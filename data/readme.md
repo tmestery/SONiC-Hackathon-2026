@@ -7,7 +7,7 @@ Mined SONiC test failures paired with their root causes, organized by source rep
 | `buildimage/` | [sonic-buildimage](https://github.com/sonic-net/sonic-buildimage) PRs and issues |
 | `management/` | [sonic-mgmt](https://github.com/sonic-net/sonic-mgmt) PRs and issues |
 | `swss/` | [sonic-swss](https://github.com/sonic-net/sonic-swss) PRs and issues |
-| `documentation/` | SONiC documentation used as context for the SLM |
+| `rag/` | SONiC documentation RAG corpus (retrieval only) |
 
 ## Layout
 
@@ -27,8 +27,7 @@ Each source folder (`buildimage/`, `management/`, `swss/`) follows the same stru
 - Keep `clean/` entries conformant to the folder's `format.md`.
 - Strip anything sensitive (IPs, hostnames, credentials) before committing.
 
-## Documentation
+## RAG corpus
 
-`documentation/` holds SONiC documentation (architecture guides, CLI references, design
-docs) that we provide to the SLM as context during retrieval and diagnosis. Keep it
-plain-text or markdown so it can be chunked and indexed easily.
+`rag/` holds SONiC documentation used as retrieval context for the SLM (architecture
+guides, HLDs, CLI notes). It is **not** train/val/test data. See [`rag/readme.md`](rag/readme.md).

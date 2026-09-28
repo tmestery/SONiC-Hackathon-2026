@@ -54,7 +54,7 @@ constrained hardware.
 │   ├── buildimage/       #   From sonic-buildimage PRs and issues
 │   ├── management/       #   From sonic-mgmt PRs and issues
 │   ├── swss/             #   From sonic-swss PRs and issues
-│   └── documentation/    #   SONiC documentation used as SLM context
+│   └── rag/              #   SONiC docs RAG corpus (retrieval only)
 └── docs/                 # Project documentation
     ├── SONiC-Hackathon-2026-Proposal.md
     └── guides/           #   Dataset quality and benchmarking guides

@@ -9,7 +9,7 @@ In SONiC, build issues, image configuration regressions, daemon startup failures
 1. **Failure Signature & Context** (from the Issue): Bug reports, environment details, traceback logs, and reproduction steps.
 2. **True Root Cause & Resolution** (from the linked PR): Developer analysis ("Why I did it", "How I did it") in the PR description, plus the files the PR changed.
 
-This pairing is labeled data for SLM **training, validation, and testing**, and for a public benchmark later. It is **not** a RAG corpus. Retrieval context comes only from [`data/documentation/`](../documentation/).
+This pairing is labeled data for SLM **training, validation, and testing**, and for a public benchmark later. It is **not** a RAG corpus. Retrieval context comes only from [`data/rag/`](../rag/).
 
 ## Directory Layout
 
@@ -124,7 +124,7 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 
 **Train/val/test.** Prefer `quality.has_diagnostic_signal == true` (error/traceback/fail/log-like text in the issue body). Explicit `split` values are not assigned in v1.
 
-**RAG.** Do not index these records. Use [`data/documentation/`](../documentation/) only.
+**RAG.** Do not index these records. Use [`data/rag/`](../rag/) only.
 
 ### Clean statistics (schema 1.0)
 

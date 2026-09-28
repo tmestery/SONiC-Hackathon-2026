@@ -1,6 +1,6 @@
 # sonic-buildimage clean schema (`1.0`)
 
-Labeled train/val/test records in `clean/issue-<n>.json`. Not a RAG corpus - that is `[data/documentation/](../documentation/)`.
+Labeled train/val/test records in `clean/issue-<n>.json`. Not a RAG corpus — that is [`data/rag/`](../rag/).
 
 Build with `python3 scripts/buildimage/clean_buildimage.py`. Never edit `raw/`.
 
