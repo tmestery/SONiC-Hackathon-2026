@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-5841",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5841,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5841",
+    "title": "[fast-reboot] arp table will be cleared after swssconfig restores it",
+    "created_at": "2020-11-06T06:54:47Z",
+    "closed_at": "2020-11-18T03:29:12Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\n**Steps to reproduce the issue:**\n1.Run fast-reboot command\n2.Compare the arp.json with ARP entry in db.\n\n**Describe the results you received:**\n=> Any ARP entries in arp.json do not appear in db.\n\n**Describe the results you expected:**\n=> All ARP entries which backup in arp.json are restored to db.\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\n    **Root Cause:**\n    ```\n    swssconfig and neighsyncd have race condition when write/clear producer state table(APP_NEIGH_TABLE_NAME)\n\n    1.When swssconfig restores arp.json, data with key \"_NEIGH_TABLE\" will be set to redis.\n       And it expected orch to process it and rewrite the data with key \"NEIGH_TABLE\" back to redis.\n\n    2.However, during the initialization of neighsyncd, \"m_AppRestartAssist->registerAppTable\" will be called\n       and it will clear the data in redis.\n\n    3.Now, neighsyncd is executed after swssconfig.\n       [program:neighsyncd]\n       command=/usr/bin/neighsyncd\n       priority=7\n       autostart=false\n       autorestart=false\n       stdout_logfile=syslog\n       stderr_logfile=syslog\n       dependent_startup=true\n       dependent_startup_wait_for=swssconfig:exited\n\n       So, if orch does not handle the data before the neighsyncd init, this issue will appear.\n\n    4.Is there any possibilities that other demons which also call 'm_AppRestartAssist->registerAppTable'\n       during initialization will have the race condition?\n    ```"
+  },
+  "resolution": {
+    "pr_number": 1498,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/1498",
+    "title": "[fast-reboot] Add a check for warmstart before cleaning up neigh table",
+    "merged_at": "2020-11-18T03:29:12Z",
+    "description": "**What I did**\nFix https://github.com/Azure/sonic-buildimage/issues/5841 and https://github.com/Azure/sonic-buildimage/issues/5580\n\nWe found that neighbor table loaded by ```swssconfig``` from ```arp.json``` after ```fast-reboot``` is cleared by ```neighsyncd``` mistakenly at the initial stage. This PR adds a check for ```WarmStart``` before cleaning up, and only do that if ```WarmStart``` is enable.\n\n**Why I did it**\nThis PR is to fix the issue that arp table is not recovered after fast-reboot.\n\n**How I verified it**\nVerified on Arista-7260, running 201911 image.\n1. Run some test to populate ARP entries on DUT, such as ```test_fast_reboot```\n2. Issue a fast-reboot\n3. Verify the ```arp.json``` backed up by ```fast-reboot-dump.py``` is loaded and NEIGH_TABLE is restored.\n```\nadmin@str-7260cx3-acs-2:~$ redis-cli -n 0 keys '*NEIGH_TABLE*'\n  1) \"NEIGH_TABLE:Vlan1000:<IP>\"\n  2) \"NEIGH_TABLE:Vlan1000:<IP>\"\n  3) \"NEIGH_TABLE:Vlan1000:<IP>\"\n  ....\n509) \"NEIGH_TABLE:Vlan1000:<IP>\"\n510) \"NEIGH_TABLE:Vlan1000:<IP>\"\n```\n\n```\npy.test --inventory ../ansible/str,../ansible/veos --host-pattern str-7260cx3-acs-2 --module-path ../ansible --testbed vms7-t0-7260-2 --testbed_file ../ansible/testbed.csv --junit-xml=tr.xml --log-cli-level info --collect_techsupport=False --topology=t0,any,util platform_tests/test_advanced_reboot.py::test_fast_reboot\n========================================================================================= test session starts =========================================================================================\nplatform_tests/test_advanced_reboot.py::test_fast_reboot\n------------------------------------------------------------------------------------------- live log setup --------------------------------------------------------------------------------------------\nPASSED                                                                                                                                                                                          [100%]\n------------------------------------------------------------------------------------------ live log teardown ------------------------------------------------------------------------------------------\n===================================================================================== 1 passed in 404.24 seconds ======================================================================================\n```\n**Details if related**",
+    "files": [
+      {
+        "path": "warmrestart/warmRestartAssist.cpp",
+        "additions": 5,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

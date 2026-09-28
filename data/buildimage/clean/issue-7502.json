@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-7502",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 7502,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/7502",
+    "title": "[Reproducible Build] apt-get hook incorrect logic and many deb packages versions are missing in versions file.",
+    "created_at": "2021-04-30T20:57:55Z",
+    "closed_at": "2026-03-13T20:06:40Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "build",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\n1. The [apt-get hook script](https://github.com/Azure/sonic-buildimage/blob/5da004675515ad2173ba3a37c4eb157754992dfd/src/sonic-build-hooks/hooks/apt-get) contains incorrect logic.\n\n2. Also as mentioned in https://github.com/Azure/sonic-buildimage/issues/7152#issuecomment-827184690:\nSome debian packages installation are not *reproducible* (eg. [python3-pip](https://github.com/Azure/sonic-buildimage/blob/cd2c86eab65a37f9030277bf3f39cbb43a657ef5/sonic-slave-buster/Dockerfile.j2#L400)), they are installed during build but uninstalled later, thus not captured in versions-deb files. After fix the logic in apt-get script, these packages are not able to be verified when version control is enabled.\n\n#### Describe the results you received:\n1. With `ENABLE_VERSION_CONTROL_DEB=y`, the version defined in versions file for debian packages never being used.\n```shell\n        if [[ \"$para\" != -* ]]; then # All packages in apt-get command are passed\n            continue\n        fi\n        if [ ! -z \"$INSTALL\" ]; then\n            if [[ \"$para\" == *=* ]]; then\n                continue\n            elif [[ \"$para\" == *=* ]]; then # duplicate check\n                continue\n            else\n                package=$para\n                if ! grep -q \"^${package}=\" $VERSION_FILE; then\n                    echo \"The version of the package ${package} is not specified.\"\n                    exit 1\n                fi # the version defined in VERSION_FILE is never extracted and used\n            fi\n        elif [[ \"$para\" == \"install\"  ]]; then\n            INSTALL=y\n        fi\n\n...\n$REAL_COMMAND \"$@\" # the version defined in VERSION_FILE is never used\n```\n2. Besides the incorrect script, many deb packages versions are missing in versions file.\n\n#### Describe the results you expected:\n1. To fix the bugs in the `apt-get` hook:\n```shell\nparameters=(\"$@\")\nif [ \"$ENABLE_VERSION_CONTROL_DEB\" == \"y\" ]; then\n    for (( i=0; i < $#; i++ ))\n    do\n        para=${parameters[$i]}\n        if [[ \"$para\" == -* ]]; then\n            continue\n        fi\n        if [ ! -z \"$INSTALL\" ]; then\n            if [[ \"$para\" == *=* ]]; then\n                continue\n            else\n                package=$para\n                [ -f \"$VERSION_FILE\" ] && version=`grep $package $VERSION_FILE | awk -F\"==\" '{print$2}'`\n                if [[ -z \"$version\" ]]; then\n                    echo \"Error: The version of the package ${package} is not specified.\" 1>&2\n                    exit 1\n                fi\n                parameters[$i]=\"${package}=${version}\"\n            fi\n        elif [[ \"$para\" == \"install\"  ]]; then\n            INSTALL=y\n        fi\n    done\nfi\n\n$REAL_COMMAND \"${parameters[@]}\"\n```\n2. Fix the logic to collect deb packages versions to include all intermediate packages versions during build."
+  },
+  "resolution": {
+    "pr_number": 25552,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25552",
+    "title": "[build-hooks] Fix reproducible build: pin apt versions and track autoremove",
+    "merged_at": "2026-03-13T20:06:39Z",
+    "description": "## Problem\n\nWhen `ENABLE_VERSION_CONTROL_DEB=y` (`SONIC_VERSION_CONTROL_COMPONENTS` includes `deb`), the apt-get hook has two issues:\n\n### 1. Versions from versions-deb are never applied to apt-get arguments (#7502)\n`check_apt_version()` only **warns** about missing package versions \u2014 it never modifies the `apt-get install` command to pin versions. While the APT preferences mechanism (`01-versions-deb` \u2192 `/etc/apt/preferences.d/`) provides pinning via `Pin-Priority: 999`, this doesn't guarantee exact version matching (APT can still pick a different version if the pinned one isn't available).\n\n### 2. `apt-get autoremove` doesn't capture package versions\nThe hook captures package versions before `purge` and `remove`, but not `autoremove`. Build dependencies installed via `apt-get install` and later cleaned up via `apt-get autoremove` are lost from the version tracking, making builds non-reproducible.\n\n## Fix\n\n### `pin_apt_versions()` \u2014 new function in `buildinfo_base.sh`\nWhen `ENABLE_VERSION_CONTROL_DEB=y`, rewrites `apt-get install foo bar` to `apt-get install foo=1.2.3 bar=4.5.6` by looking up versions in the `versions-deb` file.\n\n- Only activates when deb version control is enabled (off by default)\n- Packages already pinned (`foo=1.2.3`) pass through unchanged\n- Packages not in versions-deb pass through with existing warning\n- Works alongside the existing APT preferences mechanism as defense-in-depth\n\n### autoremove tracking\nAdded `autoremove` to the list of commands that trigger version capture (`dpkg-query -W` \u2192 `purge-versions-deb`), alongside `purge` and `remove`.\n\n## Impact\n\n- **No change for default builds** \u2014 `deb` is not in the default `SONIC_VERSION_CONTROL_COMPONENTS`\n- When version control IS enabled, packages are now actually pinned to the versions in versions-deb\n- Intermediate build dependencies removed via autoremove are now tracked\n\nFixes #7502",
+    "files": [
+      {
+        "path": "src/sonic-build-hooks/hooks/apt-get",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-build-hooks/scripts/buildinfo_base.sh",
+        "additions": 5,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

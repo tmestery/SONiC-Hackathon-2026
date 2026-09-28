@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-25726",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25726,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25726",
+    "title": "Bug: chrony.conf intf bind is invalid when run in mgmt vrf",
+    "created_at": "2026-02-27T08:40:11Z",
+    "closed_at": "2026-03-12T04:49:54Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nThere's a [wrapper script](https://github.com/nexthop-ai/private-sonic-buildimage/blob/1559e32eab1745329ecea01f1cc79c99b5e505dd/files/image_config/chrony/chronyd-starter.sh#L11) sonic-buildimage/files/image-config/chrony/chronyd-starter.sh that will start the chronyd service in the mgmt vrf if configured to do so, using ip vrf exec mgmt  /usr/sbin/chronyd $DAEMON_OPTS.\n\nSince the VRF routing logic already handles getting the chrony sync packets to the right interface, there is no need for chrony config to bind to the source interface itself. In fact, doing the bind manually will break the linux network namespace isolation that the VRF uses, and will cause the created socket to be invalid and not usable, making chronyd unable to sync when running in as part of the mgmt VRF.\n\n### Steps to Reproduce\n\nStart with NTP configured in the default VRF, and with the mgmt VRF active:\n```\n$ show ntp --verbose\nCommand: chronyc -n tracking\nReference ID    : 0AFA36FE (<IP>)\nStratum         : 5\nRef time (UTC)  : Fri Feb 27 <IPV6> 2026\nSystem time     : 0.000004821 seconds slow of NTP time\nLast offset     : -0.000004858 seconds\nRMS offset      : 0.000004858 seconds\nFrequency       : 11.544 ppm fast\nResidual freq   : +6.456 ppm\nSkew            : 0.185 ppm\nRoot delay      : 0.007050203 seconds\nRoot dispersion : 0.001518787 seconds\nUpdate interval : 2.0 seconds\nLeap status     : Normal\nCommand: chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^* <IP>                 4   6    17     0    -13us[  -18us] +/- 5021us\n$ show mgmt-vrf | head -n 5\n\nManagementVRF : Enabled\n\nManagement VRF interfaces in Linux:\n814: mgmt: <NOARP,MASTER,UP,LOWER_UP> mtu 65575 qdisc noqueue state UP mode DEFAULT group default qlen 1000\n```\nConfigure NTP to run in the mgmt VRF:\n```\n$ sudo config ntp vrf mgmt\nNTP VRF set to mgmt\nRestarting chrony service...\n```\nAfter waiting enough time for NTP to start syncing, verify that the chrony commands that are run from inside the mgmt VRF are not syncing time correctly:\n```\n$ sleep 5\n$ show ntp --verbose\nCommand: sudo ip vrf exec mgmt chronyc -n tracking\nReference ID    : 00000000 ()\nStratum         : 0\nRef time (UTC)  : Thu Jan 01 <IPV6> 1970\nSystem time     : 0.000000000 seconds fast of NTP time\nLast offset     : +0.000000000 seconds\nRMS offset      : 0.000000000 seconds\nFrequency       : 11.544 ppm fast\nResidual freq   : +0.000 ppm\nSkew            : 0.000 ppm\nRoot delay      : 1.000000000 seconds\nRoot dispersion : 1.000000000 seconds\nUpdate interval : 0.0 seconds\nLeap status     : Not synchronised\nCommand: sudo ip vrf exec mgmt chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^? <IP>                 0   6     0     -     +0ns[   +0ns] +/-    0ns\n$\n```\n\n### Actual Behavior and Expected Behavior\n\nExpected:\nNTP should sync time after starting up in the mgmt VRF\n\nActual:\nNTP never receives any time updates after starting up in the mgmt VRF\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25727,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25727",
+    "title": "Issue 25726: chrony.conf intf bind is invalid when run in mgmt vrf",
+    "merged_at": "2026-03-12T04:49:53Z",
+    "description": "There's a [wrapper script](https://github.com/nexthop-ai/private-sonic-buildimage/blob/1559e32eab1745329ecea01f1cc79c99b5e505dd/files/image_config/chrony/chronyd-starter.sh#L11) sonic-buildimage/files/image-config/chrony/chronyd-starter.sh that will start the `chronyd` service in the mgmt vrf if configured to do so, using `ip vrf exec mgmt /usr/sbin/chronyd $DAEMON_OPTS`.\n\nThere's a [wrapper script](https://github.com/nexthop-ai/private-sonic-buildimage/blob/1559e32eab1745329ecea01f1cc79c99b5e505dd/files/image_config/chrony/chronyd-starter.sh#L11) sonic-buildimage/files/image-config/chrony/chronyd-starter.sh that will start the chronyd service in the mgmt vrf if configured to do so, using ip vrf exec mgmt  /usr/sbin/chronyd $DAEMON_OPTS.\n\nSince the VRF routing logic already already handles getting the chrony sync packets to the right interface, there is no need for chrony config to bind to the source interface itself. In fact, doing the bind manually will break the linux network namespace isolation that the VRF uses, and will cause the created socket to be invalid and not usable, making chronyd unable to sync when running in as part of the mgmt VRF.\n\nCloses #25726\n\nWhy I did it\nNTP service (using chronyd under the hood) was not working when configured under the mgmt VRF. It would come up, but not actually sync time correctly.\n\nHow I did it\nThe generated configuration file was binding to the given interface, rather than going through the VRF routing mechanism\n\nHow to verify it\nWithout this change, show ntp shows no time sync occurring when bound to the mgmt VRF. With this change, time sync is detected as normal.\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/image_config/chrony/chrony.conf.j2",
+        "additions": 1,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

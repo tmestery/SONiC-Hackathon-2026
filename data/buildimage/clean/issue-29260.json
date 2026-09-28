@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-29260",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 29260,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/29260",
+    "title": "Bug:[Broadcom TH5 CPO][processFlexCounterEvent] Syncd error log when config reload",
+    "created_at": "2026-08-31T13:48:08Z",
+    "closed_at": "2026-09-27T04:19:20Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nflex counter error log when config reload\n```\n2026 Aug 31 <IPV6>.846891 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x57000000000465, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.184476 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x570000000007ad, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.488881 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x570000000006b8, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.807262 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x570000000005a0, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.119552 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x5700000000090b, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.446704 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x570000000001ef, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.782352 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x570000000002c1, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.390039 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x570000000001a9, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.947806 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x57000000000393, was not found (probably port was removed/splitted) and will remove from counters now\n2026 Aug 31 <IPV6>.972376 M2-W6940-64X1-FR4 ERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x57000000000140, was not found (probably port was removed/splitted) and will remove from counters now\n```\n\n### Steps to Reproduce\n\nconfig reload -y\n\n### Actual Behavior and Expected Behavior\n\nExpect no error log\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 2079,
+    "repository": "sonic-net/sonic-sairedis",
+    "url": "https://github.com/sonic-net/sonic-sairedis/pull/2079",
+    "title": "syncd: Skip VID-to-RID translation for FlexCounter removal",
+    "merged_at": "2026-09-27T04:19:18Z",
+    "description": "Fixes sonic-net/sonic-buildimage#29260\nFlexCounter removal only requires the VID, but processFlexCounterEvent currently performs VID-to-RID translation for both SET and DEL events.\n\nWhen a dynamically recreated object such as PORT_SERDES is removed, its mapping may be deleted before the corresponding stop_poll event is processed. This causes a misleading missing-VID error even though the counter cleanup succeeds.\n\nOnly translate VID to RID for SET events and add a regression test ensuring DEL does not query the mapping.\n\n### Description of PR\n\nSummary:\nAvoid false `processFlexCounterEvent` errors when removing FlexCounter entries whose SAI objects and VID-to-RID mappings have already been removed.\n\nFor `stop_poll`/`DEL`, FlexCounter removal only requires the VID. However, `Syncd::processFlexCounterEvent()` previously attempted VID-to-RID translation for both `SET` and `DEL`.\n\nFor dynamically recreated objects such as `SAI_OBJECT_TYPE_PORT_SERDES`, the old VID-to-RID mapping may legitimately be removed before the corresponding FlexCounter `DEL` event is processed. This produced misleading errors such as:\n```\nprocessFlexCounterEvent: port VID oid:0x57..., was not found\n(probably port was removed/splitted) and will remove from counters now\n```\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [ ] Test improvement\n\n### Approach\n#### What is the motivation for this PR?\nCPO platforms may register PORT_SERDES objects with the PORT_PHY_SERDES_ATTR FlexCounter group. These objects can be removed and recreated when updated SerDes parameters are applied.\nThe stop_poll event for the old object may therefore be processed after its VID-to-RID mapping has been removed. Since the removal path does not use the RID, attempting the translation is unnecessary and generates a misleading error.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:N/A\n\n#### How did you do it?\nChanged Syncd::processFlexCounterEvent() so that VID-to-RID translation is performed only for SET/start_poll.\nThe DEL/stop_poll path now directly removes the counter using the VID.\nThe existing SET behavior is preserved: if its VID-to-RID translation fails, Syncd logs the error and falls back to removing the stale counter entry.\nAdded a unit test using a mock Redis client to verify that FlexCounter removal does not call getRidForVid().\n\n#### How did you verify/test it?\nValidated on a 64-port CPO platform running docker-syncd-brcm-rpc.\nTest procedure:\n1. Installed the updated syncd-rpc package.\n2. Restarted the syncd container.\n3. Triggered the PORT_SERDES remove/recreate workflow.\n4. Observed two PORT_PHY_SERDES_ATTR start_poll events.\n5. Confirmed that no new processFlexCounterEvent: port VID ... was not found errors were generated.\nResult:\n```\npost_upgrade_flexcounter_vid_errors=0\npost_upgrade_serdes_start_poll_events=2\n```\nThe last occurrence of the target error was from before the updated syncd binary was installed.\nA regression unit test was also added:\n```\nSyncdTest.FlexCounterRemoveDoesNotRequireVidToRidTranslation\n```\n\n#### Any platform specific information?\nThe issue was reproduced on a Broadcom-based CPO platform where PORT_SERDES objects participate in PORT_PHY_SERDES_ATTR FlexCounter polling.\nThe fix is platform-independent and applies to all dynamically removed SAI object types processed by this FlexCounter path.\n\n### Documentation",
+    "files": [
+      {
+        "path": "syncd/Syncd.cpp",
+        "additions": 5,
+        "deletions": 2
+      },
+      {
+        "path": "unittest/syncd/TestSyncd.cpp",
+        "additions": 72,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

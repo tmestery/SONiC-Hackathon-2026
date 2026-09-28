@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-8094",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8094,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8094",
+    "title": "[arp] test_proxy_arp fails",
+    "created_at": "2021-07-07T00:42:11Z",
+    "closed_at": "2021-08-27T13:16:59Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202012"
+    ],
+    "topics": [
+      "Dual ToR Platform",
+      "flaky"
+    ]
+  },
+  "failure": {
+    "body": "```\nduthosts = <tests.common.devices.duthosts.DutHosts object at 0x7fcde45d3a90>\nenum_rand_one_per_hwsku_frontend_hostname = 'str2-7050cx3-acs-06'\nsetup_ptf_arp = ('<IP>', 'fc02:1000::2', 'eth1')\nintfs_for_test = ('Ethernet4', 'Ethernet8', 1, 2)\nptfhost = <tests.common.devices.ptf.PTFHost object at 0x7fcde1bfca50>\nconfig_facts = {'ACL_TABLE': {'EVERFLOW': {'policy_desc': u'EVERFLOW', 'ports': [u'PortChannel0001', u'PortChannel0002', u'PortChanne..._300m_profile]'}}, 'Ethernet108': {'3-4': {'profile': u'[BUFFER_PROFILE|pg_lossless_100000_300m_profile]'}}, ...}, ...}\nip_version = 'v4'\ntbinfo = {'auto_recover': 'True', 'comment': 'hellogemini', 'conf-name': 'vms17-dual-t0-7050-1', 'duts': ['str2-7050cx3-acs-06', 'str2-7050cx3-acs-07'], ...}\n\n    @pytest.mark.parametrize('ip_version', ['v4', 'v6'])\n    def test_proxy_arp(duthosts, enum_rand_one_per_hwsku_frontend_hostname, setup_ptf_arp, intfs_for_test, ptfhost, config_facts, ip_version, tbinfo):\n        '''\n        Send an ARP request or neighbor solicitation (NS) to the DUT for an IP address within the subnet of the DUT's VLAN.\n\n        DUT should reply with an ARP reply or neighbor advertisement (NA) containing the DUT's own MAC\n        '''\n        duthost = duthosts[enum_rand_one_per_hwsku_frontend_hostname]\n        ptf_intf_ipv4_addr, ptf_intf_ipv6_addr, ptf_intf_name = setup_ptf_arp\n\n        pytest_require(duthost.has_config_subcommand('config vlan proxy_arp'), \"Proxy ARP command does not exist on device\")\n\n        if ip_version == 'v4':\n            pytest_require(ptf_intf_ipv4_addr is not None, 'No IPv4 VLAN address configured on device')\n        elif ip_version == 'v6':\n            pytest_require(ptf_intf_ipv6_addr is not None, 'No IPv6 VLAN address configured on device')\n\n        proxy_arp_config_cmd = 'config vlan proxy_arp {} {}'\n\n        # We are leveraging the fact that ping will automatically send a neighbor solicitation/ARP request for us\n        # However, we expect the ping itself to always fail since no interface is configured with the pinged IP, so add '|| true' so we can continue\n        ping_cmd = 'ping {} -I {} -c 1 || true'\n\n        # Enable proxy ARP/NDP for the VLANs on the DUT\n        vlans = config_facts['VLAN']\n        vlan_ids =[vlans[vlan]['vlanid'] for vlan in vlans.keys()]\n\n        for vid in vlan_ids:\n            duthost.shell(proxy_arp_config_cmd.format(vid, 'enabled'))\n            time.sleep(3)\n            logger.info(\"Enabled proxy ARP for VLAN {}\".format(vid))\n\n        clear_dut_arp_cache(ptfhost)\n\n        ping_addr = None\n        if ip_version == 'v4':\n            ping_addr = increment_ipv4_addr(ptf_intf_ipv4_addr)\n        elif ip_version == 'v6':\n            ping_addr = increment_ipv6_addr(ptf_intf_ipv6_addr)\n\n        logger.info(\"Pinging {} using PTF interface {}\".format(ping_addr, ptf_intf_name))\n        ptfhost.shell(ping_cmd.format(ping_addr, ptf_intf_name))\n        time.sleep(2)\n\n        neighbor_table = ptfhost.switch_arptable()['ansible_facts']['arptable'][ip_version]\n\n        topology = tbinfo['topo']['name']\n        if 'dualtor' in topology:\n            dut_macs = []\n\n            for vlan_details in vlans.values():\n                dut_macs.append(vlan_details['mac'].lower())\n        else:\n            router_mac = duthost.shell('sonic-cfggen -d -v \\'DEVICE_METADATA.localhost.mac\\'')[\"stdout_lines\"][0].decode(\"utf-8\")\n            dut_macs = [router_mac]\n\n        pytest_assert(ping_addr in neighbor_table.keys())\n>       pytest_assert(neighbor_table[ping_addr]['macaddress'].lower() in dut_macs)\nE       Failed: <Failed instance>\n\nconfig_facts = {'ACL_TABLE': {'EVERFLOW': {'policy_desc': u'EVERFLOW', 'ports': [u'PortChannel0001', u'PortChannel0002', u'PortChanne..._300m_profile]'}}, 'Ethernet108': {'3-4': {'profile': u'[BUFFER_PROFILE|pg_lossless_100000_300m_profile]'}}, ...}, ...}\ndut_macs   = ['<IPV6>']\nduthost    = <MultiAsicSonicHost> str2-7050cx3-acs-06\nduthosts   = <tests.common.devices.duthosts.DutHosts object at 0x7fcde45d3a90>\nenum_rand_one_per_hwsku_frontend_hostname = 'str2-7050cx3-acs-06'\nintfs_for_test = ('Ethernet4', 'Ethernet8', 1, 2)\nip_version = 'v4'\nneighbor_table = {'<IP>': {'interface': u'mgmt', 'macaddress': u'<IPV6>', 'state': u'REACHABLE'}, '<IP>': {'interface': u'eth1', 'macaddress': u'None', 'state': u'FAILED'}}\nping_addr  = '<IP>'\nping_cmd   = 'ping {} -I {} -c 1 || true'\nproxy_arp_config_cmd = 'config vlan proxy_arp {} {}'\nptf_intf_ipv4_addr = '<IP>'\nptf_intf_ipv6_addr = 'fc02:1000::2'\nptf_intf_name = 'eth1'\nptfhost    = <tests.common.devices.ptf.PTFHost object at 0x7fcde1bfca50>\nsetup_ptf_arp = ('<IP>', 'fc02:1000::2', 'eth1')\ntbinfo     = {'auto_recover': 'True', 'comment': 'hellogemini', 'conf-name': 'vms17-dual-t0-7050-1', 'duts': ['str2-7050cx3-acs-06', 'str2-7050cx3-acs-07'], ...}\ntopology   = 'dualtor'\nvid        = u'1000'\nvlan       = 'Vlan1000'\nvlan_details = {'dhcp_servers': [u'<IP>', u'<IP>', u'<IP>', u'<IP>', u'<IP>', u'<IP>', ...], 'mac': u'0...ers': [u'Ethernet4', u'Ethernet8', u'Ethernet12', u'Ethernet16', u'Ethernet20', u'Ethernet24', ...], 'vlanid': u'1000'}\nvlan_ids   = [u'1000']\nvlans      = {'Vlan1000': {'dhcp_servers': [u'<IP>', u'<IP>', u'<IP>', u'<IP>', u'<IP>', u'<IP>', ......rs': [u'Ethernet4', u'Ethernet8', u'Ethernet12', u'Ethernet16', u'Ethernet20', u'Ethernet24', ...], 'vlanid': u'1000'}}\n\narp/test_arp_dualtor.py:197: Failed\n```"
+  },
+  "resolution": {
+    "pr_number": 4090,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/4090",
+    "title": "[arp]: DualToR arp fixes",
+    "merged_at": "2021-08-27T13:16:59Z",
+    "description": "- Change test to use direct packet capture\n\nSigned-off-by: Lawrence Lee <<EMAIL>>\n\n### Description of PR\n\nSummary:\nFixes https://github.com/Azure/sonic-buildimage/issues/8094\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n\n### Approach\n#### What is the motivation for this PR?\ntest_proxy_arp is flaky\n\n#### How did you do it?\n- Change test to use packet capture instead of inspecting PTF kernel neighbor entries\n- Call `change_mac_address` fixture to ensure PTF interfaces are properly configured.\n\n#### How did you verify/test it?\nRun the test over 20 times, verify each run passed\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/arp/test_arp_dualtor.py",
+        "additions": 152,
+        "deletions": 80
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

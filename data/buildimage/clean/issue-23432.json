@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-23432",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 23432,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/23432",
+    "title": "Bug: Failure building target/python-wheels/bookworm/sonic_ctrmgrd-1.0.0-py3-none-any.whl",
+    "created_at": "2025-07-23T01:32:59Z",
+    "closed_at": "2026-03-04T16:04:16Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen building the target:  `target/python-wheels/bookworm/sonic_ctrmgrd-1.0.0-py3-none-any.whl`\n\nwe sometimes see the following error during the test: `sonic-buildimage/src/sonic-ctrmgrd/tests/ctrmgr_iptables_test.py` leading to build failure\n\n```\n _________________________ TestIPTableUpdate.test_table _________________________\n<IPV6>\n<IPV6>  self = <tests.ctrmgr_iptables_test.TestIPTableUpdate object at 0xffff80842710>\n<IPV6>  mock_proc = <MagicMock name='run' id='281472805998800'>\n<IPV6>\n<IPV6>      @patch(\"ctrmgr_iptables.subprocess.run\")\n<IPV6>      def test_table(self, mock_proc):\n<IPV6>          global current_rules, current_tc\n<IPV6>\n<IPV6>          mock_proc.side_effect = mock_subproc_run\n<IPV6>          for i, tc in test_data.items():\n<IPV6>              print(\"----- Test: {} Start ------------------\".format(i))\n<IPV6>              current_tc = tc\n<IPV6>              current_rules = tc[\"pre_rules\"].copy()\n<IPV6>\n<IPV6>              ctrmgr_iptables.DST_IP = \"\"\n<IPV6>              ctrmgr_iptables.DST_PORT = \"\"\n<IPV6>              ctrmgr_iptables.DST_FILE = os.path.join(\n<IPV6>                      os.path.dirname(os.path.realpath(__file__)),\n<IPV6>                      tc.get(\"conf_file\", PROXY_FILE))\n<IPV6>              ret = ctrmgr_iptables.iptable_proxy_rule_upd(tc[\"ip\"], tc[\"port\"])\n<IPV6>              if \"ret\" in tc:\n<IPV6>  >               assert ret == tc[\"ret\"]\n<IPV6>  E               AssertionError: assert '<IP>:3128' == ''\n<IPV6>  E                 + <IP>:3128\n<IPV6>\n<IPV6>  tests/ctrmgr_iptables_test.py:172: AssertionError\n<IPV6>  =========================== short test summary info ============================\n<IPV6>  FAILED tests/ctrmgr_iptables_test.py::TestIPTableUpdate::test_table - AssertionError: assert '<IP>:3128' == ''\n<IPV6>    + <IP>:3128\n<IPV6>  ======================== 1 failed, 17 passed in 15.29s =========================\n<IPV6>  [  FAIL LOG END  ] [ target/python-wheels/bookworm/sonic_ctrmgrd-1.0.0-py3-none-any.whl ]\n<IPV6>  make: *** [slave.mk:953: target/python-wheels/bookworm/sonic_ctrmgrd-1.0.0-py3-none-any.whl] Error 1\n```\n\n**NOTE**: This issue doesn't happen every time. To Reproduce attempt building the sonic image multiple times."
+  },
+  "resolution": {
+    "pr_number": 25491,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25491",
+    "title": "[ctrmgrd] Fix flaky iptables test by mocking DNS resolution",
+    "merged_at": "2026-03-04T16:04:14Z",
+    "description": "#### What I did\nFixed intermittent build failure in `ctrmgr_iptables_test.py::TestIPTableUpdate::test_table` (#23432).\n\n#### How I did it\n1. **Mocked `socket.gethostbyname`** \u2014 the test was calling real DNS resolution which is environment-dependent. On build machines with DNS hijacking or NXDOMAIN redirection (common in corporate/Azure environments), invalid hostnames like `www.google.comx` resolve to a proxy IP instead of failing, causing unexpected test results.\n\n2. **Replaced `www.google.comx` with `host.invalid`** \u2014 the `.invalid` TLD is reserved by [RFC 6761](https://datatracker.ietf.org/doc/html/rfc6761) and guaranteed to never resolve, providing an extra safety net.\n\n3. **Added explicit `ret` assertion to test case 3** \u2014 previously test case 3 (`www.google.com`) only checked `post_rules` via regex `.*` but never verified the return value. Now it asserts the deterministic mock IP.\n\n#### Root cause analysis\nThe reported error was:\n```\nAssertionError: assert '<IP>:3128' == ''\n```\n\nTest case 4 passes `ip=\"www.google.comx\"` expecting `_get_ip()` \u2192 `socket.gethostbyname()` to fail (return `\"\"`). But on ARM64 build machines where DNS resolves typo domains to a proxy/redirect IP (<IP>), the hostname resolves successfully, causing `iptable_proxy_rule_upd` to return `\"<IP>:3128\"` instead of `\"\"`.\n\n#### How to verify it\n```bash\ncd src/sonic-ctrmgrd\npython -m pytest tests/ctrmgr_iptables_test.py -v\n```\n\nThe test now passes deterministically regardless of the build environment's DNS configuration.\n\n#### Which release branch to backport\nNone\n\n#### Description for the changelog\nFixed intermittent ctrmgrd iptables test failure caused by environment-dependent DNS resolution.\n\nFixes #23432",
+    "files": [
+      {
+        "path": "src/sonic-ctrmgrd/tests/ctrmgr_iptables_test.py",
+        "additions": 23,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

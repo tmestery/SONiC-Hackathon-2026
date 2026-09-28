@@ -1,0 +1,81 @@
+{
+  "id": "buildimage-21372",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21372,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21372",
+    "title": "[Smartswitch][reboot-cause] Invalid reboot cause on First boot ",
+    "created_at": "2025-01-09T18:52:01Z",
+    "closed_at": "2025-01-27T21:35:54Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT",
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nIn intermittent cases, the DPU reboot causes are not updated properly on execution of `show reboot-cause all` and `show reboot-cause history all` command on booting the switch first, but upon execution of a reboot of the DPU once the switch is powered on, this issue is fixed\nOne example scenario is:\nAll DPUS are powered on initially, We set the admin state of all the DPUs to `down` state , once DPUs are powered off when the switch is rebooted, when the `show reboot-cause all` command is executed - we do not see the DPU reboot causes, only switch reboot causes are shown, when the `show reboot-cause history` command is executed the DPU reboot causes are mis represented as NPU reboot causes (the device is shown as NPU instead of the relevant DPU)\nBoth of these command outputs are fixed on execution of a reboot (once all DPUs are rebooted while the switch is still powered on) - the right output is displayed for both the commands.\nNot sure if the reboot implementation would fix this issue\n\n#### Steps to reproduce the issue:\n1. `config chassis modules shutdown DPUs`\n2. reboot the switch\n3. The `show reboot-cause all` doesn't show any DPU information\n4. The `show reboot-cause history all` shows DPU reboot causes as the NPU reboot causes\n5. Reboot the dpus - the issue is fixed"
+  },
+  "resolution": {
+    "pr_number": 3271,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/3271",
+    "title": "CLI support for SmartSwitch PMON",
+    "merged_at": "2025-01-27T21:35:53Z",
+    "description": "#### What I did\nEnhanced the following CLIs to support SmartSwitch PMON as described in the PMON HLD documentation \"https://github.com/sonic-net/SONiC/blob/d19d8933a43d0a31a4f3b2310f4336f289bca340/doc/smart-switch/pmon/smartswitch-pmon.md\"\n\nCLIs:\nAdded new module \"DPUX\" support for 1 and 2 below\n    1. \"config chassis module startup DPUX\" , where X could be 0, to the maximum number of DPUs-1 in the SmartSwitch chassis\n    2. \"config chassis module shutdown DPUX\"\n\nExtended the following CLIs to support the new module \"DPUX\" and also provided the \"all\" option to display the reboot-cause of the \"NPU\" and all \"DPU\" modules.\n    1. \"show reboot-cause\" will remain the same and added \"show reboot-cause all\"\n    2.  \"show reboot-cause history\" will remain the same and added \"show reboot-cause history \\<module-name\\>\", where module name could be DPUX, and all.\n\nAdded a new sub command \"show system-health dpu \\<module-name\\>\", where module name could be DPUX, and all.  This new subcommand will provide additional DPU state details as mentioned in the HLD\n\n#### How I did it\n1. Kept the original CLI output unaltered\n2. Added sub command to support SmartSwitch \"DPUs\"\n3. Added additional code in chassisd, and in platform modules.py, chassis.py to support it\n4. Updated the DB tables as mentioned in the PMON HLD\n\n#### Fixes: https://github.com/sonic-net/sonic-buildimage/issues/21372\n\n#### How to verify it\n1. Build an image with the required files (refer to the other upstream PRs and the platform PRs)\n    Require files:\n        - This PR including reboot_cause.py, chassis_modules.py, system_health.py)\n        - The other PR including module_base.py, chassis_base.py, docker-pmon.supervisord.conf.j2, chassisd, mock_module_base.py, and the appropriate database_config.json\n        - Platform \"platform-cisco-8000\"  supporting PMON (module.py, chassis.py, inventory.py, pmon_daemon_control.json, and the required DB changes)\n2. Run the CLIs and see the new output\n\n#### CLI output\nroot@sonic:~# show reboot-cause\nUnknown\n\nroot@MtFuji:/home/cisco# show reboot-cause all\nDevice    Name                 Cause       Time                             User\n--------  -------------------  ----------  -------------------------------  ------\nNPU       2024_12_11_01_54_02  reboot      Wed Dec 11 <IPV6> AM UTC 2024  cisco\nDPU0      2024_12_11_01_56_45  reboot     Wed Dec 11 <IPV6> AM UTC 2024\n\ncisco@MtFuji-dut:~$ show reboot-cause history\nName                 Cause    Time                             User    Comment\n-------------------  -------  -------------------------------  ------  ---------\n2024_12_19_14_00_33  reboot   Thu Dec 19 <IPV6> PM UTC 2024  cisco   N/A\n2024_12_15_08_21_38  reboot   Sun Dec 15 <IPV6> AM UTC 2024  cisco   N/A\n\ncisco@MtFuji-dut:~$ show reboot-cause history all\nDevice    Name                 Cause         Time                             User    Comment\n--------  -------------------  ------------  -------------------------------  ------  -------------------\nNPU       2024_12_19_14_00_33  reboot        Thu Dec 19 <IPV6> PM UTC 2024  cisco   N/A\nNPU       2024_12_15_08_21_38  reboot        Sun Dec 15 <IPV6> AM UTC 2024  cisco   N/A\nDPU1      2024_12_19_14_36_47  Non-Hardware  Thu Dec 19 <IPV6> PM UTC 2024          Switch rebooted DPU\nDPU0      2024_12_19_14_03_24  reboot       Thu Dec 19 <IPV6> PM UTC 2024          N/A\nDPU0      2024_12_17_15_57_29   reboot       Tue Dec 17 <IPV6> PM UTC 2024          N/A\n\nroot@sonic:~# show reboot-cause history DPU0\nDevice    Name                 Cause         Time                             User    Comment\n--------  -------------------  ------------  -------------------------------  ------  -------------------\nDPU0      2024_12_19_14_03_24  reboot       Thu Dec 19 <IPV6> PM UTC 2024          N/A\nDPU0      2024_12_17_15_57_29   reboot       Tue Dec 17 <IPV6> PM UTC 2024          N/A",
+    "files": [
+      {
+        "path": "config/chassis_modules.py",
+        "additions": 24,
+        "deletions": 6
+      },
+      {
+        "path": "doc/Command-Reference.md",
+        "additions": 136,
+        "deletions": 6
+      },
+      {
+        "path": "show/chassis_modules.py",
+        "additions": 8,
+        "deletions": 4
+      },
+      {
+        "path": "show/reboot_cause.py",
+        "additions": 136,
+        "deletions": 27
+      },
+      {
+        "path": "show/system_health.py",
+        "additions": 87,
+        "deletions": 0
+      },
+      {
+        "path": "tests/reboot_cause_test.py",
+        "additions": 112,
+        "deletions": 1
+      },
+      {
+        "path": "tests/system_health_test.py",
+        "additions": 90,
+        "deletions": 2
+      },
+      {
+        "path": "utilities_common/chassis.py",
+        "additions": 23,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

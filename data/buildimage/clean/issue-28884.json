@@ -1,0 +1,66 @@
+{
+  "id": "buildimage-28884",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28884,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28884",
+    "title": "Bug: [vpp][dualtor] Mux drop ACL drops control-plane/for-us traffic \u2014 IN_PORTS ignored and L2 ACL runs before ip4-local punt (mux stuck unhealthy)",
+    "created_at": "2026-08-06T13:19:14Z",
+    "closed_at": "2026-08-11T15:10:52Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\ngeneric (VPP platform / `docker-syncd-vpp`, `libsaivs` vslib + VPP graph)\n\n### Importance or Severity\nHigh\n\n### Description of the bug\nOn the VPP platform, the dual-ToR **mux drop ACL** (`INGRESS_TABLE_DROP` / `mux_acl_rule`, MuxOrch) drops **control-plane / for-us (IP2ME)** traffic that should be trapped to the CPU. On a hardware ASIC these packets (ARP, ICMP-to-me, BGP, mux ICMP heartbeat) are trapped by the my-station / CoPP path **before / independently of** the ingress data ACL, so a standby mux port still delivers them to the control plane; the data-drop ACL only removes the *forwarding* copy. VPP does not preserve this ordering.\n\nTwo distinct VPP fidelity gaps combine here:\n\n**(1) VPP ignores `SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS`.**\nMuxOrch models the drop as one ACL table bound to *all* mux ports, with a per-rule `MATCH_IN_PORTS = {standby ports}` qualifier that scopes the DROP to standby ports only. In `vslib/vpp/SwitchVppAcl.cpp`, `SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS` is never read. The table\u2192port binding is honored, but the `IN_PORTS` qualifier is silently dropped, so the rule degrades to a wildcard `ipv4 deny src 0/0 dst 0/0` applied to every bound mux port \u2014 **including active ports**. Editing `IN_PORTS` on switchover has no effect in VPP.\n\n**(2) The mux drop ACL runs at `l2-input`, before the for-us / L3 punt at `ip4-local`.**\nVPP realizes the mux ACL as an L2-stage ACL (`acl-plugin-in-ip4-l2`) at `l2-input` \u2014 the first stage after the frame enters the bridge domain. The for-us recognition and punt happen much later, at `ip4-input on BVI \u2192 ip4-lookup \u2192 ip4-local / ip4-punt` (VLAN-BVI HLD \u00a75.6). So a for-us packet is denied at L2 before it can ever be recognized as IP2ME and punted. Even a correctly-scoped **standby** port would still drop its control-plane/heartbeat traffic, because there is no \"trap for-us/CoPP before the data ACL\" semantics in the VPP pipeline.\n\nConcrete impact: the linkmgrd mux ICMP heartbeat reply (server \u2192 ToR loopback, a for-us packet) is dropped on the mux port, so linkmgrd never confirms the port and it is stuck `HEALTH=unhealthy`. Because the drop also eats the heartbeat that would clear the condition, an active port that still has the (mis-scoped) deny bound never recovers.\n\n### Steps to Reproduce\n1. Dual-ToR VPP KVM testbed (`subtype=DualToR`), mux ports on `Vlan1000`.\n2. Observe `show mux status` \u2014 a port reports `active` but `HEALTH=unhealthy`.\n3. On VPP:\n   - `vppctl show acl-plugin acl` \u2192 a `ipv4 deny src <IP>/0 dst <IP>/0` rule (tag `sonic_acl_oid:...`) applied inbound on the mux bridge-member sw_if_indexes.\n   - `vppctl show errors` \u2192 `acl-plugin-in-ip4-l2 ACL deny packets` incrementing in step with the port's ingress.\n   - `vppctl show ip fib <ToR loopback>` \u2192 `dpo-receive on loopN` (for-us), i.e. it *would* be punted at `ip4-local` \u2014 after the L2 ACL that already dropped it.\n4. `ASIC_DB` shows the active port's OID **removed** from `SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS`, yet VPP still has the deny ACL bound to that port.\n\n### Actual Behavior and Expected Behavior\n**Actual:** Mux drop ACL is applied as an unscoped `deny any/any` at `l2-input` on every bound mux port; `IN_PORTS` is ignored, and control-plane/for-us traffic (ARP/ICMP-to-me/BGP/heartbeat) is dropped before the L3 for-us punt. Active ports drop too. Mux health cannot recover.\n\n**Expected (match hardware semantics):**\n- Honor `SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS` so the DROP is scoped to the standby ports actually in the set (bind/unbind the VPP ACL per member, re-derived on `set`), so active ports never drop.\n- Control-plane / for-us (IP2ME) traffic must be trapped/punted **before** the mux data-drop ACL consumes it (as on hardware, where CoPP/my-station trapping precedes the ingress data ACL). The mux drop should only remove the forwarding copy, never the CPU-punt copy.\n\n### Relevant log output\n```\n# mux says active+unhealthy:\nshow mux status | grep Ethernet4\n  Ethernet4  active  active  unhealthy  consistent  ...\n\n# ASIC_DB removed the active port from IN_PORTS (correct intent):\nredis-cli -n 1 hget ASIC_STATE:SAI_OBJECT_TYPE_ACL_ENTRY:oid:0x8000000000692 SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS\n  -> Ethernet4 oid 0x1000000000033 ABSENT\n\n# ... but VPP still has the deny ACL bound to that port (sw_if 2 = bobm1 = Ethernet4):\nvppctl show acl-plugin interface sw_if_index 2   -> input acl(s): 2, 3, 1   (3 = deny any/any)\n\n# ... dropped at L2, before the for-us punt:\nvppctl show errors | grep 'acl-plugin-in-ip4-l2'\n  478550  acl-plugin-in-ip4-l2   ACL deny packets\nvppctl show ip fib <IP>\n  [@0]: dpo-receive: <IP> on loop2      # for-us; would punt at ip4-local (after the L2 ACL)\n```\n\n### Output of `show version`, `show techsupport`\n```\nSONiC Software Version: SONiC.master.1182394-fc9ea17bb\nDistribution: Debian 13.5\nPlatform: x86_64-kvm_x86_64-r0\nHwSKU: Force10-S6000\nASIC: vpp\nASIC Count: 1\n```\n\n### Fix direction\n- `vslib/vpp/SwitchVppAcl.cpp`: implement `SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS` by binding/unbinding the VPP ACL to exactly the member interfaces in the set, re-derived on entry `set` (so removing a port from `IN_PORTS` unbinds the deny from that port).\n- Ensure control-plane / for-us (IP2ME) punt precedes the mux data-drop ACL \u2014 e.g. a higher-priority `l2-input-classify` punt arc for for-us / control ethertypes+L4 (analogous to the existing LLDP/DHCP punt arcs in the `sonic_ext` plugin), so the CPU-punt copy survives the mux drop. See VPP VLAN-BVI HLD \u00a75.6 (`doc/vpp/vlan-bvi-hld.md`); the HLD does not currently cover the ACL/mux/CoPP ordering.\n\nRelated: sonic-net/sonic-buildimage#28882 (VLAN SVI neighbor host route not installed) \u2014 separate VPP dual-ToR data-path gap."
+  },
+  "resolution": {
+    "pr_number": 2029,
+    "repository": "sonic-net/sonic-sairedis",
+    "url": "https://github.com/sonic-net/sonic-sairedis/pull/2029",
+    "title": "[vpp] Drive sonic_ext ip2me ACL-bypass from drop-ACL port binds",
+    "merged_at": "2026-08-17T13:13:07Z",
+    "description": "### Description of PR\n\nSummary:\nFixes https://github.com/sonic-net/sonic-buildimage/issues/28884\n\n### Type of change\n\n- [ ] Bug fix\n- [x] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [ ] Test improvement\n\n### Approach\n#### What is the motivation for this PR?\nSONiC VPP now drops ICMP replies to local RIF addresses (VLAN, Loopback, PortChannel, etc) if a drop ACL rule is installed. The correct behavior should be CoPP before ACL (any for-us traffic should be trapped to kernel before dataplane ACL rules).\n\nThis PR is to fix this issue.\n\nSigned-off-by: Longxiang Lyu <<EMAIL>>\n\n##### Work item tracking\n- Microsoft ADO **(number only)**: 39223945\n\n#### How did you do it?\n\nsonic-platforms-vpp PR: https://github.com/sonic-net/sonic-platform-vpp/pull/272 add sonic-ext-ip2me-ip4/ip6 nodes on the l2-input-ip4/ip6 feature arcs, running before acl-plugin-in-ip*-l2. Each frame gets a FIB receive-lookup on the inner dst IP; a DPO_RECEIVE (ip2me) result steers it to l2-input-feat-arc-end, bypassing the ACL so for-us traffic still reaches the BVI/ip*-local for punt while transit traffic hits the ACL as usual. This restores hardware-style CoPP-before-ACL ordering\n\nThis PR enables this on exactly the interfaces where such a drop ACL is bound.\n\n#### How did you verify/test it?\nBuild and setup an active-standby dualtor testbed, verify ICMP heartbeats can be received on standby mux ports.\n\n#### Any platform specific information?\n\n### Documentation",
+    "files": [
+      {
+        "path": "vslib/vpp/SwitchVpp.h",
+        "additions": 58,
+        "deletions": 0
+      },
+      {
+        "path": "vslib/vpp/SwitchVppAcl.cpp",
+        "additions": 175,
+        "deletions": 7
+      },
+      {
+        "path": "vslib/vpp/vppxlate/SaiVppXlate.c",
+        "additions": 80,
+        "deletions": 0
+      },
+      {
+        "path": "vslib/vpp/vppxlate/SaiVppXlate.h",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 272,
+      "repository": "sonic-net/sonic-platform-vpp",
+      "url": "https://github.com/sonic-net/sonic-platform-vpp/pull/272",
+      "title": "[sonic_ext] Add ip2me receive-DPO ACL-bypass feature node",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

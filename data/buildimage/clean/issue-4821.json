@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-4821",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 4821,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/4821",
+    "title": "test_announce_routes failed due to Ethernet24 is down.",
+    "created_at": "2020-06-12T06:20:48Z",
+    "closed_at": "2020-06-25T05:48:38Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\n**Steps to reproduce the issue:**\n1.\n2.\n3.\n\n**Describe the results you received:**\n\nhttps://sonic-jenkins.westus2.cloudapp.azure.com/job/vs/job/buildimage-vs-image-pr/4218/testReport/junit/(root)/test_announce_routes/test_announce_routes/\n\n{'check_item': 'interfaces', 'failed': True, 'down_ports': [u'Ethernet24']}\n\n               pytest.fail(\"Pre-test sanity check failed, allow_recover=False {}\".format(check_results))\nE               Failed: Pre-test sanity check failed, allow_recover=False [{'check_item': 'services', 'failed': False, 'services_status': {'lldp': True, 'pmon': True, 'database': True, 'snmp': True, 'bgp': True, 'teamd': True, 'syncd': True, 'swss': True}}, {'check_item': 'interfaces', 'failed': True, 'down_ports': [u'Ethernet24']}, {'check_item': 'processes', 'failed': False, 'services_status': {'lldp': True, 'bgp': True, 'pmon': True, 'database': True, 'teamd': True, 'swss': True, 'syncd': True, 'snmp': True}, 'processes_status': {'lldp': {'status': True, 'exited_critical_process': [], 'running_critical_process': [u'lldp-syncd', u'lldpd', u'lldpmgrd']}, 'pmon': {'status': True, 'exited_critical_process': [], 'running_critical_process': []}, 'database': {'status': True, 'exited_critical_process': [], 'running_critical_process': [u'redis']}, 'snmp': {'status': True, 'exited_critical_process': [], 'running_critical_process': [u'snmp-subagent', u'snmpd']}, 'bgp': {'status': True, 'exited_critical_process': [], 'running_critical_process': [u'bgpcfgd', u'bgpd', u'fpmsyncd', u'staticd', u'zebra']}, 'teamd': {'status': True, 'exited_critical_process': [], 'running_critical_process': [u'teammgrd', u'teamsyncd']}, 'syncd': {'status': True, 'exited_critical_process': [], 'running_critical_process': [u'syncd']}, 'swss': {'status': True, 'exited_critical_process': [], 'running_critical_process': [u'buffermgrd', u'intfmgrd', u'nbrmgrd', u'neighsyncd', u'orchagent', u'portmgrd', u'portsyncd', u'vlanmgrd', u'vrfmgrd', u'vxlanmgrd']}}}, {'check_item': 'dbmemory', 'failed': False}]\n\n**Describe the results you expected:**\n\n\"Ethernet24\" should not be down.\n\nI saw multiple test case failure due to this \"Ethernet24\" is donw. I am really curious why it is always this \"Ethernet24\"\n\n**Additional information you deem important:**\n\n    **Output of `show version`:**\n\n    ```\n    (paste your output here)\n    ```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```"
+  },
+  "resolution": {
+    "pr_number": 4845,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/4845",
+    "title": "[docker-orchagent]: start portsyncd before orchagent",
+    "merged_at": "2020-06-25T05:48:38Z",
+    "description": "when portsyncd starts, it first enumerates all front panel ports\nand marks them as old interfaces. Then, for new front panel ports\nit checks if their indexes exist in previous sets. If yes, it will\ntreats them as old interfaces and ignore them.\n\nThe reason we have this check is because broadcom SAI only removes\nfront panel ports after sai switch init.\n\nSo, if portsyncd starts after orchagent, new interfaces could be\ncreated before portsyncd and treated as old interface.\n\nSigned-off-by: Guohan Lu <<EMAIL>>\n\n**- Why I did it**\nwhen portsyncd starts, it first enumerates all front panel ports\nand marks them as old interfaces. Then, for new front panel ports\nit checks if their indexes exist in previous sets. If yes, it will\ntreats them as old interfaces and ignore them.\n\nThe reason we have this check is because broadcom SAI only removes\nfront panel ports after sai switch init.\n\nSo, if portsyncd starts after orchagent, new interfaces could be\ncreated before portsyncd and treated as old interface.\n\nSigned-off-by: Guohan Lu <<EMAIL>>\n\n**- How I did it**\nstart portsyncd before orchagent\n\n**- How to verify it**\nrun continuously config reload for 100 times\n\n```\n#!/bin/bash\n\n# sysctl -w kernel.hung_task_panic=1\nredis-cli -n 3 hmset portsyncd:portsyncd LOGLEVEL INFO\n\nj=0\nwhile [ True ]; do\n        echo \"iteration $j\"\n        config reload -y\n        sleep 120\n        i=0\n        while [ $i -le 120 ]; do\n                ip link show Ethernet24 | grep LOWER_UP\n                if [ $? == 0 ]; then\n                        break\n                fi\n                sleep 1\n                i=$((i+1))\n        done\n        if [ $i -gt 120 ]; then\n                break\n        fi\n        j=$((j+1))\ndone\n```\n**- Description for the changelog**\n\n**- A picture of a cute animal (not mandatory but encouraged)**",
+    "files": [
+      {
+        "path": "dockers/docker-orchagent/supervisord.conf",
+        "additions": 14,
+        "deletions": 14
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

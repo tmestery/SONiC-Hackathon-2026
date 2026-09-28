@@ -1,0 +1,68 @@
+{
+  "id": "buildimage-28011",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28011,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28011",
+    "title": "Remove redundant static files/image_config/constants/constants.yml (superseded by templated constants.yml.j2 from #27877)",
+    "created_at": "2026-06-21T23:15:22Z",
+    "closed_at": "2026-07-05T07:08:56Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\nRemove the static `files/image_config/constants/constants.yml` file. It is now redundant with the build-time templated constants introduced by #27877.\n\nAs of #27877 (\"Add `ENABLE_FRR_SNMP_AGENT` build option to disable BGP4-MIB\", merged), the image's `/etc/sonic/constants.yml` is generated at build time by rendering `files/build_templates/constants.yml.j2`:\n\n```\n# files/build_templates/sonic_debian_extension.j2\nj2 files/build_templates/constants.yml.j2 | sudo tee $FILESYSTEM_ROOT/etc/sonic/constants.yml > /dev/null\n```\n\n`constants.yml.j2` carries the full constants content plus build-time conditionals such as:\n\n```jinja\n  frr:\n    enable_snmp_agent: {{ 'true' if ENABLE_FRR_SNMP_AGENT == 'y' else 'false' }}\n```\n\nThe static `files/image_config/constants/constants.yml` is now a parallel, hand-maintained copy of the same data that the template owns. Keeping both invites drift (any new build-time-conditional constant has to be duplicated by hand) and is a maintenance hazard. It should be removed and its remaining consumers pointed at the templated source.\n\n## Why it should be removed\n\n- The authoritative, build-rendered constants now come from `files/build_templates/constants.yml.j2`.\n- The static file duplicates that content and must be kept manually in sync \u2014 it cannot express the build-time conditionals (e.g. `frr.enable_snmp_agent`) that #27877 added.\n- Two sources of truth for `constants.yml` is error-prone.\n\n## Remaining consumers to migrate first\n\nThis file is **not unused** \u2014 these references must be updated as part of (or before) removal, otherwise the VS image build and `sonic-bgpcfgd` unit tests break:\n\n1. **VS docker image** \u2014 copies the static file into the container:\n   - `platform/vs/docker-sonic-vs.mk:67` \u2014 `$(DOCKER_SONIC_VS_CONSTANTS): files/image_config/constants/constants.yml`\n   - `platform/vs/docker-sonic-vs/.gitignore` \u2014 notes it is copied at build time from `files/image_config/constants/`\n   - These should consume the rendered/templated `constants.yml` instead of the static copy.\n\n2. **`sonic-bgpcfgd` tests** \u2014 use the static file as a fixture:\n   - `src/sonic-bgpcfgd/tests/test_sonic-cfggen.py:9` \u2014 `CONSTANTS_PATH = os.path.abspath('../../files/image_config/constants/constants.yml')`\n   - `src/sonic-bgpcfgd/tests/util.py:4` \u2014 same `CONSTANTS_PATH`\n   - `src/sonic-bgpcfgd/tests/test_bgp.py:14` \u2014 `paths = [\"tests/data/constants\", \"../../files/image_config/constants\"]`\n   - These should point at the templated source (rendered output, or a test fixture derived from `constants.yml.j2`).\n\n## Proposed work\n\n- [ ] Repoint `platform/vs/docker-sonic-vs.mk` (and the `.gitignore` note) to the build-rendered/templated `constants.yml` instead of the static file.\n- [ ] Update `sonic-bgpcfgd` tests (`test_sonic-cfggen.py`, `util.py`, `test_bgp.py`) to source constants from the template (or a fixture rendered from it).\n- [ ] Delete `files/image_config/constants/constants.yml`.\n- [ ] Verify a VS image build still produces a correct `/etc/sonic/constants.yml`, and `sonic-bgpcfgd` tests pass.\n\n## References\n\n- Follow-up to #27877 \u2014 https://github.com/sonic-net/sonic-buildimage/pull/27877\n- Template that now owns the data: `files/build_templates/constants.yml.j2`\n- Build render step: `files/build_templates/sonic_debian_extension.j2`"
+  },
+  "resolution": {
+    "pr_number": 28012,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28012",
+    "title": "[build] Remove redundant static files/image_config/constants/constants.yml (superseded by constants.yml.j2)",
+    "merged_at": "2026-07-05T07:08:55Z",
+    "description": "## Description\n\nRemoves the redundant static `files/image_config/constants/constants.yml` and migrates its remaining consumers to the shared build template `files/build_templates/constants.yml.j2`.\n\nThe image's `/etc/sonic/constants.yml` is generated at build time by rendering `files/build_templates/constants.yml.j2` (see `files/build_templates/sonic_debian_extension.j2`):\n\n```sh\nj2 files/build_templates/constants.yml.j2 | sudo tee $FILESYSTEM_ROOT/etc/sonic/constants.yml > /dev/null\n```\n\nSince #27877, that template also carries build-time conditionals such as:\n\n```jinja\n  frr:\n    enable_snmp_agent: {{ 'true' if ENABLE_FRR_SNMP_AGENT == 'y' else 'false' }}\n```\n\nThe static `files/image_config/constants/constants.yml` was a parallel, hand-maintained copy of the same data. It cannot express those build-time conditionals, and keeping two sources of truth invites drift. This PR makes the template the single source.\n\nFixes #28011\n\n### Why I did it\n\n- The authoritative, build-rendered constants now come from `files/build_templates/constants.yml.j2`.\n- The static copy duplicated that data and had to be kept in sync by hand.\n- Two sources of truth for `constants.yml` is error-prone.\n\n### How I did it\n\nMigrated the two remaining consumers off the static file, then deleted it:\n\n**VS docker image**\n- `platform/vs/docker-sonic-vs.mk` \u2014 render `constants.yml` from `files/build_templates/constants.yml.j2` via `j2` (j2cli is already installed in the sonic-slave image) instead of `cp`-ing the static file. Pass `ENABLE_FRR_SNMP_AGENT` through so the VS image's constants match real images.\n- `platform/vs/docker-sonic-vs/.gitignore` \u2014 update the \"copied at build time\" note to point at the template.\n\n**sonic-bgpcfgd unit tests** (used the static file as a fixture)\n- `src/sonic-bgpcfgd/tests/util.py` \u2014 add `render_constants()` that renders the template (`jinja2` is already a dependency) to a temp file and points `CONSTANTS_PATH` at it; defaults `ENABLE_FRR_SNMP_AGENT` to `y` (same default as `rules/config`).\n- `src/sonic-bgpcfgd/tests/test_bgp.py` \u2014 use `render_constants()` for the production constants fixture instead of `../../files/image_config/constants`.\n- `src/sonic-bgpcfgd/tests/test_sonic-cfggen.py` \u2014 drop the unused `CONSTANTS_PATH`.\n\n**Removal**\n- Delete `files/image_config/constants/constants.yml`.\n\n### How to verify it\n\n1. VS image build produces a correct `/etc/sonic/constants.yml`:\n   ```\n   admin@vlab:~$ cat /etc/sonic/constants.yml | head\n   admin@vlab:~$ grep -A1 \"frr:\" /etc/sonic/constants.yml\n     frr:\n       enable_snmp_agent: true\n   ```\n2. `sonic-bgpcfgd` unit tests pass (they now render the template for the production constants fixture):\n   ```\n   cd src/sonic-bgpcfgd && pytest tests/test_bgp.py tests/test_templates.py tests/test_sonic-cfggen.py\n   ```\n3. No remaining references to the removed path:\n   ```\n   git grep image_config/constants   # only docs/none\n   ```\n\nLocally verified that the rendered template loads correctly (`constants.bgp.peers`, `constants.frr.enable_snmp_agent`) and that `load_constants_dir_mappings()` returns the expected peer types.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305",
+    "files": [
+      {
+        "path": "files/image_config/constants/constants.yml",
+        "additions": 0,
+        "deletions": 78
+      },
+      {
+        "path": "platform/vs/docker-sonic-vs.mk",
+        "additions": 6,
+        "deletions": 3
+      },
+      {
+        "path": "platform/vs/docker-sonic-vs/.gitignore",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_bgp.py",
+        "additions": 8,
+        "deletions": 7
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_sonic-cfggen.py",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/util.py",
+        "additions": 29,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "id": "buildimage-25890",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25890,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25890",
+    "title": "Bug: makedump is not compatible with 6.12 kernel",
+    "created_at": "2026-03-04T18:31:12Z",
+    "closed_at": "2026-03-25T18:08:07Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nmakedumpfile is pinned to 1.7.6 on [debian](https://packages.debian.org/trixie/makedumpfile) for 6.12 kernel\n\n<img width=\"1440\" height=\"262\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/4aafa1cb-2eb2-4bff-9021-b7dddce42e61\" />\n\nTo query the makedumpfile version\n```\n$ dpkg -l makedumpfile\nDesired=Unknown/Install/Remove/Purge/Hold\n| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend\n|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)\n||/ Name           Version      Architecture Description\n+++-==============-============-============-=================================\nii  makedumpfile   1:1.7.6-1    amd64        VMcore extraction tool\n```\n\nHowever, 1.7.6 is not compatible with 6.12  ([ref](https://github.com/makedumpfile/makedumpfile/releases/tag/1.7.6))\n\n<img width=\"1440\" height=\"808\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/7d999cc8-01f8-40a0-ae22-2a46c3052f08\" />\n\nFor 6.12, we should use makedumpfile >= 1.7.7 ([ref](https://github.com/makedumpfile/makedumpfile/releases/tag/1.7.7)) which is compatible with 6.12 and fixes an issue specific to 6.12\n\n<img width=\"1440\" height=\"794\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/95612f77-8669-4978-befc-7424c63fe421\" />\n\nOn 6.12, makedumpfile reports 0 FREE pages (classifying them as `KERN_DATA` instead), which does not seem correct. Since makedumpfile is required to capture all pages in used by the kernel, this makes the core dump very large and takes a long time for kdump to complete.\n\n```\n$ sudo makedumpfile --mem-usage /proc/kcore\nThe kernel version is not supported.\nThe makedumpfile operation may be incomplete.\nTYPE\t\tPAGES\t\t\tEXCLUDABLE\tDESCRIPTION\n----------------------------------------------------------------------\nZERO\t\t89343           \tyes\t\tPages filled with zero\nNON_PRI_CACHE\t646424          \tyes\t\tCache pages without private flag\nPRI_CACHE\t65827           \tyes\t\tCache pages with private flag\nUSER\t\t666096          \tyes\t\tUser process pages\nFREE\t\t0               \tyes\t\tFree pages\nKERN_DATA\t6885323         \tno\t\tDumpable kernel data\npage size:\t\t4096\nTotal pages on system:\t8353013\nTotal size on system:\t34213941248      Byte\n```\n\nSize of core dump (~7 GiB)\n\n```\n$ ls -l /var/crash/202602262349/\ntotal 7412984\n-rw------- 1 root root     304964 Feb 26 23:49 dmesg.202602262349\n-rw-r--r-- 1 root root 7590581090 Feb 26 23:53 kdump.202602262349\n```\n\nThe same command on 6.1\n\n```\n$ sudo makedumpfile --mem-usage /proc/kcore\nThe kernel version is not supported.\nThe makedumpfile operation may be incomplete.\nTYPE\t\tPAGES\t\t\tEXCLUDABLE\tDESCRIPTION\n----------------------------------------------------------------------\nZERO\t\t95856           \tyes\t\tPages filled with zero\nNON_PRI_CACHE\t615186          \tyes\t\tCache pages without private flag\nPRI_CACHE\t15085           \tyes\t\tCache pages with private flag\nUSER\t\t877145          \tyes\t\tUser process pages\nFREE\t\t6354174         \tyes\t\tFree pages\nKERN_DATA\t266543          \tno\t\tDumpable kernel data\npage size:\t\t4096\nTotal pages on system:\t8223989\nTotal size on system:\t33685458944      Byte\n```\n\nSize of core dump (~150 MiB)\n\n```\n$ ls -l /var/crash/202602262359/\ntotal 153752\n-rw------- 1 root root    267051 Feb 26 23:59 dmesg.202602262359\n-rw-r--r-- 1 root root 157169130 Feb 26 23:59 kdump.202602262359\n```\n\n### Steps to Reproduce\n\nUsing any image with 6.12 kernel\n```\n$ show ver | grep Kernel\nKernel: 6.12.41+deb13-sonic-amd64\n...\n```\n\n1. Trigger kernel panic (`echo c > /proc/sysrq-trigger`)\n2. kdump takes almost 5 minutes (can be seen from console logs)\n\n```\n[    0.181790] [Firmware Bug]: the BIOS has corrupted hw-PMU resources (MSR c0010200 is 530076)\n[    0.303119] platform AMDI0020:00: AMD-Vi: [Firmware Bug]: No ACPI device matched UID, but 1 device matched HID.\n+ '[' -z  ]\n+ BOOT=local\n+ '[' -n  ]\n+ '['  '=' none ]\n+ resume=\n+ mount -t tmpfs -o 'nodev,noexec,nosuid,size=10%,mode=0755' tmpfs /run\n+ mkdir -m 0700 /run/initramfs\n[    1.664751] i2c_designware AMDI0010:03: Unknown Synopsys component type: 0xffffffff\n+ '[' -n /run/initramfs/initramfs.debug ]\n+ exec\n[  254.360408] sysrq: Resetting\n```\n\n### Actual Behavior and Expected Behavior\n\nOn 6.1, the kdump takes around 10 seconds only\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25899,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25899",
+    "title": "Use makedumpfile 1.7.7 compatible with 6.12 kernel",
+    "merged_at": "2026-03-25T18:08:05Z",
+    "description": "#### Why I did it\n\nKdump takes a long time to complete because makedumpfile is version 1.7.6 which is not compatible with 6.12\n([ref](https://github.com/makedumpfile/makedumpfile/releases/tag/1.7.6)). It incorrectly classifies free pages as in use by kernel, resulting in extremely large core dump file and taking a long time to generate. On 6.1, makedumpfile is 1.7.2.\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/25890\n\nOn 6.12., core dump is large with no `FREE` pages\n\n```\n$ uname -a\nLinux gold404 6.12.41+deb13-sonic-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.41-1 (2025-08-12) x86_64 GNU/Linux\n\n$ ls -l /var/crash/202602262349/\ntotal 7412984\n-rw------- 1 root root     304964 Feb 26 23:49 dmesg.202602262349\n-rw-r--r-- 1 root root 7590581090 Feb 26 23:53 kdump.202602262349\n\n$ dpkg -l makedumpfile\nDesired=Unknown/Install/Remove/Purge/Hold\n| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend\n|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)\n||/ Name           Version      Architecture Description\n+++-==============-============-============-=================================\nii  makedumpfile   1:1.7.6-1    amd64        VMcore extraction tool\n\n$ sudo makedumpfile --mem-usage /proc/kcore\nThe kernel version is not supported.\nThe makedumpfile operation may be incomplete.\nTYPE\t\tPAGES\t\t\tEXCLUDABLE\tDESCRIPTION\n----------------------------------------------------------------------\nZERO\t\t89343           \tyes\t\tPages filled with zero\nNON_PRI_CACHE\t646424          \tyes\t\tCache pages without private flag\nPRI_CACHE\t65827           \tyes\t\tCache pages with private flag\nUSER\t\t666096          \tyes\t\tUser process pages\nFREE\t\t0               \tyes\t\tFree pages\nKERN_DATA\t6885323         \tno\t\tDumpable kernel data\npage size:\t\t4096\nTotal pages on system:\t8353013\nTotal size on system:\t34213941248      Byte\n```\n\nOn 6.1, core dump is much smaller\n\n```\n$ ls -l /var/crash/202602262359/\ntotal 153752\n-rw------- 1 root root    267051 Feb 26 23:59 dmesg.202602262359\n-rw-r--r-- 1 root root 157169130 Feb 26 23:59 kdump.202602262359\n\n$ dpkg -l makedumpfile\nDesired=Unknown/Install/Remove/Purge/Hold\n| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend\n|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)\n||/ Name           Version      Architecture Description\n+++-==============-============-============-=================================\nii  makedumpfile   1:1.7.2-1    amd64        VMcore extraction tool\n\n$ sudo makedumpfile --mem-usage /proc/kcore\nThe kernel version is not supported.\nThe makedumpfile operation may be incomplete.\nTYPE\t\tPAGES\t\t\tEXCLUDABLE\tDESCRIPTION\n----------------------------------------------------------------------\nZERO\t\t95856           \tyes\t\tPages filled with zero\nNON_PRI_CACHE\t615186          \tyes\t\tCache pages without private flag\nPRI_CACHE\t15085           \tyes\t\tCache pages with private flag\nUSER\t\t877145          \tyes\t\tUser process pages\nFREE\t\t6354174         \tyes\t\tFree pages\nKERN_DATA\t266543          \tno\t\tDumpable kernel data\npage size:\t\t4096\nTotal pages on system:\t8223989\nTotal size on system:\t33685458944      Byte\n```\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nInclude makedumpfile 1.7.7\n([ref](https://github.com/makedumpfile/makedumpfile/releases/tag/1.7.7)) in the build image, which has support for 6.12 kernel and fixes an issue specific to 6.12.\n\n#### How to verify it\n\n- Verify 1.7.7 makedumpfile is installed\n- Verify FREE pages are classified correctly\n\n```\n$ dpkg -l makedumpfile\nDesired=Unknown/Install/Remove/Purge/Hold\n| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend\n|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)\n||/ Name           Version      Architecture Description\n+++-==============-============-============-=================================\nii  makedumpfile   1:1.7.7-1+b1 amd64        VMcore extraction tool\n\n$ sudo makedumpfile --mem-usage /proc/kcore\n\nTYPE\t\tPAGES\t\t\tEXCLUDABLE\tDESCRIPTION\n----------------------------------------------------------------------\nZERO\t\t66146           \tyes\t\tPages filled with zero\nNON_PRI_CACHE\t586502          \tyes\t\tCache pages without private flag\nPRI_CACHE\t49224           \tyes\t\tCache pages with private flag\nUSER\t\t455887          \tyes\t\tUser process pages\nFREE\t\t6820384         \tyes\t\tFree pages\nKERN_DATA\t374870          \tno\t\tDumpable kernel data\n\npage size:\t\t4096\nTotal pages on system:\t8353013\nTotal size on system:\t34213941248      Byte\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "build_debian.sh",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "files/build_templates/sonic_debian_extension.j2",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "rules/makedumpfile.dep",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "rules/makedumpfile.mk",
+        "additions": 12,
+        "deletions": 0
+      },
+      {
+        "path": "slave.mk",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/makedumpfile/Makefile",
+        "additions": 28,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

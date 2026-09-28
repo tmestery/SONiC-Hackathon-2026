@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-23635",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 23635,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/23635",
+    "title": "Bug:Removing a vlan member followed by adding the port to portchannel may sometime lead to crash if configs are processed in reverse order when orchagent is busy",
+    "created_at": "2025-08-07T22:46:32Z",
+    "closed_at": "2026-03-31T20:37:04Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen a port, which is part of a Vlan is removed from it and gets added to portchannel, sometimes when orchagent is busy the configs may get queued in redis and during processing, it gets handled in alphabetical order and not chrological order.\n\nThis would result in error logs like below and orchagent crash for versions before 202505.\n\n```\n2025 Aug  7 <IPV6>.592292 sonic ERR syncd#SDK: [SAI_LAG.ERR] ./src/mlnx_sai_lag.c[726]- validate_port: Can't add port which is under bridge\n2025 Aug  7 <IPV6>.592461 sonic ERR syncd#SDK: :- sendApiResponse: api SAI_COMMON_API_CREATE failed in syncd mode: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 <IPV6>.592926 sonic ERR swss#orchagent: :- create: create status: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 <IPV6>.593116 sonic ERR swss#orchagent: :- addLagMember: Failed to add member Ethernet0 to LAG PortChannel1 lid:20000000005a8 pid:100000000000d\n2025 Aug  7 <IPV6>.593529 sonic ERR swss#orchagent: :- handleSaiFailure: Encountered failure in create operation, SAI API: SAI_API_LAG, status: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 <IPV6>.593570 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_LAG_ID: oid:0x20000000005a8\n2025 Aug  7 <IPV6>.593570 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_PORT_ID: oid:0x100000000000d\n2025 Aug  7 <IPV6>.593598 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_EGRESS_DISABLE: true\n2025 Aug  7 <IPV6>.593598 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_INGRESS_DISABLE: true\n2025 Aug  7 <IPV6>.415477 sonic ERR swss#orchagent: :- set: switch id oid:0x0 doesn't exist\n2025 Aug  7 <IPV6>.416028 sonic ERR swss#orchagent: :- setDistributionOnLagMember: Failed to disable distribution on LAG member Ethernet0\n2025 Aug  7 <IPV6>.416092 sonic ERR swss#orchagent: :- handleSaiFailure: Encountered failure in set operation, SAI API: SAI_API_LAG, status: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 <IPV6>.929435 sonic ERR swss#orchagent: :- set: switch id oid:0x0 doesn't exist\n2025 Aug  7 <IPV6>.929478 sonic ERR swss#orchagent: :- setCollectionOnLagMember: Failed to disable collection on LAG member Ethernet0\n2025 Aug  7 <IPV6>.929519 sonic ERR swss#orchagent: :- handleSaiFailure: Encountered failure in set operation, SAI API: SAI_API_LAG, status: SAI_STATUS_INVALID_PARAMETER\n```\n\nThere is a check in CLI but the check just checks config_db https://github.com/sonic-net/sonic-utilities/blob/1418f218825484551b1f8893ff836d420f0a6135/config/main.py#L2728\n\n### Steps to Reproduce\n\nconfig vlan add 10\nconfig vlan member add 10 Ethernet0\n\nIn a parallel session attach gdb to orchagent.\n\nconfig vlan member del 10 Ethernet0\nconfig portchannel add PortChannel1\nconfig portchannel member add PortChannel1 Ethernet0\n\n### Actual Behavior and Expected Behavior\n\nActual behavior: Errors in logs and crash prior to 202505\n\nExpected behavior. No errors in log or crash.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4387,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4387",
+    "title": "[portsorch]: Fix Errors when removing VLAN member and adding port to P\u2026",
+    "merged_at": "2026-03-31T20:37:03Z",
+    "description": "This PR fixed the bug Fixes sonic-net/sonic-buildimage#23635\n\n**Summary**\n\nWhen a port is removed from a VLAN and added to a PortChannel in quick succession (e.g., when orchagent is busy), the operations queue up in Redis. Because orchagent processes `LAG_MEMBER_TABLE` before `VLAN_MEMBER_TABLE` (alphabetical order at the same priority), it attempts to add the port to the LAG while the port is still a bridge member. This causes SAI error `\"Can't add port which is under bridge\"` and a crash on versions prior to 202505.\n\nThe fix defers the LAG member addition when `m_portVlanMember` for the port is non-empty, allowing the VLAN member removal to complete first. On the next `doTask()` cycle, the LAG member addition proceeds successfully.\n\n**How I verified it**\n\n1. **End-to-end testing on canonical SONiC testbed:**\n```\n$ sudo config vlan add 12\n<IPV6>.434747 NOTICE addVlan: Create an empty VLAN Vlan12 vid:12 vlan_oid:260000000005ae\n```\n\n```\n$ sudo config vlan member add 12 Ethernet0\n<IPV6>.034743 NOTICE addVlanMember: Add member Ethernet0 to VLAN Vlan12 vid:12 pid1000000000017\n```\ngdb pause orchagent in another session, then in previous session, run:\n```\nsudo config vlan member del 12 Ethernet0\nsudo config portchannel add PortChannel1\nsudo config portchannel member add PortChannel1 Ethernet0\n```\n\nthen continue gdb in the other session, then we will see:\n\n```\n2026 Mar 12 <IPV6>.123568 sonic INFO swss#orchagent: :- doLagMemberTask: Port Ethernet0 is still a member of 1 VLAN(s), skipping adding port to port channel.\n2026 Mar 12 <IPV6>.123568 sonic INFO swss#orchagent: :- doLagMemberTask: Port Ethernet0 is still a member of 1 VLAN(s), skipping adding port to port channel.\n2026 Mar 12 <IPV6>.125843 sonic INFO swss#orchagent: :- doLagMemberTask: Port Ethernet0 is still a member of 1 VLAN(s), skipping adding port to port channel.\n ...\n2026 Mar 12 <IPV6>.136631 sonic NOTICE swss#orchagent: :- removeVlanMember: Remove member Ethernet0 from VLAN Vlan12 lid:c vmid:270000000005b0\n\n...\n2026 Mar 12 <IPV6>.209554 sonic NOTICE swss#orchagent: :- addLagMember: Add member Ethernet0 to LAG PortChannel1 lid:20000000005b1 pid:1000000000017\n```\n\nand validate the SAI message disappear:\n   ```\n   show logging | grep \"Can't add port which is under bridge\"\n   # Returns nothing (no SAI error)\n   ```\n2. **C++ mock test** (`tests/mock_tests/portsorch_ut.cpp`): `VlanLagRaceTest.LagMemberAddDeferredWhileVlanMemberPending` \u2014 verifies the LAG member add is deferred while `m_portVlanMember` is non-empty, then succeeds after the VLAN member removal completes across two `doTask()` cycles. Runs automatically during swss `.deb` build.",
+    "files": [
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 9,
+        "deletions": 1
+      },
+      {
+        "path": "tests/mock_tests/portsorch_ut.cpp",
+        "additions": 130,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

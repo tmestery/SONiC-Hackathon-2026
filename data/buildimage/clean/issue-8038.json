@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-8038",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8038,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8038",
+    "title": "test_pfc_pause/unpause were consistently failing",
+    "created_at": "2021-07-02T01:51:06Z",
+    "closed_at": "2021-07-06T08:05:05Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\n```test_pfc_pause``` and ```test_pfc_unpause``` were consistently failing since 202012.05.\n```\n for intf in active_phy_intfs:\n            if is_pfc:\n>               assert counter_facts[intf]['Rx'] == [str(PKT_COUNT)] * PRIO_COUNT\nE               AssertionError\n```\npfc counters on all interfaces are ```0```, which should be ```10``` by default.\nThe most interesting thing is both cases will pass consistently when manually run. They are only failing during nightly regression test. So probably it's a test issue or testbed issue.\n\n#### Steps to reproduce the issue:\n1. Run nightly test\n2.\n3.\n\n#### Describe the results you received:\n\n#### Describe the results you expected:\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: SONiC.20201231.06\nDistribution: Debian 10.10\nKernel: 4.19.0-12-2-amd64\nBuild commit: 959975cede\nBuild date: Sun Jun 27 <IPV6> UTC 2021\nBuilt by: sonicbld@new-worker-3\n\nPlatform: x86_64-mlnx_msn4600c-r0\nHwSKU: ACS-MSN4600C\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT2023X22076\nUptime: <IPV6> up 38 min,  1 user,  load average: 1.71, 1.66, 1.33\n\nDocker images:\nREPOSITORY                 TAG                 IMAGE ID            SIZE\ndocker-syncd-mlnx          20201231.06         42d6ffdfe275        949MB\ndocker-syncd-mlnx          latest              42d6ffdfe275        949MB\ndocker-snmp                20201231.06         939ec311b090        442MB\ndocker-snmp                latest              939ec311b090        442MB\ndocker-teamd               20201231.06         3d5eb84b8638        411MB\ndocker-teamd               latest              3d5eb84b8638        411MB\ndocker-router-advertiser   20201231.06         664776e59047        401MB\ndocker-router-advertiser   latest              664776e59047        401MB\ndocker-platform-monitor    20201231.06         da638c6978f4        720MB\ndocker-platform-monitor    latest              da638c6978f4        720MB\ndocker-lldp                20201231.06         e3409bf8deea        441MB\ndocker-lldp                latest              e3409bf8deea        441MB\ndocker-dhcp-relay          20201231.06         85d89ad6b55b        408MB\ndocker-dhcp-relay          latest              85d89ad6b55b        408MB\ndocker-database            20201231.06         5793b71a61ee        401MB\ndocker-database            latest              5793b71a61ee        401MB\ndocker-orchagent           20201231.06         00d7e97adcab        430MB\ndocker-orchagent           latest              00d7e97adcab        430MB\ndocker-sonic-telemetry     20201231.06         f7c06d9a106e        490MB\ndocker-sonic-telemetry     latest              f7c06d9a106e        490MB\ndocker-mux                 20201231.06         fab98aff516d        453MB\ndocker-mux                 latest              fab98aff516d        453MB\ndocker-fpm-frr             20201231.06         3f8749e6d035        430MB\ndocker-fpm-frr             latest              3f8749e6d035        430MB\ndocker-sonic-restapi       20201231.06         dabab0ec4fee        352MB\ndocker-sonic-restapi       latest              dabab0ec4fee        352MB\ndocker-acms                20201231.06         988d77d3c362        197MB\ndocker-acms                latest              988d77d3c362        197MB\nk8s.gcr.io/pause           3.4.1               0f8457a4c2ec        683kB\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 3736,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/3736",
+    "title": "Enable flex counter for ports in ```test_pfc_counters```",
+    "merged_at": "2021-07-06T08:05:04Z",
+    "description": "### Description of PR\n\nSummary:\nFixes https://github.com/Azure/sonic-buildimage/issues/8038\n\nFixes test errors of ```test_pfc_counters```.\n\n```test_pfc_counters::test_pfc_pause/unpause``` failed because pfc counter doesn't increase as expected. The root cause of the issue is ```fast-reboot``` will disable all ```flex_counters```\nhttps://github.com/Azure/sonic-utilities/blob/4818360d7d9f5460169bce9a9f87f44311647a64/scripts/fast-reboot#L674\n```\nif [[ \"$REBOOT_TYPE\" = \"fast-reboot\" ]]; then\n    CONFIG_DB_FILE=/etc/sonic/config_db.json\n    COUNTERPOLL_DISABLE_RC=0\n    # Disable counters in config_db.json\n    /usr/local/bin/counterpoll config-db disable $CONFIG_DB_FILE || COUNTERPOLL_DISABLE_RC=$?\n    if [[ COUNTERPOLL_DISABLE_RC -ne 0 ]]; then\n        error \"Failed to disable counterpoll. Exit code: $COUNTERPOLL_DISABLE_RC\"\n        /usr/local/bin/counterpoll config-db enable $CONFIG_DB_FILE || COUNTERPOLL_DISABLE_RC=$?\n        unload_kernel\n        exit \"${EXIT_COUNTERPOLL_DISABLE_FAILURE}\"\n    fi\nfi\n```\nAs a result, the pfc counter will not increase if the case is run after ```fast-reboot``` and ```config reload```.\n\nThis PR addressed the issue by enable flex counter for ports in ```test_pfc_counters```\n\nSigned-off-by: bingwang <<EMAIL>>\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n\n### Approach\n#### What is the motivation for this PR?\nThis PR is to fix ```test_pfc_counters::test_pfc_pause/unpause```\n\n#### How did you do it?\nThis PR addressed the issue by enable flex counter for ports in ```test_pfc_counters```\n\n#### How did you verify/test it?\nVerified on SN4600. Both cases passed.\n\n#### Any platform specific information?\nNo.\n\n#### Supported testbed topology if it's a new test case?\nNo.\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/qos/test_pfc_counters.py",
+        "additions": 19,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

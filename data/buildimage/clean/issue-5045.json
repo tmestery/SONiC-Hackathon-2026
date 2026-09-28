@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-5045",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5045,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5045",
+    "title": "Master branch starting on build 353 BRCM DUT suffers SYNCD get switch_type failure resulting to Orchagent crash",
+    "created_at": "2020-07-27T07:07:28Z",
+    "closed_at": "2020-07-29T18:19:16Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "Starting with Master branch build 353 Orchagent crashes for BRCM DUTs.\nIf you look into the SYS log you will find the following:\n...\nJul 26 <IPV6>.980049 str-s6000-acs-8 NOTICE syncd#syncd: :- helperSaveDiscoveredObjectsToRedis: save discovered objects to redis took 2.731556 sec\nJul 26 <IPV6>.984351 str-s6000-acs-8 WARNING syncd#syncd: :- helperGetSwitchAttrOid: failed to get SAI_SWITCH_ATTR_ECMP_HASH: SAI_STATUS_NOT_SUPPORTED\nJul 26 <IPV6>.984351 str-s6000-acs-8 WARNING syncd#syncd: :- helperGetSwitchAttrOid: failed to get SAI_SWITCH_ATTR_LAG_HASH: SAI_STATUS_NOT_SUPPORTED\nJul 26 <IPV6>.984351 str-s6000-acs-8 ERR syncd#syncd: :- getSwitchType: failed to get switch type\nJul 26 <IPV6>.984351 str-s6000-acs-8 NOTICE syncd#syncd: :- SaiSwitch: constructor took 3.042757 sec\nJul 26 <IPV6>.987625 str-s6000-acs-8 ERR syncd#syncd: :- run: Runtime error: :- getSwitchType: failed to get switch type\nJul 26 <IPV6>.987625 str-s6000-acs-8 NOTICE syncd#syncd: :- sendShutdownRequest: sending switch_shutdown_request notification to OA for switch: oid:0x0\nJul 26 <IPV6>.988511 str-s6000-acs-8 NOTICE syncd#syncd: :- sendShutdownRequestAfterException: notification send successfull\n...\nWhich leads to Orchagent crash.\n\nGuoHan suspected that this crash was introduced by:\nsonic-sairedis: Add support to sonic-sairedis for gearbox phys (#632)\n(https://github.com/Azure/sonic-sairedis/pull/632)\n\nI have tried commenting out the code that was causing this issue in\nsai_switch_type_t SaiSwitch::getSwitchType()  where the get switch_type failure on BRCM DUT (with return status -3 NO MEMORY) was causing the SWSS_LOG_THROW(\"failed to get switch type\")  that leads to Orchagent crash  by not causing the crash but to default to return \"SAI_SWITCH_TYPE_NPU\" instead.  This helped resolved the Orchagent crash issue but it exposed the  next layer of issues where it now continuously showing something as following:\n\nJul 25 <IPV6>.344512 str-s6000-acs-8 ERR syncd#syncd: :- guard: RedisReply catches system_error: command: *8#015#012$7#015#012EVALSHA#015#012$40#015#01231fc701ca9b1b9f968f501c92b639f50f6346a9c#015#012$1#015#0121#015#012$19#015#012oid:0x1000000000008#015#012$1#015#0122#015#012$8#015#012COUNTERS#015#012$7#015#0121000000#015#012$2#015#012''#015#012, reason: ERR Error running script (call to f_31fc701ca9b1b9f968f501c92b639f50f6346a9c): @user_script:21: user_script:21: attempt to perform arithmetic on local 'alpha' (a boolean value) : Input/output error\nJul 25 <IPV6>.345213 str-s6000-acs-8 ERR syncd#syncd: :- runRedisScript: Caught exception while running Redis lua script: ERR Error running script (call to f_31fc701ca9b1b9f968f501c92b639f50f6346a9c): @user_script:21: user_script:21: attempt to perform arithmetic on local 'alpha' (a boolean value) : Input/output error\n\n---------------------------------------------------\nBUG REPORT INFORMATION\n---------------------------------------------------\n\n**Steps to reproduce the issue:**\n1. Load any master branch build starting with image 353 on any BRCM DUT\n2. Once it boots up you will see Orchagent crashed and if you investigate the syslog you will see the first error I reported above.\n\nMaster.350 was the last good build that did not suffer this issue.  Unfortunately master.351 and master.352 both had build issues so we don't have their test results.\n    **Output of `show version`:**\n\nadmin@str-s6000-acs-8:~$ show version\n\nSONiC Software Version: SONiC.master.353-b3ae7858\nDistribution: Debian 10.4\nKernel: 4.19.0-9-2-amd64\nBuild commit: b3ae7858\nBuild date: Sun Jul 19 <IPV6> UTC 2020\nBuilt by: johnar@jenkins-worker-7\n\nPlatform: x86_64-dell_s6000_s1220-r0\nHwSKU: Force10-S6000\nASIC: broadcom\nSerial Number: 1QBRX42\nUptime: <IPV6> up 38 min,  1 user,  load average: 0.15, 0.10, 0.35\n\nDocker images:\nREPOSITORY                    TAG                   IMAGE ID            SIZE\ndocker-teamd                  latest                be843e740dd2        380MB\ndocker-teamd                  master.353-b3ae7858   be843e740dd2        380MB\ndocker-nat                    latest                d7faaa0c4d23        382MB\ndocker-nat                    master.353-b3ae7858   d7faaa0c4d23        382MB\ndocker-router-advertiser      latest                f5d8a5da5e15        350MB\ndocker-router-advertiser      master.353-b3ae7858   f5d8a5da5e15        350MB\ndocker-platform-monitor       latest                844697e3e64a        422MB\ndocker-platform-monitor       master.353-b3ae7858   844697e3e64a        422MB\ndocker-database               latest                f63204dd0f61        351MB\ndocker-database               master.353-b3ae7858   f63204dd0f61        351MB\ndocker-lldp                   latest                ebfc33f71809        377MB\ndocker-lldp                   master.353-b3ae7858   ebfc33f71809        377MB\ndocker-orchagent              latest                d8c14690e66c        393MB\ndocker-orchagent              master.353-b3ae7858   d8c14690e66c        393MB\ndocker-sonic-telemetry        latest                8764f9533b8d        414MB\ndocker-sonic-telemetry        master.353-b3ae7858   8764f9533b8d        414MB\ndocker-snmp                   latest                8605e02d8f8b        390MB\ndocker-snmp                   master.353-b3ae7858   8605e02d8f8b        390MB\ndocker-dhcp-relay             latest                870bed6def46        357MB\ndocker-dhcp-relay             master.353-b3ae7858   870bed6def46        357MB\ndocker-sonic-mgmt-framework   latest                a1cf99e915fe        473MB\ndocker-sonic-mgmt-framework   master.353-b3ae7858   a1cf99e915fe        473MB\ndocker-sflow                  latest                577f5c5eed53        383MB\ndocker-sflow                  master.353-b3ae7858   577f5c5eed53        383MB\ndocker-syncd-brcm             latest                21dd40c5d954        447MB\ndocker-syncd-brcm             master.353-b3ae7858   21dd40c5d954        447MB\ndocker-fpm-frr                latest                4e1bfd2f9ab7        340MB\ndocker-fpm-frr                master.353-b3ae7858   4e1bfd2f9ab7        340MB\n\n[get_switch_type_failure_casue_orchagent_crash_syslog.txt](https://github.com/Azure/sonic-buildimage/files/4980475/get_switch_type_failure_casue_orchagent_crash_syslog.txt)"
+  },
+  "resolution": {
+    "pr_number": 5052,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/5052",
+    "title": "[sonic-sairedis] Update Submodule",
+    "merged_at": "2020-07-28T21:57:17Z",
+    "description": "Advance submodule head for sonic-sairedis on Master branch\n\n**- Why I did it**\nThe following are the commits in the submodule:\n\n    Workaround getSwitchType failure due to NPU SAI not yet supporting it (#647)\n    commit 4a3a568ad12d8f953c4b4a33ae39744a5bd57025\n\n    Adding support for new SAI API sai_query_attribute_capability() (#645)\n    commit 8d3ae8c6546dcfdc06cf84e1a59bc2a615651a72\n\n    [syncd] ARM32 bit fixes, for 64bit printf format specifier. (#643)\n    Signed-off-by: Rajkumar Pennadam Ramamoorthy <<EMAIL>>\n    commit 8809d53871169775e8869328679987ba56e4c426\n\n    [syncd] Add support for synchronous bulk api (#640)\n    commit d54bfb45435685059578ea53453e797b87241617\n\n**- How I did it**\nUpdate sairedis submodule commit pointer\n\n**- Description for the changelog**\n\n**- A picture of a cute animal (not mandatory but encouraged)**",
+    "files": [
+      {
+        "path": "src/sonic-sairedis",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

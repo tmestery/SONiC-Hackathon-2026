@@ -1,0 +1,63 @@
+{
+  "id": "buildimage-18771",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 18771,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/18771",
+    "title": "rsyslog_plugin is hogging the CPU when high load is seen on rsyslog",
+    "created_at": "2024-04-23T21:19:04Z",
+    "closed_at": "2024-05-15T01:08:15Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [
+      "202305",
+      "202311"
+    ],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nWhen the rsyslog is put under high load, it'll spawn multiple worker threads. Each worker thread will inturn fork a rsyslog_plugin process. The worker thread and the plugin will use a pipe on STDIN to communicate.\n\nhttps://github.com/rsyslog/rsyslog/blob/1128d320750fb6cfe57b8ad53ef1d5ddf80c81cf/plugins/omprog/omprog.c#L285\n\n```\nsyslog.41.gz:Apr 20 <IPV6>.143367 r-tigon-17 INFO rsyslogd: main Q:Reg: high activity - starting 1 additional worker thread(s), currently 1 active worker threads. [v8.2302.0 try https://www.rsyslog.com/e/2439 ]\nsyslog.41.gz:Apr 20 <IPV6>.286313 r-tigon-17 INFO rsyslogd: [origin software=\"rsyslogd\" swVersion=\"8.2302.0\" x-pid=\"8707\" x-info=\"https://www.rsyslog.com\"] rsyslogd was HUPed\nsyslog.40.gz:Apr 20 <IPV6>.220370 r-tigon-17 INFO rsyslogd:  message repeated 2 times: [[origin software=\"rsyslogd\" swVersion=\"8.2302.0\" x-pid=\"8707\" x-info=\"https://www.rsyslog.com\"] rsyslogd was HUPed]\n```\n\nWhen the load reduces, the worker thread is destroyed but the rsyslog_plugin is not killed. The write end of the pipe is also closed\n\n```\nsyslog.40.gz:Apr 20 <IPV6>.220370 r-tigon-17 INFO rsyslogd:  message repeated 2 times: [[origin software=\"rsyslogd\" swVersion=\"8.2302.0\" x-pid=\"8707\" x-info=\"https://www.rsyslog.com\"] rsyslogd was HUPed]\nsyslog.40.gz:Apr 20 <IPV6>.227977 r-tigon-17 WARNING rsyslogd: omprog: program '/usr/bin/rsyslog_plugin' (pid 135130) did not terminate within timeout (5000 ms); ignoring it [v8.2302.0]\nsyslog.40.gz:Apr 20 <IPV6>.496622 r-tigon-17 WARNING rsyslogd: omprog: program '/usr/bin/rsyslog_plugin' (pid 134904) did not terminate within timeout (5000 ms); ignoring it [v8.2302.0]\nsyslog.40.gz:Apr 20 <IPV6>.496723 r-tigon-17 INFO rsyslogd: main Q:Reg: worker thread 55ca50b54f80 terminated, now 1 active worker threads [v8.2302.0 try https://www.rsyslog.com/e/2439 ]\n```\n\nBecause the write end is closed, the getline(cin) call returns immediately. This causes rsyslog_plugin to busy wait and inturn CPU spike.\nhttps://github.com/sonic-net/sonic-buildimage/blob/d3b18c40de9c1c472edfc9052d0b1de0679a31bc/src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.cpp#L109\n\nOn a long running system with high rate of logs, this would lead to multiple useless rsyslog_plugin processes\n\n```\ntop - <IPV6> up  1:29,  2 users,  load average: 46.16, 43.47, 38.25\nTasks: 386 total,  43 running, 341 sleeping,   0 stopped,   2 zombie\n%Cpu(s): 95.1 us,  2.8 sy,  2.1 ni,  0.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\nMiB Mem :  15888.1 total,   8462.3 free,   4540.2 used,   2885.6 buff/cache\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  10852.4 avail Mem\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n 113785 root      20   0   99868  10932   9760 R  37.5   0.1  12:25.22 rsyslog_plugin\n 205539 root      20   0   99868  10980   9804 R  37.5   0.1   4:32.36 rsyslog_plugin\n 239979 root      20   0   99868  10884   9708 R  37.5   0.1   1:10.28 rsyslog_plugin\n  31880 root      20   0   99868   9908   8924 R  31.2   0.1  32:11.02 rsyslog_plugin\n 130609 root      20   0   99868  10852   9676 R  31.2   0.1  10:34.99 rsyslog_plugin\n 166464 root      20   0   99868  10888   9704 R  31.2   0.1   7:59.76 rsyslog_plugin\n  60126 root      20   0   99868  10852   9672 R  25.0   0.1  21:46.07 rsyslog_plugin\n  96171 root      20   0   99868   9880   8892 R  25.0   0.1  14:42.70 rsyslog_plugin\n 218871 root      20   0  165404  10836   9656 R  25.0   0.1   2:59.42 rsyslog_plugin\n 218872 root      20   0   99868  10108   9116 R  25.0   0.1   2:56.49 rsyslog_plugin\n 240818 root      20   0   99868   9956   8968 R  25.0   0.1   1:09.86 rsyslog_plugin\n  20484 root      20   0   99868  10964   9784 R  18.8   0.1  37:42.67 rsyslog_plugin\n  50569 root      20   0   99868  10992   9816 R  18.8   0.1  25:49.64 rsyslog_plugin\n  60218 root      20   0   99868   9984   8992 R  18.8   0.1  21:52.68 rsyslog_plugin\n  60310 root      20   0   99868   9940   8948 R  18.8   0.1  21:53.43 rsyslog_plugin\n  60311 root      20   0   99868   9888   8896 R  18.8   0.1  21:43.25 rsyslog_plugin\n 113940 root      20   0   99868  10056   9068 R  18.8   0.1  12:28.81 rsyslog_plugin\n 122118 root      20   0   99868  11072   9892 R  18.8   0.1  11:36.21 rsyslog_plugin\n 130864 root      20   0   99868   9936   8944 R  18.8   0.1  10:38.11 rsyslog_plugin\n 130865 root      20   0   99868   9764   8776 R  18.8   0.1  10:43.04 rsyslog_plugin\n 139055 root      20   0   99868  10840   9668 R  18.8   0.1   9:55.15 rsyslog_plugin\n 156907 root      20   0   99868  10000   9012 R  18.8   0.1   8:50.00 rsyslog_plugin\n 177107 root      20   0   99868  10876   9696 R  18.8   0.1   6:50.08 rsyslog_plugin\n 196262 root      20   0   99868   9916   8932 R  18.8   0.1   5:08.17 rsyslog_plugin\n 218870 root      20   0   99868   9964   8976 R  18.8   0.1   2:58.80 rsyslog_plugin\n 250023 root      20   0   99868  10844   9668 R  18.8   0.1   0:33.83 rsyslog_plugin\n  31751 root      20   0   99868  10012   9024 R  12.5   0.1  31:37.50 rsyslog_plugin\n  50444 root      20   0   99868   9968   8984 R  12.5   0.1  25:51.36 rsyslog_plugin\n  50455 root      20   0   99868  10056   9068 R  12.5   0.1  25:44.68 rsyslog_plugin\n  77543 root      20   0   99868  11012   9832 R  12.5   0.1  17:52.90 rsyslog_plugin\n  77700 root      20   0   99868   9812   8824 R  12.5   0.1  17:36.58 rsyslog_plugin\n  85992 root      20   0   99868  10920   9740 R  12.5   0.1  16:37.89 rsyslog_plugin\n  96018 root      20   0   99868  10908   9728 R  12.5   0.1  14:30.89 rsyslog_plugin\n 104532 root      20   0   99868  10940   9756 R  12.5   0.1  13:38.01 rsyslog_plugin\n 130863 root      20   0  165404  10952   9760 R  12.5   0.1  10:33.07 rsyslog_plugin\n 139590 root      20   0   99868  10024   9040 R  12.5   0.1   9:59.18 rsyslog_plugin\n 147852 root      20   0   99868  11020   9848 R  12.5   0.1   9:26.23 rsyslog_plugin\n 187155 root      20   0   99868  10044   9056 R  12.5   0.1   5:47.43 rsyslog_plugin\n 218423 root      20   0   99868  11004   9824 R  12.5   0.1   2:54.24 rsyslog_plugin\n 228543 root      20   0   99868   9968   8980 R  12.5   0.1   2:13.40 rsyslog_plugin\n 259539 root      20   0   99868  10900   9720 R  12.5   0.1   0:02.38 rsyslog_plugin\n  12754 root      20   0 1712848  78920  27184 S   6.2   0.5   0:19.14 telemetry\n 186646 root      20   0   99868  11024   9848 R   6.2   0.1   5:54.05 rsyslog_plugin\n\n```\n\n#### Steps to reproduce the issue:\nGenerate a situation which would cause the switch to emit a lot of logs and make sure rsyslog spawns multiple threads\n\n#### Output of `show version`:\nIssue seen on master & 202311. Possible on 202305 as well\n\n#### Potential Fix:\nRef: https://www.rsyslog.com/doc/configuration/modules/omprog.html#signalonclose\n\n> If this switch is set to \u201con\u201d, rsyslog will send a TERM signal to the child process before closing the pipe. That is, the process will first receive a TERM signal, and then an EOF on stdin.\n> No signal is issued if this switch is set to \u201coff\u201d (default). The child process can still detect it must terminate because reading from stdin will return EOF.\n\nWe need to set signalOnClose switch to on in rsyslog config and rsyslog_plugin will recieve a SIGTERM on parent close.\n\nrsyslog_plugin need to be updated to gracefully handle SIGTERM and exit"
+  },
+  "resolution": {
+    "pr_number": 18835,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/18835",
+    "title": "Close rsyslog plugin when rsyslog SIGTERM and EOF is sent to stream",
+    "merged_at": "2024-05-15T01:08:14Z",
+    "description": "#### Why I did it\nFix #18771\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:27882794\n\n#### How I did it\n\nAdd signalOnClose for omprog as well as close rsyslog plugin when receives an EOF.\n\n#### How to verify it\n\nVerify rsyslog_plugin is running inside bgp or swss container\n\nRun `docker exec -it bgp supervisorctl restart rsyslogd`\n\nBefore change:\n\nThis will not kill current rsyslog_plugin process but instead rsyslogd will now break off its end of writing to cin and send EOF to rsyslog_plugin, however will not send a signal SIGTERM or SIGKILL to rsyslog_plugin. Therefore, rsyslog plugin will run in an infinite loop forever, constantly calling getline raising CPU to 100% inside docker.\n\nAfter change of adding signalOnClose=\"on\" to conf file inside omprog, rsyslogd will now send SIGTERM to rsyslog_plugin process running inside container, and rsyslog_plugin will die.\n\n? (         ): rsyslog_plugin/578637  ... [continued]: read())                                             = -1 (unknown) (INTERNAL ERROR: strerror_r(512, [buf], 128)=22)\n\nUT (will add sonic-mgmt testcase for storming events with logs)\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/rsyslog_plugin.conf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.cpp",
+        "additions": 15,
+        "deletions": 12
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.h",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin_tests/rsyslog_plugin_ut.cpp",
+        "additions": 26,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-27104",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27104,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27104",
+    "title": "Bug: Dell new platform Z9864 commit causes all broadcom platforms bootup with the wrong \"sonic-platform\" package",
+    "created_at": "2026-04-30T18:59:48Z",
+    "closed_at": "2026-05-28T21:45:40Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nDell new platform PR  https://github.com/sonic-net/sonic-buildimage/pull/26001 \" [Dell] Z9864F initial commit #26001\" use the \"pip3 install /usr/share/sonic/device/x86_64-dell_z9864f-r0/sonic_platform-1.0-py3-none-any.whl --force-reinstall -q --root-user-action=ignore \" in the .postinst.  During broadcom image build, all debs will be dpkg -i  (install) and dpkg -p (remove) due to dependency.  \"pip3 install\" will install the wheel to a location which dpkg doesn't known (/usr/local/lib/python3.13/dist-packages/sonic-platform in this case).  dpkg -g will not able to remove it before building .bin and /usr/local/lib/python3.13/dist-packages/sonic-platform will be packaged to sonic-broadcom.bin\n\nWhen an image installed and bootup, a correct platform vendor's \"sonic-platform\" will be installed in /usr/lib/python3/dist-package directory.  Now, on localhost, both /usr/lib/python3/dist-packages/sonic-platform (correct) and /usr/local/lib/python3.13/dist-packaes/sonic-platform (Dell Z9864) exist.  Any \"import sonic_platform\" in localhost script will use Dell's Z9864 sonic-platform package and device is running a wrong sonic-platform package in localhost.\n\n### Steps to Reproduce\n\nOn Pizza box, install a latest image and execute \"show platform firmware  status\" will fail\n\n### Actual Behavior and Expected Behavior\n\nDevice should be up and running fine after image installed.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27393,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27393",
+    "title": "[platform] Avoid installing Z9864 platform API in postinst",
+    "merged_at": "2026-05-28T21:45:38Z",
+    "description": "#### Why I did it\nFixes https://github.com/sonic-net/sonic-buildimage/issues/27104.\n\nThe Z9864f platform package currently runs `pip3 install .../sonic_platform-1.0-py3-none-any.whl` from its Debian `postinst`. During broadcom image construction, platform packages for many SKUs are installed/removed as build dependencies. That direct pip install writes `sonic_platform` into `/usr/local/lib/python*/dist-packages`, outside dpkg ownership, so removing the Debian package does not clean it up. The leftover Z9864f `sonic_platform` can then be packaged into non-Z9864 broadcom images and shadow the correct platform API at runtime.\n\nThe Z9864f platform init script already installs the matching platform API from `DEVICE_METADATA.localhost.platform`, following the existing Dell platform pattern. This change removes the unconditional `postinst` pip install so the API is installed only by the runtime platform path.\n\n#### How I verified it\n- `bash -n platform/broadcom/sonic-platform-modules-dell/debian/platform-modules-z9864f.postinst`\n- Confirmed `z9864f_platform.sh` still contains the runtime `install_python_api_package()` path and calls it during platform init.\n- Confirmed no direct `pip3 install ...sonic_platform` remains in the Z9864f `postinst`.",
+    "files": [
+      {
+        "path": "platform/broadcom/sonic-platform-modules-dell/debian/platform-modules-z9864f.postinst",
+        "additions": 0,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

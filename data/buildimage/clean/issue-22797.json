@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-22797",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 22797,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/22797",
+    "title": "Regression: Tunnel pipe mode being used on IPinIP on Broadcom systems",
+    "created_at": "2025-05-30T22:52:40Z",
+    "closed_at": "2025-06-05T05:17:15Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nCritical\n\n### Previous Working Version\n\nPrior to https://github.com/sonic-net/sonic-buildimage/pull/21868 merging\n\n### Steps to Reproduce\n\nStartup any Broadcom device and we see it crashing with:\n```\nNOTICE swss#orchagent: :- addDecapTunnel: Create overlay loopback router interface oid:6000000000ce1\nERR syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_create_tunnel:1537 Unknown/unsupported tunnel attribute 27 passed\nERR syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_create_tunnel:1542 Error processing tunnel attribute failed with error -196614.\nERR syncd#syncd: :- sendApiResponse: api SAI_COMMON_API_CREATE failed in syncd mode: SAI_STATUS_ATTR_NOT_IMPLEMENTED_6\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_TYPE: SAI_TUNNEL_TYPE_IPINIP\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_OVERLAY_INTERFACE: oid:0x6000000000ce1\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_UNDERLAY_INTERFACE: oid:0x6000000000c85\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_ECN_MODE: SAI_TUNNEL_DECAP_ECN_MODE_COPY_FROM_OUTER\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_TTL_MODE: SAI_TUNNEL_TTL_MODE_PIPE_MODEL\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_DSCP_MODE: SAI_TUNNEL_DSCP_MODE_PIPE_MODEL\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_QOS_DSCP_TO_TC_MAP: oid:0x14000000000cda\nERR swss#orchagent: :- create: create status: SAI_STATUS_ATTR_NOT_IMPLEMENTED_6\nERR swss#orchagent: :- addDecapTunnel: Failed to create tunnel\nERR swss#orchagent: :- handleSaiCreateStatus: Encountered failure in create operation, exiting orchagent, SAI API: SAI_API_TUNNEL, status: SAI_STATUS_ATTR_NOT_IMPLEMENTED_6\nNOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\nNOTICE syncd#syncd: :- processNotifySyncd: Invoking SAI failure dump\nNOTICE swss#orchagent: :- sai_redis_notify_syncd: invoked DUMP succeeded\n```\n\nThis appears to be because the condition added by https://github.com/sonic-net/sonic-buildimage/pull/21868 to skip using Tunnel pipe mode on broadcom devices isn't working:\n```\n        \"TUNNEL_DECAP_TABLE:IPINIP_TUNNEL\" : {\n            \"tunnel_type\":\"IPINIP\",\n{% if \"broadcom\" in asic_type %}\n            \"dscp_mode\":\"uniform\",\n{% else %}\n            \"dscp_mode\":\"pipe\",\n            \"decap_dscp_to_tc_map\":\"AZURE\",\n{% endif %}\n```\n\nBut I see the generated file is using pipe:\n```\n# sonic-db-cli APPL_DB hgetall \"TUNNEL_DECAP_TABLE:IPINIP_TUNNEL\"\n{'decap_dscp_to_tc_map': 'AZURE', 'dscp_mode': 'pipe', 'ecn_mode': 'copy_from_outer', 'ttl_mode': 'pipe', 'tunnel_type': 'IPINIP'}\n```\n\nI had trouble tracing the rendering of this tempalte but I believe likely the issue is that `asic_type` is not defined before rendering the template so `{% if \"broadcom\" in asic_type %}` will never return true.\n\n### Impact of this regression\n\nBroadcom devices have Orchagent crashing on `master`\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22832,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/22832",
+    "title": "[QoS] Make broadcom asic detection more robust in ipinip json template",
+    "merged_at": "2025-06-05T05:17:14Z",
+    "description": "#### Why I did it\nFixes #22797\nMake broadcom asic detection more robust in ipinip json template\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nCheck if device is in the list of specified hwskus\n\n#### How to verify it\nTested on switch:\n\n```\n{\n        \"TUNNEL_DECAP_TABLE:IPINIP_TUNNEL\" : {\n            \"tunnel_type\":\"IPINIP\",\n            \"dscp_mode\":\"uniform\",\n            \"ecn_mode\":\"copy_from_outer\",\n            \"ttl_mode\":\"pipe\"\n        },\n        \"OP\": \"SET\"\n    },\n...\n```\n\nThe `ASIC_VENDOR` env var is used which is defined inside the swss container [here](https://github.com/sonic-net/sonic-buildimage/blob/80d660de2f04335ccdd26c3f19b3083528793a92/files/build_templates/docker_image_ctl.j2#L710).\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [X] 202505\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n[QoS] Make broadcom asic detection more robust in ipinip json template\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "dockers/docker-orchagent/docker-init.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-orchagent/ipinip.json.j2",
+        "additions": 12,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

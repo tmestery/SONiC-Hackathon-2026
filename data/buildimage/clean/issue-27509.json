@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-27509",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27509,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27509",
+    "title": "route_check.py truncates large failure reports without showing mismatch counts",
+    "created_at": "2026-05-14T21:38:29Z",
+    "closed_at": "2026-06-30T19:52:56Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\n`route_check.py` can print an incomplete failure report when the mismatch list is large. The script builds a complete `results` object internally, but the CLI/syslog output path truncates the formatted JSON at `PRINT_MSG_LEN_MAX` characters. As a result, the printed `Failure results` block can be cut off in the middle of a route string and does not show how many entries were omitted.\n\nThis makes the output hard to diagnose: a user only sees the first portion of the mismatch list and has no indication of the actual number of missing/unaccounted routes.\n\nRelevant code on `master`:\n\n- `PRINT_MSG_LEN_MAX = 1000`: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L78\n- `print_message()` stops appending once the accumulated message reaches that limit: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L126-L145\n- `check_routes_for_namespace()` stores the complete missing route list in `results[\"missed_ROUTE_TABLE_routes\"]`: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L939-L940\n- `check_routes()` formats and prints the whole `results` object through `print_message()`: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L1002-L1007\n\n## Example symptom\n\nFor a large mismatch set, the output can look like this:\n\n```text\nFailure results: {{\n    \"\": {\n        \"missed_ROUTE_TABLE_routes\": [\n            \"<IPV6>::/64\",\n            \"<IPV6>::/64\",\n            \"<IPV6>::/64\",\n            ...\n            \"<IPV6>\nFailed. Look at reported mismatches above\nadd: {\n    \"\": []\n}\ndel: {\n    \"\": []\n}\n```\n\nThe output is not valid JSON, does not state that it was truncated, and does not provide a count such as `missed_ROUTE_TABLE_routes: <N>`.\n\n## Expected behavior\n\nThe checker should make the size of each mismatch category visible even when the detailed route list is too long. For example:\n\n1. Print a summary count per namespace/category before the detailed list.\n2. If detailed output must remain capped, explicitly mark it as truncated.\n3. Prefer printing the first N entries plus `... <remaining> more` instead of cutting the JSON mid-string.\n\n## Impact\n\nWhen route_check reports many mismatches, operators can underestimate the scope of the failure because only the first part of the list is visible. The complete data already exists in the returned `results` object; the issue is in the reporting path."
+  },
+  "resolution": {
+    "pr_number": 4587,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/4587",
+    "title": "[route_check]: Add truncation indicator and mismatch summary counts",
+    "merged_at": "2026-06-30T19:52:55Z",
+    "description": "#### What I did\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/27509\n\nAdded a truncation indicator and mismatch summary counts to `route_check.py` failure output.\n\nWhen `print_message()` truncates output at `PRINT_MSG_LEN_MAX` (1000 chars), it now appends `... (truncated)` within the length budget so operators know data was omitted. Additionally, a compact per-namespace mismatch count summary line is emitted before the detailed (potentially truncated) JSON dump.\n\n#### How I did it\n* Add `PRINT_MSG_TRUNCATION_SUFFIX` module-level constant and truncation marker logic in `print_message()` that keeps total length \u2264 `PRINT_MSG_LEN_MAX`\n* Extract `summarize_results()` helper to produce `{namespace: {category: count}}` dict\n* Emit compact summary via `json.dumps(..., separators=(\",\",\":\"))` before the detailed failure results in both `check_routes()` and `check_sids()`\n\n#### How to verify it\n1. Run existing `test_logging` \u2014 confirms backward compatibility (all length assertions pass unchanged)\n2. Run new `test_logging_truncation_indicator` \u2014 confirms truncation suffix behavior at realistic `PRINT_MSG_LEN_MAX=50`, short message passthrough, and edge case where max < suffix length\n3. Manually: inject 200+ route mismatches on a VS image, run `route_check.py -l INFO`, verify summary count line appears and truncated output ends with `... (truncated)`\n\n#### Previous command output (if the output of a command-line utility has changed)\n```\nFailure results: {\n    \"\": {\n        \"missed_ROUTE_TABLE_routes\": [\n            \"<IPV6>::/64\",\n            \"<IPV6>::/64\",\n            \"<IPV6>\nFailed. Look at reported mismatches above\n```\n\n#### New command output (if the output of a command-line utility has changed)\n```\nRoute mismatch counts: {\"\":{\"missed_ROUTE_TABLE_routes\":47,\"missed_INTF_TABLE_entries\":2}}\nFailure results: {\n    \"\": {\n        \"missed_ROUTE_TABLE_routes\": [\n            \"<IPV6>::/64\",\n            \"<IPV6>::/64\",\n            \"<IPV6> ... (truncated)\nFailed. Look at reported mismatches above\n```",
+    "files": [
+      {
+        "path": "scripts/route_check.py",
+        "additions": 25,
+        "deletions": 2
+      },
+      {
+        "path": "tests/route_check_test.py",
+        "additions": 18,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

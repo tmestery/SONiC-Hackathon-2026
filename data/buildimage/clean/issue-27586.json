@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-27586",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27586,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27586",
+    "title": "Bug: dhcpmon exits when eth0 management interface has multiple IPv6 LLAs",
+    "created_at": "2026-05-28T20:23:53Z",
+    "closed_at": "2026-07-28T14:12:44Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "## Is it platform specific\ngeneric\n\n## Importance or Severity\ncritical\n\n## Description of the bug\nAfter sonic-net/sonic-dhcpmon#62, `dhcpmon` can exit during startup when the management interface has more than one IPv6 link-local address. This causes DHCP relay service readiness checks to fail after switching back to legacy DHCP relay mode when executing the tests in https://github.com/sonic-net/sonic-mgmt/blob/master/tests/dhcp_relay/test_dhcpv4_relay.py\nWe see the following failure\n```\nFailed: dhcp_relay is not ready after restarting\n```\n\nThe new IPv6 initialization path scans all interface addresses and requires exactly one IPv4 address and either exactly one IPv6 GUA or exactly one IPv6 LLA. Some systems have both a kernel-generated LLA and a statically configured management LLA on `eth0`, which is valid Linux IPv6 behavior. `dhcpmon` treats this as fatal and exits after printing usage.\n\nRelevant PR: sonic-net/sonic-dhcpmon#62:\n- `src/dhcp_device.cpp`: `initialize_intf_mac_and_ip_addr()` counts IPv6 LLAs and fails when `num_ipv6_lla != 1`.\n- `src/main.cpp`: failed interface initialization calls `usage()`, which exits with success, so supervisor reports the process exited too quickly.\n\n```\nsrc/dhcp_device.cpp:\n        if (num_ip_addr != 1 || (num_ipv6_gua != 1 && num_ipv6_lla != 1)) {\n            syslog(LOG_ALERT, \"Unable to find exactly 1 ip addr, 1 ipv6 GUA and 1 ipv6 LLA on physical interface \"\n                   \"and 1 ipv6 loopback addr on loopback interface: %s\", context->intf);\n            break;\n        }\n```\n\n## Steps to Reproduce\nRun the [test_dhcpv4_relay](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/dhcp_relay/test_dhcpv4_relay.py) sonic-mgmt tests with eth0 MANAGEMENT_INTERFACE configured with two Link-Local-Addresses.\n\n## Actual Behavior and Expected Behavior\nActual behavior:\n`dhcpmon-Vlan1000` exits immediately and supervisor marks it `FATAL`. Test teardown then fails with `dhcp_relay is not ready after restarting`.\n\nExpected behavior:\n`dhcpmon` should tolerate multiple IPv6 LLAs on an interface or select the configured/primary address. DHCP relay readiness should not fail solely because `eth0` has both kernel-generated and configured link-local addresses.\n\n## Relevant log output\n```shell\n2026 May 27 <IPV6> sonic INFO dhcp_relay#dhcpmon[67]: Interface eth0 has IPv6 LLA fe80::<IPV6>\n2026 May 27 <IPV6> sonic INFO dhcp_relay#dhcpmon[67]: Interface eth0 has IPv6 LLA fe80::<IPV6>\n2026 May 27 <IPV6> sonic ALERT dhcp_relay#dhcpmon[67]: Unable to find exactly 1 ip addr, 1 ipv6 GUA and 1 ipv6 LLA on physical interface and 1 ipv6 loopback addr on loopback interface: eth0\n2026 May 27 <IPV6> sonic ALERT dhcp_relay#dhcpmon[67]: Failed to initialize mac/ip address for interface eth0\n\nsupervisor status:\ndhcp-relay:dhcp6relay            RUNNING\ndhcp-relay:dhcprelayd            RUNNING\ndhcpmon:dhcpmon-Vlan1000         FATAL     Exited too quickly (process log may have details)\nisc-dhcpv4-relay-Vlan1000        RUNNING\n\nmanual run:\n/usr/sbin/dhcpmon -id Vlan1000 -iu PortChannel101 -im eth0\nUsage: dhcpmon -id <south interface> {-iu <north interface>}+ -im <mgmt interface> [-u <loopback interface>][-w <snapshot window in sec>] [-c <unhealthy status count>] [-s <snap length>] [-D] [-d][-I <db update interval in sec>]\n```"
+  },
+  "resolution": {
+    "pr_number": 87,
+    "repository": "sonic-net/sonic-dhcpmon",
+    "url": "https://github.com/sonic-net/sonic-dhcpmon/pull/87",
+    "title": "[dhcp_device] Skip address initialization for management interface",
+    "merged_at": "2026-07-28T14:12:43Z",
+    "description": "### Description of PR\n\nSummary:\n\n`dhcpmon` registers the management interface to classify and count DHCP traffic that incorrectly traverses the management network. The management interface's MAC, IPv4 address, IPv6 GUA, and IPv6 LLA are not consumed by packet validation, counters, or health checks.\n\nThe shared address initialization path nevertheless rejects a valid management configuration with multiple IPv6 LLAs. This change classifies the interface before address discovery, skips unused MAC/IP initialization for management contexts, zero-initializes the context so unused address fields remain deterministic, and retains lightweight management-interface existence validation with `if_nametoindex()`. Uplink and downstream initialization is unchanged.\n\nFixes sonic-net/sonic-buildimage#27586\n\nDependencies: None.\n\n##### Work item tracking\n- Microsoft ADO (number only): 38912123\n- Child Task: 38912124\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [ ] Test improvement\n\n### Approach\n\n#### What is the motivation for this PR?\n\nValid Linux configurations may have both a kernel-generated and a statically configured IPv6 LLA on `eth0`. Address discovery is unnecessary for the management context, so this condition must not prevent `dhcpmon` startup.\n\n#### How did you do it?\n\n- Classify the interface context before address discovery.\n- Skip `initialize_intf_mac_and_ip_addr()` only for management contexts.\n- Zero-initialize the allocated context before setting interface identity.\n- Validate the original management `-im` argument with `if_nametoindex()` so missing, stale, and overlong names are rejected.\n- Preserve existing address discovery and validation for uplink and downstream contexts.\n\n#### How did you verify/test it?\n\n- Final-head PR CI build `1173576` passed for amd64, arm64, and armhf; DCO and EasyCLA passed.\n- Hardware: `testbed-bjw-can-720dt-3` (`m0`).\n- DUT: `bjw-can-720dt-3`, platform `x86_64-arista_720dt_48s`, HWSKU `Arista-720DT-G48S4`.\n- Image: `SONiC.20260510.07`, build commit `1df5b92630`.\n- Test branch: `internal-202605`.\n- Exact reproduction with two IPv6 LLAs and no management IPv6 GUA:\n  - Stock 202605 `dhcpmon` entered `FATAL` and logged `Unable to find exactly 1 ip addr, 1 ipv6 GUA and 1 ipv6 LLA ... eth0`.\n  - PR package entered `RUNNING` under the identical address state.\n- Management interface validation after the review follow-up:\n  - valid `eth0` with two LLAs and no GUA remained `RUNNING`;\n  - missing `-im does-not-exist` was rejected with `No such device`;\n  - an overlong `-im` name was rejected with `No such device`.\n- Five consecutive full runs passed; each run executed all three affected tests (**15/15 test executions passed**):\n  - `dhcp_relay/test_dhcp_relay.py::test_dhcp_relay_with_source_port_ip_in_relay_enabled[isc-relay-agent]`\n  - `dhcp_relay/test_dhcp_relay.py::test_interface_binding[isc-relay-agent]`\n  - `dhcp_relay/test_dhcpv6_relay.py::test_dhcp_relay_default`\n- Run durations: `14m52s`, `14m58s`, `14m46s`, `14m56s`, `15m02s`.\n- After the management-existence follow-up, the same three-test set passed again (3/3 in `15m03s`). The final two commits only removed redundant include additions and are covered by final-head CI.\n\n#### Any platform specific information?\n\nNo. The failure is caused by valid Linux IPv6 address configuration and is not platform-specific.\n\n### Back port request\n\n- [x] 202605\n\n### Tested branch\n\n- [x] 202605 \u2014 `SONiC.20260510.07` (`1df5b92630`), `internal-202605` sonic-mgmt, Arista-720DT-G48S4 m0.\n\n### Test result\n\n- 202605: stock failure reproduced with two LLAs/no GUA; PR package remained `RUNNING`; five consecutive runs of the three affected tests passed (15/15).\n\n### Documentation\n\nNot applicable; this is an internal initialization fix with no user-facing interface change.",
+    "files": [
+      {
+        "path": "src/dhcp_device.cpp",
+        "additions": 13,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "buildimage-20284",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 20284,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/20284",
+    "title": "Checking for DPUs in platform.json is adding delay to WR/FR reconciliation",
+    "created_at": "2024-09-17T21:54:18Z",
+    "closed_at": "2025-01-19T19:28:42Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202405"
+    ],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nIn 202405 and above, two extra steps are added before the start of every container which checks NUM_DPU and IS_DPU_DEVICE by parsing the platform.json file using the jq tool. This is only relevant for Smartswitch. However, this is adding some delay during the reconciliation phase of WR/FR resulting\n\n```\n    # Parse the platform.json file to get the platform specific information\n    PLATFORM_JSON=/usr/share/sonic/device/$PLATFORM/platform.json\n    if [ -f \"$PLATFORM_JSON\" ]; then\n        NUM_DPU=$(jq -r '.DPUS | length' $PLATFORM_JSON 2>/dev/null)\n        jq -e '.DPU' $PLATFORM_JSON >/dev/null\n        if [[ $? -eq 0 ]]; then\n            IS_DPU_DEVICE=\"true\"\n        else\n            IS_DPU_DEVICE=\"false\"\n        fi\n    fi\n```\n\nWhen there is load on CPU, both the jq calls are adding > 1 sec to the start of swss and almost 0.5 sec to the start of syncd. There are also present in teamd and bgp container start flow which may cause extra contention on the CPU.\n\nswss start\n<img width=\"1206\" alt=\"image\" src=\"https://github.com/user-attachments/assets/56bccb06-59c9-4d6e-80e6-5d720184fee4\">\n\nsyncd start\n<img width=\"1204\" alt=\"image\" src=\"https://github.com/user-attachments/assets/4cbc695c-9579-49a2-9499-f8bd3e8fad48\">\n\nThese 1.5 - 2 sec can be avoided as this can be optimized. Ideally, this should be read once maybe in the <HOSTNAME> script and the values must be saved in some file like sonic-environment etc and should be read during the start of every container\n\n**Note: All the values were taken from MSN2700 platform, Intel Celeron 2 core CPU**"
+  },
+  "resolution": {
+    "pr_number": 21209,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/21209",
+    "title": "[Fix 20284]: Enhance smartswitch environment variables parsing",
+    "merged_at": "2025-01-19T19:28:41Z",
+    "description": "#### Why I did it\nFix #20284\n\nIn 202405 and above, two extra steps are added before the start of every container which checks NUM_DPU and IS_DPU_DEVICE by parsing the platform.json file using the jq tool. This is only relevant for Smartswitch. However, this is adding some delay during the reconciliation phase of WR/FR resulting\n\nWhen there is load on CPU, both the jq calls are adding > 1 sec to the start of swss and almost 0.5 sec to the start of syncd. There are also present in teamd and bgp container start flow which may cause extra contention on the CPU.\n\n![image](https://github.com/user-attachments/assets/c4984799-9801-4e2a-88d7-756815e60354)\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nSet the environment variables for systemd by systemd-sonic-generator.\n\n#### How to verify it\n\n1. Check there is no `jq` command under the swss.sh start and syncd.sh start from the sonic-bootchart\n2. Regression test:\n\n```\necho '{\"DPUS\":{\"dpu0\":{}, \"dpu1\":{}}}' | sudo tee /usr/share/sonic/device/x86_64-kvm_x86_64-r0/platform.json\ndocker rm -f database\nsudo reboot\n\n...\n\nadmin@vlab-01:~$ sudo systemctl list-unit-files '*midplane*'\nUNIT FILE                    STATE           PRESET\nmidplane-network-dpu.service disabled        enabled\nmidplane-network-npu.service enabled-runtime  enabled\n\n# The DPU databases should be created\nadmin@vlab-01:~$ docker ps -a\nCONTAINER ID   IMAGE                                COMMAND                  CREATED          STATUS         PORTS     NAMES\n4455f7ab611c   docker-database:latest               \"/usr/local/bin/dock\u2026\"   5 minutes ago    Up 5 minutes             databasedpu0\n8e983b5beb27   docker-database:latest               \"/usr/local/bin/dock\u2026\"   5 minutes ago    Up 5 minutes             databasedpu1\n\n# Environment variables should be inserted to the service file\nadmin@vlab-01:~$ cat $(sudo find /etc -name 'swss*service')\n[Unit]\nDescription=switch state service\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nRequires=config-setup.service\nAfter=config-setup.service\nBindsTo=sonic.target\nAfter=sonic.target\nBefore=ntp-config.service\nStartLimitIntervalSec=1200\n\nStartLimitBurst=3\n\n[Service]\nEnvironment=\"NUM_DPU=2\"\nEnvironment=\"IS_DPU_DEVICE=false\"\nUser=root\nEnvironment=sonic_asic_platform=vs\nExecStartPre=/usr/local/bin/swss.sh start\nExecStart=/usr/local/bin/swss.sh wait\nExecStop=/usr/local/bin/swss.sh stop\nRestartSec=30\n\n[Install]\nWantedBy=sonic.target\n\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 0,
+        "deletions": 12
+      },
+      {
+        "path": "src/systemd-sonic-generator/ssg-test.cc",
+        "additions": 30,
+        "deletions": 1
+      },
+      {
+        "path": "src/systemd-sonic-generator/systemd-sonic-generator.cpp",
+        "additions": 55,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

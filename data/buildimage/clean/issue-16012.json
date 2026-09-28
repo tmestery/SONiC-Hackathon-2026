@@ -1,0 +1,56 @@
+{
+  "id": "buildimage-16012",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 16012,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/16012",
+    "title": "[multi-asic] show acl table command gets data from host config db and not from asic namespace db",
+    "created_at": "2023-08-01T22:17:21Z",
+    "closed_at": "2023-08-18T04:08:46Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Chassis",
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\"show acl table\" which uses acl-loader gets data from host config db alone for multi-asic devices. The ACL entries in host need not have all the interfaces which is valid in the namespaces.\n\nInstead we need to connect to each namespace and get the ACLs\n\n#### Steps to reproduce the issue:\n1. show acl table DATAACL\n2.\n3.\n\n#### Describe the results you received:\n```\nadmin@str2--lc1-1:~$ show acl table DATAACL\nName     Type    Binding         Description    Stage    Status\n-------  ------  --------------  -------------  -------  --------------------------------------\nDATAACL  L3      PortChannel102 DATAACL        ingress  {'asic0': 'Active', 'asic1': 'Active'}\n                 PortChannel106\n```\n\n#### Describe the results you expected:\n```\nadmin@str2--lc1-1:~$ show acl table DATAACL\nName     Type    Binding         Description    Stage    Status\n-------  ------  --------------  -------------  -------  --------------------------------------\nDATAACL  L3      Ethernet128     DATAACL        ingress  {'asic0': 'Active', 'asic1': 'Active'}\n                 Ethernet184\n                 PortChannel102\n                 PortChannel106\n```\n\n#### Output of `show version`:\n\n```\nadmin@str2--lc1-1:~$ show version\n\nSONiC Software Version: SONiC.20220530.38\nSONiC OS Version: 11\nDistribution: Debian 11.7\nKernel: 5.10.0-18-2-amd64\nBuild commit: 4115919589\nBuild date: Fri Jul 28 <IPV6> UTC 2023\nBuilt by: cloudtest@8ec96c8ac000000```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 2937,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/2937",
+    "title": "[chassis][multi-asic]Fix show acl table for masic",
+    "merged_at": "2023-08-18T04:08:45Z",
+    "description": "#### What I did\nFixes https://github.com/sonic-net/sonic-buildimage/issues/16012\nThe `show acl table` command currently get the ports from host config_db on multi asic platforms.\nThis  host config_db will not the phyiscal ports in the binding ports because the host doesnt have any front panel ports on the host.  This causes the `show acl table`  not to display the phyiscal ports in the output on multi asic devices/linecards.\n\nThe test `iface_namingmode/test_iface_namingmode.py::test_show_acl_table` fails because of this issue.\n\nDetails from the test failure\n```\niface_namingmode/test_iface_namingmode.py::test_show_acl_table[alias-sonic-lc1-1]\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> PDB set_trace (IO-capturing turned off) >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n> /var/src/sonic-mgmt-int/tests/iface_namingmode/test_iface_namingmode.py(818)test_show_acl_table()\n-> for item in minigraph_acls['DataAcl']:\n(Pdb) list\n813\n814         acl_table = dutHostGuest.shell('SONIC_CLI_IFACE_MODE={} show acl table DATAACL'.format(ifmode))['stdout']\n815         logger.info('acl_table:\\n{}'.format(acl_table))\n816\n817         import pdb;pdb.set_trace()\n818  ->     for item in minigraph_acls['DataAcl']:\n819             if item in setup['physical_interfaces']:\n820                 if mode == 'alias':\n821                     assert setup['port_name_map'][item] in acl_table\n822                 elif mode == 'default':\n823                     assert item in acl_table\n(Pdb) minigraph_acls['DataAcl']\n[u'Ethernet32', u'Ethernet40', u'Ethernet208', u'Ethernet216', u'Ethernet128', u'Ethernet184']\n(Pdb) setup['port_name_map']\n{u'Ethernet8': 'TestAlias0', u'Ethernet184': 'TestAlias1', u'Ethernet280': 'TestAlias2', u'Ethernet248': 'TestAlias3', u'Ethernet104': 'TestAlias4', u'Ethernet240': 'TestAlias5', u'Ethernet264': 'TestAlias6', u'Ethernet96': 'TestAlias7', u'Ethernet168': 'TestAlias8', u'Ethernet120': 'TestAlias9', u'Ethernet144': 'TestAlias10', u'Ethernet208': 'TestAlias11', u'Ethernet160': 'TestAlias12', u'Ethernet224': 'TestAlias13', u'Ethernet56': 'TestAlias14', u'Ethernet128': 'TestAlias15', u'Ethernet72': 'TestAlias16', u'Ethernet32': 'TestAlias17', u'Ethernet16': 'TestAlias18', u'Ethernet0': 'TestAlias19', u'Ethernet192': 'TestAlias20', u'Ethernet200': 'TestAlias21', u'Ethernet88': 'TestAlias22', u'Ethernet80': 'TestAlias23', u'Ethernet112': 'TestAlias24', u'Ethernet256': 'TestAlias25', u'Ethernet152': 'TestAlias26', u'Ethernet136': 'TestAlias27', u'Ethernet272': 'TestAlias28', u'Ethernet48': 'TestAlias29', u'Ethernet232': 'TestAlias30', u'Ethernet216': 'TestAlias31', u'Ethernet176': 'TestAlias32', u'Ethernet40': 'TestAlias33', u'Ethernet64': 'TestAlias34', u'Ethernet24': 'TestAlias35'}\n(Pdb) acl_table\nu\"Name     Type    Binding         Description    Stage    Status\\n-------  ------  --------------  -------------  -------  --------------------------------------\\nDATAACL  L3      PortChannel102  DATAACL        ingress  {'asic0': 'Active', 'asic1': 'Active'}\\n                 PortChannel106\"\n(Pdb) mode\n'alias'\n```\n#### How I did it\nFor the `show acl table` command the following approach is followed\n- for single asic, get the all the acl_tables from config_db on the host **_(No change)_**\n-  for multi asic:\n    - get the control_plane acl info from host.\n    - get the dataplane and everflow acl table from each namespace and append the ports.\n\n#### How to verify it\n- Verify with updated UT\n- test on chassis multi asic linecard\n\n#### Previous command output (if the output of a command-line utility has changed)\n\n#### New command output (if the output of a command-line utility has changed)",
+    "files": [
+      {
+        "path": "acl_loader/main.py",
+        "additions": 25,
+        "deletions": 1
+      },
+      {
+        "path": "tests/mock_tables/asic2/config_db.json",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/show_acl_test.py",
+        "additions": 6,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

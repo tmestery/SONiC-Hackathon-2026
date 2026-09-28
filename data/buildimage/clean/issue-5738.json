@@ -1,0 +1,52 @@
+{
+  "id": "buildimage-5738",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5738,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5738",
+    "title": "DB_MIGRATOR misses FEATURE table during warm upgrade from 201811 to 201911",
+    "created_at": "2020-10-28T20:37:51Z",
+    "closed_at": "2020-11-06T02:42:10Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [
+      "201911"
+    ],
+    "topics": [
+      "warmboot"
+    ]
+  },
+  "failure": {
+    "body": "**Description**\n\nWarm reboot upgrade from 201811 to 201911 fails to update FEATURE table in the target config_db\nPossible cause of the issue - FEATURE table is not found in 201811 image and in 201911 image, `db_migrator` failed to update this new information in config_db.\nHowever, with cold reboot, the error gets fixed. So there might be a difference in db_migrator functionality in WARM vs COLD reboot.\n\n```\nroot@sonic-device:~# show feature status\nFeature    State    AutoRestart\n---------  -------  -------------\nroot@sonic-device:~#\n\n```\nAlso, FEATURE table access errors are seen in syslog *consistently*:\n```\nOct 28 <IPV6>.955625 sonic-device ERR syncd#supervisor-proc-exit-listener: Unable to retrieve features table from Config DB. Exiting\u2026\nOct 28 <IPV6>.146142 sonic-device ERR lldp#supervisor-proc-exit-listener: Unable to retrieve features table from Config DB. Exiting...\nOct 28 <IPV6>.254954 sonic-device ERR swss#supervisor-proc-exit-listener: Unable to retrieve features table from Config DB. Exiting...\nOct 28 <IPV6>.499858 sonic-device ERR radv#supervisor-proc-exit-listener: Unable to retrieve features table from Config DB. Exiting...\n```\n\nNote that after cold reboot, FEATURE table is found and works:\n```\nroot@sonic-device:~# show feature status\nFeature     State    AutoRestart\n----------  -------  -------------\nacms        enabled  enabled\nbgp         enabled  enabled\ndatabase    enabled  disabled\ndhcp_relay  enabled  enabled\nlldp        enabled  enabled\npmon        enabled  enabled\nradv        enabled  enabled\nsnmp        enabled  enabled\nswss        enabled  enabled\nsyncd       enabled  enabled\nteamd       enabled  enabled\ntelemetry   enabled  enabled\nroot@sonic-device:~#\n```\n\n**Steps to reproduce the issue:**\n1. With base image - 201811, install a new 201911 image on DUT.\n2. Warm boot the DUT\n3. Errors will be reproduced in syslog and via `show feature status`\n4. COLD reboot the DUT, and the issue will be fixed.\n\n**Describe the results you received:**\n\nNo features displayed in `show feature status ` and errors seen in syslog\n\n**Describe the results you expected:**\nSuccessful warm boot upgrade with FEATURE table updated in new image."
+  },
+  "resolution": {
+    "pr_number": 1209,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/1209",
+    "title": "Fix db_migrator to copy missing values from INIT_CFG to config_db",
+    "merged_at": "2020-11-06T02:42:10Z",
+    "description": "**- What I did**\nProposed fix for missing `FEATURE` table during warm-upgrade from 201811to 201911.\nFixes: https://github.com/Azure/sonic-buildimage/issues/5738\n\nFEATURE table is a part of 201911 image database, but absent in 201811 images. The warm upgrade from 201811 image to 201911 image fails as the feature table is missing in the DB and multiple errors are seen in syslog.\n\nThis PR fixes DB_MIGRATOR code to update missing init_cfg tables into config_db.\n\n**- How I did it**\nIterate through the tables in `/etc/sonic/init_cfg.json`, if a table is found missing in `configDB`, update the `configDB` with the missing table. Otherwise, ignore it, so to avoid overriding `configDB` tables with `init_cfg`.\n\n**- How to verify it**\nError is easily reproducible. Manually tested the fix by modifying `db_migrator` and issuing the `migrate` command.\nThe result is that the `FEATURE` table is updated in the in memory database and `show feature status` command starts displaying these features.\n\n```\nroot@sonic-device:~# show feature status\nFeature    State    AutoRestart\n---------  -------  -------------\nroot@sonic-device:~#\nroot@sonic-device:~# db_migrator.py -o migrate\nroot@sonic-device:~#\nroot@sonic-device:/etc/sonic# show feature status\nFeature     State    AutoRestart\n----------  -------  -------------\nacms        enabled  enabled\nbgp         enabled  enabled\ndatabase    enabled  disabled\ndhcp_relay  enabled  enabled\nlldp        enabled  enabled\npmon        enabled  enabled\nradv        enabled  enabled\nsnmp        enabled  enabled\nswss        enabled  enabled\nsyncd       enabled  enabled\nteamd       enabled  enabled\ntelemetry   enabled  enabled\nroot@sonic-device:/etc/sonic#\n```\n\n**- Previous command output (if the output of a command-line utility has changed)**\n\n**- New command output (if the output of a command-line utility has changed)**",
+    "files": [
+      {
+        "path": "config/main.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "scripts/db_migrator.py",
+        "additions": 22,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

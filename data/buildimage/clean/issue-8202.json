@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-8202",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8202,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8202",
+    "title": "[SNMP-SUBAGENT] [202012] Observed a unusual spike in CPU usage because of blocking=True argument",
+    "created_at": "2021-07-16T22:51:06Z",
+    "closed_at": "2021-07-22T09:18:13Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\n#### Steps to reproduce the issue:\n1. Load any 202012 image which was was built with this change [PR](https://github.com/Azure/sonic-swss/pull/1804)\n2. Disable counterpoll, if not already disabled and reload the switch\n3. Wait for the SNMP Container to be up.\n\n#### Describe the results you received:\n\nCheck the CPU usage of the SNMP docker and snmp-subagent process\n```\nCONTAINER ID        NAME                CPU %               MEM USAGE / LIMIT     MEM %               NET I/O             BLOCK I/O           PIDS\n24b286433cb7        mgmt-framework      0.01%               108.2MiB / 7.689GiB   1.37%               0B / 0B             26.5MB / 69.6kB     19\n78e05cfe9404        snmp                100.66%             68.76MiB / 7.689GiB   0.87%               0B / 0B             0B / 139kB          9\nf88c433f5867        telemetry           0.89%               141.4MiB / 7.689GiB   1.80%               0B / 0B             36MB / 86kB         34\n36437a3448cd        dhcp_relay          0.03%               30.47MiB / 7.689GiB   0.39%               0B / 0B             795kB / 73.7kB      6\nea34908916a6        radv                0.03%               29.96MiB / 7.689GiB   0.38%               0B / 0B             561kB / 77.8kB      6\ndcdd0f45efb8        pmon                0.94%               212MiB / 7.689GiB     2.69%               0B / 0B             72.4MB / 1.21MB     16\n8fa306e016cc        lldp                6.52%               59.86MiB / 7.689GiB   0.76%               0B / 0B             7.14MB / 127kB      11\ne010a19edc0b        syncd               4.44%               813.2MiB / 7.689GiB   10.33%              0B / 0B             34.9MB / 69.6kB     41\n6fc14c869be8        teamd               0.04%               33MiB / 7.689GiB      0.42%               0B / 0B             5.78MB / 90.1kB     12\nfedda16a902e        swss                0.13%               54.29MiB / 7.689GiB   0.69%               0B / 0B             17.4MB / 246kB      37\n84aaea73fd3f        bgp                 0.05%               71.48MiB / 7.689GiB   0.91%               0B / 0B             16.8MB / 5.83MB     22\n29fbbe40ea00        database            5.78%               93.08MiB / 7.689GiB   1.18%               0B / 0B             40.8MB / 98.3kB     12\n\nadmin@sonic:~$ top\ntop - <IPV6> up  4:47,  2 users,  load average: 2.00, 1.67, 1.13\nTasks: 306 total,   2 running, 302 sleeping,   0 stopped,   2 zombie\n%Cpu(s): 15.9 us,  2.4 sy,  0.0 ni, 81.5 id,  0.0 wa,  0.0 hi,  0.2 si,  0.0 st\nMiB Mem :   7873.9 total,   2911.0 free,   3284.7 used,   1678.2 buff/cache\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.   4232.0 avail Mem\n\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n  74572 root      20   0  153692  57784  13900 R 100.0   0.7  12:56.35 python3\n   7819 root      20   0 1330816 822260  46216 S  24.2  10.2  49:31.42 sx_sdk\n\nadmin@sonic:~$ ps -aux | grep 74572\nroot \u00a0 \u00a0 \u00a0 74572 99.1 \u00a00.7 153692 57784 pts/0 \u00a0 \u00a0Rl \u00a0 07:53 \u00a013:29 python3 -m sonic_ax_impl\nadmin \u00a0 \u00a0 \u00a075908 \u00a00.0 \u00a00.0 \u00a0 6692 \u00a0 828 pts/1 \u00a0 \u00a0S+ \u00a0 08:07 \u00a0 0:00 grep 74572\n```\n\nAfter doing some profiling,\n```\nGIL: 0.00%, Active: 100.00%, Threads: 2\n\n  %Own   %Total  OwnTime  TotalTime  Function (filename:line)\n100.00% 100.00%   319.0s    319.1s   get_all (swsscommon/swsscommon.py:1661)\n  0.00%   0.00%    2.89s     2.89s   update_rem_if_mgmt (sonic_ax_impl/mibs/ieee802_1ab.py:542)\n```\nIt is very clear that the get_all method of swsscommon.Sonicv2Connector is taking a significant amount of time, when used with blocking set to True (waits for around 60 sec if the data is not present in the Redis). And this seems to busy wait as inferred from the logic here [LINK](https://github.com/Azure/sonic-swss-common/blob/202012/common/dbinterface.cpp#L150) and thus the reason for CPU Usage spike.\n\nThis behavior is particular seen after that commit because, that commit essentially delays the initialization of FLEX_COUNTERS and thereby the COUNTERS:oid* until the counterpoll is enabled.\n\nBut the MIB classes in the snmp-subagent periodically poll these DB with blocking set to True.\n\nAs a fix, we can set the blocking set to False in all these MIB classes. This shouldn't affect how they operate as they periodically poll the redis anyway and if the data is missed at this instant, that can eventually be fetched within the next 3 to 7 second. {5 is the default period with a random delay of -2,2}\n\n#### Describe the results you expected:\n\nShouldn't see the CPU Usage spike.\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 505,
+    "repository": "sonic-net/sonic-swss-common",
+    "url": "https://github.com/sonic-net/sonic-swss-common/pull/505",
+    "title": "Fix DBInterface blocking operations",
+    "merged_at": "2021-07-22T09:18:12Z",
+    "description": "Fixes https://github.com/Azure/sonic-buildimage/issues/8202\n\n- Fix pubsub channel timeout unit\n- Reset context err before next redisGetReply, otherwise later redisGetReply early return on no data, and burn CPU core in a loop.\n\nref: https://github.com/redis/hiredis/issues/332",
+    "files": [
+      {
+        "path": "common/dbinterface.cpp",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "common/dbinterface.h",
+        "additions": 15,
+        "deletions": 15
+      },
+      {
+        "path": "tests/test_redis_ut.py",
+        "additions": 19,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

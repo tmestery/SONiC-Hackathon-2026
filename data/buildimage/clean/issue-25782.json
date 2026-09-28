@@ -1,0 +1,63 @@
+{
+  "id": "buildimage-25782",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25782,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25782",
+    "title": "[sonic-vpp][Data Plane][t1-lag] MPLS - Enable data plane testing on VPP KVM testbed",
+    "created_at": "2026-03-02T09:39:27Z",
+    "closed_at": "2026-09-18T00:14:17Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P3",
+    "issue_type": null,
+    "platform": "vpp",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "> :robot: *Created by DevAce, Jianquan's AI Agent, on his behalf.*\n\n## Description\n\nEnable mpls data plane testing on the SONiC-VPP KVM testbed.\n\n## Test Module Coverage\n\n| Feature | sonic-vpp | vpp | Status | Notes |\n|---------|:---:|:---:|--------|-------|\n| `mpls` | :x: | :white_check_mark: | Blocked on sonic-vpp | --- |\n\n## Priority\n\n**P2** --- VPP supports the data plane, but sonic-vpp integration work is needed.\n\n## Acceptance Criteria\n\n- [ ] Implement MPLS support in sonic-vpp\n- [ ] MPLS test module passes on VPP KVM testbed"
+  },
+  "resolution": {
+    "pr_number": 26619,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26619",
+    "title": "[mpls][sonic-vpp] Enable MPLS data-plane tests on the VPP t1-lag testbed",
+    "merged_at": "2026-09-18T00:14:15Z",
+    "description": "### Description of PR\n\nSummary:\nFixes sonic-net/sonic-buildimage#25782\nFixes https://github.com/sonic-net/sonic-mgmt/issues/27874\n\nEnable the existing MPLS data-plane tests on SONiC-VPP `t1-lag-vpp`.\nThe current test policy enables this module only for `asic_type == 'vpp'`,\nwithout using `feature_status` or adding an MPLS FEATURE entry.\nThe lossy-topology restriction remains, and `test_push_label` is temporarily\nskipped while #27874 is open.\n\nThe VPP MPLS backend in sonic-net/sonic-sairedis#2008 and kernel-module\nautoload in sonic-net/sonic-buildimage#29152 have merged. This PR does not\nregister a service or run `modprobe` in test setup.\n\n### Type of change\n\n- [ ] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A - no backport requested.\nFailure type: other (platform test enablement)\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n\n- Earlier end-to-end evidence for parent commit `143b5951a`: image\n  `SONiC.master.1203001-8f708f027`, Testplan ID:\n  `6a8f1793d025e08c23cc52a3`. MPLS module: **3 passed, 1 skipped**.\n  Pop, swap and swap-labelstack passed; push-label was skipped.\n- Latest marker-only update: the production marker resolver was exercised\n  in a Linux sonic-mgmt container across **448 MPLS scenarios**, covering\n  VPP, VS, hardware ASIC values, unknown ASIC values, missing/present\n  FEATURE information, lossy topologies and both YAML load orders.\n  These were validation-only checks; no unit-test file change is included.\n- Latest combined feedback update, tested from an isolated worktree at the PR\n  head with only `tests/mpls/conftest.py` and the main condition file changed:\n  **3 passed, 1 skipped**. The skip reason referenced #27874. No new\n  `setIntfMpls` syslog error or core file appeared.\n- Conditional-mark sort, flake8, Python syntax and `git diff --check` passed.\n  CI will rerun on the updated head.\n\n### Approach\n#### What is the motivation for this PR?\n\nVPP MPLS forwarding is available, but the existing tests were skipped by the\nFEATURE-presence check and a separate blanket VPP skip. Following review\ndiscussion, use an explicit VPP-only test policy instead of manufacturing a\nFEATURE entry for a protocol without a standalone MPLS service.\n\nCollected results for this module from 11 March through 7 September 2026\ncontained successful forwarding cases only on VPP. This supports the current\ntest policy; it does not establish that other SONiC platforms cannot support\nMPLS. Historical Juniper validation is documented in #3483.\n\n#### How did you do it?\n\n| File | Change |\n|---|---|\n| `tests/common/plugins/conditional_mark/tests_mark_conditions.yaml` | Skip the MPLS module when `asic_type not in ['vpp']` or the topology is lossy. Use #27874 as the temporary `test_push_label` skip condition. |\n| `tests/common/plugins/conditional_mark/tests_mark_conditions_sonic_vpp.yaml` | Remove the blanket MPLS skip so all MPLS mark conditions live in the main file. |\n| `tests/mpls/conftest.py` | Gate on topology type `t1`; determine applicability from configured IPv4 T0/T2 BGP peers; fail if a supported layout has no active interface for either role; resolve PortChannels to their member PTF ports. No FEATURE registration or test-side module loading. |\n| `tests/mpls/test_mpls.py` | Pass the resolved egress-port list to packet verification and remove a duplicate mask wrapper. |\n| `.azure-pipelines/pr_test_scripts.yaml` | Add `mpls/test_mpls.py` to the `t1-lag-vpp` selection. |\n\nThe shared rule is now:\n\n```yaml\nmpls:\n  skip:\n    reason: \"MPLS tests are currently enabled only for VPP; skipped on lossy topologies\"\n    conditions_logical_operator: or\n    conditions:\n      - \"asic_type not in ['vpp']\"\n      - *lossyTopos\n```\n\nNon-VPP platforms are skipped regardless of whether an MPLS FEATURE entry\nexists. This is a deliberate test-scope decision, not an equivalent rewrite\nfor custom images that register that entry.\n\n`test_push_label` is temporarily skipped while #27874 remains open. The issue\ntracks the observed forwarding failure without treating it as VPP-specific.\nOnce the issue checker observes #27874 as closed, this targeted skip stops\napplying; the general VPP-only and lossy-topology rules still apply. Existing\npytest issue-status caches may need clearing, and failed status lookups retain\nthe skip.\n\n#### How did you verify/test it?\n\nSee the Test result section. Selection was checked using the actual\n`load_conditions()` and `find_all_matches()` functions with the production\nYAML, not a separate reimplementation. No unit-test file changes are included.\nThe combined marker and topology-health changes were also run against the\n`t1-lag-vpp` DUT from an isolated worktree, producing 3 passed and 1 skipped.\n\n#### Any platform specific information?\n\nThe MPLS module is currently enabled only for VPP. The existing `t1` topology\nrequirement and lossy-topology exclusion still apply. Push-label is\ntemporarily skipped by #27874.\nOther platform enablement would require an explicit update to this policy.\n\n#### Supported testbed topology if it's a new test case?\n\nNot a new data-plane test. The existing module is enabled for `t1-lag-vpp`.\n\n### Documentation\n\nThe skip reason and this description document the VPP-only test policy.\nThe existing MPLS test plan remains applicable.",
+    "files": [
+      {
+        "path": ".azure-pipelines/pr_test_scripts.yaml",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 10,
+        "deletions": 2
+      },
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions_sonic_vpp.yaml",
+        "additions": 0,
+        "deletions": 11
+      },
+      {
+        "path": "tests/mpls/conftest.py",
+        "additions": 40,
+        "deletions": 6
+      },
+      {
+        "path": "tests/mpls/test_mpls.py",
+        "additions": 4,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

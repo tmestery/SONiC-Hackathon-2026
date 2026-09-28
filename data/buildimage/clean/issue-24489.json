@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-24489",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24489,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24489",
+    "title": "Bug: syslog identifier is hijacked to \"CCmisApi\" when importing sonic_platform",
+    "created_at": "2025-11-11T14:14:20Z",
+    "closed_at": "2026-01-25T05:07:27Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nIn python services using `sonic_py_common.logger` the syslog identifier already set up by the code can be overwritten when importing other modules.\n\nThis log hijack is coming from a library: `sonic_platform_base/sonic_xcvr/api/public/c_cmis.py`\n```\nSYSLOG_IDENTIFIER = \"CCmisApi\"\n...\nhelper_logger = logger.Logger(SYSLOG_IDENTIFIER)\n# This is the only log that this file has:\n    helper_logger.log_debug('key {} not present in VDM'.format(new_key))\n```\nIt seems like libraries shouldn't be syslogging, only services should.\n\nSearching in the syslog of a switch running SONiC we see logs with the `CCmisApi` that shouldn't:\n```\n2025-11-11T13:20:03.440479+00:00 sonic CCmisApi: Failed to load platform Pcie module. Warning : No module named 'sonic_platform.pcie', fallback to load Pcie common utility.\n2025 Nov 11 <IPV6>.179454 gold228 NOTICE CCmisApi: System is ready\n```\n\n### Steps to Reproduce\n\nOpen an interactive python session and run this code:\n```\nfrom sonic_py_common import logger\nlog = logger.Logger(\"NATE\")\nlog.log_notice(\"Log 1\")\nimport sonic_platform\nlog.log_notice(\"Log 2\")\n```\nWatch the syslog output:\n```\n2025 Nov 11 <IPV6>.002667 gold228-dut NOTICE NATE: Log 1\n2025 Nov 11 <IPV6>.406481 gold228-dut NOTICE CCmisApi: Log 2\n```\nClearly the second log should also have had the tag `NATE`\n\n### Actual Behavior and Expected Behavior\n\nSyslog entries should have been:\n```\n2025 Nov 11 <IPV6>.002667 gold228-dut NOTICE NATE: Log 1\n2025 Nov 11 <IPV6>.406481 gold228-dut NOTICE NATE: Log 2\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 609,
+    "repository": "sonic-net/sonic-platform-common",
+    "url": "https://github.com/sonic-net/sonic-platform-common/pull/609",
+    "title": "Fix log prefix hijack in c_cmis.py",
+    "merged_at": "2026-01-25T05:07:26Z",
+    "description": "#### Description\n\nRemove calls to setting a syslog tag as there was no logging actually used in this module. The existing call to log a message was in dead code, therefore there was no need to setup a syslogger at all.\n\n#### Motivation and Context\n\nIn python services using `sonic_py_common.logger` the syslog identifier already set up by the executable/service can be overwritten when importing other modules.\n\nThis log hijack is coming from a library: `sonic_platform_base/sonic_xcvr/api/public/c_cmis.py`\n```\nSYSLOG_IDENTIFIER = \"CCmisApi\"\n...\nhelper_logger = logger.Logger(SYSLOG_IDENTIFIER)\n# This is the only log that this file has:\n    helper_logger.log_debug('key {} not present in VDM'.format(new_key))\n```\n\nSearching in the syslog of a switch running SONiC we see logs with the `CCmisApi` that shouldn't:\n```\n2025-11-11T13:20:03.440479+00:00 sonic CCmisApi: Failed to load platform Pcie module. Warning : No module named 'sonic_platform.pcie', fallback to load Pcie common utility.\n2025 Nov 11 <IPV6>.179454 gold228 NOTICE CCmisApi: System is ready\n```\n\nIf any code imports c_cmis.py (indirectly for the most part) and has a logger session open already, their existing session will be re-opened with a new log tag, `CCmisApi` which is not desired.\n\nTo fix this we remove this logging code entirely because the function where it is used became dead in #556\n\nLibraries (rather than executables) probably shouldn't be syslogging on their own, and they certainly shouldn't hijack the log tag of the including executable.\n\nResolves sonic-net/sonic-buildimage#24489\n\n#### How Has This Been Tested?\n\nBefore the fix:\nOpen an interactive python session and run this code:\n```\nfrom sonic_py_common import logger\nlog = logger.Logger(\"NATE\")\nlog.log_notice(\"Log 1\")\nimport sonic_platform\nlog.log_notice(\"Log 2\")\n```\nWatch the syslog output:\n```\n2025 Nov 11 <IPV6>.002667 gold228-dut NOTICE NATE: Log 1\n2025 Nov 11 <IPV6>.406481 gold228-dut NOTICE CCmisApi: Log 2\n```\nClearly the second log should also have had the tag `NATE`\n\nAfter the fix:\nSyslog entries should have been:\n```\n2025 Nov 11 <IPV6>.002667 gold228-dut NOTICE NATE: Log 1\n2025 Nov 11 <IPV6>.406481 gold228-dut NOTICE NATE: Log 2\n```\n#### Additional Information (Optional)",
+    "files": [
+      {
+        "path": "sonic_platform_base/sonic_xcvr/api/public/c_cmis.py",
+        "additions": 0,
+        "deletions": 35
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

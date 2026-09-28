@@ -1,0 +1,100 @@
+{
+  "id": "buildimage-12256",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 12256,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/12256",
+    "title": "[yang-models] Missing constraints in VLAN, VLAN_INTERFACE yang models",
+    "created_at": "2022-10-03T04:13:19Z",
+    "closed_at": "2024-05-18T22:29:20Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "YANG"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nVLAN, VLAN_INTERFACE yang models are missing validation criteria. These constraints are missing from the YANG model, but they are checked in sonic-utilities using adhoc validation. Included in the description for each missing constraint is the adhoc validation code in sonic-utilities that we aim to replace with systemized YANG validation.\n\n1. Don't allow write of default vlan (vid = 1)\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if vid == 1:\n            ctx.fail(\"{} is default VLAN\".format(vlan)) # TODO: MISSING CONSTRAINT IN YANG MODEL\n```\n2. If vlan id already exists, do not allow duplicitous write to ConfigDB\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if clicommon.check_if_vlanid_exist(db.cfgdb, vlan): # TODO: MISSING CONSTRAINT IN YANG MODEL\n            ctx.fail(\"{} already exists\".format(vlan))\n```\n3. Do not allow removal of vlan interface if vlan has IP address assigned\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        for intf_key in intf_table:\n            if ((type(intf_key) is str and intf_key == 'Vlan{}'.format(vid)) or # TODO: MISSING CONSTRAINT IN YANG MODEL\n                (type(intf_key) is tuple and intf_key[0] == 'Vlan{}'.format(vid))):\n                ctx.fail(\"{} can not be removed. First remove IP addresses assigned to this VLAN\".format(vlan))\n```\n\n4. Don't allow removal of vlan if there are members assigned\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        keys = [ (k, v) for k, v in db.cfgdb.get_table('VLAN_MEMBER') if k == 'Vlan{}'.format(vid) ]\n\n        if keys: # TODO: MISSING CONSTRAINT IN YANG MODEL\n            ctx.fail(\"VLAN ID {} can not be removed. First remove all members assigned to this VLAN.\".format(vid))\n```\n\n5. If interface naming mode is alias, make sure corresponding port name exists\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if clicommon.get_interface_naming_mode() == \"alias\": # TODO: MISSING CONSTRAINT IN YANG MODEL\n            alias = port\n            iface_alias_converter = clicommon.InterfaceAliasConverter(db)\n            port = iface_alias_converter.alias_to_name(alias)\n            if port is None:\n                ctx.fail(\"cannot find port name for alias {}\".format(alias))\n\n```\n\n6.  Make sure port is not configured as a mirror destination port\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if clicommon.is_port_mirror_dst_port(db.cfgdb, port): # TODO: MISSING CONSTRAINT IN YANG MODEL\n            ctx.fail(\"{} is configured as mirror destination port\".format(port))\n```\n\n7. Make sure port is not already a vlan member\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if clicommon.is_port_vlan_member(db.cfgdb, port, vlan): # TODO: MISSING CONSTRAINT IN YANG MODEL\n            ctx.fail(\"{} is already a member of {}\".format(port, vlan))\n```\n\n8. Make sure port is not a router interface\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if (is_port and clicommon.is_port_router_interface(db.cfgdb, port)) or \\\n           (not is_port and clicommon.is_pc_router_interface(db.cfgdb, port)): # TODO: MISSING CONSTRAINT IN YANG MODEL\n            ctx.fail(\"{} is a router interface!\".format(port))\n```\n\n9. Make sure port is not already a portchannel member\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if (is_port and clicommon.interface_is_in_portchannel(portchannel_member_table, port)): # TODO: MISSING CONSTRAINT IN YANG MODEL\n            ctx.fail(\"{} is part of portchannel!\".format(port))\n```\n\n10. Make sure port is not already an untagged member\n\n[sonic-utilities config/vlan.py](https://github.com/sonic-net/sonic-utilities/blob/master/config/vlan.py)\n```\n        if (clicommon.interface_is_untagged_member(db.cfgdb, port) and untagged): # TODO: MISSING CONSTRAINT IN YANG MODEL\n            ctx.fail(\"{} is already untagged member!\".format(port))\n```\n#### Steps to reproduce the issue:\n1. Using YANG model as mode of validation, write to ConfigDB with an invalid configuration\n2. Write to ConfigDB will go through even though it should be prohibited by YANG model\n#### Describe the results you received:\nWrite to ConfigDB succeeds even though the configuration is invalid\n\n#### Describe the results you expected:\nWrite to ConfigDB should fail"
+  },
+  "resolution": {
+    "pr_number": 18292,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/18292",
+    "title": "[yang-models] Add missing constraints in VLAN yang model. Fixes #12256",
+    "merged_at": "2024-05-18T22:29:19Z",
+    "description": "Fix #12256\n\nImplement constraints as described in https://github.com/sonic-net/sonic-buildimage/issues/12256\n\n1. **Don't allow write of default vlan (vid = 1)**\n- Change range from 1..4094 to 2..4094\n\n2. **If vlan id already exists, do not allow duplicitous write to ConfigDB**\nNo change is needed, name is key so it will be unique\n\n3. **Do not allow removal of vlan interface if vlan has IP address assigned**\nNo chnage is needed since both VLAN_INTERFACE_LIST and VLAN_INTERFACE_IPPREFIX_LIST reference /vlan:sonic-vlan/vlan:VLAN/vlan:VLAN_LIST/vlan:name\n- \tAdded IP_PREFIX_WITHOUT_CREATNG_VLAN test\n\n4. **Don't allow removal of vlan if there are members assigned**\nNo chnage is needed since VLAN_MEMBER_LIST refereces \"/vlan:sonic-vlan/vlan:VLAN/vlan:VLAN_LIST/vlan:name\"\n- Added test VLAN_MEMBERS_WITHOUT_CREATING_VLAN\n\n5. **If interface naming mode is alias, make sure corresponding port name exists**\nsonic-yang doesn't support adding a ports using alias\n\n6. **Make sure port is not configured as a mirror destination port**\n- must \"not(/sms:sonic-mirror-session/sms:MIRROR_SESSION/sms:MIRROR_SESSION_LIST[sms:dst_port=current()])\"\n- Fixed MIRROR_SESSION in sonic-yang-models\\tests\\files\\sample_config_db.json (Ethernet2 is in Vlan111)\n- Test MIRROR_SESSION_ON_VLAN_MEMBER_PORT\n\n7. **Make sure port is not already a vlan member**\nNo change is needed, <vlan,port> is the key for VLAN_MEMBER_LIST\n\n8. **Make sure port is not a router interface**\n- must \"not(/intf:sonic-interface/intf:INTERFACE/intf:INTERFACE_LIST[intf:name=current()])\"\n- Test VLAN_ADD_PORT_THAT_IS_ROUTER_INTERFACE\n\n9. **Make sure port is not already a portchannel member**\n- must \"not(/lag:sonic-portchannel/lag:PORTCHANNEL_MEMBER/lag:PORTCHANNEL_MEMBER_LIST[lag:port=current()]/lag:name)\"\n- Test VLAN_ADD_PORT_CHANNEL_MEMBER\n\n10. **Make sure port is not already an untagged member**\n- must \"not(/vlan:sonic-vlan/vlan:VLAN_MEMBER/vlan:VLAN_MEMBER_LIST[vlan:port=current() and vlan:tagging_mode='untagged' and vlan:name!=current()/../name])\"\n- Test VLAN_ADD_PORT_THAT_IS_UNTAGGED\n\n**Verify Vlan name matches vlanid**\n- must \"substring-after(../name, 'Vlan') = current()\"\n- Test VLAN_CREATE_VLAN_WITH_MISSMATCHING_NAME\n#### Why I did it\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n#### How to verify it\nAdded tests to verify all modified and added constraints.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-config-engine/tests/simple-sample-graph-case-remap-disabled.xml",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/simple-sample-graph-case-remap-enabled-no-tunnel-attributes.xml",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/simple-sample-graph-case-remap-enabled.xml",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/simple-sample-graph-case.xml",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/t0-sample-graph-two-mgmt.xml",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/t0-sample-graph.xml",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_minigraph_case.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-yang-models/tests/files/sample_config_db.json",
+        "additions": 2,
+        "deletions": 5
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/test_yang_model.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests/vlan.json",
+        "additions": 28,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests_config/vlan.json",
+        "additions": 243,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/yang-models/sonic-vlan.yang",
+        "additions": 43,
+        "deletions": 19
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

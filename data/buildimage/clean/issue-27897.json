@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-27897",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27897,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27897",
+    "title": "Bug: [HFT] HFT QUEUE flex counters fail after config reload - unimplemented START_STREAM \u2192 CREATE_CONFIG transition in HFTelProfile",
+    "created_at": "2026-06-15T15:48:12Z",
+    "closed_at": "2026-07-07T16:39:15Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen HFT (High Frequency Telemetry) is configured for a QUEUE group with streaming enabled, HFT counters and queue flex counters coexist correctly on initial setup. After config reload -y, queue flex counter data becomes unavailable (N/A) and orchagent logs repeated exceptions.\n\nRoot cause: After reload, the HFT tel-type can already be in START_STREAM (because stream_state=enabled is restored from CONFIG_DB). When queue flex counter registration updates COUNTERS_QUEUE_NAME_MAP, HFTelOrch::locallyNotify() calls HFTelProfile::tryCommitConfig() \u2192 setStreamState(CREATE_CONFIG). In HFTelProfile::setStreamState(), the START_STREAM \u2192 CREATE_CONFIG transition is not implemented and throws:\n\n`Transfer from start to create config hasn't been implemented yet\n`\n\nThe exception is caught while draining FLEX_COUNTER_TABLE, so queue flex counter setup fails.\n\n### Steps to Reproduce\n\n1. Start from a fresh SONiC image on an HFT-capable platform with dynamic buffer model.\n2. Ensure QoS and queue flex counters are enabled.\n3. Configure an HFT profile and QUEUE group (example: queue Ethernet0|7, profile P1):\n```\nconfig hft add profile --poll_interval 10000 --stream_state enabled P1\nconfig hft add group --group_type QUEUE --object_counters BYTES --object_names Ethernet0\\|7 P1\n```\n4. Verify both counter paths work:\n```\nshow hft counter -i 1\nshow queue counters Ethernet0\n```\n5. Persist and reload:\n```\nconfig save -y\nconfig reload -y\n```\n6. Re-run the checks from step 4.\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior**\nBefore reload:\nshow hft counter and show queue counters Ethernet0 both return valid data for the configured queue.\n\nAfter config reload -y: queue flex counter output shows N/A:\n\n```\nPort    TxQ    Counter/pkts    Counter/bytes    Drop/pkts    Drop/bytes\n---------  -----  --------------  ---------------  -----------  ------------\nEthernet0    UC7             N/A              N/A          N/A           N/A\n```\nswss / syslog shows repeated errors (See under Relevant log output)\n\n**Expected behavior**\nAfter reload, HFT QUEUE streaming and queue flex counters should coexist, as they do before reload.\nshow hft counter and show queue counters should both show valid data.\nNo orchagent exceptions on the FLEX_COUNTER_TABLE / setStreamState path during COUNTERS_QUEUE_NAME_MAP updates.\n\n### Relevant log output\n\n```shell\nsonic NOTICE swss#orchagent: :- locallyNotify: The counter table COUNTERS_QUEUE_NAME_MAP is updated, operation 0, object Ethernet0|0\nsonic ERR swss#orchagent: :- setStreamState: Transfer from start to create config hasn't been implemented yet\nsonic ERR swss#orchagent: :- drain: Exception caught: type=exception, table=FLEX_COUNTER_TABLE, error=:- setStreamState: Transfer from start to create config hasn't been implemented yet\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4690,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4690",
+    "title": "[hftorch]: Fixbug skip commit for unrelated counter map updates",
+    "merged_at": "2026-07-07T16:39:12Z",
+    "description": "**What I did**\n\nAvoid re-committing HFT configuration when a counter name map update is for an object outside the HFT group.\n\nChanged `HFTelProfile::setObjectSAIID()` and `HFTelProfile::delObjectSAIID()` to return whether the profile was actually modified. `HFTelOrch::locallyNotify()` now calls `tryCommitConfig()` only when the counter name map update applies to an object in the profile.\n\nAdded a mock unit test that calls `HFTelOrch::locallyNotify()` with an unrelated `COUNTERS_PORT_NAME_MAP` update while the HFT profile is already streaming. The old behavior would continue into `tryCommitConfig()` and hit the unsupported `START_STREAM -> CREATE_CONFIG` path; the fixed behavior returns without committing.\n\n**Why I did it**\n\nFixes sonic-net/sonic-buildimage#27897.\n\nAfter reload, an HFT profile may already be in `START_STREAM`. `HFTelOrch::locallyNotify()` previously called `tryCommitConfig()` for every profile of the updated SAI object type, even if the updated counter name map entry was unrelated to that HFT group. That unrelated object update caused an unnecessary second commit and hit the existing unsupported `START_STREAM -> CREATE_CONFIG` transition.\n\n**How I verified it**\n\nUsed the `sonic-swss-verify` flow and checked the relevant CI files:\n\n- `.azure-pipelines/build-template.yml`\n- `.azure-pipelines/test-docker-sonic-vs-template.yml`\n\nDownloaded CI artifacts with `latestFromBranch` strategy:\n\n- swss-common build 1142984\n- sairedis build 1142386\n- common-lib build 1144430\n- VPP build 1139157 from `sonic-net.sonic-platform-vpp` main\n\nRan the updated unit test compilation in `sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:master-amd64`:\n\n- `make -C tests/mock_tests tests-hftelprofile_ut.o -j$(nproc)`\n\nResult: passed. The updated test object compiled successfully in the CI container.\n\nAlso ran:\n\n- `git diff --check`\n\n**Details if related**\n\nThe fix intentionally does not implement `START_STREAM -> CREATE_CONFIG`. It prevents unrelated object updates from entering that transition path in the first place.",
+    "files": [
+      {
+        "path": "orchagent/high_frequency_telemetry/hftelorch.cpp",
+        "additions": 8,
+        "deletions": 2
+      },
+      {
+        "path": "orchagent/high_frequency_telemetry/hftelprofile.cpp",
+        "additions": 17,
+        "deletions": 7
+      },
+      {
+        "path": "orchagent/high_frequency_telemetry/hftelprofile.h",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/mock_tests/hftelprofile_ut.cpp",
+        "additions": 152,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

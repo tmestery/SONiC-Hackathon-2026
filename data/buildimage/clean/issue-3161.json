@@ -1,0 +1,78 @@
+{
+  "id": "buildimage-3161",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 3161,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/3161",
+    "title": "radvd out of range MTU error",
+    "created_at": "2019-07-16T00:46:59Z",
+    "closed_at": "2020-09-01T20:53:37Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\nradvd out of range MTU error\n\nAs part of \"PR#2795 Build radvd from source; Patch so as not to treat out-of-range MTU as an error\", the error message was reduced to warning\nand failure was bypassed.\n\nThis issue is created to track a final fix. Following fixes have been commited to 4.18 kernel to support setting of bridge MTU to a value > 9100. When SONiC kernrel is upgraded to a kernel > 4.18, the patch done in radvd needs to be removed and Bridge MTU needs to be set to 9100.\n\nhttps://github.com/torvalds/linux/commit/3341d9170228d521fb38afae14b449308f3e4018#diff-221ed728b95e6fa6475069eed594287c\nhttps://github.com/torvalds/linux/commit/804b854d374e39f5f8bff9638fd274b9a9ca7d33#diff-221ed728b95e6fa6475069eed594287c\nhttps://github.com/torvalds/linux/commit/f40aa23339e2d06b1a8daaece5a511bb1c4f704c#diff-221ed728b95e6fa6475069eed594287c\nhttps://github.com/torvalds/linux/commit/419d14af9e07fb5ca32b1b1614793c6b1e242152#diff-221ed728b95e6fa6475069eed594287c\n\n**Steps to reproduce the issue:**\n1. Make sure that DEVICE_METADATA|localhost|type=\"ToRRouter\"\n\n2. Create a VLAN and add an active link to it\nconfig vlan add 100\nconfig vlan member add 100 Ethernet0\n\n3. Assing IPv6 address to the Vlan interface\nconfig interface ip add Vlan100 2002::1/64\n\n4. Restart radv container\nsystemctl restart radv\n\n5. Check syslog\n\n**Describe the results you received:**\n\nFollowing error message is seen\nJul 16 <IPV6>.823049 sonic WARNING radv#radvd[60]: AdvLinkMTU for Vlan1 (9100) must be zero or between 1280 and 1500\n\n**Describe the results you expected:**\nNo error/warnings need to be observed"
+  },
+  "resolution": {
+    "pr_number": 5242,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/5242",
+    "title": "[radvd] No longer build from source; Install vanilla Debian package once again",
+    "merged_at": "2020-09-01T20:53:37Z",
+    "description": "**- Why I did it**\n\nResolves https://github.com/Azure/sonic-buildimage/issues/3161\n\n- In PR https://github.com/Azure/sonic-buildimage/pull/2795, we started building radvd from source and patching it to prevent it from erroring out when advertising an MTU of 9100 which was greater than the MTU size configured on the bridge interface (1500), which was due to a limitation in the 4.9 Linux kernel.\n- Master branch is now using Linux kernel 4.19. As of 4.18, the kernel supports setting a bridge MTU to a value > 1500.\n- PR https://github.com/Azure/sonic-swss/pull/1393 modified vlanmgrd to take advantage of this and now configures the MTU of bridge interfaces in SONiC to the proper size of 9100. Therefore, we no longer need to patch radvd. Since we no longer need to patch radvd, we no longer need to build it from source, so we can save build time by going back to simply installing the vanilla radvd Debian package in the router-advertiser container.\n\n**- How I did it**\n\n- Remove radvd Makefile and patch, change docker-router-advertiser Dockerfile template to simply install the vanilla radvd package using apt-get.\n\n**- How to verify it**\n\n- Ensure that radvd starts and runs in the container and that it does *not* emit log messages like the following:\n```\nERR radv#radvd[38]: AdvLinkMTU for Vlan1000 (9100) must be zero or between 1280 and 1500\n```\n\n**- Which release branch to backport (provide reason below if selected)**\n\n- [ ] 201811\n- [ ] 201911\n- [x] 202006",
+    "files": [
+      {
+        "path": "dockers/docker-router-advertiser/Dockerfile.j2",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "rules/docker-router-advertiser.mk",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "rules/radvd.dep",
+        "additions": 0,
+        "deletions": 10
+      },
+      {
+        "path": "rules/radvd.mk",
+        "additions": 0,
+        "deletions": 17
+      },
+      {
+        "path": "src/radvd/.gitignore",
+        "additions": 0,
+        "deletions": 4
+      },
+      {
+        "path": "src/radvd/Makefile",
+        "additions": 0,
+        "deletions": 32
+      },
+      {
+        "path": "src/radvd/patch/0001-Don-t-treat-out-of-range-MTU-as-an-error.patch",
+        "additions": 0,
+        "deletions": 33
+      },
+      {
+        "path": "src/radvd/patch/series",
+        "additions": 0,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

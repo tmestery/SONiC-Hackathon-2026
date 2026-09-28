@@ -1,0 +1,56 @@
+{
+  "id": "buildimage-27345",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27345,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27345",
+    "title": "Bug: [vpp] Hard-coded 240.0.0.0/4 FIB drop in upstream VPP breaks SONiC routing parity (e.g. test_decap)",
+    "created_at": "2026-05-13T09:03:22Z",
+    "closed_at": "2026-05-28T20:51:02Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": "P1",
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nOn the SONiC VPP platform, packets with an IPv4 destination in <IP>/4 (and <IP>/4) are silently dropped inside ip4-lookup even when SONiC has installed a route covering them (e.g. the default route). Other ASIC platforms (BCM, MLNX) do not impose this filter, so the same SONiC route table behaves differently on VPP.\n\nConcretely this breaks test_decap, whose IPIP inner destinations land in <IP>/4.\n\nUpstream VPP installs a fixed set of high-priority drop entries into every IPv4 FIB at table creation:\nhttps://github.com/FDio/vpp/blob/2044332c908702fbe2ca7b370f75dbd7c2ae6dad/src/vnet/fib/ip4_fib.c#L13-L90\n\n|prefix | source | overridable?|\n|-- | -- | --|\n|<IP>/0 | FIB_SOURCE_DEFAULT_ROUTE | yes|\n|<IP>/32 | FIB_SOURCE_DEFAULT_ROUTE | yes|\n|<IP>/4 | FIB_SOURCE_SPECIAL | no|\n|<IP>/4 | FIB_SOURCE_SPECIAL | no|\n|<IP>/32 | FIB_SOURCE_DEFAULT_ROUTE | yes|\n\n</body>\n</html>\n\n### Steps to Reproduce\n\n```\nvpp# show ip fib <IP>\nipv4-VRF:0, fib_index:0, flow hash:[src dst sport dport proto ] epoch:0 flags:none locks:[adjacency:1, recursive-resolution:8, default-route:1, ]\n<IP>/4 fib:0 index:2 locks:2\n  special refs:1 entry-flags:drop, src-flags:added,contributing,active,\n    path-list:[2] locks:2 flags:drop, uPRF-list:2 len:0 itfs:[]\n      path:[2] pl-index:2 ip4 weight=1 pref=0 special:  cfg-flags:drop,\n        [@0]: dpo-drop ip4\n\n forwarding:   unicast-ip4-chain\n  [@0]: dpo-load-balance: [proto:ip4 index:3 buckets:1 uRPF:2 to:[40037:4003700]]\n    [0] [@0]: dpo-drop ip4\n```\n\n### Actual Behavior and Expected Behavior\n\nthe route in the VPP should be the same as the bgp fib:\n```\nroot@vlab-vpp-02:~# show ip route <IP>\nRouting entry for <IP>/0\n  Known via \"bgp\", distance 20, metric 0, best\n  Last update <IPV6> ago\n  * <IP>, via PortChannel101\n  * <IP>, via PortChannel102\n  * <IP>, via PortChannel103\n  * <IP>, via PortChannel104\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 238,
+    "repository": "sonic-net/sonic-platform-vpp",
+    "url": "https://github.com/sonic-net/sonic-platform-vpp/pull/238",
+    "title": "Add patch to support no class e drop",
+    "merged_at": "2026-05-28T20:51:01Z",
+    "description": "VPP PR: https://gerrit.fd.io/r/c/vpp/+/45898\n\nThis is to fix https://github.com/sonic-net/sonic-buildimage/issues/27345.\n\n* Microsoft ADO (number only): 38209399\n\nwith this patch:\n```\nadmin@vlab-vpp-02:~$ docker exec -it syncd bash\nroot@vlab-vpp-02:/# vppctl show ip fib table 0 <IP>/4\nipv4-VRF:0, fib_index:0, flow hash:[src dst sport dport proto ] epoch:0 flags:none locks:[adjacency:1, recursive-resolution:8, default-route:1, ]\n<IP>/0 fib:0 index:0 locks:3\n  API refs:1 src-flags:added,contributing,active,\n    path-list:[259] locks:12798 flags:shared,popular, uPRF-list:185 len:4 itfs:[65, 66, 67, 68, ]\n      path:[426] pl-index:259 ip4 weight=1 pref=0 recursive:  oper-flags:resolved,\n        via <IP> in fib:0 via-fib:109 via-dpo:[dpo-load-balance:110]\n      path:[427] pl-index:259 ip4 weight=1 pref=0 recursive:  oper-flags:resolved,\n        via <IP> in fib:0 via-fib:117 via-dpo:[dpo-load-balance:118]\n      path:[428] pl-index:259 ip4 weight=1 pref=0 recursive:  oper-flags:resolved,\n        via <IP> in fib:0 via-fib:125 via-dpo:[dpo-load-balance:126]\n      path:[429] pl-index:259 ip4 weight=1 pref=0 recursive:  oper-flags:resolved,\n        via <IP> in fib:0 via-fib:133 via-dpo:[dpo-load-balance:134]\n\n  default-route refs:1 entry-flags:drop, src-flags:added,\n    path-list:[0] locks:1 flags:drop, uPRF-list:0 len:0 itfs:[]\n      path:[0] pl-index:0 ip4 weight=1 pref=0 special:  cfg-flags:drop,\n        [@0]: dpo-drop ip4\n\n forwarding:   unicast-ip4-chain\n  [@0]: dpo-load-balance: [proto:ip4 index:1 buckets:4 uRPF:185 to:[0:0]]\n    [0] [@13]: dpo-load-balance: [proto:ip4 index:110 buckets:1 uRPF:114 to:[0:0]]\n          [0] [@5]: ipv4 via <IP> BondEthernet101: mtu:9100 next:38 flags:[] 3e9050e769a12259d0d519a90800\n    [1] [@13]: dpo-load-balance: [proto:ip4 index:118 buckets:1 uRPF:122 to:[0:0]]\n          [0] [@5]: ipv4 via <IP> BondEthernet102: mtu:9100 next:39 flags:[] 06b48ba124242259d0d519a90800\n    [2] [@13]: dpo-load-balance: [proto:ip4 index:126 buckets:1 uRPF:130 to:[0:0]]\n          [0] [@5]: ipv4 via <IP> BondEthernet103: mtu:9100 next:40 flags:[] 12390ac1a90c2259d0d519a90800\n    [3] [@13]: dpo-load-balance: [proto:ip4 index:134 buckets:1 uRPF:138 to:[0:0]]\n          [0] [@5]: ipv4 via <IP> BondEthernet104: mtu:9100 next:41 flags:[] 663457500c622259d0d519a90800\n```\n\nSigned-off-by: Longxiang Lyu <<EMAIL>>",
+    "files": [
+      {
+        "path": "vppbld/patches/0010-ip-add-no-class-e-drop-startup-config-option-to-supp.patch",
+        "additions": 202,
+        "deletions": 0
+      },
+      {
+        "path": "vppbld/patches/series",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 233,
+      "repository": "sonic-net/sonic-platform-vpp",
+      "url": "https://github.com/sonic-net/sonic-platform-vpp/pull/233",
+      "title": "[vpp] Allow routes to override Class E drop",
+      "merged": false
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

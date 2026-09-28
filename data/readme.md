@@ -15,9 +15,9 @@ Each source folder (`buildimage/`, `management/`, `swss/`) follows the same stru
 
 - **`raw/`** — Unprocessed mined data: closed PRs, linked issues, test logs, and
   `show techsupport` dumps, exactly as collected. Never edit files here by hand.
-- **`clean/`** — Cleaned, deduplicated dataset entries derived from `raw/`. Each entry
-  pairs a failure (log or dump) with its verified root cause. This is what the
-  benchmark and RAG pipeline consume.
+- **`clean/`** — Cleaned, labeled entries derived from `raw/`. Each entry pairs a
+  failure with its verified resolution (PR URL + PR description). Use these for
+  SLM train/val/test and a future benchmark. Do not index them for RAG.
 - **`format.md`** — Schema for the cleaned entries in that folder (fields, types, example record).
 - **`readme.md`** — Source-specific notes: how the data was mined, filters applied, known gaps.
 

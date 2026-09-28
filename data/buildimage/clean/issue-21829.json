@@ -1,0 +1,75 @@
+{
+  "id": "buildimage-21829",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21829,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21829",
+    "title": "FRR rejects SRv6 vtysh commands from bgpcfgd when doing bgp service restart",
+    "created_at": "2025-02-21T23:32:35Z",
+    "closed_at": "2025-03-03T22:04:00Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "routing"
+    ]
+  },
+  "failure": {
+    "body": "When BGP container/service is restarted, the CONFIG_DB entries will be pushed to Bgpcfgd for programming into FRR. Bgpcfgd does so by batching a set of commands in a temporary file and run \"vtysh -f /tmp/<filename>\" to push the configuration to FRR.\n\nRecently, we noticed that when there is SRv6 configuration in CONFIG_DB, such an operation failed because FRR complained that \"segment-routing\" command was not complete.\n\nExample syslog:\n```\n2025 Feb 21 <IPV6>.127094 vlab-01 DEBUG bgp#bgpcfgd: execute command '['vtysh', '-f', '/tmp/tmp_oxgkoog']'.\n2025 Feb 21 <IPV6>.196510 vlab-01 ERR bgp#bgpcfgd: command execution returned 2. Command: '['vtysh', '-f', '/tmp/tmp_oxgkoog']', stdout: '[83|mgmtd] sending configuration#012[84|zebra] sending configuration#012[90|bgpd] sending configuration#012Waiting for children to finish applying config...#012[100|staticd] sending configuration#012', stderr: 'line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012[84|zebra] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012[100|staticd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012[83|mgmtd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012[90|bgpd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012'\n2025 Feb 21 <IPV6>.196510 vlab-01 ERR bgp#bgpcfgd: ConfigMgr::commit(): can't push configuration from file='/tmp/tmp_oxgkoog', rc='2', stdout='[83|mgmtd] sending configuration#012[84|zebra] sending configuration#012[90|bgpd] sending configuration#012Waiting for children to finish applying config...#012[100|staticd] sending configuration#012', stderr='line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012[84|zebra] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012[100|staticd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012[83|mgmtd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid <IPV6>::/48 locator loc1 behavior uN#012[90|bgpd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012'\n2025 Feb 21 <IPV6>.196510 vlab-01 CRIT bgp#bgpcfgd: Runner::commit was unsuccessful\n```\n\nRelevant content of the vtysh commands file in the case above:\n```\n!\n! template: bgpd/templates/msft.general/v4.tor/instance.conf.j2\n!\n  neighbor <IP> remote-as 64600\n  neighbor <IP> description ARISTA01T1\n  neighbor <IP> peer-group TIER1_V4\n!\n\naddress-family ipv4 unicast\n  neighbor <IP> allowas-in 1\nexit-address-family\n\n!\n\n!\n\n!\n! end of template: bgpd/templates/msft.general/v4.tor/instance.conf.j2\n!\n\n!\n! end of template: bgpd/templates/general/instance.conf.j2\n!\nsegment-routing\nsrv6\nstatic-sids\nsid <IPV6>::/48 locator loc1 behavior uN\n!\n! Set ip source to loopback for bgp learned routes\n!\nroute-map RM_SET_SRC6 permit 10\n    set src FC00:1::32\n!\nipv6 protocol bgp route-map RM_SET_SRC6\n!\n!\n! Set ip source to loopback for bgp learned routes\n!\nroute-map RM_SET_SRC permit 10\n    set src <IP>\n!\nip protocol bgp route-map RM_SET_SRC\n!\n\n```"
+  },
+  "resolution": {
+    "pr_number": 21889,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/21889",
+    "title": "[Bgpcfgd]Add correct terminating commands at the end of BGP config command groups",
+    "merged_at": "2025-03-03T22:03:59Z",
+    "description": "#### Why I did it\n\nPreviously, Bgpcfgd generated groups of BGP configuration commands that did not have proper terminating commands. As a consequence, non-BGP configuration commands following the BGP configuration command may be rejected by the FRR because of FRR's context was not properly switched. You check the details in Issue #21829.\n\nFix #21829\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nAdd exit and exit-address-family command at the end of BGP configuration command groups.\n\n#### How to verify it\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-bgpcfgd/bgpcfgd/managers_advertise_rt.py",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-bgpcfgd/bgpcfgd/managers_bbr.py",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-bgpcfgd/bgpcfgd/managers_bgp.py",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-bgpcfgd/bgpcfgd/managers_static_rt.py",
+        "additions": 5,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_advertise_rt.py",
+        "additions": 53,
+        "deletions": 20
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_bbr.py",
+        "additions": 18,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_static_rt.py",
+        "additions": 129,
+        "deletions": 30
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

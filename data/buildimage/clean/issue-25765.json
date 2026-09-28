@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-25765",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25765,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25765",
+    "title": "'show version' crashes in docker-sonic-vs: missing debian_version and kernel_version in sonic_version.yml",
+    "created_at": "2026-03-02T08:26:09Z",
+    "closed_at": "2026-03-03T07:00:25Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n`show version` crashes with `KeyError: 'debian_version'` inside docker-sonic-vs containers because `sonic_version.yml` does not include `debian_version` or `kernel_version` fields.\n\n## Root Cause\n`sonic_version.yml.j2` conditionally includes `debian_version` and `kernel_version` only when those variables are defined during the build:\n\n```jinja2\n{% if debian_version is defined -%}\ndebian_version: '{{ debian_version }}'\n{% endif -%}\n```\n\nFor docker-sonic-vs, these variables are not set during the docker build, so the fields are omitted from the generated `sonic_version.yml`.\n\nHowever, `show/main.py` (in sonic-utilities) accesses them unconditionally:\n\n```python\nclick.echo(\"Distribution: Debian {}\".format(version_info['debian_version']))\nclick.echo(\"Kernel: {}\".format(version_info['kernel_version']))\n```\n\n## Reproduction\n```bash\ndocker exec <csonic-container> show version\n```\n\nOutput:\n```\n/bin/sh: 1: sudo: not found\nSONiC Software Version: SONiC.\nSONiC OS Version: 13\nTraceback (most recent call last):\n  ...\nKeyError: 'debian_version'\n```\n\n## Additional Issue\n`build_version` is also empty, producing `SONiC Software Version: SONiC.` \u2014 the version string is not populated during docker-sonic-vs builds.\n\n## Proposed Fix\nTwo possible approaches:\n1. **sonic-utilities**: Use `version_info.get()` with fallback defaults (defensive fix)\n2. **sonic-buildimage**: Always include `debian_version` and `kernel_version` in `sonic_version.yml.j2` with sensible defaults, and populate `build_version` during docker-sonic-vs builds\n\nApproach 1 is more robust since `sonic_version.yml` contents may vary across versions.\n\n## Environment\n- SONiC docker-sonic-vs built from master branch\n- sonic-utilities from master branch"
+  },
+  "resolution": {
+    "pr_number": 4324,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/4324",
+    "title": "Fix 'show version' KeyError when sonic_version.yml has missing fields",
+    "merged_at": "2026-03-03T07:00:24Z",
+    "description": "## Description\n`show version` crashes with `KeyError: 'debian_version'` in docker-sonic-vs containers because `sonic_version.yml` is missing `debian_version` and `kernel_version` fields.\n\n### Root Cause\n`sonic_version.yml.j2` conditionally includes these fields only when defined during the build. The full image build (`build_debian.sh`) sets them from the filesystem root, but docker-only VS builds skip that path, so the fields are omitted.\n\n`show/main.py` accesses them with `[]` (raises KeyError) instead of `.get()`.\n\n### Fix\nUse `version_info.get()` with sensible fallbacks:\n- `debian_version` \u2192 `'N/A'`\n- `kernel_version` \u2192 `os.uname().release` (actual runtime kernel)\n- `build_version` \u2192 `'N/A'`\n- `sonic_os_version` \u2192 `'N/A'`\n\n### Reproduction\n```bash\ndocker exec <docker-sonic-vs-container> show version\n# Traceback: KeyError: 'debian_version'\n```\n\n### Testing\nVerified `show version` no longer crashes in docker-sonic-vs containers.\n\nFixes sonic-net/sonic-buildimage#25765\n\nSigned-off-by: securely1g <<EMAIL>>",
+    "files": [
+      {
+        "path": "show/main.py",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "tests/show_test.py",
+        "additions": 30,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-10050",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 10050,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/10050",
+    "title": "ARP traffic gets dropped in VXLAN-EVPN tunnels",
+    "created_at": "2022-02-21T20:24:00Z",
+    "closed_at": "2025-01-29T20:58:43Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nWhen configuring a L2 VXLAN-EVPN overlay on Celestica Seastone2 (Trident3-based) switches in a simple test setup, ARP packets don't reach the server on the other switch.\n\nIPv4 unicast traffic works just fine after manually adding the ARP entries on the servers, IPv6 (including ND) works just fine out of the box, and other broadcast traffic (e.g. a simple ping to the broadcast address) also arrives, so the problem appears to be related to ARP itself, not BUM traffic in general.\n\n#### Steps to reproduce the issue:\n1. Deploy a 202012 or 202106 image (containing the SAI config entries mentioned in [this comment](https://github.com/Azure/sonic-buildimage/issues/8371#issuecomment-896390372)) on two Celestica Seastone2 switches, each of which is connected to one server on Ethernet128 and to the other switch on Ethernet0.\n2. Set up a basic L2VPN configuration:\n```\nsudo config interface ip add Loopback0 <IP>/32\nsudo config interface ip add Ethernet0 <IP>/24\nsudo config vlan add 1000\nsudo config vlan member add -u 1000 Ethernet128\nsudo config vxlan add vtep <IP>\nsudo config vxlan evpn_nvo add nvo vtep\nsudo config vxlan map add vtep 1000 10000\n```\n3. Configure BGP:\n```\nconfigure terminal\n router bgp 65100\n  bgp router-id <IP>\n  no bgp ebgp-requires-policy\n  bgp bestpath as-path multipath-relax\n  neighbor <IP> remote-as external\n  !\n  address-family ipv4 unicast\n   network <IP>/32\n  exit-address-family\n  !\n  address-family l2vpn evpn\n   neighbor <IP> activate\n   advertise-all-vni\n  exit-address-family\n end\nwrite\n```\n4. Apply equivalent config on the other switch (adjusting IPs and ASN)\n5. Check that BGP session is up and L2VPN info is exchanged\n6. Assign IPv4 and IPv6 IPs to the two servers\n7. Check that pings go through\n\n#### Describe the results you received:\nIPv6 pings to link-local and manually configured addresses work just fine, while IPv4 pings fail due to not receiving an ARP reply. After adding a static ARP table entry on both servers, IPv4 pings also work just fine, and traffic between the servers flows at line rate.\n\n#### Describe the results you expected:\nBoth IPv4 and IPv6 should work.\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: SONiC.202012.0-c57ae5f80\nDistribution: Debian 10.11\nKernel: 4.19.0-12-2-amd64\nBuild commit: c57ae5f80\nBuild date: Mon Feb 21 <IPV6> UTC 2022\nBuilt by: lstockner@gc231-ctrlv2-control-host\n\nPlatform: x86_64-cel_seastone_2-r0\nHwSKU: Seastone_2\nASIC: broadcom\nASIC Count: 1\nSerial Number: DX030F2B031A05UB200019\nUptime: <IPV6> up 26 min,  1 user,  load average: 1.29, 1.31, 1.15\n\nDocker images:\nREPOSITORY                    TAG                  IMAGE ID            SIZE\ndocker-sonic-mgmt-framework   202012.0-c57ae5f80   79440cf48d41        797MB\ndocker-sonic-mgmt-framework   latest               79440cf48d41        797MB\ndocker-fpm-frr                202012.0-c57ae5f80   28481c6294d1        412MB\ndocker-fpm-frr                latest               28481c6294d1        412MB\ndocker-orchagent              202012.0-c57ae5f80   e535c2ffebac        412MB\ndocker-orchagent              latest               e535c2ffebac        412MB\ndocker-nat                    202012.0-c57ae5f80   a18fd90d0b31        397MB\ndocker-nat                    latest               a18fd90d0b31        397MB\ndocker-sflow                  202012.0-c57ae5f80   823b96247f40        395MB\ndocker-sflow                  latest               823b96247f40        395MB\ndocker-teamd                  202012.0-c57ae5f80   3229bb6a0885        394MB\ndocker-teamd                  latest               3229bb6a0885        394MB\ndocker-sonic-telemetry        202012.0-c57ae5f80   143e2eb4c7ad        472MB\ndocker-sonic-telemetry        latest               143e2eb4c7ad        472MB\ndocker-platform-monitor       202012.0-c57ae5f80   004a6a58b2df        564MB\ndocker-platform-monitor       latest               004a6a58b2df        564MB\ndocker-snmp                   202012.0-c57ae5f80   b707dba0b738        426MB\ndocker-snmp                   latest               b707dba0b738        426MB\ndocker-iccpd                  202012.0-c57ae5f80   fd2fff9a2f9f        394MB\ndocker-iccpd                  latest               fd2fff9a2f9f        394MB\ndocker-syncd-brcm             202012.0-c57ae5f80   657db22b6b53        675MB\ndocker-syncd-brcm             latest               657db22b6b53        675MB\ndocker-lldp                   202012.0-c57ae5f80   5dd3f98d8e09        423MB\ndocker-lldp                   latest               5dd3f98d8e09        423MB\ndocker-database               202012.0-c57ae5f80   35b7c2b9bcfd        382MB\ndocker-database               latest               35b7c2b9bcfd        382MB\ndocker-dhcp-relay             202012.0-c57ae5f80   8c1beba4a4a7        396MB\ndocker-dhcp-relay             latest               8c1beba4a4a7        396MB\ndocker-router-advertiser      202012.0-c57ae5f80   ab595b3854c6        383MB\ndocker-router-advertiser      latest               ab595b3854c6        383MB\ndocker-mux                    202012.0-c57ae5f80   00619d24125d        435MB\ndocker-mux                    latest               00619d24125d        435MB\n\n```\n#### Output of `show techsupport`:\n[sonic_dump_localhost_20220221_201100.tar.gz](https://github.com/Azure/sonic-buildimage/files/8111875/sonic_dump_localhost_20220221_201100.tar.gz)\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\nSince a few other issues mention that L2VPN worked for them, I've tried several older versions going back to July 2021, but all of them had the same problem.\n\n202111 and master have a different issue that prevents the tunnel from coming up at all, I'll create a separate issue for that.\n\nThe logs contain an error related to setting the port status - backporting https://github.com/Azure/sonic-swss/pull/2080 fixes this, but the ARP problem remains.\n\nGiving the switches an IP on the VLAN makes the ARP requests in question show up on the Linux interfaces when using tcpdump, but there's no ARP reply to be seen.\n\nFrom spamming ARP requests from one server and checking port counters, it appears that the destination switch receives the packets and drops them instead of decapping and sending them to the second server.\n\nThe image I'm running for the output above is based on 7a35504ff, with a few platform-related fixes that I still have to upstream. None of them should have any impact on the dataplane, it's just Python platform module stuff."
+  },
+  "resolution": {
+    "pr_number": 3383,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/3383",
+    "title": "[orchagent]: VXLAN: Fix oper_status and tunnel encapsulation TTL",
+    "merged_at": "2025-01-29T20:58:41Z",
+    "description": "**What I did**\n\nThis fixes 2 issues across a range of open tickets building upon patches created by others with modifications as requested by @VladimirKuk.\n\nThe first issue this resolves is the status shown for remote vteps which in the fact that it is wrong makes debugging nearly impossible:\n```\n# show vxlan remotevtep\n+------------+------------+-------------------+--------------+\n| SIP        | DIP        | Creation Source   | OperStatus   |\n+============+============+===================+==============+\n| <IP> | <IP> | EVPN              | oper_down    |\n+------------+------------+-------------------+--------------+\nTotal count : 1\n```\n\nThe remote VTEP is really up.\n\nOriginal PR for that is #2080.\n\nAlso fixes https://github.com/sonic-net/sonic-buildimage/issues/10004 or at least the error message which hurts debugging.\n\nThe next issue is in reachabiity across VXLANs.  This fixes IP/MAC learning via ARP.  The original PR for that is #3216, however it appears it has its origins in\nhttps://github.com/sonic-net/sonic-buildimage/issues/10050 which goes into greater detail about the issue itself.  Also there is talk about it here https://github.com/kamelnetworks/sonic/issues/9 as well as another similar patch here: https://github.com/kamelnetworks/sonic-swss/commit/02ee3e3\n\n**Why I did it**\n\nFixes #3216\nFixes #2080\nFixes https://github.com/sonic-net/sonic-buildimage/issues/10050\nFixes https://github.com/sonic-net/sonic-buildimage/issues/10004\n\n**How I verified it**\n\nPulled into my private sonic-swss fork:\nhttps://github.com/bradh352/sonic-swss/commits/bradh352/master\n\nWhich is pulled in by my private sonic-buildimage fork:\nhttps://github.com/bradh352/sonic-buildimage/tree/bradh352/master\n\nWhich is then automatically built when changes are made.  Then the uploaded asset of sonic-broadcom.bin is installed onto Dell S5248F switches and tested.\n\nUpdate: also now tested by me on Mellanox/NVidia SN2201\n\n**Details if related**\n\n Signed-off-by: Brad House (@bradh352)\n\nThis should also be backported to 202411, 202405",
+    "files": [
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 5,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/vxlanorch.h",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/evpn_tunnel.py",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "tests/test_vxlan_tunnel.py",
+        "additions": 3,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

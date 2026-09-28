@@ -1,0 +1,108 @@
+{
+  "id": "buildimage-6001",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 6001,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/6001",
+    "title": "No drop_community is added to advertised IPv6 routes",
+    "created_at": "2020-11-23T09:19:20Z",
+    "closed_at": "2020-11-24T16:33:32Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\nAfter the BGP Allow List feature is introduced, the drop_community should be added to advertised routes that are not on allow list when default_action is \"permit\". However, the drop_community `\"5056:12345\"` is not added to IPv6 routes.\n\n**Steps to reproduce the issue:**\n1. By default, default_action of BGP allow list is \"permit\" and the allow list is empty. All the routes advertised by SONIC should have community \"5056:12345\".\n2. Check the routes on neighbors. The IPv6 routes received from SONiC do not have drop_community in community list. Only IPv4 routes have drop_community.\n```\nARISTA01T2#show ip bgp <IP>/25\nBGP routing table information for VRF default\nRouter identifier <IP>, local AS number 65200\nBGP routing table entry for <IP>/25\n Paths: 1 available\n  65100 64001\n    <IP> from <IP> (<IP>)\n      Origin IGP, metric 0, localpref 100, IGP metric 1, weight 0, received <IPV6> ago, valid, external, best\n      Community: 5060:12345\n      Rx SAFI: Unicast\nARISTA01T2#\nARISTA01T2#show ipv6 bgp 20c0:a800::/64\nBGP routing table information for VRF default\nRouter identifier <IP>, local AS number 65200\nBGP routing table entry for 20c0:a800::/64\n Paths: 1 available\n  65100 64001\n    fc00::1 from fc00::1 (<IP>)\n      Origin IGP, metric 0, localpref 100, IGP metric 1, weight 0, received <IPV6> ago, valid, external, best\n      Rx SAFI: Unicast\n```\n3.\n\n**Describe the results you received:**\nWhen default_action of BGP allow list is \"permit\", SONiC does not add drop_community to advertised IPv6 routes that are not on allow list.\n\n**Describe the results you expected:**\nThe SONiC switch should add drop_community to both IPv4 and IPv6 routes that are not on allow list when default_action of BGP allow list is `\"permit\"`.\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\nThe reason is that SONiC has an extra rule for route-map `FROM_BGP_PEER_V6`:\n```\nroute-map FROM_BGP_PEER_V6 permit 1\n set ipv6 next-hop prefer-global\n```\nThis rule has the highest priority. When this rule is hit, the IPv6 routes are permitted and then advertised to other peers. Rest rules of route-map `FROM_BGP_PEER_V6` are not hit. Including the rule for adding drop_community:\n```\nroute-map FROM_BGP_PEER_V6 permit 2\n call ALLOW_LIST_DEPLOYMENT_ID_0_V6\n on-match next\n\nroute-map ALLOW_LIST_DEPLOYMENT_ID_0_V6 permit 65535\n set community 5060:12345 additive\n```\n\n```\nadmin@vlab-03:~$ show version\n\nSONiC Software Version: SONiC.master.564-e0781f46\nDistribution: Debian 10.6\nKernel: 4.19.0-9-2-amd64\nBuild commit: e0781f46\nBuild date: Sun Nov 22 <IPV6> UTC 2020\nBuilt by: johnar@jenkins-worker-11\n\nPlatform: x86_64-kvm_x86_64-r0\nHwSKU: Force10-S6000\nASIC: vs\nSerial Number: 000000\nUptime: <IPV6> up  5:50,  1 user,  load average: 2.26, 2.53, 1.89\n\nDocker images:\nREPOSITORY                    TAG                   IMAGE ID            SIZE\ndocker-gbsyncd-vs             latest                5279f3537b39        447MB\ndocker-gbsyncd-vs             master.564-e0781f46   5279f3537b39        447MB\ndocker-syncd-vs               latest                61879683c030        447MB\ndocker-syncd-vs               master.564-e0781f46   61879683c030        447MB\ndocker-teamd                  latest                a3870fc3e181        483MB\ndocker-teamd                  master.564-e0781f46   a3870fc3e181        483MB\ndocker-nat                    latest                3252a3152e39        486MB\ndocker-nat                    master.564-e0781f46   3252a3152e39        486MB\ndocker-router-advertiser      latest                89a5515a1a34        441MB\ndocker-router-advertiser      master.564-e0781f46   89a5515a1a34        441MB\ndocker-platform-monitor       latest                eb8fc7142218        563MB\ndocker-platform-monitor       master.564-e0781f46   eb8fc7142218        563MB\ndocker-lldp                   latest                e7cb6de5f480        514MB\ndocker-lldp                   master.564-e0781f46   e7cb6de5f480        514MB\ndocker-database               latest                25483c69475b        441MB\ndocker-database               master.564-e0781f46   25483c69475b        441MB\ndocker-orchagent              latest                b6b3b4af0286        497MB\ndocker-orchagent              master.564-e0781f46   b6b3b4af0286        497MB\ndocker-snmp                   latest                1730a5aad978        477MB\ndocker-snmp                   master.564-e0781f46   1730a5aad978        477MB\ndocker-dhcp-relay             latest                dd10e666da0b        448MB\ndocker-dhcp-relay             master.564-e0781f46   dd10e666da0b        448MB\ndocker-sonic-telemetry        latest                8ddabca21e8f        511MB\ndocker-sonic-telemetry        master.564-e0781f46   8ddabca21e8f        511MB\ndocker-sonic-mgmt-framework   latest                0b01beadd681        598MB\ndocker-sonic-mgmt-framework   master.564-e0781f46   0b01beadd681        598MB\ndocker-fpm-frr                latest                74f723fe2e0e        500MB\ndocker-fpm-frr                master.564-e0781f46   74f723fe2e0e        500MB\ndocker-sflow                  latest                2ae465489055        484MB\ndocker-sflow                  master.564-e0781f46   2ae465489055        484MB\n\nadmin@vlab-03:~$ show run bgp\nBuilding configuration...\n\nCurrent configuration:\n!\nfrr version 7.2.1-sonic\nfrr defaults traditional\nhostname vlab-03\nlog syslog informational\nlog facility local4\nagentx\nno service integrated-vtysh-config\n!\nenable password zebra\npassword zebra\n!\nip route <IP>/0 <IP> 200\n!\nrouter bgp 65100\n bgp router-id <IP>\n bgp log-neighbor-changes\n no bgp default ipv4-unicast\n bgp graceful-restart restart-time 240\n bgp graceful-restart\n bgp graceful-restart preserve-fw-state\n bgp bestpath as-path multipath-relax\n neighbor PEER_V4 peer-group\n neighbor PEER_V6 peer-group\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA01T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA03T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA05T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA07T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA09T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA11T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA13T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 65200\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA15T2\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64001\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA01T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64002\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA02T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64003\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA03T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64004\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA04T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64005\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA05T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64006\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA06T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64007\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA07T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64008\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA08T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64009\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA09T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64010\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA10T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64011\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA11T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64012\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA12T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64013\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA13T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64014\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA14T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64015\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA15T0\n neighbor <IP> timers 3 10\n neighbor <IP> remote-as 64016\n neighbor <IP> peer-group PEER_V4\n neighbor <IP> description ARISTA16T0\n neighbor <IP> timers 3 10\n neighbor fc00::2 remote-as 65200\n neighbor fc00::2 peer-group PEER_V6\n neighbor fc00::2 description ARISTA01T2\n neighbor fc00::2 timers 3 10\n neighbor fc00::a remote-as 65200\n neighbor fc00::a peer-group PEER_V6\n neighbor fc00::a description ARISTA03T2\n neighbor fc00::a timers 3 10\n neighbor fc00::12 remote-as 65200\n neighbor fc00::12 peer-group PEER_V6\n neighbor fc00::12 description ARISTA05T2\n neighbor fc00::12 timers 3 10\n neighbor fc00::1a remote-as 65200\n neighbor fc00::1a peer-group PEER_V6\n neighbor fc00::1a description ARISTA07T2\n neighbor fc00::1a timers 3 10\n neighbor fc00::22 remote-as 65200\n neighbor fc00::22 peer-group PEER_V6\n neighbor fc00::22 description ARISTA09T2\n neighbor fc00::22 timers 3 10\n neighbor fc00::2a remote-as 65200\n neighbor fc00::2a peer-group PEER_V6\n neighbor fc00::2a description ARISTA11T2\n neighbor fc00::2a timers 3 10\n neighbor fc00::32 remote-as 65200\n neighbor fc00::32 peer-group PEER_V6\n neighbor fc00::32 description ARISTA13T2\n neighbor fc00::32 timers 3 10\n neighbor fc00::3a remote-as 65200\n neighbor fc00::3a peer-group PEER_V6\n neighbor fc00::3a description ARISTA15T2\n neighbor fc00::3a timers 3 10\n neighbor fc00::42 remote-as 64001\n neighbor fc00::42 peer-group PEER_V6\n neighbor fc00::42 description ARISTA01T0\n neighbor fc00::42 timers 3 10\n neighbor fc00::46 remote-as 64002\n neighbor fc00::46 peer-group PEER_V6\n neighbor fc00::46 description ARISTA02T0\n neighbor fc00::46 timers 3 10\n neighbor fc00::4a remote-as 64003\n neighbor fc00::4a peer-group PEER_V6\n neighbor fc00::4a description ARISTA03T0\n neighbor fc00::4a timers 3 10\n neighbor fc00::4e remote-as 64004\n neighbor fc00::4e peer-group PEER_V6\n neighbor fc00::4e description ARISTA04T0\n neighbor fc00::4e timers 3 10\n neighbor fc00::52 remote-as 64005\n neighbor fc00::52 peer-group PEER_V6\n neighbor fc00::52 description ARISTA05T0\n neighbor fc00::52 timers 3 10\n neighbor fc00::56 remote-as 64006\n neighbor fc00::56 peer-group PEER_V6\n neighbor fc00::56 description ARISTA06T0\n neighbor fc00::56 timers 3 10\n neighbor fc00::5a remote-as 64007\n neighbor fc00::5a peer-group PEER_V6\n neighbor fc00::5a description ARISTA07T0\n neighbor fc00::5a timers 3 10\n neighbor fc00::5e remote-as 64008\n neighbor fc00::5e peer-group PEER_V6\n neighbor fc00::5e description ARISTA08T0\n neighbor fc00::5e timers 3 10\n neighbor fc00::62 remote-as 64009\n neighbor fc00::62 peer-group PEER_V6\n neighbor fc00::62 description ARISTA09T0\n neighbor fc00::62 timers 3 10\n neighbor fc00::66 remote-as 64010\n neighbor fc00::66 peer-group PEER_V6\n neighbor fc00::66 description ARISTA10T0\n neighbor fc00::66 timers 3 10\n neighbor fc00::6a remote-as 64011\n neighbor fc00::6a peer-group PEER_V6\n neighbor fc00::6a description ARISTA11T0\n neighbor fc00::6a timers 3 10\n neighbor fc00::6e remote-as 64012\n neighbor fc00::6e peer-group PEER_V6\n neighbor fc00::6e description ARISTA12T0\n neighbor fc00::6e timers 3 10\n neighbor fc00::72 remote-as 64013\n neighbor fc00::72 peer-group PEER_V6\n neighbor fc00::72 description ARISTA13T0\n neighbor fc00::72 timers 3 10\n neighbor fc00::76 remote-as 64014\n neighbor fc00::76 peer-group PEER_V6\n neighbor fc00::76 description ARISTA14T0\n neighbor fc00::76 timers 3 10\n neighbor fc00::7a remote-as 64015\n neighbor fc00::7a peer-group PEER_V6\n neighbor fc00::7a description ARISTA15T0\n neighbor fc00::7a timers 3 10\n neighbor fc00::7e remote-as 64016\n neighbor fc00::7e peer-group PEER_V6\n neighbor fc00::7e description ARISTA16T0\n neighbor fc00::7e timers 3 10\n !\n address-family ipv4 unicast\n  network <IP>/32\n  neighbor PEER_V4 soft-reconfiguration inbound\n  neighbor PEER_V4 route-map FROM_BGP_PEER_V4 in\n  neighbor PEER_V4 route-map TO_BGP_PEER_V4 out\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  neighbor <IP> activate\n  maximum-paths 64\n exit-address-family\n !\n address-family ipv6 unicast\n  network fc00:1::/64\n  neighbor PEER_V6 soft-reconfiguration inbound\n  neighbor PEER_V6 route-map FROM_BGP_PEER_V6 in\n  neighbor PEER_V6 route-map TO_BGP_PEER_V6 out\n  neighbor fc00::2 activate\n  neighbor fc00::a activate\n  neighbor fc00::12 activate\n  neighbor fc00::1a activate\n  neighbor fc00::22 activate\n  neighbor fc00::2a activate\n  neighbor fc00::32 activate\n  neighbor fc00::3a activate\n  neighbor fc00::42 activate\n  neighbor fc00::46 activate\n  neighbor fc00::4a activate\n  neighbor fc00::4e activate\n  neighbor fc00::52 activate\n  neighbor fc00::56 activate\n  neighbor fc00::5a activate\n  neighbor fc00::5e activate\n  neighbor fc00::62 activate\n  neighbor fc00::66 activate\n  neighbor fc00::6a activate\n  neighbor fc00::6e activate\n  neighbor fc00::72 activate\n  neighbor fc00::76 activate\n  neighbor fc00::7a activate\n  neighbor fc00::7e activate\n  maximum-paths 64\n exit-address-family\n!\nip prefix-list PL_LoopbackV4 seq 5 permit <IP>/32\n!\nipv6 prefix-list PL_LoopbackV6 seq 5 permit fc00:1::/64\n!\nroute-map ALLOW_LIST_DEPLOYMENT_ID_0_V4 permit 65535\n set community 5060:12345 additive\n!\nroute-map ALLOW_LIST_DEPLOYMENT_ID_0_V6 permit 65535\n set community 5060:12345 additive\n!\nroute-map FROM_BGP_PEER_V4 permit 100\n!\nroute-map FROM_BGP_PEER_V4 permit 2\n call ALLOW_LIST_DEPLOYMENT_ID_0_V4\n on-match next\n!\nroute-map FROM_BGP_PEER_V6 permit 1\n set ipv6 next-hop prefer-global\n!\nroute-map FROM_BGP_PEER_V6 permit 100\n!\nroute-map FROM_BGP_PEER_V6 permit 2\n call ALLOW_LIST_DEPLOYMENT_ID_0_V6\n on-match next\n!\nroute-map RM_SET_SRC permit 10\n set src <IP>\n!\nroute-map RM_SET_SRC6 permit 10\n set src FC00:1::32\n!\nroute-map TO_BGP_PEER_V4 permit 100\n!\nroute-map TO_BGP_PEER_V6 permit 100\n!\nip nht resolve-via-default\n!\nip protocol bgp route-map RM_SET_SRC\n!\nipv6 protocol bgp route-map RM_SET_SRC6\n!\nline vty\n!\nend\n```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```"
+  },
+  "resolution": {
+    "pr_number": 6011,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/6011",
+    "title": "[bgpcfgd]: Add on-match next rule for set ipv6 next-hop prefer-global",
+    "merged_at": "2020-11-24T16:33:32Z",
+    "description": "**- Why I did it**\nWithout the rule, IPv6 route-map entries were skipped.\n**- How I did it**\nAdded 'on-match next' rule after 'set ipv6 next-hop prefer-global.\nUpdated a test to check that we have 'on-match next' rule with the 'set ipv6 next-hop prefer-global'\n\n**- How to verify it**\nBuild an image. Run on your dut. Add a route-map entry after 'set ipv6 next-hop prefer-global'. Check that the route-map entry works\n**- Which release branch to backport (provide reason below if selected)**\n\n- [ ] 201811\n- [ ] 201911\n- [x] 202006\n\n**- Description for the changelog**\n\n**- A picture of a cute animal (not mandatory but encouraged)**",
+    "files": [
+      {
+        "path": "dockers/docker-fpm-frr/frr/bgpd/templates/general/policies.conf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-fpm-frr/frr/bgpd/templates/internal/policies.conf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/general/policies.conf/result_all.conf",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/general/policies.conf/result_base.conf",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/general/policies.conf/result_deny.conf",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/instance.conf/result_back_v4.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/instance.conf/result_back_v6.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/instance.conf/result_front_v4.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/instance.conf/result_front_v6.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/peer-group.conf/result_back.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/peer-group.conf/result_front.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/policies.conf/result_back.conf",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/internal/policies.conf/result_front.conf",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_ipv6_nexthop_global.py",
+        "additions": 13,
+        "deletions": 7
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "id": "buildimage-8619",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8619,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8619",
+    "title": "[hostcfgd] hoscfgd doesn't honor CFG DB updates if they arrive in a specific time interval",
+    "created_at": "2021-08-27T20:32:06Z",
+    "closed_at": "2021-10-28T14:18:08Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202106"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nWe have an internal test which invokes \"config feature state sflow enabled\" at around 92 sec after the boot and the update was never honored. The issue was narrowed down to the delayed start of hostcfgd (which starts at 90th sec). I'll explain with an example\n\nLet say system boots up at 0th sec. hostcfg starts at 90th sec. The hostcfgd reads the FEATURE|* tables at 90th sec and acts on it accordingly for the next 10 seconds (i.e mask/unmask/enable/disable).  And it then starts listening to notifications of feature table from 100th sec.\n\nSo, an update which is made before 90th sec and after 100th sec is honored. Updates made between 90th \u2013 100th sec will not.\n\n#### Steps to reproduce the issue:\n1. Make sure SFLOW feature state is disabled, save it.\n2. Write a one shot timer to start at 94 sec after boot up. Make it enable sflow using \"config feature state sflow enabled\"\n3. Reboot the switch with one-shot timer in place.\n\n#### Describe the results you received:\n\nThe update will not be honored\n\n```\n# Command was run on\n\n2021-08-23 <IPV6> [    INFO]  Running cmd: sudo config feature state sflow enabled\n\n# Pre-notification listen phase i.e. https://github.com/Azure/sonic-buildimage/blob/202012/src/sonic-host-services/scripts/hostcfgd#L656 was active from\n\n<IPV6>.986854  <->  <IPV6>.245694 and thus the update was missed\n\nAug 23 <IPV6>.986854 sonic INFO /hostcfgd: Waiting for systemctl to finish initialization\nAug 23 <IPV6>.000117 sonic INFO /hostcfgd: systemctl has finished initialization -- proceeding ....\n\n...............\n\n................\n\nAug 23 <IPV6>.421544 sonic INFO /hostcfgd: Feature 'lldp.service' is enabled and started\nAug 23 <IPV6>.437933 sonic INFO /hostcfgd: Feature 'sflow' is stopped and disabled\n..........\n\n.........\n\nAug 23 <IPV6>.234307 sonic INFO /hostcfgd: Running cmd: 'sudo systemctl start dhcp_relay.service'\nAug 23 <IPV6>.245694 sonic INFO /hostcfgd: Feature 'dhcp_relay.service' is enabled and started\n```\n\n#### Describe the results you expected:\n\nThe update should be honored\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 8861,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/8861",
+    "title": "[hostcfgd] Fixed the brief blackout in hostcfgd using SubscriberStateTable",
+    "merged_at": "2021-10-28T14:18:08Z",
+    "description": "#### Why I did it\n\nFixes https://github.com/Azure/sonic-buildimage/issues/8619\n\n#### How I did it\n\n1) Listening to CFG_DB notifications was migrated from ConfigDBConnector to SubscriberStateTable & Select\n2) This change in design helped me to remove `update_all_features_config` which was roughly taking a 5-10 sec time to execute and thus the reason for blackout\n3) Edited FeatureHandler, Feature & NtpCfgd classes to suit this design\n4) Added corresponding mocks and UT's\n\n**Changes made to classes other than HostConfigDaemon:**\nWith the previous design, the initially read data from the config db was applied by using hardcoded methods even before the config_db.listen() was called. For Eg: `update_all_features_config` for FeatureHandler and load() named methods for NtpCfgd etc\n\nBut with this design, since the existing data is read and given out as a notification by SubscriberStateTable, i've pretty much removed these hardcoded methods. Thus changes made to these class will be around adapting them to the new design and no change in the actual functionality .\n\n#### How to verify it\n\nUT's:\n```\ntests/determine-reboot-cause_test.py .........                                                                                                                                                                                        [ 29%]\ntests/procdockerstatsd_test.py .                                                                                                                                                                                                      [ 32%]\ntests/caclmgrd/caclmgrd_dhcp_test.py ......                                                                                                                                                                                           [ 51%]\ntests/hostcfgd/hostcfgd_radius_test.py ..                                                                                                                                                                                             [ 58%]\ntests/hostcfgd/hostcfgd_test.py .............                                                                                                                                                                                         [100%]\n```\nVerified manually,\n\n```\nSep 10 <IPV6>.662621 sonic INFO systemd[1]: hostcfgd.service: Succeeded.\nSep 10 <IPV6>.127719 sonic INFO /hostcfgd: ConfigDB connect success\nSep 10 <IPV6>.128108 sonic INFO /hostcfgd: KdumpCfg init ...\nSep 10 <IPV6>.148819 sonic INFO /hostcfgd: Waiting for systemctl to finish initialization\nSep 10 <IPV6>.163452 sonic INFO /hostcfgd: systemctl has finished initialization -- proceeding ...\nSep 10 <IPV6>.163834 sonic INFO /hostcfgd: Kdump handler...\nSep 10 <IPV6>.164019 sonic INFO /hostcfgd: Kdump global configuration update\nSep 10 <IPV6>.758784 sonic INFO hostcfgd[184471]: kdump is already disabled\nSep 10 <IPV6>.758876 sonic INFO hostcfgd[184471]: Kdump is already disabled\nSep 10 <IPV6>.182021 sonic INFO hostcfgd[184511]: Kdump configuration has been updated in the startup configuration\nSep 10 <IPV6>.596919 sonic INFO hostcfgd[184528]: Kdump configuration has been updated in the startup configuration\nSep 10 <IPV6>.140627 sonic INFO /hostcfgd: Feature nat is stopped and disabled\nSep 10 <IPV6>.642629 sonic INFO /hostcfgd: Feature telemetry is enabled and started\nSep 10 <IPV6>.101297 sonic INFO /hostcfgd: Feature pmon is enabled and started\nSep 10 <IPV6>.554366 sonic INFO /hostcfgd: Feature database is enabled and started\nSep 10 <IPV6>.009329 sonic INFO /hostcfgd: Feature mgmt-framework is enabled and started\nSep 10 <IPV6>.394952 sonic INFO /hostcfgd: Feature macsec is stopped and disabled\nSep 10 <IPV6>.782853 sonic INFO /hostcfgd: Feature snmp is enabled and started\nSep 10 <IPV6>.205381 sonic INFO /hostcfgd: Feature teamd is enabled and started\nSep 10 <IPV6>.224877 sonic INFO /hostcfgd: Feature what-just-happened is enabled and started\nSep 10 <IPV6>.627929 sonic INFO /hostcfgd: Feature lldp is enabled and started\nSep 10 <IPV6>.086993 sonic INFO /hostcfgd: Feature swss is enabled and started\nSep 10 <IPV6>.170312 sonic INFO /hostcfgd: cmd - service aaastatsd stop\nSep 10 <IPV6>.012236 sonic INFO /hostcfgd: cmd - service aaastatsd stop\nSep 10 <IPV6>.225946 sonic INFO /hostcfgd: Feature bgp is enabled and started\nSep 10 <IPV6>.712792 sonic INFO /hostcfgd: Feature dhcp_relay is enabled and started\nSep 10 <IPV6>.166656 sonic INFO /hostcfgd: Feature sflow is stopped and disabled\nSep 10 <IPV6>.593639 sonic INFO /hostcfgd: Feature radv is enabled and started\nSep 10 <IPV6>.034106 sonic INFO /hostcfgd: Feature syncd is enabled and started\nSep 10 <IPV6>.113064 sonic INFO /hostcfgd: cmd - service aaastatsd stop\nSep 10 <IPV6>.863601 sonic INFO /hostcfgd: RADIUS_SERVER update: key: <IP>, op: SET, data: {'auth_type': 'pap', 'passkey': 'p*****', 'retransmit': '1', 'timeout': '1'}\nSep 10 <IPV6>.938605 sonic INFO /hostcfgd: cmd - service aaastatsd stop\nSep 10 <IPV6>.667545 sonic INFO /hostcfgd: RADIUS_SERVER update: key: <IP>, op: SET, data: {'auth_type': 'chap', 'passkey': 'p*****', 'retransmit': '2', 'timeout': '2'}\nSep 10 <IPV6>.667801 sonic INFO /hostcfgd: RADIUS (NAS) IP change - key:eth0, current global info {}\nSep 10 <IPV6>.746531 sonic INFO /hostcfgd: cmd - service aaastatsd stop\nSep 10 <IPV6>.435340 sonic INFO /hostcfgd: ntp server update key 0.debian.pool.ntp.org\nSep 10 <IPV6>.435661 sonic INFO /hostcfgd: ntp server update, restarting ntp-config, ntp servers configured {'0.debian.pool.ntp.org'}\nSep 10 <IPV6>.866394 sonic INFO /hostcfgd: NTP GLOBAL Update\nSep 10 <IPV6>.866557 sonic INFO /hostcfgd: ntp global update for source intf old {''} new {'eth0', 'Loopback0'}, restarting ntp-config\nSep 10 <IPV6>.157600 sonic INFO /hostcfgd: Running cmd: 'sudo systemctl unmask sflow.service'\nSep 10 <IPV6>.178472 sonic INFO hostcfgd[192106]: Removed /etc/systemd/system/sflow.service.\nSep 10 <IPV6>.582018 sonic INFO /hostcfgd: Running cmd: 'sudo systemctl enable sflow.service'\nSep 10 <IPV6>.604534 sonic INFO hostcfgd[192123]: Created symlink /etc/systemd/system/sonic.target.wants/sflow.service \u2192 /lib/systemd/system/sflow.service.\nSep 10 <IPV6>.029416 sonic INFO /hostcfgd: Running cmd: 'sudo systemctl start sflow.service'\nSep 10 <IPV6>.691927 sonic INFO /hostcfgd: Feature sflow is enabled and started\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n\nRequired for 202012 & 202106, but a clean cherry-pick to these branches is not possible. Will raise separate PR's, once this is approved\n\n#### Description for the changelog\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-host-services/scripts/hostcfgd",
+        "additions": 253,
+        "deletions": 186
+      },
+      {
+        "path": "src/sonic-host-services/setup.py",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "src/sonic-host-services/tests/common/mock_configdb.py",
+        "additions": 81,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-host-services/tests/hostcfgd/hostcfgd_radius_test.py",
+        "additions": 8,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-host-services/tests/hostcfgd/hostcfgd_test.py",
+        "additions": 187,
+        "deletions": 34
+      },
+      {
+        "path": "src/sonic-host-services/tests/hostcfgd/test_vectors.py",
+        "additions": 59,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

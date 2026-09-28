@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-22420",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 22420,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/22420",
+    "title": "Bug: 'config route add' incorrectly adds an empty string for default vrf",
+    "created_at": "2025-04-23T06:54:24Z",
+    "closed_at": "2025-09-10T15:08:47Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nAfter adding a static route, `config reload` fails with a YANG validation error.\n\n```\nsudo config route add prefix <IP>/16 nexthop <IP>\n```\ngenerates the following in ConfigDB:\n```\n\"STATIC_ROUTE\": {\n    \"default|<IP>/16\": {\n        \"blackhole\": \"false\",\n        \"distance\": \"0\",\n        \"ifname\": \"\",\n        \"nexthop\": \"<IP>\",\n        \"nexthop-vrf\": \"\"\n    }\n},\n```\n\nWe have \"\" passed as an entry for nexthop-vrf in our default config_db.json. Subsequent calls to `config replace` fail due to this entry.\n\n```\nadmin@tb3-dut:~$ sudo config replace /etc/sonic/config_db.json\nConfig Replacer: Config replacement starting.\nConfig Replacer: Target config length: 36417.\nConfig Replacer: Getting current config db.\nConfig Replacer: Generating patch between target config and current config db.\nConfig Replacer: Applying patch using 'Patch Applier'.\nPatch Applier: localhost: Patch application starting.\nPatch Applier: localhost: Patch: []\nPatch Applier: localhost getting current config db.\nPatch Applier: localhost: simulating the target full config after applying the patch.\nPatch Applier: localhost: validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: localhost: validating target config does not have empty tables,\n                            since they do not show up in ConfigDb.\nPatch Applier: localhost: sorting patch updates.\nFailed to replace config\nUsage: config replace [OPTIONS] TARGET_FILE_PATH\nTry \"config replace -h\" for help.\n\nError: Given patch will produce invalid config. Error: Data Loading Failed\nValue \"\" does not satisfy the constraint \"(((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt)),)*((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt))\" (range, length, or pattern).\n```\n\nWe can see from https://github.com/sonic-net/sonic-buildimage/blob/47687229f3a3cde08e9d144c1668c44a04dee41c/src/sonic-yang-models/yang-models/sonic-static-route.yang#L114 that the empty string is not a valid vrf identifier for a nexthop-vrf:\n```\n        leaf nexthop-vrf {\n          type string {\n            pattern \"((((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt)),)*((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt)))?\";\n          }\n          description\n            \"VRF name of the nexthop. This is for vrf leaking\";\n        }\n```\n\nThis can either be fixed by adding the string 'default' instead of '' for nexthops in the default vrf, or by adding '' to the YANG definition.\n\n### Steps to Reproduce\n\nsudo config route add prefix <IP>/16 nexthop <IP>\nsudo config reload\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\n\n`config reload` fails after running `config prefix add`\n\nExpected:\n\n`config reload` should pass after running `config prefix add`\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 3862,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/3862",
+    "title": "Issue #22420: Modify 'config route add' command not to include empty \u2026",
+    "merged_at": "2025-09-10T15:08:45Z",
+    "description": "#### What I did\n\nThe config route commands accept a `nexthop-vrf` as an argument. When that argument is not specified, the commands use the empty string as the default. This violates the yang model, which only accepts vrf names of the form (`default`, `mgmt`, or `Vrf*`). In the case where a `nexthop-vrf` is not defined, we should fall back to using the same vrf given for the prefix we are adding. If that is not specified, then both prefix and nexthop will use the default vrf.\n\nFixes: [#22420](https://github.com/sonic-net/sonic-buildimage/issues/22420)\n\n#### How I did it\n\nModify the` add_route()` and `del_route()` codepaths from sonic-utilites/config/main.py to set nexthop-vrf to whatever the vrf is for the associated prefix whenever it is not explicitly specified.\n\n#### How to verify it\n\nAll unit tests pass (including all tests in `static_route_test.py`).\n\nI don't think the output of any show commands changes because of this, but it's possible there are combinations of different VRFs which would show up differently. Before this merges I'll set up some routes and nexthops with different VRFs and make sure any changes there may be are shown here.\n\n#### Previous command output (if the output of a command-line utility has changed)\n\n#### New command output (if the output of a command-line utility has changed)",
+    "files": [
+      {
+        "path": "config/main.py",
+        "additions": 6,
+        "deletions": 4
+      },
+      {
+        "path": "tests/static_routes_test.py",
+        "additions": 144,
+        "deletions": 27
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

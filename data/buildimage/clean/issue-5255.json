@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-5255",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5255,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5255",
+    "title": "[201911] Warmboot fails on Arista 7050",
+    "created_at": "2020-08-26T22:50:39Z",
+    "closed_at": "2020-09-04T16:34:27Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "201911"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "Issue:\nWarmboot from 201911 image to same image fails on Arista 7050 with below logs.\n\nRoot Cause\n=======\n\nIsssue is generic and can happen on any platform. It is more of timing issue. With the new supervisor way of starting process\nswssconfig.sh starts after orchagent goes in running state\n\n[program:swssconfig]\ncommand=/usr/bin/swssconfig.sh\npriority=6\nautostart=false\nautorestart=unexpected\nstartretries=0\nstartsecs=0\nstdout_logfile=syslog\nstderr_logfile=syslog\ndependent_startup=true\ndependent_startup_wait_for=orchagent:running\n\nMeanwhile it's possible because of delay(timing ussue) swssconfig.sh check that Warm restart is enable  might be ignored\nand it is possible we will again load APP_DP with files (00-copp.config.json ipinip.json ports.json switch.json )\nwhich can cause below issue (as seen in logs).\nPossible fix can be add some delay so that orchagent can do initial processing\nand update the State DB\n\nif [[ \"$SYSTEM_WARM_START\" == \"true\" ]] || [[ \"$SWSS_WARM_START\" == \"true\" ]]; then\n  RESTORE_COUNT=`sonic-db-cli STATE_DB hget \"WARM_RESTART_TABLE|orchagent\" restore_count`\n  if [[ -n \"$RESTORE_COUNT\" ]] && [[ \"$RESTORE_COUNT\" != \"0\" ]]; then\n    exit 0\n  fi\nfi\n\nLogs\n======\nAug 26 <IPV6>.358466 str-a7050-acs-1 ERR swss#orchagent: :- processCoppRule: Failed to apply attribute[2].id=0 to policer for trap group:default, error:-5\nAug 26 <IPV6>.358466 str-a7050-acs-1 ERR swss#orchagent: :- doTask: Processing copp task item failed, exiting.\nAug 26 <IPV6>.358642 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_POLICER_ATTR_METER_TYPE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.358693 str-a7050-acs-1 ERR swss#orchagent: :- processCoppRule: Failed to apply attribute[2].id=0 to policer for trap group:trap.group.arp, error:-5\nAug 26 <IPV6>.358693 str-a7050-acs-1 ERR swss#orchagent: :- doTask: Processing copp task item failed, exiting.\nAug 26 <IPV6>.359964 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_TUNNEL_ATTR_DECAP_DSCP_MODE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.359964 str-a7050-acs-1 ERR swss#orchagent: :- setTunnelAttribute: Failed to set attribute dscp_mode with value pipe\nAug 26 <IPV6>.359964 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: <IP> already exists. Did not create entry.\nAug 26 <IPV6>.359964 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: <IP> already exists. Did not create entry.\nAug 26 <IPV6>.359964 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: <IP> already exists. Did not create entry.\nAug 26 <IPV6>.359964 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: <IP> already exists. Did not create entry.\nAug 26 <IPV6>.360052 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: <IP> already exists. Did not create entry.\nAug 26 <IPV6>.360052 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: <IP> already exists. Did not create entry.\nAug 26 <IPV6>.360066 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_TUNNEL_ATTR_DECAP_ECN_MODE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.360093 str-a7050-acs-1 ERR swss#orchagent: :- setTunnelAttribute: Failed to set attribute ecn_mode with value copy_from_outer\nAug 26 <IPV6>.360093 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_TUNNEL_ATTR_DECAP_TTL_MODE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.360940 str-a7050-acs-1 ERR swss#orchagent: :- setTunnelAttribute: Failed to set attribute ttl_mode with value pipe\nAug 26 <IPV6>.360940 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_TUNNEL_ATTR_DECAP_DSCP_MODE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.360940 str-a7050-acs-1 ERR swss#orchagent: :- setTunnelAttribute: Failed to set attribute dscp_mode with value pipe\nAug 26 <IPV6>.361022 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: fc00::71 already exists. Did not create entry.\nAug 26 <IPV6>.361022 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: fc00::75 already exists. Did not create entry.\nAug 26 <IPV6>.361039 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: fc00::79 already exists. Did not create entry.\nAug 26 <IPV6>.361062 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: fc00::7d already exists. Did not create entry.\nAug 26 <IPV6>.361062 str-a7050-acs-1 ERR swss#orchagent: :- addDecapTunnelTermEntries: fc00:1::32 already exists. Did not create entry.\nAug 26 <IPV6>.361080 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_TUNNEL_ATTR_DECAP_ECN_MODE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.361092 str-a7050-acs-1 ERR swss#orchagent: :- setTunnelAttribute: Failed to set attribute ecn_mode with value copy_from_outer\nAug 26 <IPV6>.361121 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_TUNNEL_ATTR_DECAP_TTL_MODE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.361252 str-a7050-acs-1 ERR swss#orchagent: :- setTunnelAttribute: Failed to set attribute ttl_mode with value pipe\nAug 26 <IPV6>.361359 str-a7050-acs-1 NOTICE swss#orchagent: :- processCoppRule: Set trap group trap.group.bgp.lacp to host interface\nAug 26 <IPV6>.361406 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_create: attribute key SAI_HOSTIF_TRAP_ATTR_TRAP_TYPE:16387; already exists, can't create\nAug 26 <IPV6>.361406 str-a7050-acs-1 ERR swss#orchagent: :- applyAttributesToTrapIds: Failed to create trap 16387, rv:-5\nAug 26 <IPV6>.361423 str-a7050-acs-1 ERR swss#orchagent: :- doTask: Processing copp task item failed, exiting.\nAug 26 <IPV6>.361880 str-a7050-acs-1 ERR swss#orchagent: :- meta_generic_validation_set: SAI_POLICER_ATTR_METER_TYPE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified\nAug 26 <IPV6>.361880 str-a7050-acs-1 ERR syncd#syncd: [none] brcm_sai_set_policer_attribute:470 policer create failed with error Operation still running (0xfffffff6).\nAug 26 <IPV6>.361880 str-a7050-acs-1 ERR syncd#syncd: :- processEvent: VID: oid:0x120000000007f8 RID: oid:0x41200000002\nAug 26 <IPV6>.361880 str-a7050-acs-1 ERR syncd#syncd: :- processEvent: attr: SAI_POLICER_ATTR_CBS: 600\nAug 26 <IPV6>.361880 str-a7050-acs-1 ERR syncd#syncd: :- processEvent: failed to execute api: set, key: SAI_OBJECT_TYPE_POLICER:oid:0x120000000007f8, status: SAI_STATUS_OBJECT_IN_USE\nAug 26 <IPV6>.361931 str-a7050-acs-1 ERR syncd#syncd: :- syncd_main: Runtime error: :- processEvent: failed to execute api: set, key: SAI_OBJECT_TYPE_POLICER:oid:0x120000000007f8, status: SAI_STATUS_OBJECT_IN_USE\nAug 26 <IPV6>.361931 str-a7050-acs-1 NOTICE syncd#syncd: :- notify_OA_about_syncd_exception: sending switch_shutdown_request notification to OA"
+  },
+  "resolution": {
+    "pr_number": 5315,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/5315",
+    "title": "[warm-boot] Fix the issue as reported in https://github.com/Azure/sonic-buildimage/issues/5255",
+    "merged_at": "2020-09-04T16:34:27Z",
+    "description": "Why I did:\n\nFixes the issue https://github.com/Azure/sonic-buildimage/issues/5255\n\nRoot Cause: Waiting on Restore count != 0 can lead to race condition\nbetween orchagent process and swssconfig.sh.\n\nIdeally check of  Restore count != 0 is not needed as the State DB\ncannot be flushed as if it was flushed then Warm Restart or swss-restart\nenable flag should not be true also.\n\nHow I verify:\nAfter removing check did not hit race condition that resulted the error.",
+    "files": [
+      {
+        "path": "dockers/docker-orchagent/swssconfig.sh",
+        "additions": 1,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

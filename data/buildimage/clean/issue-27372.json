@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-27372",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27372,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27372",
+    "title": "Bug: [hft][countersyncd] Silent data corruption + reconnect loop when IPFIX netlink datagram exceeds 128 KB",
+    "created_at": "2026-05-14T10:08:20Z",
+    "closed_at": "2026-06-30T22:59:06Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\ncountersyncd fails to deliver IPFIX counter data whenever the streaming IPFIX data datagram exceeds BUFFER_SIZE = 0x1FFFF (131 071 bytes), defined at crates/countersyncd/src/actor/data_netlink.rs:38.\n\nIt will be hit by any session whose data datagram exceeds 128 KB.\n\nTwo issues combine to produce the failure:\n\n1. Receive buffer too small. data_netlink.rs:673 calls libc::recv(fd, buf, 0x1FFFF, 0). sonic_stel / ipfix is a NETLINK_GENERIC (datagram) socket; when the datagram is larger than the recv buffer, the kernel returns the truncated bytes, sets MSG_TRUNC in msg_flags, and discards the remainder. The code calls recv with flags = 0 and never inspects MSG_TRUNC, so truncation is silent. BUFFER_SIZE is hard-coded - not exposed as a CLI flag, env var, ConfigDB key, or constants.yml setting.\n2. NetlinkMessageParser splices truncated datagrams. parse_buffer (data_netlink.rs:87) was written as if netlink were a byte stream that could split a single message across recv calls. When recv #1 yields a truncated datagram (e.g. 131 071 of a 134 296-byte message), the parser stores it in incomplete_buffer and waits. On recv #2 it concatenates the next (also truncated) datagram and finds an \"apparently complete\" message of the declared length - but the tail bytes are actually the head of the next datagram, and the rest of that next datagram is then read as a new netlink header. This produces:\n  - One corrupted IPFIX payload sent downstream (silently).\n  - A WARN: Failed to receive message: Invalid netlink message length: 0 (too small) (data_netlink.rs:944 / parser at data_netlink.rs:118), because the post-extract offset lands inside a payload that happens to start with zero bytes.\n  - Followed by socket disconnect/reconnect, and the cycle repeats.\n\nNet effect: no valid counter data reaches CounterDB or the OpenTelemetry exporter.\n\n### Steps to Reproduce\n\n1. On a high-port-count switch, configure a HIGH_FREQUENCY_TELEMETRY_PROFILE with STREAM_STATE = enabled and attach a large number of objects/counters such that the resulting IPFIX data datagram exceeds 128 KB.\n  - In our case: queue_profile|QUEUE session covering ~560 Ethernet*|<queue> objects with ~6 counters each (including PACKETS), producing a ~134 KB data datagram.\n2. Start countersyncd:\ncountersyncd -e -l debug\n3. Watch the log.\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behavior**\n\nTemplates are sent successfully once at startup, then every subsequent data push fails:\n\n[DEBUG] Received netlink data, size: 131071 bytes\n[DEBUG] Combined incomplete buffer (131071 bytes) with new data (131071 bytes)\n[DEBUG] Found complete message: offset=0, length=134296, aligned_length=134296\n[DEBUG] Successfully extracted payload with 134276 bytes        # <-- corrupted: tail is from the next datagram\n[WARN]  Failed to receive message: Custom { kind: InvalidData,\n        error: \"Invalid netlink message length: 0 (too small)\" }\n[INFO]  Establishing new connection for family 'sonic_stel', group 'ipfix'\n[INFO]  Successfully connected to family 'sonic_stel', group 'ipfix' with group_id: 21\n...\n\n- No usable counters are printed.\n- The downstream IPFIX decoder receives spliced/corrupted records that it cannot interpret.\n- The actor keeps reconnecting on every cycle.\n\n**Expected Behavior**\n- countersyncd should be able to receive IPFIX data datagrams of any size the producer emits (the kernel-side SO_RCVBUF is already 8 MB on this system per the same log).\n- Truncation must never be silent: if a datagram is larger than the userspace recv buffer, countersyncd should either grow the buffer and re-recv (e.g. via recvmsg with MSG_PEEK | MSG_TRUNC to size, then recv), or drop with a clear error and a metric - but never splice a truncated datagram with the next one.\n- IPFIX data records should be delivered intact to CounterDB / OTel for any supported counter configuration.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4684,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4684",
+    "title": "[countersyncd]: Fix countersyncd netlink datagram truncation",
+    "merged_at": "2026-06-30T22:59:04Z",
+    "description": "**What I did**\n\nFix `countersyncd` IPFIX data netlink receive handling for oversized datagrams:\n\n- Receive generic netlink multicast data as atomic datagrams with `recvmsg`.\n- Use `MSG_PEEK | MSG_TRUNC` to determine the real datagram length before consuming it.\n- Allocate the receive buffer from the probed datagram length instead of relying on the fixed 128 KB buffer.\n- Configure data socket `SO_RCVBUF` before joining the multicast group, avoiding a startup race where early multicast datagrams used the kernel default receive buffer.\n- Stop carrying incomplete parser state across receives, so a truncated datagram cannot be spliced with the next datagram.\n- Drop invalid, empty, or oversized datagrams without reconnecting the socket.\n- Preserve already-parsed messages from the same datagram if only a malformed trailing portion is found.\n- Add parser regression tests, fd-level `UnixDatagram` tests, and a startup-burst regression test covering the receive-buffer/membership ordering.\n\n**Why I did it**\n\nFixes sonic-net/sonic-buildimage#27372.\n\nThat issue reports silent IPFIX counter data corruption and reconnect loops when an IPFIX netlink datagram exceeds the old userspace receive buffer size (`BUFFER_SIZE = 0x1FFFF`).\n\nThe old code used `recv(..., flags = 0)` and then let `NetlinkMessageParser` keep incomplete bytes for the next recv. On a datagram socket, an undersized receive discards the rest of that datagram. The next recv is a new datagram, not a continuation. This allowed `countersyncd` to splice the truncated head of one datagram with bytes from the next datagram and send corrupted IPFIX payloads downstream.\n\nThis change makes truncation observable and keeps parsing scoped to a single datagram. It also ensures the enlarged kernel receive buffer is applied before multicast delivery can begin on the data socket.\n\n**How I verified it**\n\nVerified in `swss-bookworm-master` container on commits `824881f` and `6d9bbc7`.\n\nCommands:\n\n```bash\nRUSTFLAGS=-Dwarnings cargo test -p countersyncd test_data_socket_rcvbuf_before_membership_prevents_startup_burst_corruption -- --nocapture\nRUSTFLAGS=-Dwarnings cargo check -p countersyncd --all-targets\nRUSTFLAGS=-Dwarnings cargo test -p countersyncd\n```\n\nTDD check:\n\n```text\nTemporarily changed configure_data_socket_steps() to old order:\nbind -> add_membership -> set_non_blocking -> set_rcvbuf\n\ntest_data_socket_rcvbuf_before_membership_prevents_startup_burst_corruption failed with:\nInvalid netlink message length: 0 (too small)\n\nRestored fixed order:\nbind -> set_rcvbuf -> add_membership -> set_non_blocking\n\nThe same test passed.\n```\n\nFinal committed result:\n\n```text\ncargo check -p countersyncd --all-targets: passed\nsrc/lib.rs: 100 passed\nsrc/main.rs: 106 passed\ntests/integration_test.rs: 2 passed\ntests/ipfix_helpers_integration.rs: 1 passed\ndoc-tests: 0 passed\n```\n\nRedis was started on `/var/run/redis/redis.sock` for the `swss` actor tests.\n\n**Details if related**\n\nRelated issue: sonic-net/sonic-buildimage#27372\n\nThe receive path intentionally uses a peek-first flow instead of a fixed large reusable buffer. This adds one extra syscall per datagram, but it guarantees correct sizing and prevents future silent truncation if producer datagrams grow beyond any fixed buffer value.",
+    "files": [
+      {
+        "path": "crates/countersyncd/src/actor/data_netlink.rs",
+        "additions": 426,
+        "deletions": 175
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "buildimage-6632",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 6632,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/6632",
+    "title": "teamd#tlm_teamd: :- get_dump: Can't get dump for LAG 'PortChannel999",
+    "created_at": "2021-02-01T15:55:15Z",
+    "closed_at": "2021-09-17T02:20:29Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "master"
+    ],
+    "topics": [
+      "team"
+    ]
+  },
+  "failure": {
+    "body": "**Description**\n\n**Steps to reproduce the issue:**\n```\n-02-01T11:37:31.4708702Z common/plugins/loganalyzer/loganalyzer.py:254: in analyze\n2021-02-01T11:37:31.4709241Z     self._verify_log(analyzer_summary)\n2021-02-01T11:37:31.4709833Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n2021-02-01T11:37:31.4710232Z\n2021-02-01T11:37:31.4710915Z self = <tests.common.plugins.loganalyzer.loganalyzer.LogAnalyzer instance at 0x7f5a78c0ed20>\n2021-02-01T11:37:31.4713046Z result = {'expect_messages': {'/tmp/syslog.2021-02-01-<IPV6>': []}, 'match_files': {'/tmp/syslog.2021-02-01-<IPV6>': {'expe... for LAG 'PortChannel999'. Skipping\\n\"]}, 'total': {'expected_match': 0, 'expected_missing_match': 0, 'match': 1}, ...}\n2021-02-01T11:37:31.4714152Z\n2021-02-01T11:37:31.4714591Z     def _verify_log(self, result):\n2021-02-01T11:37:31.4715026Z         \"\"\"\n2021-02-01T11:37:31.4715597Z         Verify that total match and expected missing match equals to zero or raise exception otherwise.\n2021-02-01T11:37:31.4716409Z         Verify that expected_match is not equal to zero when there is configured expected regexp in self.expect_regex list\n2021-02-01T11:37:31.4717011Z         \"\"\"\n2021-02-01T11:37:31.4717391Z         if not result:\n2021-02-01T11:37:31.4718261Z             raise LogAnalyzerError(\"Log analyzer failed - no result.\")\n2021-02-01T11:37:31.4718990Z         if result[\"total\"][\"match\"] != 0 or result[\"total\"][\"expected_missing_match\"] != 0:\n2021-02-01T11:37:31.4719683Z >           raise LogAnalyzerError(result)\n2021-02-01T11:37:31.4722342Z E           LogAnalyzerError: {'match_messages': {'/tmp/syslog.2021-02-01-<IPV6>': [\"Feb  1 <IPV6>.300164 vlab-01 ERR teamd#tlm_teamd: :- get_dump: Can't get dump for LAG 'PortChannel999'. Skipping\\n\"]}, 'total': {'expected_match': 0, 'expected_missing_match': 0, 'match': 1}, 'match_files': {'/tmp/syslog.2021-02-01-<IPV6>': {'expected_match': 0, 'match': 1}}, 'expect_messages': {'/tmp/syslog.2021-02-01-<IPV6>': []}, 'unused_expected_regexp': []}\n2021-02-01T11:37:31.4723874Z\n2021-02-01T11:37:31.4725761Z result     = {'expect_messages': {'/tmp/syslog.2021-02-01-<IPV6>': []}, 'match_files': {'/tmp/syslog.2021-02-01-<IPV6>': {'expe... for LAG 'PortChannel999'. Skipping\\n\"]}, 'total': {'expected_match': 0, 'expected_missing_match': 0, 'match': 1}, ...}\n2021-02-01T11:37:31.4727096Z self       = <tests.common.plugins.loganalyzer.loganalyzer.LogAnalyzer instance at 0x7f5a78c0ed20>\n```\n\n**Describe the results you received:**\nhttps://dev.azure.com/sonicswitch/build/_build/results?buildId=2494&view=logs&j=551384a3-3c3d-5d98-9a93-ab579ce10658&t=dcc0ef7a-c27d-5084-36c2-e0f4d142c187\n\n**Describe the results you expected:**\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\n    **Output of `show version`:**\n\n    ```\n    (paste your output here)\n    ```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```"
+  },
+  "resolution": {
+    "pr_number": 1629,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/1629",
+    "title": "[tlm teamd] Add retry mechanism before logging the ERR in get_dumps.",
+    "merged_at": "2021-09-17T02:20:29Z",
+    "description": "**Why I did**\nFix https://github.com/Azure/sonic-buildimage/issues/6632\n\nThere has been cases when the get_dumps API in tlm_teamd process is not able to get the right data and logs an error message.\n\nThe issue occurs very rarely and it is due to the race condition between teammgrd/teamsyncd/tlm_teamd when a Portchannel is removed. In the teamd telemetry module there are two places where the get_dumps() is called.\n1. When the portchannel object is add/removed. [https://github.com/Azure/sonic-swss/blob/master/tlm_teamd/main.cpp#L101]\n2. On timeout of 1 sec. [https://github.com/Azure/sonic-swss/blob/master/tlm_teamd/main.cpp#L108]\n\nIn case of timeout call for get_dumps(), there could be an inconsistent state where the portchannel/teamd process is getting removed by teammgrd but the STATE table update to remove the lag interface is still not received by the tlm_teamd module.\n\nSeen below on a bad case where the get_dumps() call from TIMEOUT handler throws an ERR message - as the remove_lag message is not yet received.\n\nOn a good case\n```\nFeb  7 <IPV6>.576078 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' has been removed.\nFeb  7 <IPV6>.453829 vlab-01 INFO teamd#supervisord 2021-02-07 <IPV6>,451 INFO reaped unknown pid 4747 (exit status 0)\nFeb  7 <IPV6>.458616 vlab-01 NOTICE teamd#teammgrd: :- removeLag: Stop port channel PortChannel999\n```\nOn a bad case\n\n```\nFeb  7 <IPV6>.037401 vlab-01 ERR teamd#tlm_teamd: :- get_dump: Can't get dump for LAG 'PortChannel999'. Skipping\nFeb  7 <IPV6>.046179 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' has been removed.\nFeb  7 <IPV6>.997639 vlab-01 INFO teamd#supervisord 2021-02-07 <IPV6>,996 INFO reaped unknown pid 4775 (exit status 0)\nFeb  7 <IPV6>.040126 vlab-01 NOTICE teamd#teammgrd: :- removeLag: Stop port channel PortChannel999\n```\n\n**How I did it**\n\nAdd retry mechanism before logging the ERR in get_dumps API(). The number of retries is set as 3. So that if the same error repeats 3 times - it is logged, other wise it is considered a transient condition - not an error.\n\nAdditionally added a **to_retry** flag to get_dumps() API so that the caller can decide whether to use the retry mechanism or not.\n\n**How I verified it**\nVerified that the error message is no more seen in the syslog.\nConfirmed by running ~ 200 times portchannel creation (which had reproduced the issue earlier on VS testbed).\n\nThe new NOTICE message added in remove_lag shows that we had indeed hit the original issue earlier and clearing flags here.\n\n```\nadmin@vlab-01:/var/log$ sudo zgrep -i \"get dump for LAG\" syslog*; sudo zgrep -i \"clearing it\" syslog*\nsyslog.1:Feb  8 <IPV6>.995716 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.2.gz:Feb  8 <IPV6>.360135 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.2.gz:Feb  8 <IPV6>.617283 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.2.gz:Feb  8 <IPV6>.906306 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.3.gz:Feb  8 <IPV6>.442474 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.3.gz:Feb  8 <IPV6>.539413 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.3.gz:Feb  8 <IPV6>.785533 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.3.gz:Feb  8 <IPV6>.510933 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\nsyslog.5.gz:Feb  8 <IPV6>.643106 vlab-01 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel999' had errored while getting dump, clearing it\n```\n\n**Details if related**",
+    "files": [
+      {
+        "path": "tlm_teamd/main.cpp",
+        "additions": 5,
+        "deletions": 2
+      },
+      {
+        "path": "tlm_teamd/teamdctl_mgr.cpp",
+        "additions": 47,
+        "deletions": 4
+      },
+      {
+        "path": "tlm_teamd/teamdctl_mgr.h",
+        "additions": 4,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

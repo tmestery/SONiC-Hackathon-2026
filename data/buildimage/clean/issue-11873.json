@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-11873",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 11873,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/11873",
+    "title": "[LAG] Inconsistency in LAG members configuration in config DB",
+    "created_at": "2022-08-29T10:09:24Z",
+    "closed_at": "2023-02-23T22:49:56Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202205"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nWhen adding ports to lag using minigraph, 2 tables contain the lag membership information, PORTCHANNEL and PORTCHANNEL_MEMBER.\nBut when we adding ports to LAG using CLI, only 1 table contains the lag membership information, PORTCHANNEL_MEMBER.\n\nWhen I deployed t0 topology (that contains lag) using minigraph, \"members@\" field is being created in PORTCHANNEL table.\n[Link](https://nam11.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2Fliorghub%2Fsonic-buildimage%2Fblob%2Fmaster%2Fsrc%2Fsonic-config-engine%2Fminigraph.py%23L515&data=05%7C01%7Cliora%40nvidia.com%7Cfb2ff84cb555419f024308da89867917%7C43083d15727340c1b7db39efd9ccc17a%7C0%7C0%7C637973507907184086%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C3000%7C%7C%7C&sdata=VRkkCQMf2KOLbD2tsg%2BKqvtRB64ylhFmJLtpWvIXSUc%3D&reserved=0) to code snippet that adds the \u201cmembers@\u201d field to PORTCHANNEL table.\n```\nroot@sonic:/home/admin# redis-cli  -n 4 hgetall \"PORTCHANNEL|PortChannel102\"\n1) \"admin_status\"\n2) \"up\"\n3) \"members@\"\n4) \"Ethernet58\"\n5) \"min_links\"\n6) \"1\"\n7) \"mtu\"\n8) \"9100\"\n9) \"tpid\"\n10) \"0x8100\"\n\nroot@sonic:/home/admin# redis-cli  -n 4 hgetall \"PORTCHANNEL_MEMBER|PortChannel102|Ethernet58\"\n1) \"NULL\"\n2) \"NULL\"\n\n```\n\nWhen I created lag using the following CLI commands:\n#config portchannel add PortChannel200\n#config portchannel member add PortChannel200 Ethernet0\nField \"members@\" field is not created in PORTCHANNEL table.\n\n```\nroot@sonic:/home/admin# redis-cli  -n 4 hgetall \"PORTCHANNEL|PortChannel200\"\n1) \"admin_status\"\n2) \"up\"\n3) \"lacp_key\"\n4) \"auto\"\n5) \"min_links\"\n6) \"1\"\n7) \"mtu\"\n8) \"9100\"\n\nroot@sonic:/home/admin# redis-cli  -n 4 hgetall \"PORTCHANNEL_MEMBER|PortChannel200|Ethernet0\"\n1) \"NULL\"\n2) \"NULL\"\n```\n\n#### Steps to reproduce the issue:\nInstall to topology using minigraph:\n```\nconnect to docker-ngts\ncd ~/mars/workspace/sonic-mgmt/ansible\n./testbed-cli.sh -k ceos add-topo  r-tigris-13-t0 vault -e ptf_imagetag=latest\n./testbed-cli.sh gen-mg r-tigris-13-t0 lab vault\nansible-playbook -i inventory --limit r-tigris-13 deploy_minigraph.yml -e dut_minigraph=r-tigris-13.t0.xml -b -vvv\n```\nConfigure LAG using CLI:\n```\nconfig portchannel member add PortChannel200 Ethernet0\nconfig portchannel add PortChannel200\n```\n\n#### Describe the results you received:\nThe expectation is to have LAG members configuration saved in a single table.\n\n#### Describe the results you expected:\n\n#### Output of `show version`:\nroot@sonic:/home/admin# show version\n\nSONiC Software Version: SONiC.202205.139499-a5171349a\nDistribution: Debian 11.4\nKernel: 5.10.0-12-2-amd64\nBuild commit: a5171349a\nBuild date: Thu Aug 25 <IPV6> UTC 2022\nBuilt by: AzDevOps@sonic-build-workers-001ZUF\n\nPlatform: x86_64-mlnx_msn3800-r0\nHwSKU: Mellanox-SN3800-D112C8\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT1937X00527\nModel Number: MSN3800-CS2FO\nHardware Revision: A2\nUptime: <IPV6> up 15 min,  1 user,  load average: 1.97, 1.90, 1.26\nDate: Mon 29 Aug 2022 <IPV6>\n\nDocker images:\nREPOSITORY                    TAG                       IMAGE ID       SIZE\ndocker-syncd-mlnx             202205.139499-a5171349a   1e2f53986bf4   844MB\ndocker-syncd-mlnx             latest                    1e2f53986bf4   844MB\ndocker-platform-monitor       202205.139499-a5171349a   75c1a9b5c131   847MB\ndocker-platform-monitor       latest                    75c1a9b5c131   847MB\ndocker-orchagent              202205.139499-a5171349a   0ecb28e57007   473MB\ndocker-orchagent              latest                    0ecb28e57007   473MB\ndocker-teamd                  202205.139499-a5171349a   5037c24fdbdb   454MB\ndocker-teamd                  latest                    5037c24fdbdb   454MB\ndocker-macsec                 latest                    42a2666268e9   456MB\ndocker-dhcp-relay             latest                    aec46c245364   448MB\ndocker-sonic-telemetry        202205.139499-a5171349a   070635cc1b7c   519MB\ndocker-sonic-telemetry        latest                    070635cc1b7c   519MB\ndocker-router-advertiser      202205.139499-a5171349a   c27126ea47e9   438MB\ndocker-router-advertiser      latest                    c27126ea47e9   438MB\ndocker-mux                    202205.139499-a5171349a   0c055af258f9   487MB\ndocker-mux                    latest                    0c055af258f9   487MB\ndocker-lldp                   202205.139499-a5171349a   9056fe6e98da   481MB\ndocker-lldp                   latest                    9056fe6e98da   481MB\ndocker-database               202205.139499-a5171349a   97070b04accb   438MB\ndocker-database               latest                    97070b04accb   438MB\ndocker-sflow                  202205.139499-a5171349a   b4ed262d4259   428MB\ndocker-sflow                  latest                    b4ed262d4259   428MB\ndocker-fpm-frr                202205.139499-a5171349a   ba3d0ca10044   456MB\ndocker-fpm-frr                latest                    ba3d0ca10044   456MB\ndocker-nat                    202205.139499-a5171349a   fad671ccf959   429MB\ndocker-nat                    latest                    fad671ccf959   429MB\ndocker-snmp                   202205.139499-a5171349a   f5935674501f   455MB\ndocker-snmp                   latest                    f5935674501f   455MB\ndocker-sonic-mgmt-framework   202205.139499-a5171349a   7a28e06406c4   556MB\ndocker-sonic-mgmt-framework   latest                    7a28e06406c4   556MB\n\nroot@sonic:/home/admin#\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 7568,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/7568",
+    "title": "[bgp] Don't use portchannel members entry",
+    "merged_at": "2023-02-27T02:22:59Z",
+    "description": "### Description of PR\n\nSummary:\nFixes sonic-net/sonic-buildimage#11873\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n- [ ] 202012\n- [ ] 202205\n\n### Approach\n#### What is the motivation for this PR?\n\nThe `members` entry in the `PORTCHANNEL` table has been removed. Switch to using `PORTCHANNEL_MEMBERS` instead.\n\nRelated to sonic-net/sonic-buildimage#13660\n\n#### How did you do it?\n\n#### How did you verify/test it?\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/bgp/test_bgp_gr_helper.py",
+        "additions": 2,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 13660,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/13660",
+      "title": "Don't create the members@ array in config_db for PC when reading from minigraph",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

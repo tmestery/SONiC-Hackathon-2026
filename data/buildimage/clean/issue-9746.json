@@ -1,0 +1,65 @@
+{
+  "id": "buildimage-9746",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 9746,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/9746",
+    "title": "[yang] validating TACPLUS with empty \u201cglobal\u201d fails, while non-empty \u201cglobal\u201d does not fail",
+    "created_at": "2022-01-12T10:00:38Z",
+    "closed_at": "2022-04-07T00:46:41Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P0",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "YANG"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nyang validation fail when `global` is empty, but it succeeds when nonempty.\n\n_Background of tacacs table._\nIn t0 topo, tacacs has default value while configDB doesn't contain those table.\nAfter sudo config tacacs value, its table will appear in configDB.\nThen the table will contains empty value after set back to default.\n\n#### Steps to reproduce the issue:\n1. config tacacs and let TACPLUS table appear in configDB\n```\nadmin@vlab-01:~$ show run all | grep -w TACPLUS\nadmin@vlab-01:~$ sudo config tacacs timeout 3\nadmin@vlab-01:~$ show run all | grep -w TACPLUS -A3\n    \"TACPLUS\": {\n        \"global\": {\n            \"timeout\": \"3\"\n        }\n\n```\n2. Verify by python script. Pass. (Some yang is outdated so we ignore them)\n```\nadmin@vlab-01:~$ cd /usr/local/yang-models/\nadmin@vlab-01:/usr/local/yang-models$ sudo mkdir ignore\nadmin@vlab-01:/usr/local/yang-models$ sudo mv sonic-queue.yang sonic-scheduler.yang sonic-feature.yang ignore/\nadmin@vlab-01:/usr/local/yang-models$ cd -\n/home/admin\n\nadmin@vlab-01:~$ cat verify_configDB_yang.py\nimport subprocess\nimport sonic_yang\nimport json\ndef get_config_db_json():\n    cmd = \"show runningconfiguration all\"\n    result = subprocess.Popen(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n    text, err = result.communicate()\n    return json.loads(text)\nconfigDbJson = get_config_db_json()\nsy = sonic_yang.SonicYang(\"/usr/local/yang-models\")\nsy.loadYangModel()\nsy.loadData(configDbJson )\nsy.validate_data_tree()\nadmin@vlab-01:~$\n\nadmin@vlab-01:~$ python verify_configDB_yang.py\nNote: Below table(s) have no YANG models:\nBGP_PEER_RANGE, CONSOLE_SWITCH, DEVICE_NEIGHBOR_METADATA, DHCP_SERVER, FEATURE, KDUMP, QUEUE, RESTAPI, SCHEDULER, SNMP, SNMP_COMMUNITY, TELEMETRY,\nadmin@vlab-01:~$\n```\n3. set tacacs back to default and run python script again. It fails.\n```\nadmin@vlab-01:~$ sudo config tacacs default timeout\nadmin@vlab-01:~$ show run all | grep -w TACPLUS -A3\n    \"TACPLUS\": {\n        \"global\": {}\n    },\n    \"TACPLUS_SERVER\": {\nadmin@vlab-01:~$ python verify_configDB_yang.py\nNote: Below table(s) have no YANG models:\nBGP_PEER_RANGE, CONSOLE_SWITCH, DEVICE_NEIGHBOR_METADATA, DHCP_SERVER, FEATURE, KDUMP, QUEUE, RESTAPI, SCHEDULER, SNMP, SNMP_COMMUNITY, TELEMETRY,\nsonic_yang(3):All Keys are not parsed in TACPLUS\ndict_keys(['global'])\nsonic_yang(3):exceptionList:[]\nsonic_yang(3):Data Loading Failed:All Keys are not parsed in TACPLUS\ndict_keys(['global'])\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 1062, in loadData\n    self._xlateConfigDB(xlateFile=xlateFile)\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 695, in _xlateConfigDB\n    self._xlateConfigDBtoYang(jIn, yangJ)\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 682, in _xlateConfigDBtoYang\n    self._xlateContainer(cmap['container'], yangJ[key][subkey], \\\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 662, in _xlateContainer\n    raise(Exception(\"All Keys are not parsed in {}\\n{}\".format(table, \\\nException: All Keys are not parsed in TACPLUS\ndict_keys(['global'])\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/admin/verify_configDB_yang.py\", line 12, in <module>\n    sy.loadData(configDbJson )\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 1072, in loadData\n    raise SonicYangException(\"Data Loading Failed\\n{}\".format(str(e)))\nsonic_yang_ext.SonicYangException: Data Loading Failed\nAll Keys are not parsed in TACPLUS\ndict_keys(['global'])\n\n```\n#### Describe the results you received:\nSee above.\n\n#### Describe the results you expected:\nAction should succeed because it should be valid configDB.\n\n#### Output of `show version`:\n\n```\nadmin@vlab-01:~/tacacs$ show ver\n\nSONiC Software Version: SONiC.master.58770-6402a0226\nDistribution: Debian 11.1\nKernel: 5.10.0-8-2-amd64\nBuild commit: 6402a0226\nBuild date: Mon Dec 13 <IPV6> UTC 2021\nBuilt by: AzDevOps@sonic-build-workers-000Z9S\n\nPlatform: x86_64-kvm_x86_64-r0\nHwSKU: Force10-S6000\nASIC: vs\nASIC Count: 1\nSerial Number: N/A\nModel Number: N/A\nHardware Revision: N/A\nUptime: <IPV6> up  4:11,  2 users,  load average: 0.14, 0.14, 0.15\n\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 10431,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/10431",
+    "title": "Fix yang validation failure when table contains empty value",
+    "merged_at": "2022-04-07T00:46:41Z",
+    "description": "#### Why I did it\nFix https://github.com/Azure/sonic-buildimage/issues/9746\n#### How I did it\nSplit the check condition based on non-exist and zero length.\n#### How to verify it\nRun verification script when table contains empty value\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-yang-mgmt/sonic_yang_ext.py",
+        "additions": 14,
+        "deletions": 9
+      },
+      {
+        "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/test_sonic_yang.py",
+        "additions": 15,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/tests/files/sample_config_db.json",
+        "additions": 7,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests/tacacs.json",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-yang-models/yang-models/sonic-device_metadata.yang",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

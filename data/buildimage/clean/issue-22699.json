@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-22699",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 22699,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/22699",
+    "title": "Bug: PDDF - If multiple agents are getting/setting LED color, there is a race condition.",
+    "created_at": "2025-05-24T15:33:28Z",
+    "closed_at": "2025-06-04T15:22:59Z"
+  },
+  "metadata": {
+    "severity": "low",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nPDDF - If multiple agents are getting/setting LED color, there is a race condition.\n\n### Steps to Reproduce\n\nOn a PDDF platform calling [get_led_color_from_cpld](https://github.com/sonic-net/sonic-buildimage/blob/b228122f388ecfdde86ae6921a30f60b9d4d8900/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py#L158) or [set_led_color_from_cpld](https://github.com/sonic-net/sonic-buildimage/blob/b228122f388ecfdde86ae6921a30f60b9d4d8900/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py#L198) more multiple agents can cause a race condition.\n\nAs seen in the existing code below.\n\nEach set_led_color_from_cpld requires writing to the following sysfs paths in one atomic operation.\n```\n/sys/kernel/pddf/devices/led/device_name\n/sys/kernel/pddf/devices/led/index\n/sys/kernel/pddf/devices/led/color\n/sys/kernel/pddf/devices/led/dev_ops\n/sys/kernel/pddf/devices/led/cur_state/color\n```\n\nEach get_led_color_from_cpld requires writing to the following sysfs paths in one atomic operation.\n```\n/sys/kernel/pddf/devices/led/device_name\n/sys/kernel/pddf/devices/led/index\n/sys/kernel/pddf/devices/led/dev_ops\n/sys/kernel/pddf/devices/led/cur_state/color\n```\n\n```\n    def set_led_color_from_cpld(self, led_device_name, color):\n        index = self.data[led_device_name]['dev_attr']['index']\n        device_name = self.data[led_device_name]['dev_info']['device_name']\n        self.create_attr('device_name', device_name,  self.get_led_path())\n        self.create_attr('index', index, self.get_led_path())\n        self.create_attr('color', color, self.get_led_cur_state_path())\n        self.create_attr('dev_ops', 'set_status',  self.get_led_path())\n        return (True, \"Success\")\n```\n\n```\n    def get_led_color_from_cpld(self, led_device_name):\n        index = self.data[led_device_name]['dev_attr']['index']\n        device_name = self.data[led_device_name]['dev_info']['device_name']\n        self.create_attr('device_name', device_name,  self.get_led_path())\n        self.create_attr('index', index, self.get_led_path())\n        self.create_attr('dev_ops', 'get_status',  self.get_led_path())\n        return self.get_led_color()\n```\n\nThis will cause a race condition, if multiple agents are calling `set_led_color_from_cpld` and `get_led_color_from_cpld`, each call can get its sysfs files overwritten midway between able to finish the entire operation.\n\n### Actual Behavior and Expected Behavior\n\nNo race condition, can call the methods from multiple agent.\n\n### Relevant log output\n\n```shell\nErrors like:\n\n[  124.847956] PDDF_LED ERROR find_led_ops_data invalid index: 36 for type:FANTRAY_LED_1;3\n\nIn this case, one process was setting to index to 36 to operate on a port LED, while another process was attempting a fantray led operation.\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22684,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/22684",
+    "title": "[PDDF] Add file lock for led ctrl",
+    "merged_at": "2025-06-04T15:22:58Z",
+    "description": "#### Why I did it\npddf uses a shared sysfs interface for getting/setting led status for all leds. Our system currently has 3 processes that gets/sets led status using the pddf api:\n - healthd\n - port-ledd.service\n - system-ledd.service\n\nThere's the potential for simultaneous sysfs operations to interfere with each other, resulting in errors like:\n```\n[  124.847956] PDDF_LED ERROR find_led_ops_data invalid index: 36 for type:FANTRAY_LED_1;3\n```\nThis problem is not unique to our system. Any vendor using pddf for leds is susceptible to this.\n\nFixes #22699\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n#### How to verify it\nTested on NH-4010\nLet it run for > 30 minutes and confirmed no PDDF_LED \"invalid index\" errors. Previously it was easily reproducible in that timeframe.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py",
+        "additions": 43,
+        "deletions": 17
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

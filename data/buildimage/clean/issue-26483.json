@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-26483",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26483,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26483",
+    "title": "Regression: Incremental rebuild broken for signed images",
+    "created_at": "2026-03-31T08:43:11Z",
+    "closed_at": "2026-04-23T10:11:29Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Previous Working Version\n\n202505\n\n### Steps to Reproduce\n\nIn 202505 and earlier, incremental rebuild of the final sonic.bin file was possible, which enabled very fast build of multiple images with slightly different build flags. For example, building ZTP and non-ZTP images in the same workspace was possible with only a few extra minutes of build time:\n\n```\nmake init\nmake configure\nmake ENABLE_ZTP=y all\nmv target/sonic.bin target/sonic.ztp.bin\nmake ENABLE_ZTP=n all # This step only takes 10 minutes because only .bin repackaging happens\n```\n\nFrom 202511 onwards, this functionality is broken when image signing is also performed, as the `sign-file` kernel script is missing from the sonic-slave docker _container_ on the second bin build only.\n\nThis appears to be due to the lack of the linux-kbuild package in the sonic-slave-trixie docker _image_.\n\nPrior to trixie, the linux-kbuild package, which provides the `sign-file` utility, was installed into the sonic-slave docker _image_ directly by the `sonic-slave-*/Dockerfile.j2` files:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/8e65b0854512fde4be8afd4737bf69a48b05565e/sonic-slave-bookworm/Dockerfile.j2#L238\n\nHowever, the linux-kbuild install is missing from `sonic-slave-trixie/Dockerfile.j2`.\n\nInstead, the linux-kbuild package is installed into the sonic-slave-trixie _container_ during the build process, specifically in by the build_debian.sh script during the creation of the `sonic-<PLATFORM>.bin__<PLATFORM>__rfs.squashfs` target:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/8e65b0854512fde4be8afd4737bf69a48b05565e/build_debian.sh#L168-L169\n\nThis works fine for the first build. But, when building a second .bin file with slightly different flags (e.g. disabling ZTP), the rfs.squashfs target is not rebuilt, so the linux-kbuild package is never installed into the sonic-slave-trixie container.\n\nThen, when the image signing logic is invoked during the second bin generation, the requisite `sign-file` binary is not present in the container, causing the build to fail:\n\n```\nERROR: LOCAL_SIGN_FILE=/usr/lib/linux-kbuild-6.12.41+deb13/scripts/sign-file file does not exist\n```\n\nI see a few potential ways to resolve this:\n\n1. Install the linux-kbuild package in the sonic-slave-trixie docker _image_, if possible\n2. Add logic in the .bin generation step to install linux-kbuild into the sonic-slave container\n3. Force the rfs.squashfs target to rebuild when a new bin file is generated, or at least confirm the lack of squashfs rebuild is intentional (rather than due to a missing dependency)\n\n### Impact of this regression\n\nIncremental rebuild of the .bin file is not possible when image signing is needed as well. This substantially increases build time when producing, for example, ZTP and non-ZTP images from the same sources\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26498,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26498",
+    "title": "[slave.mk]: Add linux-kbuild install dependency to installer target",
+    "merged_at": "2026-04-23T10:11:28Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/26483\n\nCurrently, the `linux-kbuild` package (which provides the `sign-file` utility) is only installed into the sonic-slave container during the `rfs.squashfs` build step in `build_debian.sh`.\n\nOn incremental rebuilds, the `rfs.squashfs` target is not rebuilt, so `linux-kbuild` is never re-installed into the container, causing the signing step to fail with `ERROR: LOCAL_SIGN_FILE=... file does not exist`.\n\n#### How I did it\n* Added `$(LINUX_KBUILD)-install` as a dependency to the `$(SONIC_INSTALLERS)` target in `slave.mk`\n* This ensures the `linux-kbuild` package is installed into the sonic-slave container before `.bin` generation, regardless of whether the `rfs.squashfs` target was rebuilt\n* This approach was suggested by @saiarcot895 as the preferred fix, since it records the dependency explicitly in make rather than relying on a side effect of the squashfs build step\n\n#### How to verify it\n1. Build a signed image: `make ENABLE_ZTP=y all`\n2. Move the output: `mv target/sonic.bin target/sonic.ztp.bin`\n3. Build again with different flags: `make ENABLE_ZTP=n all`\n4. Verify the second build completes without `sign-file` errors\n\n#### Description for the changelog\n* Fixed incremental rebuild failure for signed images by adding linux-kbuild install dependency to the installer target",
+    "files": [
+      {
+        "path": "build_debian.sh",
+        "additions": 0,
+        "deletions": 3
+      },
+      {
+        "path": "slave.mk",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-27800",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27800,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27800",
+    "title": "Bug:bgpcfgd throws errors during handling of interface associated with VRF",
+    "created_at": "2026-06-10T00:55:01Z",
+    "closed_at": "2026-07-07T18:48:10Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "routing"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nBgpcfgd lacks support for handling interfaces that are part of VRF. It throws error because the 'directory' datastructure where it handles the interface just uses ip address as key\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/90f84741c388fef110a83f5a6e582228ae52883d/src/sonic-bgpcfgd/bgpcfgd/managers_intf.py#L38\n\nWith VRF, two different interfaces in different VRFs can have same IP. Hence during delete we may end up seeing errors like below\n\n2026 Jun  9 <IPV6>.916471 sonic DEBUG bgp#bgpcfgd: Received message : '('Vlan1002|<IPV6>::1/64', 'DEL', ())'\n2026 Jun  9 <IPV6>.920850 sonic DEBUG bgp#bgpcfgd: Received message : '('Vlan1002|<IPV6>::1/64', 'DEL', ())'\n2026 Jun  9 <IPV6>.920850 sonic WARNING bgp#bgpcfgd: Delete key 'Vlan1002|<IPV6>::1/64' is not supported for 'zebra set src' templates\n2026 Jun  9 <IPV6>.386032 sonic DEBUG bgp#bgpcfgd: Received message : '('Vlan1003|<IP>/24', 'DEL', ())'\n**2026 Jun  9 <IPV6>.386166 sonic ERR bgp#bgpcfgd: Directory: Can't remove key '<IP>' from slot 'LOCAL__local_addresses'. The key doesn't exist**\n\n### Steps to Reproduce\n\nCreate two VLANs and bind them to two different VRFs.\nAssign same ip address on them\nRemove the IP addresses\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior:**\nError logs are seen\n\n**Expected behavior:**\nNo error logs seen\n\n### Relevant log output\n\n```shell\n2026-06-09.<IPV6>.689741|INTF_TABLE:Vlan1003:<IP>/24|SET|scope:global|family:IPv4\n2026-06-09.<IPV6>.689755|INTF_TABLE:Vlan1003|SET|vrf_name:Vrf_0003|mac_addr:<IPV6>\n2026-06-09.<IPV6>.689863|INTF_TABLE:Vlan1002:<IP>/24|SET|scope:global|family:IPv4\n2026-06-09.<IPV6>.689876|INTF_TABLE:Vlan1002|SET|vrf_name:Vrf_0002|mac_addr:<IPV6>\n2026-06-09.<IPV6>.148064|INTF_TABLE:Vlan1002:<IP>/24|DEL\n2026-06-09.<IPV6>.390118|INTF_TABLE:Vlan1003:<IP>/24|DEL\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nWill be seen on all versions. Day 1 issue.\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27981,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27981",
+    "title": "[bgpcfgd]: Use composite key for local_addresses to support VRF overlapping IPs",
+    "merged_at": "2026-07-07T18:48:09Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/27800\n\nbgpcfgd uses bare IP address as the key in its internal `local_addresses` directory slot. When two interfaces in different VRFs are assigned the same IP address, the second entry overwrites the first. On deletion, the first interface removes the key successfully, but the second deletion fails with \"Can't remove key ... The key doesn't exist\" because the entry was already gone. This is a Day 1 bug that affects any deployment using overlapping IPs across VRFs.\n\n#### How I did it\n* Use composite key `interface_name|ip` in `local_addresses` directory slot to ensure uniqueness across VRF-bound interfaces\n* Update `get_local_interface` in managers_bgp.py to search entries by IP suffix in the composite key\n\n#### How to verify it\n1. Create two VLANs bound to different VRFs with the same IP (e.g., `Vlan1002` in `Vrf_0002` and `Vlan1003` in `Vrf_0003`, both with `<IP>/24`)\n2. Remove the IP addresses from both interfaces\n3. Verify no \"Can't remove key\" errors appear in bgpcfgd logs\n\n#### Description for the changelog\nFixed bgpcfgd key collision when the same IP address exists on different interfaces across VRFs",
+    "files": [
+      {
+        "path": "src/sonic-bgpcfgd/bgpcfgd/managers_bgp.py",
+        "additions": 23,
+        "deletions": 12
+      },
+      {
+        "path": "src/sonic-bgpcfgd/bgpcfgd/managers_intf.py",
+        "additions": 5,
+        "deletions": 3
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_bgp.py",
+        "additions": 73,
+        "deletions": 7
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_intf.py",
+        "additions": 31,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

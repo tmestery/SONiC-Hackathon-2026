@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-11707",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 11707,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/11707",
+    "title": "xcvrd crash observed during boot",
+    "created_at": "2022-08-11T20:42:55Z",
+    "closed_at": "2022-09-20T15:26:47Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nDuring boot on Line cards, xcvrd crash is observed which cause the port optics init failure:\n\nAug 11 <IPV6>.008708 sfd-vt2-lc0 INFO pmon#supervisord 2022-08-11 <IPV6>,007 INFO success: xcvrd entered RUNNING state, process has stayed up for > than 10 seconds (startsecs)\nAug 11 <IPV6>.747253 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd ERROR: execvpe(/usr/sbin/smartctl) failed\nAug 11 <IPV6>.747582 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd : [2] No such file or directory\nAug 11 <IPV6>.751125 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd ERROR: command '/usr/sbin/smartctl' failed\nAug 11 <IPV6>.751354 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd : [116] Stale file handle\nAug 11 <IPV6>.423570 sfd-vt2-lc0 NOTICE pmon#xcvrd[121]: CMIS: Starting...\nAug 11 <IPV6>.526003 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd Process Process-1:\nAug 11 <IPV6>.526805 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd Traceback (most recent call last):\nAug 11 <IPV6>.526805 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd   File \"/usr/lib/python3.9/multiprocessing/process.py\", line 315, in _bootstrap\nAug 11 <IPV6>.526805 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd     self.run()\nAug 11 <IPV6>.527188 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd   File \"/usr/lib/python3.9/multiprocessing/process.py\", line 108, in run\nAug 11 <IPV6>.527204 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd     self._target(*self._args, **self._kwargs)\nAug 11 <IPV6>.527212 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd.py\", line 1268, in task_worker\nAug 11 <IPV6>.527212 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd     self.port_dict[lport]['admin_status'] = self.get_port_admin_status(lport)\nAug 11 <IPV6>.527223 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd.py\", line 1226, in get_port_admin_status\nAug 11 <IPV6>.527223 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd     admin_status = dict(port_info)['admin_status']\nAug 11 <IPV6>.527236 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd KeyError: 'admin_status'\nAug 11 <IPV6>.527274 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd Starting\nAug 11 <IPV6>.929726 sfd-vt2-lc0 INFO pmon#supervisord: xcvrd DBG _optics_init_once:OPTICS_INIT_ONCE: start one time optics lib initialization\n\n#### Steps to reproduce the issue:\n1. Boot the image on Line cards.\n2. Check ps aux| grep xcvrd to make sure all 3 threads are running.\n3. Only 2 threads were running and syslog shows the crash\n\n#### Describe the results you received:\nFront panel ports failed to come oper up.\n\n#### Describe the results you expected:\nno xcvrd crash. port should come oper up\n\n#### Output of `show version`:\nsha1 used to build the image:\nhttps://github.com/Azure/sonic-buildimage-msft/commit/b6bfd6ab0e1df805c32021c11653682ad6b7f259\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 286,
+    "repository": "sonic-net/sonic-platform-daemons",
+    "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/286",
+    "title": "Use get() to fetch default value from dictionary for port admin_status ",
+    "merged_at": "2022-09-20T15:26:46Z",
+    "description": "Signed-off-by: anamehra <<EMAIL>>\n\n#### Description\n    The config db dictionary may not have admin_status available for a\nport if the same is not set in config db file. Use get() function to\nprevent crashes and set the default status to 'down'.\n\n#### Motivation and Context\n\nxcvrd crash is observed during boot on multi-asic chassis system.\nThe crash is reported in https://github.com/sonic-net/sonic-buildimage/issues/11707\n\nOn debugging the issue, found that at the point of the crash, the data being used is from config db.\nIt was observed that the Ethernet ports, which are not configured for admin_state field explicitly in the config  is causing the crash. This is a valid config as admin_status is not a mandatory field and is considerd by default 'down' if missing in port config in config db file.\n\nfor example, the Ethernet31 is configured for a far-end, and has this field populated while Ethernet32, as was not being used, has this field missing.\n\n    \"Ethernet31\": {\n        \"admin_status\": \"up\",\n        \"alias\": \"Eth0/2/31\",\n        \"asic_port_name\": \"Eth31-ASIC2\",\n        \"description\": \"ARISTA32T3:Ethernet1\",\n        \"fec\": \"rs\",\n        \"index\": \"31\",\n        \"lanes\": \"512,513,514,515\",\n        \"mtu\": \"9100\",\n        \"pfc_asym\": \"off\",\n        \"role\": \"Ext\",\n        \"speed\": \"100000\",\n        \"tpid\": \"0x8100\"\n    },\n    \"Ethernet32\": {\n        \"alias\": \"Eth0/2/32\",\n        \"asic_port_name\": \"Eth32-ASIC2\",\n        \"description\": \"Eth0/2/32\",\n        \"fec\": \"rs\",\n        \"index\": \"32\",\n        \"lanes\": \"264,265,266,267\",\n        \"mtu\": \"9100\",\n        \"pfc_asym\": \"off\",\n        \"role\": \"Ext\",\n        \"speed\": \"100000\",\n        \"tpid\": \"0x8100\"\n    },\n\ncloses https://github.com/sonic-net/sonic-buildimage/issues/11707\n\n#### How Has This Been Tested?\n\nLoaded image on single and multi-asic system. Tested for normal boot. No crash observed.\n\n#### Additional Information (Optional)",
+    "files": [
+      {
+        "path": "sonic-xcvrd/xcvrd/xcvrd.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

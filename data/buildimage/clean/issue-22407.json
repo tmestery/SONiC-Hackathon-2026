@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-22407",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 22407,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/22407",
+    "title": "Bug: ConfigReload fails when RADIUS statistics are enabled",
+    "created_at": "2025-04-22T19:06:50Z",
+    "closed_at": "2025-05-30T18:27:18Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nRADIUS statistics is using an invalid YANG value when statistics are enabled. With a config like the following:\n\u00a0\n```\nadmin@usschq-eswdut-t001:~$ show radius\nRADIUS global auth_type pap (default)\nRADIUS global retransmit 3 (default)\nRADIUS global timeout 5 (default)\nRADIUS global passkey <EMPTY_STRING> (default)\nRADIUS global statistics True\u00a0<--\n```\n\u00a0\nWhen a user performs a ConfigSave, and then ConfigReload, the config fails a YANG validation check:\n\n```\nadmin@usschq-eswdut-t001:~$ sudo config save -y\nRunning command: /usr/local/bin/sonic-cfggen -d --print-data > /etc/sonic/config_db.json\nadmin@usschq-eswdut-t001:~$ sudo config reload -y -f\nAcquired lock on /etc/sonic/reload.lock\nDisabling container monitoring ...\nStopping SONiC target ...\nRunning command: /usr/local/bin/sonic-cfggen -j /etc/sonic/init_cfg.json -j /etc/sonic/config_db.json --write-to-db\nRunning command: /usr/local/bin/db_migrator.py -o migrate\nlibyang[0]: Invalid value \"True\" in \"statistics\" element. (path: /sonic-system-radius:sonic-system-radius/RADIUS/global/statistics)\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_yang_ext.py\", line 1176, in loadData\n    self.root = self.ctx.parse_data_mem(dumps(self.xlateJson), \\\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3/dist-packages/yang.py\", line 2574, in parse_data_mem\n    return _yang.Context_parse_data_mem(self, data, format, options)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: Invalid value \"True\" in \"statistics\" element.\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/usr/local/bin/config_validator.py\", line 44, in <module>\n    main()\n  File \"/usr/local/bin/config_validator.py\", line 33, in main\n    yang_parser.loadData(configdbJson=config)\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_yang_ext.py\", line 1183, in loadData\n    raise SonicYangException(\"Data Loading Failed\\n{}\".format(str(e)))\nsonic_yang_ext.SonicYangException: Data Loading Failed\nInvalid value \"True\" in \"statistics\" element.\nTraceback (most recent call last):\n  File \"/usr/local/bin/db_migrator.py\", line 1390, in main\n    result = getattr(dbmgtr, operation)()\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/bin/db_migrator.py\", line 1317, in migrate\n    self.validate()\n  File \"/usr/local/bin/db_migrator.py\", line 1343, in validate\n    assert ret == 0, \"Yang validation failed\"\n           ^^^^^^^^\nAssertionError: Yang validation failed\nsonic_yang(3):Data Loading Failed:Invalid value \"True\" in \"statistics\" element.\nYang validation failed\nusage: db_migrator.py [-h] [-o operation migrate, set_version, get_version]\n                      [-s unix socket] [-n asic namespace]\n\noptions:\n  -h, --help            show this help message and exit\n  -o operation (migrate, set_version, get_version)\n                        operation to perform [default: get_version]\n  -s unix socket        the unix socket that the desired database listens on\n  -n asic namespace     The asic namespace whose DB instance we need to\n                        connect\nReleased lock on /etc/sonic/reload.lock\n```\nThe is because the value is set to `True` rather than the string `\"true\"` which YANG expects. See the [YANG documentation](https://yangson.labs.nic.cz/datatype.html#yangson.datatype.DataType.parse_value) for details.\n\n### Steps to Reproduce\n\n1. configure radius statistics on dut\nsudo config radius statistics enable\n2. save config\nsudo config save -y\n3. reload config\nsudo config reload\n\n### Actual Behavior and Expected Behavior\n\nActual:\n```\n$ sudo config radius statistics enable\n$ sudo config save -y\n$ sudo config reload <--- fails\n... yang error\n```\nExpected:\n```\n$ sudo config radius statistics enable\n$ sudo config save -y\n$ sudo config reload <--- succeeds\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nadmin@usschq-eswdut-t001:~$ show ver\n\nSONiC Software Version: SONiC.sbala-radius_fix_1.0-d4e4cecc3\nSONiC OS Version: 12\nDistribution: Debian 12.6\nKernel: 6.1.0-22-2-amd64\nBuild commit: d4e4cecc3\nBuild date: Wed Jan  1 <IPV6> UTC 2025\nBuilt by: sbala@nxthplinuxser01\n\nPlatform: x86_64-accton_as9716_32d-r0\nHwSKU: Accton-AS9716-32D\nASIC: broadcom\nASIC Count: 1\nSerial Number: 971632D2429019\nModel Number: FP5ZZ8632400A\nHardware Revision: N/A\nUptime: <IPV6> up 1 day, 18:31,  1 user,  load average: 0.30, 0.57, 0.63\nDate: Mon 06 Jan 2025 <IPV6>\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 3860,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/3860",
+    "title": "Issue #22407: ConfigReload fails when RADIUS options are enabled",
+    "merged_at": "2025-05-30T18:27:17Z",
+    "description": "#### What I did\n\nEnabling RADIUS `statistics` adds config entries which are not valid in YANG.  The option adds the True/False boolean values instead of the 'true'/'false' booleans that are defined in the YANG model, which causes failures when trying to reload/replace the config.\n\nFixes: [#22407](https://github.com/sonic-net/sonic-buildimage/issues/22407)\n\n#### How I did it\n\nModified relevant config command to use the correct values.\n\n#### How to verify it\n\nManually verified.\n\nI added a test case for `config radius statistics` command. Note that this test follows the pattern in this file, which is not actually exercising the correct codepath (see https://github.com/sonic-net/sonic-utilities/issues/3754 for details).\n\n#### Previous command output (if the output of a command-line utility has changed)\n\n#### New command output (if the output of a command-line utility has changed)",
+    "files": [
+      {
+        "path": "config/aaa.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/radius_test.py",
+        "additions": 48,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

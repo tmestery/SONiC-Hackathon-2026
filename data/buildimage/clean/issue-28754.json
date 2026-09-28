@@ -1,0 +1,80 @@
+{
+  "id": "buildimage-28754",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28754,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28754",
+    "title": "Bug: SRv6 MySID entries are not reconciled during warmboot",
+    "created_at": "2026-07-31T16:33:05Z",
+    "closed_at": "2026-08-19T16:38:38Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "warmboot"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nDuring warmboot, syncd fails to reconcile SRv6 MySID entries (`SAI_OBJECT_TYPE_MY_SID_ENTRY`).\nExisting MySID objects programmed before the reboot are not matched between the temporary\nand current ASIC views, so warmboot tears them down / recreates them (or hits unsupported\nobject-type paths) instead of preserving them via best-candidate matching.\n\n### Investigation and suspected root cause\n\nDuring warmboot, syncd builds two ASIC views and reconciles them:\n\n* **current view** \u2014 objects present in the ASIC after reboot (from ASIC dump)\n* **temporary view** \u2014 objects expected by orchagent (from Redis)\n\nFor non-object-id entry types (route, NAT, inseg, \u2026), matching is not a simple OID compare.\nThe entry key itself embeds other VIDs (e.g. virtual router). Those VIDs differ between the\ntemporary and current views, so syncd must translate them via the RID map before it can\nlook the entry up.\n\n`SAI_OBJECT_TYPE_MY_SID_ENTRY` was never wired into that path.\n\n#### Why MySID needs the same treatment as inseg / route / NAT\n\nA MySID entry key contains `switch_id` and `vr_id` VIDs plus the SID and locator lengths:\n\n```text\nSAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id, vr_id, sid, locator_*, function_len, args_len}\n```\n\nAfter warmboot, the temporary view may have `vr_id = 0x3000000000002` while the current\nview has the same VR as `vr_id = 0x3000000000001`, both mapping to the same RID.\nDictionary lookup on the temporary serialized key will miss unless `vr_id` is rewritten\nto the current VID first \u2014 exactly the pattern already used for inseg / route / NAT.\n\n#### Missing wiring in syncd warmboot comparison logic\n\n```cpp\n// syncd/AsicView.h \u2014 no dedicated map for MySID\nStrObjectIdToSaiObjectHash m_soRoutes;\nStrObjectIdToSaiObjectHash m_soNatEntries;\nStrObjectIdToSaiObjectHash m_soInsegs;\n// m_soMySidEntries missing\nStrObjectIdToSaiObjectHash m_soOids;\n```\n\nAs a result:\n\n* `AsicView::fromDump` / `asicCreateObject` / `asicRemoveObject` had no\n  `m_soMySidEntries` map \u2014 MySID fell into the unsupported / default branches\n* `BestCandidateFinder` had no MySID matcher, so warmboot could not reconcile\n  existing MySID entries after VID translation\n* `ComparisonLogic` did not re-serialize the MySID object id after exchanging\n  struct VIDs\n\nWarmboot with SRv6 MySID entries programmed therefore fails to match and preserve\nthose objects (create / remove / throw paths instead of a clean best-candidate match).\n\n#### Correct approach (same as inseg)\n\nTeach the warmboot comparison path about `SAI_OBJECT_TYPE_MY_SID_ENTRY`:\n\n1. **`AsicView`** \u2014 add `m_soMySidEntries`; deserialize into it in `fromDump`;\n   maintain it in `asicCreateObject` / `asicRemoveObject`\n2. **`BestCandidateFinder::findCurrentBestMatchForMySidEntry`** \u2014 copy the temporary\n   meta key, `exchangeTemporaryVidToCurrentVid`, serialize, then dictionary-lookup\n   in `m_soMySidEntries`\n3. **`ComparisonLogic`** \u2014 re-serialize `m_str_object_id` with\n   `sai_serialize_my_sid_entry` after VID exchange when creating from a temporary object\n\n```cpp\n// BestCandidateFinder \u2014 match after VID exchange\nsai_object_meta_key_t mk = temporaryObj->m_meta_key;\n\nif (!exchangeTemporaryVidToCurrentVid(mk))\n{\n    return nullptr;\n}\n\nstd::string str_my_sid_entry =\n    sai_serialize_my_sid_entry(mk.objectkey.key.my_sid_entry);\n\nauto currentMySidIt =\n    m_currentView.m_soMySidEntries.find(str_my_sid_entry);\n```\n\n### Steps to Reproduce\n\n1. Program SRv6 MySID entries on a DUT (via orchagent / APPL_DB) so that\n   `SAI_OBJECT_TYPE_MY_SID_ENTRY` objects exist in ASIC_DB / ASIC\n2. Confirm MySID entries are present before reboot\n3. Perform warm-reboot\n4. After warmboot completes, inspect MySID entries and syncd warmboot comparison logs\n5. Observe that MySID entries are not best-candidate matched (recreate / remove /\n   unsupported-type behavior instead of a clean preserve)\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior:\nDuring warmboot reconciliation, `SAI_OBJECT_TYPE_MY_SID_ENTRY` is not tracked in a\ndedicated ASIC-view map and has no VID-aware best-candidate matcher. Existing MySID\nentries are not matched across temporary vs current views and are not preserved cleanly.\n\n### Expected Behavior:\nWarmboot reconciles MySID entries the same way as inseg / route / NAT: translate\nembedded VIDs via the RID map, dictionary-lookup in `m_soMySidEntries`, and keep\nmatching entries without unnecessary tear-down / recreate.\n\n### Relevant log output\n\n```shell\n# During warmboot comparison (illustrative) \u2014 MySID not matched / unsupported\n# syncd may take create/remove paths for SAI_OBJECT_TYPE_MY_SID_ENTRY\n# instead of best-candidate match after vr_id VID exchange\n\n# Temporary view key (example):\n# SAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id=oid:0x2100..., vr_id=oid:0x3000000000002, sid=<IPV6>::, ...}\n\n# Current view key (same RID-backed VR, different VID):\n# SAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id=oid:0x2100..., vr_id=oid:0x3000000000001, sid=<IPV6>::, ...}\n\n# Without VID exchange \u2192 dictionary lookup miss \u2192 no best match\n```\n\n### Output of `show version`, `show techsupport`\n\n* N/A\n\n### Attach files (if any)\n\n* N/A"
+  },
+  "resolution": {
+    "pr_number": 2012,
+    "repository": "sonic-net/sonic-sairedis",
+    "url": "https://github.com/sonic-net/sonic-sairedis/pull/2012",
+    "title": "[warmboot]: Add SRv6 MySID warmboot support",
+    "merged_at": "2026-08-19T16:38:37Z",
+    "description": "Signed-off-by: Nazarii Hnydyn <<EMAIL>>\n\n### Description of PR\n\n## The bug\n\nDuring warmboot, syncd builds two ASIC views and reconciles them:\n\n* **current view** \u2014 objects present in the ASIC after reboot (from ASIC dump)\n* **temporary view** \u2014 objects expected by orchagent (from Redis)\n\nFor non-object-id entry types (route, NAT, inseg, \u2026), matching is not a simple OID compare.\nThe entry key itself embeds other VIDs (e.g. virtual router).\nThose VIDs differ between the temporary and current views,\nso syncd must translate them via the RID map before it can look the entry up.\n\n`SAI_OBJECT_TYPE_MY_SID_ENTRY` (SRv6 MySID) was never wired into that path. As a result:\n\n* `AsicView::fromDump` / `asicCreateObject` / `asicRemoveObject` had no\n  `m_soMySidEntries` map \u2014 MySID fell into the unsupported/default branches\n* `BestCandidateFinder` had no MySID matcher, so warmboot could not reconcile\n  existing MySID entries after VID translation\n* `ComparisonLogic` did not re-serialize the MySID object id after exchanging\n  struct VIDs\n\nWarmboot with SRv6 MySID entries programmed therefore fails to match and preserve\nthose objects (create/remove/throw paths instead of a clean best-candidate match).\n\n## Why MySID needs the same treatment as inseg/route\n\nA MySID entry key contains `switch_id` and `vr_id` VIDs plus the SID and locator lengths:\n\n```text\nSAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id, vr_id, sid, locator_*, function_len, args_len}\n```\n\nAfter warmboot, the temporary view may have `vr_id = 0x3000000000002` while the\ncurrent view has the same VR as `vr_id = 0x3000000000001`, both mapping to the same RID.\nDictionary lookup on the temporary serialized key will miss unless `vr_id` is rewritten\nto the current VID first \u2014 exactly the pattern already used for inseg / route / NAT.\n\n## The fix\n\nTeach the warmboot comparison path about `SAI_OBJECT_TYPE_MY_SID_ENTRY`,\nmirroring the existing inseg-entry handling:\n\n1. **`AsicView`** \u2014 add `m_soMySidEntries`; deserialize into it in `fromDump`;\n   maintain it in `asicCreateObject` / `asicRemoveObject`\n2. **`BestCandidateFinder::findCurrentBestMatchForMySidEntry`** \u2014 copy the temporary\n   meta key, `exchangeTemporaryVidToCurrentVid`, serialize, then dictionary-lookup\n   in `m_soMySidEntries`\n3. **`ComparisonLogic`** \u2014 re-serialize `m_str_object_id` with\n   `sai_serialize_my_sid_entry` after VID exchange when creating from a temporary object\n4. **Unit tests** \u2014 cover dump/create/remove, successful match after VID exchange,\n   missing mapping, missing entry, and already-processed throw\n\n```cpp\n// BestCandidateFinder \u2014 match after VID exchange\nsai_object_meta_key_t mk = temporaryObj->m_meta_key;\n\nif (!exchangeTemporaryVidToCurrentVid(mk))\n{\n    return nullptr;\n}\n\nstd::string str_my_sid_entry =\n    sai_serialize_my_sid_entry(mk.objectkey.key.my_sid_entry);\n\nauto currentMySidIt =\n    m_currentView.m_soMySidEntries.find(str_my_sid_entry);\n```\n\nWith that, warmboot can keep existing MySID entries instead of tearing them down\nand recreating them (or failing).\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [x] Test improvement\n\n### Approach\n\n#### What is the motivation for this PR?\n\nSRv6 MySID entries must survive warmboot.\nWithout ASIC-view tracking and VID-aware best-candidate matching,\nsyncd cannot reconcile `SAI_OBJECT_TYPE_MY_SID_ENTRY` between the temporary\nand current views.\n\n#### Work item tracking\n* N/A\n\n#### How did you do it?\n\n* Added `m_soMySidEntries` and MySID handling in `AsicView`\n  (`fromDump`, `asicCreateObject`, `asicRemoveObject`)\n* Implemented `findCurrentBestMatchForMySidEntry`\n  (VID exchange \u2192 serialize \u2192 dictionary lookup), same approach as inseg\n* Wired `SAI_OBJECT_TYPE_MY_SID_ENTRY` into\n  `BestCandidateFinder::findCurrentBestMatch` and\n  `ComparisonLogic::createNewObjectFromTemporaryObject`\n* Added `unittest/syncd/TestMySidWarmboot.cpp` covering dump lifecycle\n  and best-candidate match / miss / already-processed paths\n\n#### How did you verify/test it?\n\n1. Run syncd unit tests:\n```\nmake -C unittest/syncd check\n```\n2. Confirm `TestMySidWarmboot` cases pass:\n   * `asicView_fromDump_deserializes_my_sid_entry`\n   * `asicView_create_and_remove_my_sid_entry`\n   * `my_sid_entry_serializes_with_exchanged_vr_vid`\n   * `bestCandidateFinder_matches_my_sid_entry_after_vid_exchange`\n   * `bestCandidateFinder_returns_null_when_vid_mapping_missing`\n   * `bestCandidateFinder_returns_null_when_entry_missing_in_current_view`\n   * `bestCandidateFinder_throws_when_entry_already_processed`\n3. On a DUT with SRv6 MySID programmed: warm-reboot and confirm MySID entries\n   remain in ASIC/APPL_DB without recreate storms in syncd logs\n\n#### Any platform specific information?\n\n* N/A\n\n### Documentation\n\n* N/A\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n```\n      .---.        .-----------\n     /     \\  __  /    ------\n    / /     \\(  )/    -----\n   //////   ' \\/ `   ---\n  //// / // :    : ---\n // /   /  /`    '--\n//          //..\\\\\n       ====UU====UU====\n           '//||\\\\`\n             ''``\n```",
+    "files": [
+      {
+        "path": "syncd/AsicView.cpp",
+        "additions": 13,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/AsicView.h",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/BestCandidateFinder.cpp",
+        "additions": 80,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/BestCandidateFinder.h",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/ComparisonLogic.cpp",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "tests/aspell.en.pws",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "unittest/syncd/Makefile.am",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "unittest/syncd/TestMySidWarmboot.cpp",
+        "additions": 244,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

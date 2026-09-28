@@ -1,0 +1,104 @@
+{
+  "id": "buildimage-21314",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21314,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21314",
+    "title": "SNMP request timeout when CPU utilization is high",
+    "created_at": "2025-01-01T09:37:05Z",
+    "closed_at": "2025-01-08T02:49:50Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P0",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Chassis",
+      "chassis-packet"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nSNMP request timeout when CPU utilization is high\nTest module[snmp/test_snmp_cpu.py] in sonic-mgmt repo stably reproduce this issue.\nCurrently the issue is only seen on Cisco 8800 chassis.\nSuspectation is on the RP card, including backend ports, there're too much interfaces.\n\n#### Steps to reproduce the issue:\n1. Use 'yes' command to simulate 100% utilization on all CPU processors.\n2. Send snmp requests, the timeout generate been seen on interface snmp request.\n3. SNMP request time out and fail.\n\n#### Describe the results you received:\nAfter simulated 100% CPU utilization.\nargs.json contains mgmt-ip of the RP card.\njianquanye@sonic-mgmt-jianquanye:/var/src/sonic-mgmt-int/tests$ python ../ansible/library/snmp_facts.py args.json\nTraceback (most recent call last):\n  File \"../ansible/library/snmp_facts.py\", line 1075, in <module>\n    main()\n  File \"../ansible/library/snmp_facts.py\", line 496, in main\n    for oid, val in varBinds:\nValueError: too many values to unpack (expected 2)\njianquanye@sonic-mgmt-jianquanye:/var/src/sonic-mgmt-int/tests$\n\n#### Describe the results you expected:\nSNMP can successfully pass even with 100% CPU utilization\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 345,
+    "repository": "sonic-net/sonic-snmpagent",
+    "url": "https://github.com/sonic-net/sonic-snmpagent/pull/345",
+    "title": "Fix snmp agent not-responding issue when high CPU utilization",
+    "merged_at": "2025-01-14T00:36:37Z",
+    "description": "Fix https://github.com/sonic-net/sonic-buildimage/issues/21314\nThe SNMP agent and MIB updaters are basic on Asyncio/Coroutine,\n  the mib updaters share the same Asyncio event loop with the SNMP agent client.\n  Hence during the updaters executing, the agent client can't receive/respond to new requests.\n\nWhen the CPU utilization is high (In some stress test we make CPU 100% utilization), the updates are slow, and this causes the snmpd request to be timeout because the agent got suspended during updating.\n\n**- What I did**\nDecrease the MIB update frequency when the update execution is slow.\npros:\n   1.  The snmp request can success even if 100% CPU utilization.\n   2. The snmpd request seldomly fails due to timeout, combined with https://github.com/sonic-net/sonic-buildimage/pull/21316 , we have 4*5 = 20s time windows for the SNMP agent to wait for the MIB updates finish and respond to snmpd request.\n   3. Relief the CPU cost when CPU is high, the can avoid CPU becomes more crowded.\n\ncons:\n   1. Tested on pizzabox (4600c), the updaters are very fast, generally finished within 0.001~0.02s, the chagne won't actually affect the frequency and interval.\n   2. On Cisco chassis, the update of SNMP data could be delayed for 10~20s(at most 60s in extreme situation). Per my oberservation, most of the updater finishes within 0.5s. But for\n         1.a ciscoSwitchQosMIB.QueueStatUpdater, generally finishs in 0.5-2s, expected to be delayed to 5-20s\n         1.b PhysicalTableMIBUpdater, generally finishs in 0.5-1.5s, expected to be delayed to 5-1.5s\n         1.c ciscoPfcExtMIB.PfcPrioUpdater, generally finishs in 0.5-3s, expected to be delayed to 5-30s\n\n**- How I did it**\nIn get_next_update_interval, we compute the interval based on current execution time.\nRoughly, we make the 'update interval'/'update execution time' >= UPDATE_FREQUENCY_RATE(10)\nMore specifically, if the execution time is 2.000001s, we sleep 21s before next update round.\nAnd the max interval won't be longer than MAX_UPDATE_INTERVAL(60s).\n\n**- How to verify it**\nTest on Cisco chassis, test_snmp_cpu.py which triggers 100% CPU utilization test whether snmp requests work well.\n\n**- Description for the changelog**",
+    "files": [
+      {
+        "path": "src/ax_interface/agent.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/ax_interface/constants.py",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "src/ax_interface/mib.py",
+        "additions": 42,
+        "deletions": 2
+      },
+      {
+        "path": "src/ax_interface/util.py",
+        "additions": 29,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic_ax_impl/__main__.py",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "src/sonic_ax_impl/main.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic_ax_impl/utils/__init__.py",
+        "additions": 0,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic_ax_impl/utils/arg_parser.py",
+        "additions": 39,
+        "deletions": 0
+      },
+      {
+        "path": "tests/test_agent.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/test_arg_parser.py",
+        "additions": 152,
+        "deletions": 0
+      },
+      {
+        "path": "tests/test_utils.py",
+        "additions": 54,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 21316,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/21316",
+      "title": "Update snmpd.conf.j2 prolong agentXTimeout to avoid timeout failure in high CPU utilization scenario",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

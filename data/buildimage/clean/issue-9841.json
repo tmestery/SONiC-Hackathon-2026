@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-9841",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 9841,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/9841",
+    "title": "[dhcp_relay] dhcp6relay memory issue resulting in segfault",
+    "created_at": "2022-01-24T19:14:35Z",
+    "closed_at": "2022-01-26T17:58:52Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nDHCPv6 Relay tests are failing on armhf with dhcp6relay resulting in segfault\n\n#### Steps to reproduce the issue:\n1. On version 20201231.48, 20201231.49, 20201231.50, run dhcpv6 relay management tests\n2. Tests fail and dhcp6relay results in segfault\n\n#### Describe the results you received:\n// Initialization\nJan 23 <IPV6>.690932 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === add config for intf Vlan1000\nJan 23 <IPV6>.692032 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === associating config 0x16c59a8 intf Vlan1000 with db connector 0xbe834b3c\n\n// a good relay\nJan 23 <IPV6>.473310 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === callback updating #2 config 0x16c59a8 message type 1(0x1)\nJan 23 <IPV6>.474304 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === send_udp updating #1 config 0x16c59a8 message type 12(0xc)\n\n// some more good relays\nJan 23 <IPV6>.065216 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: message repeated 3 times: [ === send_udp updating #1 config 0x16c59a8 message type 12(0xc)]\n\n// This seems to be the problem. The config address changed (last byte got zeroed out):\nJan 23 <IPV6>.065699 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === server_callback updating #3 config 0x16c59a8 message type 13(0xd)\nJan 23 <IPV6>.066095 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === send_udp updating #1 config 0x16c5900 message type 2(0x2)\n\n// crashed then restarted:\nJan 23 <IPV6>.674247 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === add config for intf Vlan1000\nJan 23 <IPV6>.674478 str2-7215-acs-3 WARNING dhcp_relay#dhcp6relay: === associating config 0x1a449a8 intf Vlan1000 with db connector 0xbe9dbb3c\n\n#### Describe the results you expected:\nConfig address should stay the same upon receiving and sending packets.\n\n#### Output of `show version`:\n\n```\n\nDocker images:\n\nREPOSITORY                 TAG                 IMAGE ID            SIZE\n\ndocker-syncd-mrvl          20201231.50         1676bfbdc32c        546MB\n\ndocker-syncd-mrvl          latest              1676bfbdc32c        546MB\n\ndocker-snmp                20201231.50         f118fe3e753d        467MB\n\ndocker-snmp                latest              f118fe3e753d        467MB\n\ndocker-teamd               20201231.50         53102d8accb5        435MB\n\ndocker-teamd               latest   a           53102d8accb5        435MB\n\ndocker-router-advertiser   20201231.50         53399a5a0d79        428MB\n\ndocker-router-advertiser   latest              53399a5a0d79        428MB\n\ndocker-platform-monitor    20201231.50         271246a1b81e        561MB\n\ndocker-platform-monitor    latest              271246a1b81e        561MB\n\ndocker-lldp                20201231.50         ca98c2222f54        431MB\n\ndocker-lldp                latest              ca98c2222f54        431MB\n\ndocker-database            20201231.50         3993b75cb9ea        427MB\n\ndocker-database            latest              3993b75cb9ea        427MB\n\ndocker-acms                20201231.50         eead63234782        271MB\n\ndocker-acms                latest              eead63234782        271MB\n\ndocker-orchagent           20201231.50         82655245db79        521MB\n\ndocker-orchagent           latest              82655245db79        521MB\n\ndocker-dhcp-relay          20201231.50         ab80fabaccda        442MB\n\ndocker-dhcp-relay          latest              ab80fabaccda        442MB\n\ndocker-sonic-telemetry     20201231.50         39f65d822b30        504MB\n\ndocker-sonic-telemetry     latest              39f65d822b30        504MB\n\ndocker-fpm-frr             20201231.50         b0159c4cf554        447MB\n\ndocker-fpm-frr             latest              b0159c4cf554        447MB\n\ndocker-sflow               20201231.50         57493c04ad16        435MB\n\ndocker-sflow               latest              57493c04ad16        435MB\n\ndocker-mux                 20201231.50         b76a0fb8510c        446MB\n\ndocker-mux                 latest              b76a0fb8510c        446MB\n\nk8s.gcr.io/pause           3.4.1               3f46e9d0aa60        325kB\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 9851,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/9851",
+    "title": "[dhcp6relay] a couple memory access protections",
+    "merged_at": "2022-01-26T17:58:52Z",
+    "description": "#### Why I did it\n1. the strcpy and buffer allocation is not safe, it corrupts 1 byte on the stack. Depending on the memory layout, it may or may not cause issue immediately.\n2. message type is not validated before updating the counter. Which could cause segment fault.\n\n#### How I did it\n1. Remove the unsafe strcpy, use config->interface.c_str() instead.\n2. Check message type before updating counters.\n\n#### How to verify it\nThe issue (1) caused segment fault on a specific platform. The fix was validated there. Issue (2) was precautionary. Added log in case it triggers.\n\n- [x] 201811\n- [ ] 201911\n- [ ] 202006\n- [x] 202012\n- [ ] 202106",
+    "files": [
+      {
+        "path": "src/dhcp6relay/src/configInterface.cpp",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/dhcp6relay/src/relay.cpp",
+        "additions": 7,
+        "deletions": 8
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

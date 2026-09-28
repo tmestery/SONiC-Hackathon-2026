@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-26225",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26225,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26225",
+    "title": "[smartswitch] monit and dualtorNeighborCheck failures on DPU hosts during post-test health checks",
+    "created_at": "2026-03-16T23:54:26Z",
+    "closed_at": "2026-04-01T00:08:54Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "## Description\n\nAfter switch reload/reboot operations on SmartSwitch platforms, post-test DPU health checks fail because `monit` and `dualtorNeighborCheck` services report non-OK status on DPU hosts. These failures are reported by `check_dpu_critical_processes()` in `tests/smartswitch/common/device_utils_dpu.py` which runs `sudo show system-health detail` on each DPU and treats any non-OK service as a failure.\n\n## Error\n\n```\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU0\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU1\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU2\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU3\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU0\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU1\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU2\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU3\n```\n\nThese failures occur repeatedly during `test_dpu_status_post_switch_config_reload`, `test_dpu_status_post_switch_mem_exhaustion`, and `test_dpu_status_post_switch_kernel_panic` in `tests/smartswitch/platform_tests/test_reload_dpu.py`.\n\n## Root Cause\n\nThe `check_dpu_critical_processes()` function at `device_utils_dpu.py:465` SSHes into each DPU, runs `sudo show system-health detail`, and iterates over all entries. If any entry has `status != \"ok\"` and is not in `DPU_CRITICAL_PROCESS_SKIP`, it returns `False`.\n\nThe current skip list (`DPU_CRITICAL_PROCESS_SKIP`) includes:\n```python\nfrozenset({\"container_checker\", \"snmp\", \"acms:acms\", \"routeCheck\",\n           \"PSU0\", \"PSU1\", \"PSU2\", \"PSU3\"})\n```\n\nBut `monit` and `dualtorNeighborCheck` are **not** in the skip list. After a switch reload, these services on DPU hosts may take additional time to converge or may not be applicable to DPU environments at all:\n\n- **`monit`**: The monit daemon on DPU hosts may be in a transient failure state after a switch-level reload. On some DPU platforms, monit may not be fully applicable.\n- **`dualtorNeighborCheck`**: This check verifies neighbor reachability for dualtor configurations. On DPU hosts, this check may not be relevant or may fail because the dataplane has not fully converged after a switch reload.\n\n## Affected Tests\n\n- `test_dpu_status_post_switch_config_reload`\n- `test_dpu_status_post_switch_mem_exhaustion`\n- `test_dpu_status_post_switch_kernel_panic`\n\nAll in `tests/smartswitch/platform_tests/test_reload_dpu.py`.\n\n## Suggested Fix\n\n### Option A: Add to skip list (test-side fix)\n\nAdd `monit` and `dualtorNeighborCheck` to `DPU_CRITICAL_PROCESS_SKIP` in `device_utils_dpu.py`:\n\n```python\nDPU_CRITICAL_PROCESS_SKIP = frozenset({\n    \"container_checker\", \"snmp\", \"acms:acms\", \"routeCheck\",\n    \"PSU0\", \"PSU1\", \"PSU2\", \"PSU3\",\n    \"monit\", \"dualtorNeighborCheck\",\n})\n```\n\n### Option B: Buildimage fix\n\nIf `dualtorNeighborCheck` is not applicable on DPU hosts, it should be disabled in the DPU monit configuration at the buildimage level.\n\n### Option C: Increase convergence timeout\n\nIf these services eventually recover, increase the `wait_until` timeout for `check_dpu_critical_processes` after reload operations.\n\n## Environment\n\n- Platform: Cisco 8102-28FH-DPU-O SmartSwitch\n- DPU type: AMD Pensando DSC\n- SONiC release: 202511\n- Test files:\n  - `tests/smartswitch/common/device_utils_dpu.py` (check logic, line 465)\n  - `tests/smartswitch/platform_tests/test_reload_dpu.py` (affected tests)"
+  },
+  "resolution": {
+    "pr_number": 4405,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/4405",
+    "title": "[config reload] Skip routeCheck monit calls on DPU platforms",
+    "merged_at": "2026-04-01T00:17:12Z",
+    "description": "#### What I did\n\nOn DPU platforms (pensando, nvidia-bluefield), the `routeCheck` monit service is removed from the monit config (sonic-net/sonic-buildimage#26214) since route checking is not applicable on DPUs. However, `config reload` unconditionally tries to `monit unmonitor/monitor routeCheck`, causing:\n```\nDisabling container and routeCheck monitoring ...\nThere is no service named \"routeCheck\"\n```\n\nAdded a `_monit_service_exists()` helper and guarded `routeCheck` monit calls in `_stop_services()` and `_restart_services()` so they only execute when the service is present in monit.\n\n#### How I did it\n\n- Added `_monit_service_exists(service)` helper that runs `sudo monit summary <service>` and returns `True`/`False` based on exit code.\n- In `_stop_services()`: only call `monit unmonitor routeCheck` if `_monit_service_exists(\"routeCheck\")` returns `True`.\n- In `_restart_services()`: only call `monit monitor routeCheck` and `_wait_for_monit_service_monitored(\"routeCheck\")` if the service exists.\n\n#### How to verify it\n\n1. On a DPU platform (nvidia-bluefield / pensando) with routeCheck removed from monit config:\n   - Run `config reload -y` \u2014 should complete without `\"There is no service named routeCheck\"` error\n2. On a non-DPU platform where routeCheck exists in monit:\n   - Run `config reload -y` \u2014 routeCheck monitoring should still be disabled/re-enabled as before\n\n#### Previous command output (if the output of a command-line utility has changed)\n\nOn DPU with routeCheck removed from monit:\n```\nroot@sonic-dpu-3:/home/admin# config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container and routeCheck monitoring ...\nThere is no service named \"routeCheck\"\nReleased lock on /etc/sonic/reload.lock\n```\n\n#### New command output (if the output of a command-line utility has changed)\n\nOn DPU with routeCheck removed from monit:\n```\nroot@sonic-dpu-3:/home/admin# config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container monitoring ...\n...\nEnabling container monitoring ...\nReleased lock on /etc/sonic/reload.lock\n```\n\nCompanion PR: sonic-net/sonic-buildimage#26214\nFixes: sonic-net/sonic-buildimage#26225",
+    "files": [
+      {
+        "path": "config/main.py",
+        "additions": 19,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 26214,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26214",
+      "title": "Disable routeCheck, dualtorNeighborCheck and vnetRouteCheck in monit config on DPU platforms",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

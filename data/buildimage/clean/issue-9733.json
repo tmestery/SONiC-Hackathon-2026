@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-9733",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 9733,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/9733",
+    "title": "Syslog error for Unexpected running containers: gbsyncd",
+    "created_at": "2022-01-11T19:05:43Z",
+    "closed_at": "2022-04-20T11:02:50Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nDuring bootup sonic syslog throw following container check errors\n\nError message - 'container_checker' status failed (4) -- Unexpected running containers: gbsyncd\n\nThe SONiC monit service looks up FEATURE table from CONFIG DB and actual running container service to match all the expected containers are up and running.  Since gbsyncd feature is not added in the FEATURE table, monit service throw syslog errors about \"Unexpected running container\"\n\nThe default init config init_cfg.json.j2  adds gbsyncd into CONFIGDB for only virtual switch.\nFor real hardware platform the CONFIGDB update is missing.\n\n#### Steps to reproduce the issue:\n1.  Build image for gbsyncd enabled platform\n2. Boot system and ensure gbsyncd container is running(via docker ps command)\n3. Check syslog for the error.\n\n#### Describe the results you received:\nOnce gbsyncd container starts monit service reporting unexpected container error\n'container_checker' status failed (4) -- Unexpected running containers: gbsyncd\n\n#### Describe the results you expected:\nThe error message should not be present in the syslog when gbsyncd container runs.\n\n#### Output of `show version`\nNot applicable\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\nNot applicable\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 10504,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/10504",
+    "title": "[gearbox] Add peer gbsyncd for swss if gearbox exists",
+    "merged_at": "2022-04-20T11:02:49Z",
+    "description": "#### Why I did it\nFix [#10501](https://github.com/Azure/sonic-buildimage/issues/10501)\nFix [#9733](https://github.com/Azure/sonic-buildimage/issues/9733)\n\nIf having gearbox, we need\n- add gbsyncd as a peer since swss also has dependency on gbsyncd\n- add service gbsyncd to FEATURE table if it is missing\n\n#### How I did it\n\n#### How to verify it\n\n- Kill orchagent\n\n```\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\n29d108cf328e   docker-gbsyncd-credo:latest          \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 5 minutes             gbsyncd\n0da3a5c5b6b9   docker-syncd-brcm-dnx:latest         \"/usr/local/bin/supe\u2026\"   5 days ago   Up 5 minutes             syncd\nf1e699d0c8fa   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 5 minutes             swss\nadmin@DUT:~$ sudo killall orchagent\n\n### Services stopped soon\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\nadmin@DUT:~$\n\n### Services auto-restart after a while\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\n29d108cf328e   docker-gbsyncd-credo:latest          \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 17 seconds             gbsyncd\n0da3a5c5b6b9   docker-syncd-brcm-dnx:latest         \"/usr/local/bin/supe\u2026\"   5 days ago   Up 19 seconds             syncd\nf1e699d0c8fa   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 21 seconds             swss\n```\n\n- Kill syncd\n\n```\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\n29d108cf328e   docker-gbsyncd-credo:latest          \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 12 hours             gbsyncd\n0da3a5c5b6b9   docker-syncd-brcm-dnx:latest         \"/usr/local/bin/supe\u2026\"   5 days ago   Up 12 hours             syncd\nf1e699d0c8fa   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 12 hours             swss\nadmin@DUT:~$ ps ax |grep '/usr/bin/syncd'\n  14654 ?        S      0:00 /bin/bash /usr/bin/syncd.sh wait\n  15126 pts/0    Sl     0:00 /usr/bin/dsserve /usr/bin/syncd --diag -u -s -p /etc/sai.d/sai.profile -x /usr/share/sonic/hwsku/context_config.json -g 0 -b /tmp/break_before_make_objects\n  15181 pts/0    Sl   1490:43 /usr/bin/syncd --diag -u -s -p /etc/sai.d/sai.profile -x /usr/share/sonic/hwsku/context_config.json -g 0 -b /tmp/break_before_make_objects\n  15365 pts/0    Sl     5:59 /usr/bin/syncd -s -p /etc/sai.d/psai.profile -x /usr/share/sonic/hwsku/context_config.json -g 1\n 342396 pts/0    S+     0:00 grep /usr/bin/syncdps ax\n### Kill syncd\nadmin@DUT:~$ sudo kill 15181\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\nadmin@DUT:~$\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\n29d108cf328e   docker-gbsyncd-credo:latest          \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 21 seconds             gbsyncd\n0da3a5c5b6b9   docker-syncd-brcm-dnx:latest         \"/usr/local/bin/supe\u2026\"   5 days ago   Up 24 seconds             syncd\nf1e699d0c8fa   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 27 seconds             swss\n```\n\n- Kill gbsyncd\n\n```\nadmin@str2-a7280cr3-4:~$ docker ps | grep -E 'swss|syncd'\n29d108cf328e   docker-gbsyncd-credo:latest          \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 6 minutes             gbsyncd\n0da3a5c5b6b9   docker-syncd-brcm-dnx:latest         \"/usr/local/bin/supe\u2026\"   5 days ago   Up 6 minutes             syncd\nf1e699d0c8fa   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 6 minutes             swss\nadmin@DUT:~$ ps ax |grep '/usr/bin/syncd'\n 346899 ?        S      0:00 /bin/bash /usr/bin/syncd.sh wait\n 347462 pts/0    Sl     0:00 /usr/bin/dsserve /usr/bin/syncd --diag -u -s -p /etc/sai.d/sai.profile -x /usr/share/sonic/hwsku/context_config.json -g 0 -b /tmp/break_before_make_objects\n 347498 pts/0    Sl    12:52 /usr/bin/syncd --diag -u -s -p /etc/sai.d/sai.profile -x /usr/share/sonic/hwsku/context_config.json -g 0 -b /tmp/break_before_make_objects\n 347724 pts/0    Sl     0:15 /usr/bin/syncd -s -p /etc/sai.d/psai.profile -x /usr/share/sonic/hwsku/context_config.json -g 1\n 356699 pts/0    S+     0:00 grep /usr/bin/syncd\n### kill gbsyncd\nadmin@DUT:~$ sudo kill 347724\nadmin@DUT:~$\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\nadmin@DUT:~$\nadmin@DUT:~$ docker ps | grep -E 'swss|syncd'\n29d108cf328e   docker-gbsyncd-credo:latest          \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 48 seconds             gbsyncd\n0da3a5c5b6b9   docker-syncd-brcm-dnx:latest         \"/usr/local/bin/supe\u2026\"   5 days ago   Up 50 seconds             syncd\nf1e699d0c8fa   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   5 days ago   Up 52 seconds             swss\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/scripts/gbsyncd.sh",
+        "additions": 5,
+        "deletions": 1
+      },
+      {
+        "path": "files/scripts/swss.sh",
+        "additions": 40,
+        "deletions": 17
+      },
+      {
+        "path": "platform/components/docker-gbsyncd-credo/supervisord.conf.j2",
+        "additions": 8,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

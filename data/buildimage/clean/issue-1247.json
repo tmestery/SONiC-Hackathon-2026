@@ -1,0 +1,98 @@
+{
+  "id": "buildimage-1247",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 1247,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/1247",
+    "title": "Per Vlan DHCP relay is broken if DHCP server is connected via Vlan interface",
+    "created_at": "2017-12-18T22:28:30Z",
+    "closed_at": "2019-06-03T21:26:46Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "question",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\nPrior to the per vlan dhcp relay support was added via https://github.com/Azure/sonic-buildimage/commit/1d16a37d48fcee31f81897a6dff8c83e8bed8851 , DhcpResources tag was used to specify the Dhcp relay server information, and all routed interfaces, VLAN interfaces and Port-Channel interfaces were added to listening interfaces for the dhcrelay command in the j2 template.\n\nAfter the commit with the new DhcpRelay tag, only the dhcp relay vlan, routed interfaces and Port-Channel interfaces are added to the dhcrelay command, but if the dhcp server sits behind a different vlan, the dhcp offer is not getting forwarded.\n\n**Steps to reproduce the issue:**\n1. Configure per vlan dhcp relay\n2. Have a dhcp server connected to a VLAN interface in the topology\n3. Have dhcp relay configured on another VLAN interface.\n\n**Describe the results you received:**\nDHCP request is getting forwarded to the dhcp server, but DHCP offer received from the server is dropped since it is not in the dhcrelay listening interfaces.\n\n**Describe the results you expected:**\nDHCP offer should be forwarded properly in the case of dhcp server connected to vlan interface.\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\nManually modified docker-dhcp-relay.supervisord.conf to include the dhcp server VLAN, and dhcp relay is working properly."
+  },
+  "resolution": {
+    "pr_number": 2946,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/2946",
+    "title": "[dhcp_relay] Add support for DHCP client(s) on one VLAN and DHCP server(s) on another",
+    "merged_at": "2019-06-03T21:26:46Z",
+    "description": "Previously, the DHCP relay agent in SONiC would not relay DHCP requests to other VLANs. Therefore, if a DHCP client and the DHCP server it needed to communicate with resided on different VLANs under the same ToR device, the DHCP server would never receive the requests. The reason for this was because there was no way to specify whether the agent should only listen for requests or responses on each interface, so each DHCP relay agent could only listen on one VLAN to avoid sending DHCP requests and replies to incorrect DHCP servers.\n\n**How I did it**\n- First I had to downgrade isc-dhcp sources from 4.3.5-3.1 to 4.3.5-2 in order to apply my patches which I created for the [201803](https://github.com/Azure/sonic-buildimage/pull/2857) and [201811](https://github.com/Azure/sonic-buildimage/pull/2919) branches, as detailed below. I had to downgrade from the current Stretch release version of 4.3.5-3.1 because the Debian sources contain a backported upstream patch to use getifaddrs() on Linux instead of parsing /proc/net directly. Unfortunately, this patch does not apply cleanly on top of my patches. Once the Stretch package gets upgraded to an upstream version which natively includes the getifaddrs() change (i.e., not in a Debian source patch), I will advance our sources and update my patches accordingly to work with the new method.\n- Utilize new isc-dhcp features (`-id` and `-iu` arguments) which allow us to specify 'downstream' and 'upstream' interfaces, respectively (the relay agent will only listen for requests on downstream interfaces, and will only listen for replies on upstream interfaces.\n- For each VLAN which has DHCP server IP addresses configured, we create a DHCP relay agent process, passing that VLAN as the downstream interface (`-id`), and all other interfaces (including all other VLAN interfaces) as upstream interfaces (`-iu`).\n- After implementing the above changes, I found that when the relay agent would relay directed broadcast packets on the upstream VLAN, the send was failing with the message `ERR dhcrelay[172]: send_packet: Permission denied`. I discovered that this was due to the relay agent being built by default to open one shared socket on a \"fallback\" interface, _without_ the `SO_BROADCAST` flag set. I then added a patch to force the relay agent to open one socket per interface, each _with_ the `SO_BROADCAST` flag set. I then noticed, however, that when built with this configuration, the relay agent would only relay packets on one upstream interface, so I created another patch, firstly fixing a bug that prevented a fallback interface from being created if `USE_SOCKETS` was defined. With this fix, I was able to open sockets on all specified interfaces, as well as a fallback interface. Then I was able to create a patch to relay request packets as follows:\n    - If the BOOTREQUEST packet is destined for the broadcast IP of one of our upstream interfaces, send the directed broadcast packet directly on that interface, otherwise the kernel will drop directed broadcast packets.\n     - Otherwise:\n        - If we have a fallback interface, forward the packet on that interface and let the kernel route it\n        - Otherwise, forward the packet on all upstream interfaces\n- Resolves https://github.com/Azure/sonic-buildimage/issues/1247.",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-relay/docker-dhcp-relay.supervisord.conf.j2",
+        "additions": 20,
+        "deletions": 15
+      },
+      {
+        "path": "rules/docker-dhcp-relay.mk",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "rules/isc-dhcp.mk",
+        "additions": 4,
+        "deletions": 7
+      },
+      {
+        "path": "src/isc-dhcp/Makefile",
+        "additions": 2,
+        "deletions": 5
+      },
+      {
+        "path": "src/isc-dhcp/patch/0005-Add-enable-use-sockets-to-configure-flags-in-debian-.patch",
+        "additions": 26,
+        "deletions": 0
+      },
+      {
+        "path": "src/isc-dhcp/patch/0006-Bugfix-Ensure-HAVE_SO_BINDTODEVICE-has-a-chance-to-b.patch",
+        "additions": 275,
+        "deletions": 0
+      },
+      {
+        "path": "src/isc-dhcp/patch/0007-If-destination-of-BOOTREQUEST-is-directed-broadcast-.patch",
+        "additions": 267,
+        "deletions": 0
+      },
+      {
+        "path": "src/isc-dhcp/patch/0008-CVE-2017-3144.patch",
+        "additions": 47,
+        "deletions": 0
+      },
+      {
+        "path": "src/isc-dhcp/patch/0009-CVE-2018-5733.patch",
+        "additions": 131,
+        "deletions": 0
+      },
+      {
+        "path": "src/isc-dhcp/patch/0010-CVE-2018-5732.patch",
+        "additions": 144,
+        "deletions": 0
+      },
+      {
+        "path": "src/isc-dhcp/patch/series",
+        "additions": 6,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/docker-dhcp-relay.supervisord.conf",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

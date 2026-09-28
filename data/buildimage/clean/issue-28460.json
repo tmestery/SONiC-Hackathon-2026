@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-28460",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28460,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28460",
+    "title": "sonic-sairedis #1774 (Smart Counter Poll) does O(ports) per-port getStats at counter init, starving orchagent and crashing it on high port-count switches",
+    "created_at": "2026-07-16T18:06:41Z",
+    "closed_at": "2026-08-03T10:06:59Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nGeneric \u2014 affects any switch with a high number of ports. Root cause is in the vendor-agnostic `syncd` FlexCounter counter-initialization code.\n\n### Importance or Severity\n\nHigh \u2014 `orchagent` aborts during initialization; ports are never programmed and all interfaces stay `oper-down` (no data plane). Reproducible on every boot / `config reload`.\n\n### Description of the bug\n\nsonic-sairedis PR **#1774** (\"Smart Counter Poll to allow counters to work properly on Broadcom platforms\") changed FlexCounter counter initialization from *\"assume all ports support the same counters\"* to **per-port capability discovery**:\n- https://github.com/sonic-net/sonic-sairedis/pull/1774\n\n**What the change does at counter init (in `syncd`):**\n- Runs a **capability check** (`queryStatsCapability`) to get the set of counters the object type supports \u2014 this is cheap and done once.\n- Then, **for every port**, issues **individual `getStats` calls** to empirically determine which of those counters that specific port actually supports (a `getStats` of the candidate counter set per port, and per-counter `getStats` in the fallback). Ports are then bucketed into \"counter groups\" by what they support.\n\n**Why it breaks on high port-count switches:**\n- The per-port `getStats` step turns counter init into an **O(number-of-ports)** loop of live hardware reads.\n- A single `getStats` call costs on the order of **~136 ms**, and on a **512-port** switch that is **512 such calls \u2248 ~70 seconds** just to discover per-port capability.\n- While this loop runs, `syncd` holds vendor SAI/SDK access serialized. `orchagent`'s concurrent **synchronous** SAI calls (e.g. the `sai_query_stats_capability` it issues during counter setup) cannot be serviced \u2014 they **starve** behind the discovery loop.\n- Those synchronous calls hit the **60 s `getresponse` timeout**, which desynchronizes the request/response channel; `orchagent` then throws an **uncaught exception** and aborts (SIGABRT) in its `FLEX_COUNTER_TABLE` drain. Ports are never programmed.\n\nNote this is the *best case* (uniform ports, one `getStats` per port); heterogeneous ports fall back to per-counter probing and are even more expensive.\n\n**Confirmed on a 512-port switch (instrumented `syncd`/`orchagent`):** the entire per-port discovery runs inside a **single** `syncd` event. `syncd` processes its request queue with **one thread, in order**, so that one event holds the queue at the head for **~74 s** (`elapsed_ms=74220`, 514 ports) and blocks everything behind it. `orchagent`'s next synchronous call therefore waits past its **60 s** `getresponse` timeout \u2192 gets 0 values \u2192 aborts:\n\n```\ndiscovery START             t=0\norchagent TIMEOUT           t=+60.06 s   (60 s sync-op timeout)\ndiscovery DONE              t=+74.2 s\norchagent -> 0 values -> std::runtime_error -> SIGABRT (FLEX_COUNTER_TABLE drain)\n```\n\nThe failure condition is simply `ports \u00d7 per-port getStats > 60 s`, so it is **not platform specific**: invisible at low port counts, hit by any platform carrying #1774 once the count is high enough (empirically > ~256 ports).\n\n### Steps to Reproduce\n\n1. Boot (or run `sudo config reload -y`) an image that includes sonic-sairedis #1774, on a switch with a **high port count**.\n2. Watch `syncd` counter init and `orchagent` in the logs, and `show interface status`.\n\n### Actual Behavior and Expected Behavior\n\n**Actual:** During counter init, `syncd` spends tens of seconds in the per-port `getStats` discovery loop; `orchagent`'s synchronous SAI call times out at 60 s, and `orchagent` aborts (exception in the `FLEX_COUNTER_TABLE` drain) and hangs. All interfaces remain `oper-down`.\n\n**Expected:** Counter init completes within the SAI response-timeout window; `orchagent` stays up and programs ports; interfaces come up.\n\n### Relevant log output\n\n```\n# orchagent - synchronous SAI call to syncd times out during counter init, then aborts\nERR  swss#orchagent: wait: SELECT operation result: TIMEOUT on getresponse\nERR  swss#orchagent: waitForGetResponse: logic error, get response returned 0 values!\nERR  swss#orchagent: drain: Exception caught: table=FLEX_COUNTER_TABLE, error=...0 values!\n     swss#orchagent: terminate called after throwing an instance of 'std::runtime_error'   # SIGABRT\n\n# syncd - per-port counter-init discovery: one getStats per port, ~136 ms each, ~512 ports\n#   bulkAdd START  group=PORT  nports=512\n#   ... 512 x [ per-port getStats, ~136 ms each ] ...\n#   grouping DONE  group=PORT  nports=512  elapsed_ms=~70000\n```\n\n### Output of `show version`, `show techsupport`\n\nImage includes sonic-sairedis #1774. `show techsupport` available on request / to be attached.\n\n### Attach files (if any)\n\n_(attach `generate_dump` techsupport with the orchagent core + syncd/swss logs)_"
+  },
+  "resolution": {
+    "pr_number": 2002,
+    "repository": "sonic-net/sonic-sairedis",
+    "url": "https://github.com/sonic-net/sonic-sairedis/pull/2002",
+    "title": "Toggle enablePerPortCounterDiscovery based on HWSKU config",
+    "merged_at": "2026-08-06T01:54:56Z",
+    "description": "### Description of PR\n\nSummary:\nApply the `enablePerPortCounterDiscovery` `syncd` arg when the file `enable_per_port_counter_discovery` exists and has the contents `true` in the machine's HWSKU config in `sonic-buildimage/device/...`.\n\nThis is part 2 of 2 fix in addressing https://github.com/sonic-net/sonic-buildimage/issues/28460. There are two fix methods under consideration, this PR outlines the method of deciding code path via the HWSKU config and needs to be used together with https://github.com/sonic-net/sonic-buildimage/pull/28506.\n\nThis change also requires the changes in https://github.com/sonic-net/sonic-sairedis/pull/2000, https://github.com/sonic-net/sonic-sairedis/pull/2001, and https://github.com/sonic-net/sonic-buildimage/pull/28506 to work.\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/28460\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [ ] Test improvement\n\n### Approach\n#### What is the motivation for this PR?\nIn #1774 , a new counter support discovery method is introduced for being able to read counter support for platforms where different ports can have different capabilities.\nThe method worked well for some platforms, not so much for some others.\n\nThis change applies the new `syncd` arg `enablePerPortCounterDiscovery` (introduced in https://github.com/sonic-net/sonic-sairedis/pull/2000) when `enable_per_port_counter_discovery` is populated as `true` in `SYNCD_VARS`, which is retrieved from `DEVICE_METADATA` in `CONFIG_DB`.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How did you do it?\nAdd logic in `syncd_init_common.sh` to apply the `syncd` arg `enablePerPortCounterDiscovery` when it is defined as so in `SYNCD_VARS`.\n#### Tested branch\n\n- [x] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n`syncd` unit tests pass on master and on 202605, internal Arista build from Jul 24, 2026.\nOn physical hardware, an image is built with the changes cherry-picked to 202605 and tests are ran in 6 scenarios:\n1):\n- ASIC check: use arg on `broadcom`\n- HWSKU config: not defined\n- Result: per-port counter discovery code path used\n\n2):\n- ASIC check: use arg on `broadcom`\n- HWSKU config: `enable_per_port_counter_discovery` set to `true`\n- Result: per-port counter discovery code path used\n\n3):\n- ASIC check: use arg on `broadcom`\n- HWSKU config: `enable_per_port_counter_discovery` set to `false`\n- Result: legacy code path used\n\n4):\n- ASIC check: use arg on `mellanox`\n- HWSKU config: not defined\n- Result: legacy code path used\n\n5):\n- ASIC check: use arg on `mellanox`\n- HWSKU config: `enable_per_port_counter_discovery` set to `true`\n- Result: per-port counter discovery code path used\n\n6):\n- ASIC check: use arg on `mellanox`\n- HWSKU config: `enable_per_port_counter_discovery` set to `false`\n- Result: legacy code path used\n\nIn all 6 scenarios, `syncd` enters the expected code path.\n\nAdditionally, a subset of counters-focused `sonic-mgmt` tests are ran. There is no test result difference compared to tests done without this change.\nTests were ran on `Arista-7260CX3-D108C8`.\n\nThe list of `sonic-mgmt` tests ran:\n```\ntest_pretest.py\ndhcp_relay/test_dhcp_counter_stress.py\ndrop_packets/test_drop_counters.py\ndrop_packets/test_configurable_drop_counters.py\ngnmi/test_gnmi_countersdb.py\nsnmp/test_snmp_queue_counters.py\ntest_posttest.py\n```\n\n#### Any platform specific information?\nBroadcom\n\n### Documentation",
+    "files": [
+      {
+        "path": "syncd/scripts/syncd_init_common.sh",
+        "additions": 10,
+        "deletions": 7
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 2000,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2000",
+      "title": "Add per-port counter discovery toggle argument",
+      "merged": true
+    },
+    {
+      "pr_number": 2001,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2001",
+      "title": "Auto-use enablePerPortCounterDiscovery syncd arg on Broadcom ASICs",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

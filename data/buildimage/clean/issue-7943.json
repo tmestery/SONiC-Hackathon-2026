@@ -1,0 +1,57 @@
+{
+  "id": "buildimage-7943",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 7943,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/7943",
+    "title": "[mirroring] Incorrect validation for multiple source ports and direction",
+    "created_at": "2021-06-22T13:29:31Z",
+    "closed_at": "2022-05-10T00:22:56Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "broadcom",
+    "target_releases": [
+      "202106"
+    ],
+    "topics": [
+      "port mirroring"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nThere are two related issues which I am grouping together because the solution of one needs to consider the other.\n\n1) The code in validate_mirror_session_config aims to prohibit the same source port appearing in more than one mirror session.  I believe this is undesirable, because some HW allows mirroring the rx direction in one session and tx in another.  Solving this would require checking both  source port and direction of existing and new sessions.\n\n2) The code mentioned above fails to prevent duplication of source ports when there is more than one of them.  For example, suppose 'Ethernet12,Ethernet16,Ethernet20' are source ports in both an old and new session.  validate_mirror_session_config breaks the new source list into its components using src_port.split(\",\"), and each of these components is compared in interface_has_mirror_config to the entire list, which doesn't match and the command is accepted.\n\nThe combination of these two bugs results in a special case that works well by accident: when two sessions have the same list of source ports, one rx and the other tx.  If someone were to fix #2 without fixing #1, this happy case would no longer work.  That is why they need to be fixed together.\n\n#### Steps to reproduce the issue:\n\nCase #1\n\n1.  config mirror_session span add ms1 Ethernet0 Ethernet4 rx\n2.  config mirror_session span add ms2 Ethernet8 Ethernet4 tx\n\nCase #2\n\n1.  config mirror_session span add ms1 Ethernet0 Ethernet12,Ethernet16,Ethernet20 rx\n2.  config mirror_session span add ms3 Ethernet24 Ethernet12,Ethernet16,Ethernet20 both\n\n#### Describe the results you received:\n\nCase #1\n\nError: Source Interface Ethernet4 already has mirror config\n\nCase #2\n\nNo error at CLI level, errors in syncd\n\n#### Describe the results you expected:\n\nCase #1\n\nCommands should be accepted at CLI level.  If HW does not support mirroring tx and rx of same port in different sessions, this should be rejected with an error logged by orchagent.\n\nCase #2\n\nReject command with a message that rx direction of at least one of the ports is already mirrored.\n\n#### Output of `show version`:\n\nSONiC Software Version: SONiC.build4.0-223f18f0f\nDistribution: Debian 10.9\nKernel: 4.19.0-12-2-amd64\nBuild commit: 223f18f0f\nBuild date: Tue Jun 15 <IPV6> UTC 2021\nBuilt by: stephens@arc-build-server-2\n\nPlatform: x86_64-mlnx_msn3420-r0\nHwSKU: ACS-MSN3420\nASIC: mellanox\nASIC Count: 1\nSerial Number: None\nModel Number: None\nHardware Revision: None\nUptime: <IPV6> up  5:10,  1 user,  load average: 0.29, 0.28, 0.54\n\n#### Output of `show techsupport`:\n\nN/A as problem is fully diagnosed.\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 2053,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/2053",
+    "title": "Validate destination port is not LAG",
+    "merged_at": "2022-05-10T00:22:56Z",
+    "description": "#### What I did\nLAG as mirror destionation is not supported in SPAN. Add validation in CLI.\nThis fixes issue https://github.com/Azure/sonic-buildimage/issues/7989#issue-930956772\nAlso fixes https://github.com/Azure/sonic-buildimage/issues/7943\n#### How I did it\nAdd extra validation to check if the destion port is LAG or not.\n#### How to verify it\nAdd mirror config with LAG as destination port.\n#### Previous command output (if the output of a command-line utility has changed)\nAllow mirror config and orchagent logs error\n#### New command output (if the output of a command-line utility has changed)\nShow error message that Destination port is not supported",
+    "files": [
+      {
+        "path": "config/main.py",
+        "additions": 37,
+        "deletions": 26
+      },
+      {
+        "path": "tests/config_mirror_session_test.py",
+        "additions": 80,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tables/config_db.json",
+        "additions": 5,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

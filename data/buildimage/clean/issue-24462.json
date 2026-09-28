@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-24462",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24462,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24462",
+    "title": "Bug: Control plane fails to use backup route when connected route link goes down",
+    "created_at": "2025-11-07T08:57:28Z",
+    "closed_at": "2026-06-24T18:03:21Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nIn the data path, when a link goes down, any directly connected routes are removed, allowing the system to switch to alternative BGP-learned routes. However, in the control plane (kernel), connected routes remain active even when the link is down, leading to traffic failures.\n\n### Steps to Reproduce\n\nHave configuration to have two routes to same destination and shutdown the link with direct connect route.\n\n```bash\nroot@sonic:/home/admin# ip route\ndefault via <IP> dev eth0\n<IP>/30 dev Ethernet0 proto kernel scope link src <IP>\n**<IP>/30 dev PortChannel02 scope link linkdown**                               <-- Connected route\n**<IP>/30 via <IP> dev Ethernet0 proto bgp src <IP> metric 20**     <-- BGP learnt route\n<IP>/24 dev eth0 proto kernel scope link src <IP>\n<IP> via <IP> dev Ethernet0 proto bgp src <IP> metric 20\n<IP>/24 dev docker0 proto kernel scope link src <IP> linkdown\n```\n\n```bash\n#show ip route\nCodes: K - kernel route, C - connected, S - static, R - RIP,\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\n       F - PBR, f - OpenFabric,\n       > - selected route, * - FIB route, q - queued route, r - rejected route\nK>*<IP>/0 [0/0] via <IP>, eth0, <IPV6>\nC>*<IP>/30 is directly connected, Ethernet0, <IPV6>\nB>*<IP>/30 [200/0] via <IP>, Ethernet0, <IPV6>                    <-- BGP learnt route\nC>*<IP>/24 is directly connected, eth0, <IPV6>\nK <IP>/24 [0/0] is directly connected, eth0, <IPV6>\nC>*<IP>/32 is directly connected, Loopback0, <IPV6>\nB>*<IP>/32 [200/0] via <IP>, Ethernet0, <IPV6>\nK <IP>/24 [0/0] is directly connected, docker0, inactive <IPV6>\n```\n\nPing an IP in the subnet\n```bash\n# ping <IP>\nPING <IP> (<IP>) 56(84) bytes of data.\n^C\n--- <IP> ping statistics ---\n3 packets transmitted, 0 received, 100% packet loss, time 2044ms\n```\n\n### Actual Behavior and Expected Behavior\n\nControl path and data path behavior must be the same. Kernel should also skip using\nconnected routes whose link is down\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n# show ver\n\nSONiC Software Version: SONiC.202505.130-dirty-20251104.181622\nSONiC OS Version: 12\nDistribution: Debian 12.12\nKernel: 6.1.0-29-2-amd64\nBuild commit: 8a5c9269b\nBuild date: Tue Nov  4 <IPV6> UTC 2025\nBuilt by: marvell@sonic-build-vm\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27420,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27420",
+    "title": "sysctl: enable ignore_routes_with_linkdown for IPv4 and IPv6",
+    "merged_at": "2026-06-24T18:03:20Z",
+    "description": "Fixes #24462\n\nToday in Sonic, control path continues to use connected routes even when the link is down, despite alternative routes being available, causing traffic failure. This behavior differs from data path, which removes the downed connected route and switches to alternatives.\n\nEnabling ignore_routes_with_linkdown sysctl aligns control and data path behavior by allowing control path to fallback to BGP-learned routes with lower metrics.\n\nOnce the link is restored, the connected route is reused.\n\nThis behavior follows FRR documentation and standard Linux network manager practices.\n\n#### Why I did it\nTo avoid control path traffic failure and have common behavior across control and data path\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nEnabled ignore_routes_with_linkdown sysctl parameter\n#### How to verify it\n```bash\nroot@sonic:/home/admin# ip route\ndefault via <IP> dev eth0\n<IP>/30 dev Ethernet0 proto kernel scope link src <IP>\n**<IP>/30 dev PortChannel02 scope link linkdown**                               <-- Connected route\n**<IP>/30 via <IP> dev Ethernet0 proto bgp src <IP> metric 20**     <-- BGP learnt route\n<IP>/24 dev eth0 proto kernel scope link src <IP>\n<IP> via <IP> dev Ethernet0 proto bgp src <IP> metric 20\n<IP>/24 dev docker0 proto kernel scope link src <IP> linkdown\n```\n\n```bash\n#show ip route\nCodes: K - kernel route, C - connected, S - static, R - RIP,\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\n       F - PBR, f - OpenFabric,\n       > - selected route, * - FIB route, q - queued route, r - rejected route\nK>*<IP>/0 [0/0] via <IP>, eth0, <IPV6>\nC>*<IP>/30 is directly connected, Ethernet0, <IPV6>\nB>*<IP>/30 [200/0] via <IP>, Ethernet0, <IPV6>                    <-- BGP learnt route\nC>*<IP>/24 is directly connected, eth0, <IPV6>\nK <IP>/24 [0/0] is directly connected, eth0, <IPV6>\nC>*<IP>/32 is directly connected, Loopback0, <IPV6>\nB>*<IP>/32 [200/0] via <IP>, Ethernet0, <IPV6>\nK <IP>/24 [0/0] is directly connected, docker0, inactive <IPV6>\n```\n\n```bash\nroot@sonic:/home/admin# ping <IP>\nPING <IP> (<IP>) 56(84) bytes of data.\n64 bytes from <IP>: icmp_seq=1 ttl=63 time=0.229 ms\n```\n\n#### Which release branch to backport (provide reason below if selected)\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [X] 202511\n\n#### Tested branch (Please provide the tested image version)\n- [202511]\n\n#### Description for the changelog\n[sysctl]: Enable ignore_routes_with_linkdown to avoid using routes of linkdown interface\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/image_config/sysctl/90-sonic.conf",
+        "additions": 3,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

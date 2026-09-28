@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-15949",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 15949,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/15949",
+    "title": "Unable to set custom ONIE disk partition size for OS",
+    "created_at": "2023-07-24T19:26:56Z",
+    "closed_at": "2023-09-29T16:29:56Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nWhen building the SONiC image, I'm unable to set the partition size to a custom value that is based on the HW configuration.\nI was able to do it using some make file changes, but not sure if that is the way or if there is a already supported method to\ncustomize the Disk partition size. If not supported yet, would be happy to do a pull request with my changes.\n\n#### Steps to reproduce the issue:\n1. Try to set the ONIE build parameter ONIE_IMAGE_PART_SIZE to a custom value below.\n2. make USERNAME=test PASSWORD=<REDACTED> ONIE_IMAGE_PART_SIZE=130048 all\n3. Check partition size on the final image built using \"lsblk\"\n\n#### Describe the results you received:\nAfter booting the image and checking the OS partition size, It is still 32G\n\nNAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINT\nloop0    7:0    0 419.4M  0 loop\nloop1    7:1    0     4G  0 loop /var/log\nsda      8:0    0 119.2G  0 disk\n->sda1   8:1    0   256M  0 part\n->sda2   8:2    0   128M  0 part\n->sda3   8:3    0    32G  0 part /host\n\n#### Describe the results you expected:\nExpect the  the disk partition size to be 118.8G for sda3\n\n#### Output of `show version`:\nThis was tried on a 202205 branch, commit hash a66d4699f2ad75442ad146f9237717c01bfc45f3"
+  },
+  "resolution": {
+    "pr_number": 16691,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/16691",
+    "title": "fix ONIE partition size customization and add platform specific set ability",
+    "merged_at": "2023-09-29T16:29:54Z",
+    "description": "#### Why I did it\nfixes #15949\nProblem 1: Setting ONIE_IMAGE_PART_SIZE using env variable or using \"make ONIE_IMAGE_PART_SIZE=65536 USERNAME=test PASSWORD=<REDACTED> all\" did not work.\n\nProblem 2: The platform specific file for example \"device/x86_64-8201_32fh_o-r0/installer.conf\" cannot override it by setting value of ONIE_IMAGE_PART_SIZE in the file. change 2 adds support to do that.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nChange 1: when ONIE_IMAGE_PART_SIZE, the files Makefile.work and slave.mk should pass that setting along all the way to build_image.sh. Please see commit 1.\n\nChange 2: In installer/install.sh, save the value set during build time string replace into a value and then let this value be overridden later when installer.conf get read which is platform specific. If platform does not override it, the original value will continue to work. Please see commit 2.\n\n#### How to verify it\n1: The below command works now\nmake ONIE_IMAGE_PART_SIZE=65536 USERNAME=test PASSWORD=<REDACTED> all\"\n\nThe image properly was installed using ONIE and the partition size reflects what was passed in the above build command.\nIf the above value is not set, the default from \"onie-image.conf\" takes effect and still works.\n\n2: Set ONIE_IMAGE_PART_SIZE in platform specific file like below example\n--------------Diff----\ndevice/x86_64-8201_32fh_o-r0/installer.conf\n@@ -1 +1,2 @@\n ONIE_PLATFORM_EXTRA_CMDLINE_LINUX=\" intel_iommu=off\"\n+ONIE_IMAGE_PART_SIZE=128000\n\nand built the image using \"make USERNAME=test PASSWORD=<REDACTED> all\" and verified that the final installation properly partitioned the disk to the requested value from installer.conf file.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\nmaster and 202205 branches\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "Makefile.work",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "installer/install.sh",
+        "additions": 9,
+        "deletions": 3
+      },
+      {
+        "path": "slave.mk",
+        "additions": 3,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

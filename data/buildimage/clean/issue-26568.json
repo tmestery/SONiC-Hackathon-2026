@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-26568",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26568,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26568",
+    "title": "Bug: LLDP neighbor table flaps on high-scale systems",
+    "created_at": "2026-04-05T06:28:59Z",
+    "closed_at": "2026-04-23T09:50:53Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nOn high-scale systems (sn5640-r0), the expanded startup and subsequent lldpmgrd/lldp-syncd reconfiguration create a prolonged convergence with repeated per-port LLDP updates.\nThis causes LLDP neighbor churn and unstable `show lldp table` results.\n\nRoot cause:\nhttps://github.com/sonic-net/sonic-buildimage/pull/26144\nThis PR added preloading of `portidsubtype` for every front-panel port into `lldpd.conf`.\nAs a result, LLDP startup work now scales with the number of ports.\n\nOn high-scale systems, `lldpd.conf` grows from 5 lines to 519 lines, significantly increasing startup/config processing and amplifying later lldpmgrd/lldp-syncd reconfiguration activity.\n\nFlapping persists in lldpctl source output.\nReverting the bulk per-port block restores stability, confirms regression tied to #26144 startup config expansion.\n\n### Steps to Reproduce\n\nwatch 'show lldp table | grep -i --color \"Total entries\"'\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\nInterfaces are repeatedly repopulated/re-added, causing LLDP neighbor churn and unstable `show lldp table` counts.\n- Unstable LLDP records:\nLLDP table entry count (`310 -> 288 -> 310`)\n`lldpctl -f json | jq '.lldp.interface | length'` (`288 -> 278 -> 310`)\n- logs repeatedly show interface repopulate/add events\n\nExpected behavior:\nLLDP neighbor table should converge once and remain stable.\n\n### Relevant log output\n\n```shell\n----- Logs -----\ndocker exec -i lldp wc -l /etc/lldpd.conf\n519 /etc/lldpd.conf\n\nshow lldp table | grep -i --color \"Total entries\"\nTotal entries displayed:  310\nshow lldp table | grep -i --color \"Total entries\"\nTotal entries displayed:  288\n\nwhile true; do   echo -n \"$(date '+%F %T') lldpctl_ifaces=\";   docker exec -i lldp lldpctl -f json | jq '.lldp.interface | length';   sleep 1; done\n2026-03-31 <IPV6> lldpctl_ifaces=288\n2026-03-31 <IPV6> lldpctl_ifaces=288\n...\n2026-03-31 <IPV6> lldpctl_ifaces=278\n2026-03-31 <IPV6> lldpctl_ifaces=278\n...\n2026-03-31 <IPV6> lldpctl_ifaces=310\n2026-03-31 <IPV6> lldpctl_ifaces=310\n...\n\nrepeated logs:\nINFO lldp#lldp-syncd [lldp_syncd] INFO: Force repopulate the changed interface Ethernet...\nINFO lldp#lldp-syncd [lldp_syncd] INFO: Add new interface Ethernet...\n\n----- Logs without the PR -----\ndocker exec -i lldp wc -l /etc/lldpd.conf\n5 /etc/lldpd.conf\n\nshow lldp table | grep -i --color \"Total entries\"\nTotal entries displayed:  476\n(Stable)\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26873,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26873",
+    "title": "[lldp] Replace per-port portidsubtype loop with global ifname directive",
+    "merged_at": "2026-04-23T09:50:52Z",
+    "description": "### Description of PR\n\nSummary:\nReplace the per-port portidsubtype configuration loop from PR #26144 with a single global `configure lldp portidsubtype ifname` directive.\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/26568\n\n#### Background: Why portidsubtype matters\n\nWithout any portidsubtype configuration, lldpd uses MAC address as the default Port ID. When lldpd auto-resumes after config processing, the first LLDP frame carries MAC-based Port IDs. Peers then see a transient MSAP change when `lldpmgrd` later reconfigures portidsubtype to `local` (alias), causing unnecessary neighbor flaps.\n\nPR #26144 solved this by adding a Jinja2 loop generating per-port `configure ports <name> lldp portidsubtype local <alias>` lines in `lldpd.conf`. This worked fine on low-port-count platforms.\n\n#### The problem on high-port-count platforms\n\nOn platforms with many ports (e.g., Mellanox SN5640 with 512 ports), PR #26144 generates 512+ config lines. Processing these lines blocks lldpd for **11+ seconds** at startup. During this blackout:\n- Neighbors with 30-second TTL begin timing out\n- When lldpd resumes, it sends frames with new MSAPs, causing neighbor table churn\n- The churn cascades through lldp_syncd, creating a feedback loop that never stabilizes\n- Result: LLDP neighbor count oscillates indefinitely (observed 161\u2192166\u2192163\u2192171 after 4+ minutes)\n\n#### The fix: global `portidsubtype ifname`\n\nThe single global directive `configure lldp portidsubtype ifname` tells lldpd to use the Linux interface name (e.g., `Ethernet0`) as Port ID for **all** ports, instead of MAC address. This achieves the same goal as the per-port loop (no MAC-as-Port-ID) with O(1) config processing time.\n\n`lldpmgrd` still runs later to set the final `portidsubtype` to `local` + alias (e.g., `etp1a`) per port \u2014 this is the existing designed behavior and works correctly.\n\n**Key trade-off:** The first LLDP frame after restart uses the interface name (`Ethernet0`) instead of the alias (`etp9a`). When lldpmgrd starts and reconfigures, there is a one-time MSAP transition per port. This is acceptable because:\n1. LLDP is an informational protocol \u2014 no data plane impact\n2. The transition is atomic and completes within seconds\n3. The alternative (batch per-port config) causes the same 512-line processing blackout\n\n### Type of change\n\n- [x] Bug fix\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\nOn high-port-count platforms (SN5640, 512 ports), the per-port portidsubtype loop from PR #26144 blocks lldpd startup for 11+ seconds, causing LLDP neighbor churn and cascading instability that never converges.\n\n#### How did you do it?\nReplaced the per-port Jinja2 loop (N lines) with a single global directive (1 line):\n```\nconfigure lldp portidsubtype ifname\n```\n\n#### How did you verify/test it?\nA/B tested on Mellanox SN5640 (str5-sn5640-6, topology t0-isolated-d256u256s2, 259 VM neighbors):\n\n| Configuration | Config Lines | Convergence | Stable at 259? | Deletes |\n|--------------|-------------|-------------|----------------|---------|\n| PR #26144 (per-port loop) | 519 | never stable | \u274c | 74+ ongoing |\n| No PR #26144 (baseline) | 5 | 14s | \u2705 | 0 |\n| **This PR (global ifname)** | **6** | **~30s** | **\u2705** | **0** |\n| Batch per-port in waitfor_lldp_ready.sh | 6 + 512 batch | never stable | \u274c | oscillating |\n\nThe global ifname approach was tested across multiple restart cycles with zero neighbor drops.\n\n#### Any platform specific information?\nPrimarily affects high-port-count platforms (SN5640 with 512 ports). Lower port count platforms were not affected by the original issue but benefit from the simpler config.\n\n#### Supported testbed topology if it's a new test case?\nN/A (not a new test case)\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "dockers/docker-lldp/lldpd.conf.j2",
+        "additions": 2,
+        "deletions": 19
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv4-iface-with-ports.conf",
+        "additions": 1,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv4-iface.conf",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv6-iface.conf",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

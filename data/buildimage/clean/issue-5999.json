@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-5999",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5999,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5999",
+    "title": "Possibility of Teamd can start before swss restart",
+    "created_at": "2020-11-23T03:14:53Z",
+    "closed_at": "2020-11-25T16:41:12Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "201911"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "Issue was found on multi-asic platform.\nTeamd got started before swss restart which resulted in bad state since swss  on its init\ncleaned up the State DB populated by teamd and system went into bad state\nand could not recover on it\u2019s own\n\nRoot cause for above condition is Feature Table handling being done in hostcfgd.\nFeature Table does not know about state of swss when starting teamd(/syncd)\nand can start teamd (/syncd) while swss is about to get stopped (because of some crash/error handling) but not completely stopped and is active.\n\nIssue Flow during init:\n\n\u2022\tLinux start swss/teamd/syncd/hostcfgd services\n\u2022\tSyncd crash\n\u2022\tSyncd/swss/teamd are getting stopped (service is still active)\n\u2022\tHostcfgd processing Feature Table in parallel and start teamd which populate State DB\n\u2022\tLinux finally stop and restart swss and it cleans up State DB populated by above Step.\n\nSwss2 gets notified of orchangent being killed\n\nNov 19 <IPV6>.843894 STG02-0101-0102-01T1 INFO swss2#supervisor-proc-exit-listener: Process orchagent exited unxepectedly. Terminating supervisor...\n\nTeamd2 getting started from hostcfgd (swss2 is still active )\n\nNov 19 <IPV6>.649500 STG02-0101-0102-01T1 INFO systemd[1]: Reloading.\nNov 19 <IPV6>.733279 STG02-0101-0102-01T1 INFO hostcfgd: Running cmd: 'sudo systemctl start <EMAIL>'\nNov 19 <IPV6>.744685 STG02-0101-0102-01T1 INFO systemd[1]: Starting TEAMD container...\n\nSwss2 service finally getting stop and restart\n\nNov 19 <IPV6>.064349 STG02-0101-0102-01T1 INFO systemd[1]: <EMAIL>: Service hold-off time over, scheduling restart.\nNov 19 <IPV6>.064899 STG02-0101-0102-01T1 INFO systemd[1]: Stopped switch state service.\nNov 19 <IPV6>.065865 STG02-0101-0102-01T1 INFO systemd[1]: Starting switch state service...\nNov 19 <IPV6>.071078 STG02-0101-0102-01T1 NOTICE root: Starting swss2 service...\nNov 19 <IPV6>.075242 STG02-0101-0102-01T1 NOTICE root: Locking /tmp/swss-syncd-lock2 from swss2 service\nNov 19 <IPV6>.080174 STG02-0101-0102-01T1 NOTICE root: Locked /tmp/swss-syncd-lock2 (10) from swss2 service\nNov 19 <IPV6>.443526 STG02-0101-0102-01T1 NOTICE root: Warm boot flag: swss2 false.\nNov 19 <IPV6>.447624 STG02-0101-0102-01T1 NOTICE root: Flushing APP, ASIC, COUNTER, CONFIG, and partial STATE databases ...\n\nThis issue is definitely more prominent in case of multi-asic as we have more services to take action on\nbut can come in single asic also."
+  },
+  "resolution": {
+    "pr_number": 6000,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/6000",
+    "title": "Enhanced Feature table to support 'always_enabled' value for state and auto-restart fields.",
+    "merged_at": "2020-11-25T16:41:11Z",
+    "description": "Why I did:\nFixes Issue#https://github.com/Azure/sonic-buildimage/issues/5999\n\nHow I did:\n\n- Added new flag value 'always_enabled' for the state and auto-restart field of feature table\n\n- init_cfg.json is updated to initialize state field of database/swss/syncd/teamd feature and auto-restart field of database feature\n  as always_enabled\n\n- Once the state/auto-restart value is initialized as \"always_enabled\" it is immutable and cannot be change via feature config commands. (config feature..) PR#https://github.com/Azure/sonic-utilities/pull/1271\n\n- hostcfgd will not take any action if state field value is 'always_enabled'\n\n- Since we have always_enabled field for auto-restart updated supervisor-proc-exit-listener\n   not to have special check for database and always rely  on value from Feature table.\n\nHow I Verify:\n\n- Cli command\n\n```\nadmin@str-xxx-2:/var/log$ show feature status\nFeature     State           AutoRestart\n----------  --------------  --------------\nacms        enabled         enabled\nbgp         enabled         enabled\ndatabase    always_enabled  always_enabled\ndhcp_relay  enabled         enabled\nlldp        enabled         enabled\npmon        enabled         enabled\nradv        enabled         enabled\nsnmp        enabled         enabled\nswss        always_enabled  enabled\nsyncd       always_enabled  enabled\nteamd       always_enabled  enabled\ntelemetry   enabled         enabled\n\n```\n\n- Hostcfgd skip the processing via syslog\n\n`Nov 25 <IPV6>.925773 str-xxx-2 INFO hostcfgd: Feature 'teamd' service is always enabled`\n\n- Made sure auto-restart works fine for swss/syncd/teamd",
+    "files": [
+      {
+        "path": "files/build_templates/init_cfg.json.j2",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "files/scripts/supervisor-proc-exit-listener",
+        "additions": 19,
+        "deletions": 20
+      },
+      {
+        "path": "src/sonic-host-services/scripts/hostcfgd",
+        "additions": 4,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

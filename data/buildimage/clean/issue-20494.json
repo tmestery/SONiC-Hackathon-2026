@@ -1,0 +1,108 @@
+{
+  "id": "buildimage-20494",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 20494,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/20494",
+    "title": "The `eventd.proxy` test occasionally fails",
+    "created_at": "2024-10-14T10:21:12Z",
+    "closed_at": "2026-02-14T06:53:36Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nThe `eventd.proxy` test occasionally fails on my build server, but the issue is resolved when I rerun the command `make target/debs/bookworm/sonic-eventd_1.0.0-0_amd64.deb`. I'm working on the main branch with PR #20024.\n\n[----------] 6 tests from eventd\n[ RUN      ] eventd.proxy\nProxy TEST started\ntests/eventd_ut.cpp:170: Failure\nExpected equality of these values:\n  1\n  rc\n    Which is: 36\nFinished building: rsyslog_plugin/rsyslog_plugin.cpp\n\nBuidling Target: rsyslog-plugin\nInvoking: G++ Linker\ng++ -Wl,-z,relro -Wl,-z,now -o rsyslog_plugin/rsyslog_plugin ./rsyslog_plugin/rsyslog_plugin.o ./rsyslog_plugin/syslog_parser.o ./rsyslog_plugin/timestamp_formatter.o ./rsyslog_plugin/main.o -levent -lhiredis -lswsscommon -lpthread -lboost_thread -lboost_system -lzmq -lboost_serialization -luuid -llua5.1\nFinished building target: rsyslog-plugin\n\ntests/eventd_ut.cpp:279: Failure\nExpected equality of these values:\n  rd_cevts_sz\n    Which is: 6\n  wr_evts.size()\n    Which is: 5\neventd_proxy is tested GOOD\n[  FAILED  ] eventd.proxy (1627 ms)\n\n#### Steps to reproduce the issue:\n1. make SONIC_BUILD_JOBS=8 target/sonic-vs.img.gz\n2.\n3.\n\n#### Describe the results you received:\n\n#### Describe the results you expected:\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 25419,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25419",
+    "title": "Eventd: Fix race conditions that randomly fail builds",
+    "merged_at": "2026-02-14T06:53:35Z",
+    "description": "There are many variables used to communicate between threads in eventd\n(and its tests), and few of them have any synchronization (std::atomic\nor explicit locking). This results in random test failures or crashes\nwhen running the tests during a build. This could cause failures on real devices\nbut it's harder to find evidence of that.\n\nTo fix the lack of synchronization, I added std::atomic to all the\nvariables used to communicate between threads.\n\nThere was then the matter of the event_proxy. This sets up a proxy which\nconnects a couple of ZMQ sockets together. However, when tearing down\nthe sockets, the closing of the sockets was in the destructor which runs\non the main thread. We instead need to do all the interaction with the\nzmq sockets owned by the proxy in the thread which the proxy runs. ZMQ\nsockets are generally not allowed to be shared by different threads.\nRe-arranged how the event proxy is started and quit in order to satisfy\nthe requirements of the ZMQ framework.\n\nAfter submitting the PR, the build was failing. I beleive this is because the autobuilds were pulling a cached libswsscommon-dev.deb, which meant that the generated file cfg_schema.h was not present. It's more correct to use the headers that are installed with the libswsscommon-dev.deb, so I changed all the include paths that come from sonic-swss-common to <swss/header.h> for example. Also removed the explicit include path for the swss common headers.\n\nAs I was in the Makefile, I removed unnecessary linker flags (i.e. unused libraries).\n\n#### Why I did it\n\nFix random breakages in builds\n\nFixes #20494\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n#### How to verify it\n\nRun the tests over and over in a loop (with valgrind if you like) and ensure they don't fail, crash, or hang.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-eventd/Makefile",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "src/sonic-eventd/debian/control",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.cpp",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.h",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin/syslog_parser.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin/syslog_parser.h",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin/timestamp_formatter.cpp",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-eventd/rsyslog_plugin_tests/rsyslog_plugin_ut.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-eventd/src/eventd.cpp",
+        "additions": 52,
+        "deletions": 23
+      },
+      {
+        "path": "src/sonic-eventd/src/eventd.h",
+        "additions": 16,
+        "deletions": 17
+      },
+      {
+        "path": "src/sonic-eventd/src/main.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-eventd/tests/eventd_ut.cpp",
+        "additions": 33,
+        "deletions": 37
+      },
+      {
+        "path": "src/sonic-eventd/tests/main.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-eventd/tools/events_tool.cpp",
+        "additions": 3,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-24542",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24542,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24542",
+    "title": "gnmi container should remove privileged mode",
+    "created_at": "2025-11-17T21:04:43Z",
+    "closed_at": "2026-02-17T19:13:00Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": ">privileged [](http://example.com/codeflow?start=28&length=10)\n\nCould you check [https://github.com/sonic-net/SONiC/pull/1364](https://github.com/sonic-net/SONiC/pull/1364) ? Is it possible to use fine granularity linux capacities?\n\n_Originally posted by @qiluo-msft in https://github.com/sonic-net/sonic-buildimage/pull/24056#discussion_r2535501897_"
+  },
+  "resolution": {
+    "pr_number": 25089,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25089",
+    "title": "[docker-gnmi] Replace --privileged with specific capabilities",
+    "merged_at": "2026-02-17T19:12:58Z",
+    "description": "#### Why I did it\n\nImplement container hardening for the GNMI container as per the [SONiC Container Hardening HLD](https://github.com/sonic-net/SONiC/blob/master/doc/Container%20Hardening/SONiC_container_hardening_HLD.md). This improves security by following the principle of least privilege, replacing the `--privileged` flag with specific Linux capabilities.\n\nFixes #24542\n\n#### How I did it\n\nModified `rules/docker-gnmi.mk` to replace `--privileged` with specific Linux capabilities and security options:\n\n**Capabilities added:**\n- `CAP_SYS_ADMIN`: Required for `setns()` syscall used by nsenter to enter namespaces\n- `CAP_SYS_BOOT`: For reboot operations via gNOI\n- `CAP_SYS_PTRACE`: Required to access `/proc/1/ns/*` files - the kernel enforces PTRACE_MODE_READ checks when reading namespace symlinks of other processes (see `man 2 ptrace` \"Ptrace access mode checking\" section)\n- `CAP_NET_ADMIN`: For network administration operations\n- `CAP_DAC_OVERRIDE`: To bypass file permission checks\n\n**Security options added:**\n- `--security-opt apparmor=unconfined`\n- `--security-opt seccomp=unconfined`\n\nThese security options are required for nsenter to access host namespaces from within the container.\n\n**Why CAP_SYS_PTRACE is required:**\n\nWhen nsenter runs inside the container, it needs to read `/proc/1/ns/*` to enter the host's namespaces. The kernel requires PTRACE_MODE_READ access for `readlink()` on `/proc/[pid]/ns/*` files. Without `CAP_SYS_PTRACE`:\n```\n$ nsenter -t 1 -m -n -p -u -i hostname\nnsenter: cannot open /proc/1/ns/ipc: Permission denied\n```\n\nWith `CAP_SYS_PTRACE`, the container can read the namespace files and nsenter works correctly.\n\n#### How to verify it\n\n**Testing performed on vlab-01:**\n\n1. **Verified container is running without --privileged:**\n   ```bash\n   docker ps | grep gnmi\n   ```\n\n2. **Key Test - nsenter from INSIDE the container (this is how gNOI operates):**\n   ```bash\n   docker exec gnmi nsenter -t 1 -m -n -p -u -i sonic-installer list\n   ```\n\n3. **Tested reboot functionality:**\n   ```bash\n   docker exec gnmi nsenter -t 1 -m -n -p -u -i reboot\n   # System rebooted successfully\n   ```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202405\n- [ ] 202411\n\n#### Description for the changelog\n\nReplace --privileged flag with specific Linux capabilities (SYS_ADMIN, SYS_BOOT, SYS_PTRACE, NET_ADMIN, DAC_OVERRIDE) and security options for GNMI container to improve security while maintaining gNOI functionality including nsenter operations from within the container.",
+    "files": [
+      {
+        "path": "rules/docker-gnmi.mk",
+        "additions": 9,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

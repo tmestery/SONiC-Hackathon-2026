@@ -1,0 +1,71 @@
+{
+  "id": "buildimage-12625",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 12625,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/12625",
+    "title": "[warm-reboot] Upgrade from 201911 to 202205 is failing due to fpmsyncd crash",
+    "created_at": "2022-11-07T15:05:25Z",
+    "closed_at": "2023-03-03T20:45:42Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n201911->202205 warm-upgrade is failing because of fpmsyncd crash on reconciliation stage during 202205 initialization after warm-reboot.\n```\nNov  7 <IPV6>.088021 sonic NOTICE bgp#fpmsyncd: :- main: Warm-Restart timer expired.\nNov  7 <IPV6>.088507 sonic NOTICE bgp#fpmsyncd: :- reconcile: Warm-Restart: Initiating reconciliation process for bgp application.\nNov  7 <IPV6>.089566 sonic INFO bgp#supervisord: fpmsyncd fpmsyncd: ../warmrestart/warmRestartHelper.cpp:295: bool swss::WarmStartHelper::compareAllFV(const std::vector<std::pair<std::__cxx11::basic_string<char>, std::__cxx\n11::basic_string<char> > >&, const std::vector<std::pair<std::__cxx11::basic_string<char>, std::__cxx11::basic_string<char> > >&): Assertion `v1Iter != v1Map.end()' failed.\nNov  7 <IPV6>.545656 sonic INFO bgp#supervisord 2022-11-03 <IPV6>,544 INFO exited: fpmsyncd (terminated by SIGABRT (core dumped); not expected)\nNov  7 <IPV6>.307563 sonic INFO systemd[1]: run-docker-runtime\\x2drunc-moby-216ca677eef9bbee9b1202cc3b1ddbff50a8ce9b1330da2f3fa1ea3e9afa6364-runc.F02N9R.mount: Succeeded.\nNov  7 <IPV6>.580120 sonic INFO bgp#supervisor-proc-exit-listener: Process 'fpmsyncd' exited unexpectedly. Terminating supervisor 'bgp'\nNov  7 <IPV6>.583203 sonic INFO bgp#supervisord 2022-11-07 <IPV6>,580 WARN received SIGTERM indicating exit request\nNov  7 <IPV6>.583414 sonic INFO bgp#supervisord 2022-11-07 <IPV6>,580 INFO waiting for supervisor-proc-exit-listener, rsyslogd, staticd, zebra, bgpd, bgpcfgd, bgpmon to die\nNov  7 <IPV6>.585041 sonic INFO bgp#supervisord 2022-11-07 <IPV6>,584 INFO stopped: bgpmon (terminated by SIGTERM)\nNov  7 <IPV6>.595653 sonic INFO bgp#supervisord 2022-11-07 <IPV6>,594 INFO stopped: bgpcfgd (exit status 0)\nNov  7 <IPV6>.611052 sonic INFO bgp#supervisord 2022-11-07 <IPV6>,610 INFO stopped: bgpd (terminated by SIGKILL)\n```\n\nfpmsyncd is crashing due to shown below ```assert``` during routes reconciliation.\nhttps://github.com/sonic-net/sonic-swss/blob/202205/warmrestart/warmRestartHelper.cpp#L295\n```\n/*\n * Compare all field-value-tuples within two vectors.\n *\n * Example: v1 {nexthop: <IP>, ifname: eth1}\n *          v2 {nexthop: <IP>, ifname: eth2}\n...\nbool WarmStartHelper::compareAllFV(const std::vector<FieldValueTuple> &v1,\n                                   const std::vector<FieldValueTuple> &v2)\n{\n ...\n        assert(v1Iter != v1Map.end());\n...}\n```\n\nNot 100% sure if it is root cause for fpmsyncd crash, but it looks like route entries look different in 201911 and 202205. Reconciliation logic goes through all the routes in APP_DB, compares all the attributes  and expects them to match. But there is additional \"weight\"\" attribute in 202205, which is not present in 201911. As a result fpmsyncd is aborted.\n\nExample of APP_DD route config in 201911:\n```\n<IP>:6379> HGETALL \"ROUTE_TABLE:<IP>/25\"\n1) \"nexthop\"\n2) \"<IP>,<IP>,<IP>,<IP>\"\n3) \"ifname\"\n4) \"PortChannel101,PortChannel102,PortChannel103,PortChannel104\"\n```\n\nExample of APP_DD route config in 202205:\n```\n<IP>:6379> HGETALL \"ROUTE_TABLE:<IP>/25\"\n1) \"nexthop\"\n2) \"<IP>,<IP>,<IP>,<IP>\"\n3) \"ifname\"\n4) \"PortChannel101,PortChannel102,PortChannel103,PortChannel104\"\n5) \"weight\"\n6) \"1,1,1,1\"\n```\n\n#### Steps to reproduce the issue:\n1. Deploy 201911 image and T0 topology\n3. Install 202205 image\n4. Perform war-reboot\n5. Check syslog already on 202205 image and observe that fpmsyncd crashed on reconciliation stage\n\n#### Describe the results you received:\nfpmsyncd crash after warm-upgrading from 201911 to 202205\n\n#### Describe the results you expected:\nNo fpmsyncd crash after upgrading from 201911 to 202205\n\n#### Output of `show version`:\n* Latest 201911 image (e.g. image built on top of ```7781399bb``` hash was used)\n* Latest 202205 image (e.g. image built on top of ```d2540ae31``` hash was used)\n*\n#### Output of `show techsupport`:\nN/A\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\nN/A"
+  },
+  "resolution": {
+    "pr_number": 2691,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/2691",
+    "title": "[db_migrator] Add missing attribute 'weight' to route entries in APPL DB",
+    "merged_at": "2023-03-03T20:45:41Z",
+    "description": "#### What I did\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/12625\n\n#### How I did it\n\nCheck for missing attribute `weight` in APPLDB route entries. If found missing this attribute is added with empty value.\n\n#### How to verify it\nVerified on physical device. 201911 to 202205 upgrade worked fine.\n\n#### Previous command output (if the output of a command-line utility has changed)\n\n#### New command output (if the output of a command-line utility has changed)",
+    "files": [
+      {
+        "path": "scripts/db_migrator.py",
+        "additions": 19,
+        "deletions": 0
+      },
+      {
+        "path": "tests/db_migrator_input/appl_db/routes_migrate_expected.json",
+        "additions": 12,
+        "deletions": 0
+      },
+      {
+        "path": "tests/db_migrator_input/appl_db/routes_migrate_input.json",
+        "additions": 10,
+        "deletions": 0
+      },
+      {
+        "path": "tests/db_migrator_input/config_db/routes_migrate_input.json",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "tests/db_migrator_test.py",
+        "additions": 35,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 2544,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2544",
+      "title": "[fpmsyncd] Bug Fix #12625 for Upgrade from 201911 to 202205 is failing ",
+      "merged": false
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

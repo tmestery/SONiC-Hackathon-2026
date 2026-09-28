@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-25543",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25543,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25543",
+    "title": "Bug: Build failure due to conflict between sonic-supervisord-utilities-rs and sonic-eventd",
+    "created_at": "2026-02-17T18:28:08Z",
+    "closed_at": "2026-04-28T10:02:29Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen performing parallel builds, sonic-eventd starts up a ZMQ instance for running its tests.  If sonic-supervisord-utilities-rs is also running its tests at the same time, it will actually send events to sonic-eventd's ZMQ instance like:\n```\n{ (\"d\", \"{\\\"sonic-events-host:process-exited-unexpectedly\\\":{\\\"ctr_name\\\":\\\"swss\\\",\\\"process_name\\\":\\\"orchagent\\\",\\\"timestamp\\\":\\\"2026-02-17T17:06:20.744756Z\\\"}}\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"1\"), (\"t\", \"1771347980745085222\") }, { (\"d\", \"CONTROL_DEINIT\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"2\"), (\"t\", \"1771347980746220186\") }\n```\n\nsonic-supervisord-utilities-rs expects the EventPublisher to fail as per the comment here: https://github.com/sonic-net/sonic-buildimage/blob/5714ce93c06353c769bb24a828de98d8160af4ba/src/sonic-supervisord-utilities-rs/tests/test_listener.rs#L313 and the code ignores EventPublisher failures.\n\nThis issue was introduced as part of #24508.\n\nI'm not sure the best way to resolve it, it may be to have sonic-eventd spawn ZMQ on a non-standard port to make sure anything else trying to publish events doesn't interfere.\n\n### Steps to Reproduce\n\nmake a parallel build, notice failures in sonic-eventd test cases intermittently\n\n### Actual Behavior and Expected Behavior\n\ntest cases should not conflict with eachother\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nmaster as of 2025-02-17\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25558,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25558",
+    "title": "eventd: zmq: Use custom ports for test cases to prevent conflicts with other tests",
+    "merged_at": "2026-04-28T10:02:27Z",
+    "description": "#### Why I did it\n\nBy default ZMQ ports are opened up on the standard ports SONiC uses.  When other tests run they may inject data into these ports, it can cause tests to fail due to unexpected data.  One instance identified was when sonic-supervisord-utilities-rs test were run at the same time. sonic-supervisord-ubilities-rs has logic to ignore errors in sending events as it doesn't expect the ports to be online.\n\n#### How I did it\n\nThis patch creates a temporary configuration file and injects it early into the initialization to listen on non-standard ZMQ ports.\n\nThis can fix errors during tests such as:\n```\n{ (\"d\", \"{\\\"sonic-events-host:process-exited-unexpectedly\\\":{\\\"ctr_name\\\":\\\"swss\\\",\\\"process_name\\\":\\\"orchagent\\\",\\\"timestamp\\\":\\\"2026-02-17T17:06:20.744756Z\\\"}}\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"1\"), (\"t\", \"1771347980745085222\") }, { (\"d\", \"CONTROL_DEINIT\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"2\"), (\"t\", \"1771347980746220186\") }\n```\n\n#### How to verify it\n\nRun sonic-eventd and sonic-supervisord-ubilities-rs tests simultaneously.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\nMaster as of 2026-02-18\n\n#### Description for the changelog\n\nZMQ: Use custom ports for test cases to prevent conflicts with other tests\n\n#### Link to config_db schema for YANG module changes\n\nN/A\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\nFixes #25543",
+    "files": [
+      {
+        "path": "src/sonic-eventd/tests/main.cpp",
+        "additions": 21,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

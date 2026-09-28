@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-20663",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 20663,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/20663",
+    "title": "FRR Management Framework: Cannot activate BGP neighbor for address-families",
+    "created_at": "2024-10-31T14:26:51Z",
+    "closed_at": "2025-03-12T22:04:23Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "Hello,\n\nin our PoC-Lab, we were not able to active BGP neighbors for any address-family using the management framework.\n\nThe value for `admin-status`, which indicates the address family active/inactive status according to the documentation, can be either `up` or `down`, while the management framework script seems to evaluate `true` or `false`.\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/8a9ff73c9339cabc9413b796157afae563df114f/src/sonic-yang-models/yang-models/sonic-bgp-common.yang#L345\n\nHowever, after replacing `type stypes:admin_status;` with `type boolean;` and rebuilding the CLI extension the expected statement `neighbor Ethernet0 activate` will be generated.\n\n**Before the manipulation of the YANG file**\n\n`/usr/local/yang-models/sonic-bgp-common.yang`\n```shell\n...\ngrouping sonic-bgp-cmn-af {\n...\n        leaf admin_status {\n            type stypes:admin_status;\n            description \"Indicates address family active/inactive status\";\n        }\n...\n}\n...\n```\n\n`Command`\n\n`sudo config bgp-neighbor-af add default Ethernet0 ipv4_unicast --admin-status up (...)`\n\n`/etc/sonic/config_db.json`\n```json\n    \"BGP_NEIGHBOR_AF\": {\n        \"default|Ethernet0|ipv4_unicast\": {\n            \"admin_status\": \"up\",\n            \"nhself\": \"true\",\n            \"rrclient\": \"true\"\n        }\n    }\n```\n\n`vtysh | show run`\n```shell\n address-family ipv4 unicast\n  neighbor Ethernet0 route-reflector-client\n  neighbor Ethernet0 next-hop-self\n exit-address-family\n```\n\n**After the manipulation of the YANG file**\n\n`/usr/local/yang-models/sonic-bgp-common.yang`\n\n```shell\n...\ngrouping sonic-bgp-cmn-af {\n...\n        leaf admin_status {\n            type boolean;\n            description \"Indicates address family active/inactive status\";\n        }\n...\n}\n...\n```\n\n`Command`\n\n`sudo config bgp-neighbor-af add default Ethernet0 ipv4_unicast --admin-status true (...)`\n\n`etc/sonic/config_db.json`\n\n```json\n    \"BGP_NEIGHBOR_AF\": {\n        \"default|Ethernet0|ipv4_unicast\": {\n            \"admin_status\": \"true\",\n            \"nhself\": \"true\",\n            \"rrclient\": \"true\"\n        }\n    }\n```\n\n`vtysh | show run`\n\n```shell\n address-family ipv4 unicast\n  neighbor Ethernet0 activate\n  neighbor Ethernet0 route-reflector-client\n  neighbor Ethernet0 next-hop-self\n exit-address-family\n```"
+  },
+  "resolution": {
+    "pr_number": 21697,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/21697",
+    "title": "frr-mgmt-framework: Handle up/down as well as true/false as admin_status values for bgp neighbor in frrcfgd",
+    "merged_at": "2025-03-12T22:04:22Z",
+    "description": "Handle up/down (in addition to true/false) as admin_status values for BGP_NEIGHBOR_AF and BGP_PEER_GROUP_AF. Currently only true/false is handled, whereas the yang model identifies up/down as valid values of admin_status\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-yang-models/yang-models/sonic-bgp-common.yang\n```\ngrouping sonic-bgp-cmn-af {\n        leaf afi_safi {\n            type string;\n            description \"Address family\";\n        }\n        leaf admin_status {\n            type stypes:admin_status;\n            description \"Indicates address family active/inactive status\";\n        }\n```\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/82956752ac0fd8e39c7fdd69d2afc3f8989fa37d/src/sonic-yang-models/yang-templates/sonic-types.yang.j2#L54\n```\u00a0\nmodule sonic-types {\n\u00a0  typedef admin_status {\n        type enumeration {\n            enum up;\n            enum down;\n        }\n    }\n```\n\ncloses #20663\ncloses #18865\n\n#### Why I did it\n\n`frrcfgd` fails to convert bgp neighbor's (as well as bgp peer group's) admin_status value of up/down to correct vtysh command (`neighbor <ip> activate`). The same behavior is seen for the jinja template used to generate frr config files. Modified these to handle up/down (as well as true/false, so that existing working deployments are not broken).\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nModified `frrcfgd` as well as the jinja template to handle `admin_status` values `up/down`. I didn't remove the handling of current `true/false`, so that existing working deployments do not get broken when image is upgraded.\n\n#### How to verify it\n\nAdded unit tests to verify that both `up/down` and `true/false` values of `admin_status` get correctly converted to frr commands.\n\nAlso can be manually verified by writing `up/down` as `admin_status` to config_db, and seeing the `neighbor <ip|peergroup> activate` command in the generated vty config like this:\n\n```\nrtr1(bash)$ sonic-db-cli CONFIG_DB HGETALL \"BGP_PEER_GROUP_AF|default|peer4|ipv4_unicast\"\n{'admin_status': 'up', 'route_map_in@': 'pfx', 'route_map_out@': 'all'}\n\nrtr1(bash)$ show runningconfiguration bgp\nBuilding configuration...\n\nCurrent configuration:\n...\nrouter bgp 65100\n bgp router-id <IP>\n no bgp default ipv4-unicast\n neighbor peer4 peer-group\n neighbor peer4 remote-as 65001\n neighbor peer4 description peer4\n neighbor <IP> peer-group peer4\n neighbor <IP> description rtr2\n !\n address-family ipv4 unicast\n  network <IP>/32\n  neighbor peer4 activate\n  neighbor peer4 route-map pfx in\n  neighbor peer4 route-map all out\n exit-address-family\nexit\n\nrtr1(bash)$ sonic-db-cli CONFIG_DB HSET \"BGP_PEER_GROUP_AF|default|peer4|ipv4_unicast\" admin_status down\n0\nrtr1(bash)$ show runningconfiguration bgp\nBuilding configuration...\n\nCurrent configuration:\n!\n...\n!\nrouter bgp 65100\n bgp router-id <IP>\n no bgp default ipv4-unicast\n neighbor peer4 peer-group\n neighbor peer4 remote-as 65001\n neighbor peer4 description peer4\n neighbor <IP> peer-group peer4\n neighbor <IP> description rtr2\n !\n address-family ipv4 unicast\n  network <IP>/32\n  neighbor peer4 route-map pfx in\n  neighbor peer4 route-map all out\n exit-address-family\nexit\n\nrtr1(bash)$ sonic-db-cli CONFIG_DB HSET \"BGP_PEER_GROUP_AF|default|peer4|ipv4_unicast\" admin_status up\n0\nrtr1(bash)$ show runningconfiguration bgp\nBuilding configuration...\n\nCurrent configuration:\n...\nrouter bgp 65100\n bgp router-id <IP>\n no bgp default ipv4-unicast\n neighbor peer4 peer-group\n neighbor peer4 remote-as 65001\n neighbor peer4 description peer4\n neighbor <IP> peer-group peer4\n neighbor <IP> description rtr2\n !\n address-family ipv4 unicast\n  network <IP>/32\n  neighbor peer4 activate\n  neighbor peer4 route-map pfx in\n  neighbor peer4 route-map all out\n exit-address-family\nexit\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-frr-mgmt-framework/frrcfgd/frrcfgd.py",
+        "additions": 54,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.nbr_af.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.nbr_or_peer.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-frr-mgmt-framework/tests/test_config.py",
+        "additions": 88,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

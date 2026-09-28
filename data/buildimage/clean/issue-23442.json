@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-23442",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 23442,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/23442",
+    "title": "Bug: [Chassis] route_check takes more than 120secs",
+    "created_at": "2025-07-23T16:21:06Z",
+    "closed_at": "2026-04-10T01:07:31Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n Since the bgp_suppress_fib_pending is enabled in master,  route_check.py calls check_frr_pending_routes which executes the following commands to get the routes from frr for each name space.\nSince T2 chassis has ~51K routes, these commands takes longer and the current TIMEOUT_SECONDS=120 is not enough. We tried with 300 secs and it works most of the time except the test cases which does port flap(ex: test_lldp_entry_table_after_flap)\n\n v4_route_cmd = ['show', 'ip', 'route', '-n', namespace, 'json']\n v6_route_cmd = ['show', 'ipv6', 'route', '-n', namespace, 'json']\n\n### Steps to Reproduce\n\nRun OC in T2 chassis\n\n### Actual Behavior and Expected Behavior\n\nrotue_check with pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\ngithub master\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4436,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/4436",
+    "title": "Fix route_check.py ijson performance regression",
+    "merged_at": "2026-04-10T01:10:49Z",
+    "description": "#### What I did\n\nRemove the forced `IJSON_BACKEND=python` override in `route_check.py`. The pure-Python\nijson backend is slow, causing route_check to take 21 minutes on chassis platforms with\n100K+ routes (reported in sonic-net/sonic-buildimage#23442).\n\nThe companion sonic-buildimage PR installs `python3-ijson` from Debian repos, which\nprovides the fast `yajl2_c` C extension backend. With this backend available, ijson\nauto-detects it \u2014 delivering 24\u00d7 better performance while remaining safe under monit's\n`MemoryDenyWriteExecute=true`.\n\nFixes sonic-net/sonic-buildimage#23442\n\n#### How I did it\n\nRemoved `os.environ.setdefault('IJSON_BACKEND', 'python')` from `scripts/route_check.py`\n(line 50).\n\n#### How to verify it\n\n1. Build a VS image with the companion sonic-buildimage PR\n2. On the DUT, verify: `python3 -c \"import ijson; print(ijson.backend)\"` \u2192 `yajl2_c`\n3. Run `sudo route_check.py` \u2014 completes in seconds instead of minutes\n4. Check `sudo monit summary` \u2014 `routeCheck` shows OK (no crash)\n\n**Unit test results (37/37 passed):**\n```\ntests/route_check_test.py::TestRouteCheck::test_route_check_default_namespace PASSED\ntests/route_check_test.py::TestRouteCheck::test_route_check_multi_asic PASSED\n... (all 37 tests passed in 85.38s)\n```\n\n**On-box validation (KVM VS testbed):**\n- `ijson.backend` = `yajl2_c` \u2705\n- `MemoryDenyWriteExecute=true` active, no crash \u2705\n- `routeCheck` monit status: OK \u2705\n- `route_check.py` manual run: 4.3s \u2705\n\n**Nokia on-box validation (reported by @saksarav-nokia on issue #23442):**\n- Route check time: 21 min \u2192 1 min 12 sec\n\n#### Previous command output (if the output of a command-line utility has changed)\n\nN/A \u2014 no CLI output changes.\n\n#### New command output (if the output of a command-line utility has changed)\n\nN/A",
+    "files": [
+      {
+        "path": "scripts/route_check.py",
+        "additions": 7,
+        "deletions": 8
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 26633,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26633",
+      "title": "Fix route_check ijson performance by using Debian python3-ijson with yajl2_c backend",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

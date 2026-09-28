@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-27728",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27728,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27728",
+    "title": "Bug: hsflowd crashes (SIGSEGV / stack overflow) on high-port-count systems after PR #27368",
+    "created_at": "2026-06-04T20:54:10Z",
+    "closed_at": "2026-06-22T23:54:21Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n### Summary\nOn a switch with many ports (seen on a 514-port system), `hsflowd` crashes with SIGSEGV\nsoon after startup. It's a stack overflow from infinite recursion in the Redis write path.\nPR #27368 didn't cause the bug but exposes it; small switches (e.g. 32 ports) are unaffected.\n\n### Crash evidence\n`type=ANOM_ABEND ... comm=\"hsflowd\" exe=\"/usr/sbin/hsflowd\" sig=11` (no further hsflowd logs).\n\n### Root cause\nIn `mod_sonic.c`, the hiredis `addWrite` hook does the write **synchronously**:\n\n```c\nstatic void db_addWriteCB(void *magic) {\n  HSPSonicDBClient *db = (HSPSonicDBClient *)magic;\n  db->writes++;\n  redisAsyncHandleWrite(db->ctx);   // synchronous write inside the addWrite hook\n}\n```\n\nWhen many port queries are sent at once, the socket send buffer fills and `send()` returns\n`EWOULDBLOCK`. hiredis then re-calls the `addWrite` hook to retry. Because the hook is\nsynchronous and never returns to the event loop, the socket never drains, so it keeps\nretrying and recurses into itself until the stack overflows:\n\n### Related\n#25896 - hsflowd isn't restarted after a crash, so this turns into a permanent, silent sFlow outage.\n\n### Steps to Reproduce\n\n1. Run a SONiC image that includes PR #27368.\n2. Use a high-port-count system (~500 ports; reproduced on 514 ports).\n3. Configure sFlow.\n4. Start the sflow container so hsflowd runs port discovery.\n\n### Actual Behavior and Expected Behavior\n\n-\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27739,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27739",
+    "title": "[sflow] Fix hsflowd db_addWriteCB recursion / stack overflow on high-port-count switches",
+    "merged_at": "2026-06-22T23:54:20Z",
+    "description": "#### Why I did it\n\nFixes a SIGSEGV regression in `hsflowd` (sflow container) observed on high-port-count switches after #27368 enabled batched port discovery.\n\nOn a 514-port system, `mod_sonic`'s `db_addWriteCB()` calls `redisAsyncHandleWrite()` synchronously with no re-entry protection. When the redis socket send buffer fills up under the burst of commands queued by the batched `mapPorts()` path, `write()` returns `EWOULDBLOCK`; hiredis re-arms the writable hook by calling `addWrite` again, which recurses straight back into `db_addWriteCB()`. With 500+ commands in flight the kernel can't drain the socket fast enough, the C stack is exhausted, and `hsflowd` SIGSEGVs.\n\nCloses #27728. Refs #27330, #27368.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nTwo patches added under `src/sflow/hsflowd/patch/`, applied via the existing `series` file (no build-system changes):\n\n- **`0010-mod_sonic-fix-write-recursion.patch`** \u2014 the actual fix.\n  - Adds `inWrite` and `writeDeferred` bits to `HSPSonicDBClient`.\n  - `db_addWriteCB()`: if we're already inside a write, set `writeDeferred = YES` and return instead of recursing into `redisAsyncHandleWrite()`. Otherwise set `inWrite = YES`, call the real handler, clear the flags.\n  - Two drain paths for the deferred output:\n    1. `db_readCB()` \u2014 after each successful read, if `obuf` still has bytes queued and we're not already writing, do one non-recursive `redisAsyncHandleWrite()`. The kernel has typically freed buffer space by the time a read returns.\n    2. `evt_poll_tick()` \u2014 slow-path safety net that walks every `dbInstances` client and drains any with non-empty `obuf`, guarded by the same `inWrite` flag.\n- **`0009-mod_sonic-debug-sndbuf.patch`** \u2014 debug-only knob. Adds a `HSP_SONIC_SNDBUF` env var that calls `setsockopt(SO_SNDBUF)` immediately after each redis client connects, used to reproduce the back-pressure on small-port-count test platforms (no behavioral change when the var is unset).\n\nThe fix is intentionally minimal: it does not touch the batched-dispatch behavior added by #27368, it only makes the write path safe against the back-pressure that batching can produce.\n\n#### How to verify it\n\nThree layers of validation:\n\n1. **Positive control (unfixed binary actually crashes under back-pressure).** On a 32-port `sonic-vs` testbed I built `hsflowd` from PR #27368 master without this fix (md5 `f503ba8352d8a8ce19ba50fe788514eb`) and ran it with an `LD_PRELOAD` shim that intercepts redis socket `write()`/`send()` and forces them to return `EAGAIN`. After ~262k `EAGAIN`-returning sends the process **dumps core (SIGSEGV)**, reproducing the reported stack overflow.\n2. **Negative control (fixed binary survives the same forcing).** Same testbed, same shim, same env (`HSP_EAGAIN=1 HSP_EAGAIN_AFTER=20`), but with the fixed binary (md5 `22696c3fbdba03961050facb791db611`). `hsflowd` survives the full 25-second window and exits **cleanly on SIGTERM**, no core file.\n3. **Full sflow regression on `sonic-vs` T0.** Built `target/sonic-vs.img.gz` from this commit (build commit `585d58222` = this PR on top of master), deployed onto a `vms-kvm-t0` testbed with converged cEOS neighbors (4\u00d7T1 BGP, 6400 prefixes), ran `tests/sflow/test_sflow.py` (16 tests including `TestReboot` warm-reboot and fast-reboot classes):\n   - `/var/log/hsflowd.crash` stays **0 bytes** for the entire run.\n   - **Zero** `hsflowd` segfault / abort / core / kill events in syslog across the full run.\n   - sflow counters stream cleanly through the collector throughout, sample JSON parses (e.g. `ifInOctets=182,843,660 / 307,996 pkts` on Ethernet112).\n   - BGP stays 4\u00d7T1 Established through the entire test.\n\nRemaining test failures in the sonic-vs sflow suite are unrelated to this change (long-standing PTF parser fragility around `ast.literal_eval` on raw-byte JSON lines from `sflowtool -j`, plus expected post-warm-reboot inventory breakage \u2014 same failure profile as the unrelated baseline on master).\n\nAsking the original reporter on #27728 to confirm on the 514-port hardware as well; the PR can land on master in the meantime since the recursion path is exercised on every release branch.\n\n#### Which release branch to backport (provide reason below if selected)\n\nThis is a real-world crash on existing hardware running #27368, so it should be backported wherever #27368 (or its precursor batched-dispatch code) is present. Please check the matrix of release branches that picked up #27368 and tick accordingly.\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ] master \u2014 `SONiC.fix_sflow-write-recursion-guard.0-585d58222` (= this PR head + a test-only ycabled-skip workaround dropped before submission)\n\n#### Description for the changelog\n\n[sflow] Fix `hsflowd` `db_addWriteCB()` recursion / stack overflow under redis send-buffer back-pressure on high-port-count switches (regression from #27368).\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no YANG / config_db schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83e\udda6",
+    "files": [
+      {
+        "path": "src/sflow/hsflowd/patch/0009-mod_sonic-debug-sndbuf.patch",
+        "additions": 43,
+        "deletions": 0
+      },
+      {
+        "path": "src/sflow/hsflowd/patch/0010-mod_sonic-fix-write-recursion-via-evbus.patch",
+        "additions": 184,
+        "deletions": 0
+      },
+      {
+        "path": "src/sflow/hsflowd/patch/series",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

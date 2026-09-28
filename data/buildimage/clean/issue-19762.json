@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-19762",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 19762,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/19762",
+    "title": "[BFD] [ACL] Unexpected BFD state change (up->down) after applying ACL",
+    "created_at": "2024-08-01T11:32:57Z",
+    "closed_at": "2024-08-29T01:25:35Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P0",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202305",
+      "202311"
+    ],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nApplying ACL triggers state change for the existing BFD sessions.\n\nIf there is BFD session configured which is up and then user applies some ACL rule then BFD session is going down.\nAfter some time BFD session will go back to up state.\n\nLooks like this issue is happening due to the design of caclmgrd.\nBFD feature is using control plane ACLs in order to route BFD packets.\nAnd in caclmgrd it is mentioned that it will take Control Plane ACTION for any ACL Table Event: [caclmgrd#L1087](https://github.com/sonic-net/sonic-host-services/blob/ca6b3cdb9a56604765ada4ac67234c117f0fb5ad/scripts/caclmgrd#L1087\n).\n\nSo each time we add some ACL it causes caclmgrd to reconfigure all control plane ACLs.\nWhich means that control plane ACLs are first removed and then added again.\nSo there is some period of time when BFD control plane ACL was removed but not added yet.\nAs a result  BFD session goes down.\n\n#### Steps to reproduce the issue:\n1. Connect 2 SONiC switches via 1 physical link (DUT 1 <-> DUT 2)\n2. Configure IP connection (<IP>/30 <-> <IP>/30)\n3. Configure 2 loopback interfaces on both sides\n4. Configure static route on both devices to reach each other loopbacks\n5. On both switches configure 2 BFD sessions\n6. Verify that all BFD sessions are up\n7. Config ACL on DUT 2 switch to block all ingress traffic except one subnet on which 2nd BFD session is cofigured\n8. Verify that 1st BFD session is \"down\" on DUT 2 and \"init\" DUT 1, which is expected according to applied ACL\n9. Observe that 2nd BFD session changed state to \"down\" and then back to \"up\" which is not expected according to applied ACL\n\nTopology and BFD configuration (steps 1-6):\n```\n+--------------------------+                       +--------------------------+\n| DUT 1                    |                       | DUT 2                    |\n|                          |                       |                          |\n|                          |                       |                          |\n|      [Ethernet0|<IP>/30]---------------------[Ethernet0||<IP>/30]     |\n|                          |                       |                          |\n|                          |          BFD          |                          |\n|   [Loopback0|<IP>/32]- - - - - - - - - - - -[Loopback0|<IP>/32]   |\n|   [Loopback1|<IP>/32]- - - - - - - - - - - -[Loopback1|<IP>/32]   |\n|                          |                       |                          |\n|                          |                       |                          |\n| Route:                   |                       | Route:                   |\n| <IP>/16 via <IP> |                       | <IP>/16 via <IP> |\n|                          |                       |                          |\n+--------------------------+                       +--------------------------+\n```\n\nACL Rule that is applied (step 7):\n```\n{\n    \"ACL_RULE\": {\n        \"DATAACL|ALLOW_RULE\": {\n            \"DST_IP\": \"<IP>/24\",\n            \"ETHER_TYPE\": \"2048\",\n            \"PACKET_ACTION\": \"FORWARD\",\n            \"PRIORITY\": \"999\"\n        },\n        \"DATAACL|DEFAULT_RULE\": {\n            \"ETHER_TYPE\": \"2048\",\n            \"PACKET_ACTION\": \"DROP\",\n            \"PRIORITY\": \"1\"\n        }\n    }\n}\n```\n\n#### Describe the results you received:\n\nApplying ACL triggers state change for the existing BFD sessions.\n\nIf there is BFD session configured which is up and then user applies some ACL rule then BFD session is going down.\nAfter some time BFD session will go back to up state.\n\n#### Describe the results you expected:\n\nApplying ACL should not trigger any state change for the existing BFD sessions.\nBFD sessions of the subnet that is not affected by ACL should not change state and should stay in Up state after applying ACL.\n\n#### Output of `show version`:\nAll versions (caclmgrd didn't change implementation recently)\n\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 150,
+    "repository": "sonic-net/sonic-host-services",
+    "url": "https://github.com/sonic-net/sonic-host-services/pull/150",
+    "title": "[BFD]Fix BFD blackout issue",
+    "merged_at": "2024-08-29T01:25:34Z",
+    "description": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/19762\n\nWhen caclmgrd processes any ACL table change, this results in rules flushed and readded which was introduced in https://github.com/sonic-net/sonic-host-services/pull/114 . However in this flow the BFD and vxlan rules were added at the end which may result in traffic loss because of the DROP rule for ip2me installed. To overcome this added BFD and vxlan rules at the very start so that there is no drop seen for BFD.\n\nExisting UT should verify the flows.\n\nAdditionally manually verified",
+    "files": [
+      {
+        "path": "scripts/caclmgrd",
+        "additions": 25,
+        "deletions": 13
+      },
+      {
+        "path": "tests/caclmgrd/caclmgrd_bfd_test.py",
+        "additions": 20,
+        "deletions": 2
+      },
+      {
+        "path": "tests/caclmgrd/test_bfd_vectors.py",
+        "additions": 10,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

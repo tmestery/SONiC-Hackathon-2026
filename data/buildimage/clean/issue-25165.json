@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-25165",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25165,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25165",
+    "title": "Bug: parsePortSerdes could leave orchagent in busy loop",
+    "created_at": "2026-01-22T22:31:03Z",
+    "closed_at": "2026-07-07T21:34:15Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nIf any error happened in `parsePortSerdes`, device could be left in unhealthy state due to orchagent is stuck in busy loop.\n\n<img width=\"1400\" height=\"128\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/eb56f446-38b3-4f46-8d27-d9d9cb37a28e\" />\n\n### Steps to Reproduce\n\n1. If there is error in `media_setting.json`, `parsePortSerdes` will return false and the event is erased.\n    https://github.com/sonic-net/sonic-swss/blob/a8d968c9e1767b77573982b693aa17d562276c8b/orchagent/portsorch.cpp#L4456\n2. The port with invalid parameters will be left in `m_pendingPortSet` if no more event on this port.\nhttps://github.com/sonic-net/sonic-swss/blob/a8d968c9e1767b77573982b693aa17d562276c8b/orchagent/portsorch.cpp#L4561\n3. All events will not be handled because `allPortsReady` always return false.\nhttps://github.com/sonic-net/sonic-swss/blob/a8d968c9e1767b77573982b693aa17d562276c8b/orchagent/portsorch.cpp#L1620\n\n### Actual Behavior and Expected Behavior\n\nIf there is error in `media_setting.json`, only the port with bad parameters should be impacted.\n\n### Relevant log output\n\n```shell\n2025 Dec  4 <IPV6>.617266  NOTICE pmon#xcvrd[34]: Publishing ASIC-side SI setting for port Ethernet496 in APP_DB:\n2025 Dec  4 <IPV6>.617522  NOTICE pmon#xcvrd[34]: 0:(pre3,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff,0xffffffff)\n2025 Dec  4 <IPV6>.617704  NOTICE pmon#xcvrd[34]: 1:(pre2,0x00000007,0x00000007,0x00000007,0x00000007,0x00000007,0x00000007,0x00000007,0x00000007)\n2025 Dec  4 <IPV6>.617870  NOTICE pmon#xcvrd[34]: 2:(pre1,0xffffffe3,0xffffffe3,0xffffffe3,0xffffffe3,0xffffffe3,0xffffffe3,0xffffffe3,0xffffffe3)\n2025 Dec  4 <IPV6>.618029  NOTICE pmon#xcvrd[34]: 3:(main,0x00000062,0x00000062,0x00000062,0x00000062,0x00000062,0x00000062,0x00000062,0x00000062)\n2025 Dec  4 <IPV6>.618189  NOTICE pmon#xcvrd[34]: 4:(post1,0,0,0,0,0,0,0,0)\n2025 Dec  4 <IPV6>.618349  NOTICE pmon#xcvrd[34]: 5:(post2,0xfffffff3,0xfffffff3,0xfffffff3,0xfffffff3,0xfffffff3,0xfffffff3,0xfffffff3,0xfffffff3)\n2025 Dec  4 <IPV6>.618876  NOTICE pmon#xcvrd[34]: Notify media setting: Published ASIC-side SI setting for lport Ethernet496 in APP_DB\n2025 Dec  4 <IPV6>.619880  ERR swss#orchagent: :- parsePortSerdes: Failed to parse field(post1): Invalid argument: '0'\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4720,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4720",
+    "title": "portsorch: drop port from pending set on parse failure",
+    "merged_at": "2026-07-07T21:34:14Z",
+    "description": "#### What I did\n\nIn `PortsOrch::doPortTask`, a port whose configuration fails to parse or\nvalidate has its task erased but is left in `m_pendingPortSet`. Because\n`allPortsReady()` is gated on that set draining, a single bad port (for\nexample an unparsable serdes value pushed from a bad `media_setting.json`)\nkeeps `allPortsReady()` false forever and stalls orchagent for every other\nport \u2014 the busy loop reported in the issue, which can brick the device on\nwarm reboot.\n\nThis removes the affected port from `m_pendingPortSet` on parse/validate\nfailure so the impact stays isolated to that port.\n\nFixes sonic-net/sonic-buildimage#25165\n\n#### Why I did it\n\nAs the issue notes, on a bad `media_setting.json` \"only the port with bad\nparameters should be impacted\". The three failure paths in `doPortTask`\n(the `!portExists` parse and validate failures, and the `portExists` update\nparse failure) erase the task but never clear the pending entry, so one bad\nport blocks all of them.\n\n#### How I verified it\n\nUnit tests in `tests/mock_tests/portphyserdesattr_ut.cpp`, one per failure\nbranch:\n\n- `ParseFailureDoesNotStrandPendingPort` \u2014 existing port, bad serdes update\n- `ParseFailureNewPortDropsPending` \u2014 not-yet-created port, parse failure\n- `ValidateFailureNewPortDropsPending` \u2014 not-yet-created port, validation\n  failure (missing mandatory fields)\n\nEach passes with the fix and fails without it; the full `PortSerdesAttrTest`\nfixture passes (8/8, no regressions).\n\nI also reproduced the busy loop on a hardware switch: injecting a bad serdes\nvalue and warm-restarting swss yields `bake()` \u2192\n`parsePortSerdes: Failed to parse field(...): Invalid argument: '0'` \u2192\n`WARM_RESTART_TABLE|orchagent` stuck at `initialized` (never `reconciled`).\nWith the port dropped from the pending set, reconciliation is no longer\nblocked.",
+    "files": [
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 9,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/portphyserdesattr_ut.cpp",
+        "additions": 92,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

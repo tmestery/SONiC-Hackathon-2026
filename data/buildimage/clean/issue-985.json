@@ -1,0 +1,123 @@
+{
+  "id": "buildimage-985",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 985,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/985",
+    "title": "Failed DHCP relay test",
+    "created_at": "2017-09-25T12:58:11Z",
+    "closed_at": "2017-10-05T06:35:44Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\n**Steps to reproduce the issue:**\nRun DHCP relay test and it fails\n\n**Describe the results you received:**\nTest failure\n\nand get errors in /var/log/syslog:\n```\nSep 25 <IPV6>.248407 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay Traceback (most recent call last):\nSep 25 <IPV6>.248619 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/bin/sonic-cfggen\", line 215, in <module>\nSep 25 <IPV6>.248728 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     main()\nSep 25 <IPV6>.248821 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/bin/sonic-cfggen\", line 200, in main\nSep 25 <IPV6>.248912 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     print template.render(data)\nSep 25 <IPV6>.249054 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/lib/python2.7/dist-packages/jinja2/environment.py\", line 1008, in render\nSep 25 <IPV6>.249155 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     return self.environment.handle_exception(exc_info, True)\nSep 25 <IPV6>.249248 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/lib/python2.7/dist-packages/jinja2/environment.py\", line 780, in handle_exception\nSep 25 <IPV6>.249341 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     reraise(exc_type, exc_value, tb)\nSep 25 <IPV6>.249468 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"<template>\", line 1, in top-level template code\nSep 25 <IPV6>.249577 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/lib/python2.7/dist-packages/jinja2/environment.py\", line 411, in getitem\nSep 25 <IPV6>.249673 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     return obj[argument]\nSep 25 <IPV6>.249769 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay jinja2.exceptions.UndefinedError: 'minigraph_ports' is undefined\n```\n\n**Describe the results you expected:**\nTest pass\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\nIt looks like the line 178 is outdated, since configDB has been introduced.\nhttps://github.com/Azure/sonic-buildimage/blob/f570616b0dca24d0c38550e5c946e7e9bf00b342/src/isc-dhcp/isc-dhcp-4.3.1_dhcrelay-custom-circuit_id-remote_id-and-bridge-iface-support.patch#L178\nMaybe it should be\n```\n+\t\t\t\t\t\tsprintf(cmdstr, \"sonic-cfggen -d -v \\\"PORT['%s'].alias\\\"\", ip->name);\n```"
+  },
+  "resolution": {
+    "pr_number": 999,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/999",
+    "title": "[DHCP Relay]: Support Multiple VLANs (Separate DHCP Relay Agents, One Per VLAN)",
+    "merged_at": "2017-10-05T06:35:44Z",
+    "description": "**- What I did**\n  - Spawn one DHCP relay agent for each VLAN that is configured as requiring one or more DHCP servers.\n  - Also resolves https://github.com/Azure/sonic-buildimage/issues/985\n\n**- How I did it**\n  - docker-dhcp-relay entrypoint is a new script, docker_init.sh, which is responsible for generating the supervisord configuration file dynamically from a Jinja2 template. docker_init.sh then starts supervisord via exec so that supervisord still runs as PID 1\n  - Dynamically-configured supervisord config now supports spawning a variable number of DHCP relay agent processes, based on VLAN configuration\n  - Due to above changes, we no longer rely on /etc/default/isc-dhcp-relay config file, so the related Jinja2 template and shell script have been removed\n - Update isc-dhcp-relay patch such that it no longer relies on calling sonic-cfggen to retrieve port aliases with each packet (slow). Now parses the aliases from port_config.ini file directly once at startup and loads them into memory\n - Prevent relaying of already-relayed packets using `-m discard` parameter\n- Change name of supervisord config file and template from generic `supervisord.conf` to more specific (albeit long) `docker-dhcp-relay.supervisord.conf` for better comprehension and also to avoid conflicts when copying to /usr/share/sonic/templates if we need to templatize other supervisord config files. We may also want to consider creating subdirectories under /usr/share/sonic/templates to further avoid other conflicts.\n - Update minigraph.py parser to parse out new `<DhcpRelays>` tag\n - Update sonic-cfggen test T0 minigraphs to contain new `<DhcpRelays>` tag\n - Remove executable permission and extra trailing newline from wait_for_intf.sh.j2 template file\n\n**- How to verify it**\n  1. Generate a T0 minigraph with two or more VLANs, each configured with one or more DHCP servers (using the `<DhcpRelays>` tag.\n  2. Boot up SONiC using the minigraph created in step 1.\n  3. Verify that there are multiple `dhcrelay` processes running, one per VLAN as configured in step 1.\n  4. Verify that DHCP requests from devices on VLANs under the SONiC T0 are forwarded to all the DHCP servers configured in the minigraph, and verify all responses from DHCP servers are forwarded back to the appropriate device under the SONiC T0.\n\n**- Description for the changelog**\n\n[DHCP Relay]: Support Multiple VLANs (Separate DHCP Relay Agents, One Per VLAN)\n\n**- A picture of a cute animal (not mandatory but encouraged)**\n```\n       _\n       \\`*-.\n        )  _`-.\n       .  : `. .\n       : _   '  \\\n       ; *` _.   `*-._\n       `-.-'          `-.\n         ;       `       `.\n         :.       .        \\\n         . \\  .   :   .-'   .\n         '  `+.;  ;  '      :\n         :  '  |    ;       ;-.\n         ; '   : :`-:     _.`* ;\n[bug] .*' /  .*' ; .*`- +'  `*'\n      `*-*   `*-*  `*-*'\n```",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-relay/Dockerfile.j2",
+        "additions": 3,
+        "deletions": 5
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/docker-dhcp-relay.supervisord.conf.j2",
+        "additions": 67,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/docker_init.sh",
+        "additions": 18,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/isc-dhcp-relay.j2",
+        "additions": 0,
+        "deletions": 28
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/isc-dhcp-relay.sh",
+        "additions": 0,
+        "deletions": 18
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/start.sh",
+        "additions": 5,
+        "deletions": 8
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/supervisord.conf",
+        "additions": 0,
+        "deletions": 28
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/wait_for_intf.sh.j2",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "src/isc-dhcp/isc-dhcp-4.3.1_dhcrelay-custom-circuit_id-remote_id-and-bridge-iface-support.patch",
+        "additions": 200,
+        "deletions": 47
+      },
+      {
+        "path": "src/sonic-config-engine/minigraph.py",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/pc-test-graph.xml",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/isc-dhcp-relay",
+        "additions": 0,
+        "deletions": 7
+      },
+      {
+        "path": "src/sonic-config-engine/tests/simple-sample-graph.xml",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/t0-sample-bgp-speaker.xml",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/t0-sample-graph-everflow.xml",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/t0-sample-graph.xml",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_cfggen.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

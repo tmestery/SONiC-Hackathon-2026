@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-5277",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5277,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5277",
+    "title": "sonic-cfggen fails to connect to /var/run/redis/redis.sock",
+    "created_at": "2020-08-31T11:18:44Z",
+    "closed_at": "2020-09-04T23:18:41Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\nThe `sonic-cfggen` utility fails to connect to `/var/run/redis/redis.sock`:\n```\nsudo systemctl restart bgp\n\nadmin@sonic:~$ sudo cat /var/log/syslog | grep -B 30 -A 5 /var/run/redis/redis.sock\nAug 20 <IPV6>.963130 sonic NOTICE admin: Stopped bgp service...\nAug 20 <IPV6>.967556 sonic INFO systemd[1]: bgp.service: Succeeded.\nAug 20 <IPV6>.969013 sonic INFO systemd[1]: Stopped BGP container.\nAug 20 <IPV6>.972528 sonic INFO systemd[1]: Starting BGP container...\nAug 20 <IPV6>.979468 sonic NOTICE admin: Starting bgp service...\nAug 20 <IPV6>.231106 sonic NOTICE admin: Warm boot flag: bgp false.\nAug 20 <IPV6>.238290 sonic NOTICE admin: Fast boot flag: bgp .\nAug 20 <IPV6>.734560 sonic INFO bgp.sh[28088]: Traceback (most recent call last):\nAug 20 <IPV6>.734827 sonic INFO bgp.sh[28088]:   File \"/usr/local/bin/sonic-cfggen\", line 416, in <module>\nAug 20 <IPV6>.735145 sonic INFO bgp.sh[28088]:     main()\nAug 20 <IPV6>.735326 sonic INFO bgp.sh[28088]:   File \"/usr/local/bin/sonic-cfggen\", line 343, in main\nAug 20 <IPV6>.735498 sonic INFO bgp.sh[28088]:     configdb.connect()\nAug 20 <IPV6>.735671 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/swsssdk/configdb.py\", line 74, in connect\nAug 20 <IPV6>.735854 sonic INFO bgp.sh[28088]:     self.db_connect('CONFIG_DB', wait_for_init, retry_on)\nAug 20 <IPV6>.736030 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/swsssdk/configdb.py\", line 69, in db_connect\nAug 20 <IPV6>.736202 sonic INFO bgp.sh[28088]:     SonicV2Connector.connect(self, self.db_name, retry_on)\nAug 20 <IPV6>.736377 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/swsssdk/dbconnector.py\", line 250, in connect\nAug 20 <IPV6>.736549 sonic INFO bgp.sh[28088]:     self.dbintf.connect(db_id, retry_on)\nAug 20 <IPV6>.736778 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/swsssdk/interface.py\", line 171, in connect\nAug 20 <IPV6>.736941 sonic INFO bgp.sh[28088]:     self._onetime_connect(db_id)\nAug 20 <IPV6>.737094 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/swsssdk/interface.py\", line 183, in _onetime_connect\nAug 20 <IPV6>.737249 sonic INFO bgp.sh[28088]:     client.config_set('notify-keyspace-events', self.KEYSPACE_EVENTS)\nAug 20 <IPV6>.737408 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/redis/client.py\", line 1243, in config_set\nAug 20 <IPV6>.737562 sonic INFO bgp.sh[28088]:     return self.execute_command('CONFIG SET', name, value)\nAug 20 <IPV6>.737714 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/redis/client.py\", line 898, in execute_command\nAug 20 <IPV6>.737872 sonic INFO bgp.sh[28088]:     conn = self.connection or pool.get_connection(command_name, **options)\nAug 20 <IPV6>.738027 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/redis/connection.py\", line 1192, in get_connection\nAug 20 <IPV6>.738180 sonic INFO bgp.sh[28088]:     connection.connect()\nAug 20 <IPV6>.738334 sonic INFO bgp.sh[28088]:   File \"/usr/local/lib/python2.7/dist-packages/redis/connection.py\", line 563, in connect\nAug 20 <IPV6>.738487 sonic INFO bgp.sh[28088]:     raise ConnectionError(self._error_message(e))\nAug 20 <IPV6>.738642 sonic INFO bgp.sh[28088]: redis.exceptions.ConnectionError: Error 13 connecting to unix socket: /var/run/redis/redis.sock. Permission denied.\nAug 20 <IPV6>.836439 sonic INFO bgp.sh[28088]: Removing obsolete bgp container with HWSKU montara\nAug 20 <IPV6>.902063 sonic INFO bgp.sh[28088]: bgp\nAug 20 <IPV6>.905879 sonic INFO bgp.sh[28088]: Creating new bgp container with HWSKU\nAug 20 <IPV6>.085741 sonic INFO bgp.sh[28088]: a9f9487d078ec6ae0d3ca4c793bcfa41975d0c50a7decf48331f50a162d0e438\nAug 20 <IPV6>.203221 sonic INFO containerd[505]: time=\"2020-08-20T10:55:07.202160280Z\" level=info msg=\"shim containerd-shim started\" address=\"/containerd-shim/moby/a9f9487d078ec6ae0d3ca4c793bcfa41975d0c50a7decf48331f50a162d0e438/shim.sock\" debug=false pid=28176\nadmin@sonic:~$\n```\nThe issue flow is:\n```\nbgp.service ->  /usr/local/bin/bgp.sh ->  /usr/bin/bgp.sh ->  start() ->   HWSKU=${HWSKU:-`$SONIC_CFGGEN -d -v 'DEVICE_METADATA[\"localhost\"][\"hwsku\"]'`}\n```\nProbably because `User=admin` in `bgp.service`:\n```\n[Service]\nUser=admin\nExecStartPre=/usr/local/bin/bgp.sh start\n```\n\n**Steps to reproduce the issue:**\n1. `sudo systemctl restart bgp`\n2. `sudo cat /var/log/syslog | grep -B 30 -A 5 /var/run/redis/redis.sock`\n\n**Describe the results you received:**\nThe `sonic-cfggen` utility fails to connect to `/var/run/redis/redis.sock`.\nThe errors in logs are generated.\n\n**Describe the results you expected:**\nNo errors in logs\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\nEnvironment:\n```\nSONiC Software Version: SONiC.HEAD.740-dirty-20200813.174118\nDistribution: Debian 10.5\nKernel: 4.19.0-9-2-amd64\nBuild commit: 9c22d19b\n\nPlatform: x86_64-arista_7170_64c\nHwSKU: Arista-7170-64C\nASIC: barefoot\n```\nThe issue has been introduced by https://github.com/Azure/sonic-buildimage/pull/4941/files?diff=unified&w=1#diff-2901ad8ea8e7ba16059aa09588944b30L300\n\nThe following PR may cause the same issue in SONiC 201911: https://github.com/Azure/sonic-buildimage/pull/5200"
+  },
+  "resolution": {
+    "pr_number": 5289,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/5289",
+    "title": "[redis] Add redis Group And Grant Read/Write Access to Members",
+    "merged_at": "2020-09-03T06:40:22Z",
+    "description": "sonic-cfggen is now using Unix Domain Socket for Redis DB. The socket\nis created using root account. Subsequently, services that are started\nas admin fail to start. This PR creates redis group and add admin\nuser to redis group. It also grants read/write access on redis.sock\nfor redis group members.\n\ncloses #5277\nresolves #5277\n\nsigned-off-by: Tamer Ahmed <<EMAIL>>\n\n**- Why I did it**\nAccess to redis.sock fails when using admin account\n\n**- How I did it**\nAdded `redis` group\nChanged `redis.sock` group to the new group `redis`\nGave read/write access to `redis` group on `redis.sock`\n\n**- How to verify it**\nwithout this change\n```\nadmin@str-s6000-acs-14:~$ groups\nadmin sudo docker\n\nadmin@str-s6000-acs-14:~$ ls -alrt /var/run/redis/redis.sock\nsrwx------ 1 root root 0 Aug 31 18:48 /var/run/redis/redis.sock\n\nadmin@str-s6000-acs-14:~$ sonic-cfggen -d -v 'DEVICE_METADATA[\"localhost\"][\"hwsku\"]'\nTraceback (most recent call last):\n  File \"/usr/local/bin/sonic-cfggen\", line 420, in <module>\n    main()\n  File \"/usr/local/bin/sonic-cfggen\", line 347, in main\n    configdb.connect()\n  File \"/usr/local/lib/python2.7/dist-packages/swsssdk/configdb.py\", line 74, in connect\n    self.db_connect('CONFIG_DB', wait_for_init, retry_on)\n  File \"/usr/local/lib/python2.7/dist-packages/swsssdk/configdb.py\", line 69, in db_connect\n    SonicV2Connector.connect(self, self.db_name, retry_on)\n  File \"/usr/local/lib/python2.7/dist-packages/swsssdk/dbconnector.py\", line 250, in connect\n    self.dbintf.connect(db_id, retry_on)\n  File \"/usr/local/lib/python2.7/dist-packages/swsssdk/interface.py\", line 171, in connect\n    self._onetime_connect(db_id)\n  File \"/usr/local/lib/python2.7/dist-packages/swsssdk/interface.py\", line 183, in _onetime_connect\n    client.config_set('notify-keyspace-events', self.KEYSPACE_EVENTS)\n  File \"/usr/local/lib/python2.7/dist-packages/redis/client.py\", line 1243, in config_set\n    return self.execute_command('CONFIG SET', name, value)\n  File \"/usr/local/lib/python2.7/dist-packages/redis/client.py\", line 898, in execute_command\n    conn = self.connection or pool.get_connection(command_name, **options)\n  File \"/usr/local/lib/python2.7/dist-packages/redis/connection.py\", line 1192, in get_connection\n    connection.connect()\n  File \"/usr/local/lib/python2.7/dist-packages/redis/connection.py\", line 563, in connect\n    raise ConnectionError(self._error_message(e))\nredis.exceptions.ConnectionError: Error 13 connecting to unix socket: /var/run/redis/redis.sock. Permission denied.\n```\nwith this change\n```\nadmin@str-s6000-acs-14:~$ groups\nadmin sudo docker redis\n\nadmin@str-s6000-acs-14:~$ ls -alrt /var/run/redis/redis.sock\nsrwxrw---- 1 root redis 0 Aug 31 23:00 /var/run/redis/redis.sock\n\nadmin@str-s6000-acs-14:~$ sonic-cfggen -d -v 'DEVICE_METADATA[\"localhost\"][\"hwsku\"]'\nForce10-S6000\n```\n**- Which release branch to backport (provide reason below if selected)**\n\n- [ ] 201811\n- [x] 201911\n- [x] 202006\n\n**- Description for the changelog**\n\n**- A picture of a cute animal (not mandatory but encouraged)**",
+    "files": [
+      {
+        "path": "build_debian.sh",
+        "additions": 5,
+        "deletions": 2
+      },
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 5,
+        "deletions": 7
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

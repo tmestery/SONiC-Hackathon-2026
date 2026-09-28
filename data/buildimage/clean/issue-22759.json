@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-22759",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 22759,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/22759",
+    "title": "Bug: 'config interface ip add' adds entries for non-existent intefaces",
+    "created_at": "2025-05-29T03:55:09Z",
+    "closed_at": "2025-09-26T01:28:45Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`config interface ip add` does not check to see if the interface string that is passed to it corresponds to a valid interface. It will accept arbitrary interface names and will add misformed entries for these invalid interfaces to ConfigDB. These entries cannot be removed by `config interface ip delete` because that command checks the actual interface list, and these entries are never present there. Trying to run `config replace` fails because these bad entries do not pass yang validation.\n\n### Steps to Reproduce\n\nTrivial to reproduce.\n\nRun the command and pass an interface name which matches the basic pattern for a routed interface, but does not exist, for instance:\n\n`sudo config interface ip add EthernetNotARealInterface <IP>`\n\nThe command will complete and return success. An entry will be added to the VLAN_SUB_INTERFACE table, using the invalid interface name as the key. Running `sudo config replace /etc/sonic/config_db.json` at this point will fail, since the added entry will fail yang validation.\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\n\n```\nadmin@gold113-dut:~$ sudo config interface ip add EthernetNR <IP>\nadmin@gold113-dut:~$ sudo config interface ip add EthernetJustMadeUp <IP>\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet99999999 <IP>\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet-totally-not-real <IP>\nadmin@gold113-dut:~$ sudo config interface ip remove EthernetNR <IP>\nCannot find device \"EthernetNR\"\nadmin@gold113-dut:~$ sudo config replace -d /etc/sonic/config_db.json\n** DRY RUN EXECUTION **\nConfig Replacer: Config replacement starting.\nConfig Replacer: Target config length: 50412.\nConfig Replacer: Getting current config db.\nConfig Replacer: Generating patch between target config and current config db.\nConfig Replacer: Applying patch using 'Patch Applier'.\nPatch Applier: localhost: Patch application starting.\nPatch Applier: localhost: Patch: [{\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp|<IP>~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999|<IP>~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real|<IP>~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR|<IP>~132\"}]\nPatch Applier: localhost getting current config db.\nPatch Applier: localhost: simulating the target full config after applying the patch.\nPatch Applier: localhost: validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: localhost: validating target config does not have empty tables,\n                            since they do not show up in ConfigDb.\nPatch Applier: localhost: sorting patch updates.\nFailed to replace config\nUsage: config replace [OPTIONS] TARGET_FILE_PATH\nTry \"config replace -h\" for help.\n\nError: Data Loading Failed\nLeafref \"/sonic-port:sonic-port/sonic-port:PORT/sonic-port:PORT_LIST/sonic-port:name\" of value \"EthernetNR\" points to a non-existing leaf.\n```\n\nExpected Behavior:\n\nCommand is not accepted, no bad entries are added to ConfigDB\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSeems to be a day-1 issue, present in all versions which support this command.\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 3901,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/3901",
+    "title": "Issue #22759: Prevent CLI from adding invalid routed interfaces",
+    "merged_at": "2025-09-26T01:28:44Z",
+    "description": "#### What I did\n\nCurrently, config interface ip add will accept EthernetX interfaces which do not have an underlying port or portchannel associated with them. This violates the yang model, so if these entries are added to ConfigDB, 'config replace' and 'config reload' don't work properly. To make matters worse, the implementation of config interface ip remove does not detect these invalid entries, so once they are added they cannot be removed through the CLI. I modified the command to reject invalid cases.\n\nFixes: [#22759](https://github.com/sonic-net/sonic-buildimage/issues/22759)\n\n#### How I did it\n\nAdd a check for this case into the config interface ip add CLI command to avoid invalid cases of this form by checking to ensure that the interface which is passed is associated with a valid port or port channel if it is an Ethernet or PortChannel interface. There is already an existing check for vlan interfaces.\n\n#### How to verify it\n\nModify existing test cases to handle expected behavior, verify that they all pass.\n\n#### Previous command output (if the output of a command-line utility has changed)\n\n```\nadmin@gold113-dut:~$ sudo config interface ip add EthernetNR <IP>\nadmin@gold113-dut:~$ sudo config interface ip add EthernetJustMadeUp <IP>\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet99999999 <IP>\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet-totally-not-real <IP>\nadmin@gold113-dut:~$ sudo config interface ip remove EthernetNR <IP>\nCannot find device \"EthernetNR\"\nadmin@gold113-dut:~$ sudo config replace -d /etc/sonic/config_db.json\n** DRY RUN EXECUTION **\nConfig Replacer: Config replacement starting.\nConfig Replacer: Target config length: 50412.\nConfig Replacer: Getting current config db.\nConfig Replacer: Generating patch between target config and current config db.\nConfig Replacer: Applying patch using 'Patch Applier'.\nPatch Applier: localhost: Patch application starting.\nPatch Applier: localhost: Patch: [{\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp|<IP>~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999|<IP>~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real|<IP>~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR|<IP>~132\"}]\nPatch Applier: localhost getting current config db.\nPatch Applier: localhost: simulating the target full config after applying the patch.\nPatch Applier: localhost: validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: localhost: validating target config does not have empty tables,\n                            since they do not show up in ConfigDb.\nPatch Applier: localhost: sorting patch updates.\nFailed to replace config\nUsage: config replace [OPTIONS] TARGET_FILE_PATH\nTry \"config replace -h\" for help.\n\nError: Data Loading Failed\nLeafref \"/sonic-port:sonic-port/sonic-port:PORT/sonic-port:PORT_LIST/sonic-port:name\" of value \"EthernetNR\" points to a non-existing leaf.\n```\n\n#### New command output (if the output of a command-line utility has changed)\n\n```\nadmin@gold113-dut:~$ sudo config interface ip add EthernetNR.10 <IP>\nUsage: config interface ip add [OPTIONS] <interface_name> <ip_addr> <default\n                               gateway IP address>\nTry \"config interface ip add -h\" for help.\n\nError: Interface EthernetNR.10 does not exist\n```",
+    "files": [
+      {
+        "path": "config/main.py",
+        "additions": 59,
+        "deletions": 41
+      },
+      {
+        "path": "tests/ip_config_test.py",
+        "additions": 144,
+        "deletions": 0
+      },
+      {
+        "path": "tests/vlan_test.py",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "tests/vrrp_test.py",
+        "additions": 168,
+        "deletions": 168
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

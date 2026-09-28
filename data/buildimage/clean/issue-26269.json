@@ -1,0 +1,63 @@
+{
+  "id": "buildimage-26269",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26269,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26269",
+    "title": "Bug: Partial HFTel Capability query results in Orchagent initialization failure",
+    "created_at": "2026-03-19T11:14:32Z",
+    "closed_at": "2026-04-10T20:46:56Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "marvell",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nmarvell\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n**Summary**\n\n_Orchagent boot fails due to HFTel on platforms that support streaming telemetry in non-IPFIX format._\n\nFix HFTelOrch::isSupportedHFTel(sai_object_id_t switch_id) to use OCP SAI capability query APIs for all the essential SAI capability that HFTel needs.  This way, HFTel is only reported as supported when the platform supports the transport and report format used by SONiC (Genetlink and IPFIX) and all related SAI attributes and enum values, avoiding orchagent boot abort on platforms that support streaming telemetry via other OCP-defined options but not IPFIX/Genetlink.\n\n**Problem**\nThe SONiC high-frequency telemetry (HFTel) implementation is built around Genetlink transport and IPFIX report format. Today, support is inferred only by querying Streaming Stats capability (e.g. sai_query_stats_st_capability() for SAI_OBJECT_TYPE_PORT). OCP SAI, however, allows streaming telemetry to be implemented with other transports and report formats; some platforms support streaming telemetry in these other transports but do not support the Genetlink transport or IPFIX format that SONiC HFTel requires. Because the current capability check is incomplete, HFTel can be configured on such platforms. When the orchagent then tries to create the Hostif, TAM, and related objects using Genetlink and IPFIX-specific attributes and enum values, the SAI adapter rejects the operations and the orchagent boot aborts.\n\n**Proposed fix**\nUse OCP SAI capability query APIs to ensure the platform supports the exact transport, report format, and attributes that SONiC HFTel uses (Genetlink, IPFIX, and the associated TAM/Hostif object model), before enabling HFTel.\n\nIf any of these checks returns not supported, isSupportedHFTel() should return false, so HFTel is not configured on platforms that do not support the SONiC-specific transport and report format.\n\n### Steps to Reproduce\n\n __'config reload'__ on platforms that support streaming stats but not the HFTel report format and TAM_TEL_TYPE_CONFIG_CHANGE_NOTIFY\n\n### Actual Behavior and Expected Behavior\n\n- Actual behavior: HFTel is configured on unsupported platforms resulting in swss/syncd crash\n- Expected behavior: HFTel should be skipped on unsupported platforms.\n\n### Relevant log output\n\n```shell\n2026 Mar 10 <IPV6>.443929 tl10sn181 ERR syncd#syncd: :- processQuadEvent: attr: SAI_SWITCH_ATTR_TAM_TEL_TYPE_CONFIG_CHANGE_NOTIFY: 0x562c6e35e9f0\n2026 Mar 10 <IPV6>.444196 tl10sn181 ERR swss#orchagent: :- set: set status: SAI_STATUS_ATTR_NOT_IMPLEMENTED_0\n2026 Mar 10 <IPV6>.444196 tl10sn181 ERR swss#orchagent: :- HFTelOrch: Failed to set SAI_SWITCH_ATTR_TAM_TEL_TYPE_CONFIG_CHANGE_NOTIFY\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nroot@tl10sn181:~# show version\n\nSONiC Software Version: SONiC.master.13-f3e14d989\nSONiC OS Version: 13\nDistribution: Debian 13.3\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: f3e14d989\nBuild date: Fri Mar  6 <IPV6> UTC 2026\nBuilt by: marvell@cpss-testvm2\n\nPlatform: x86_64-marvell_dbmvtx9180-r0\nHwSKU: dbmvtx9180_64osfp_64x800G\nASIC: marvell-teralynx\nASIC Count: 1\nSerial Number: N/A\nModel Number: N/A\nHardware Revision: N/A\n\nUptime: <IPV6> up 1 day, 19:55,  1 user,  load average: 0.00, 0.04, 0.07\nDate: Wed 11 Mar 2026 <IPV6>\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4367,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4367",
+    "title": "[HFTelOrch] Fix High Frequency Telemetry Platform Capability Detection",
+    "merged_at": "2026-04-10T20:46:55Z",
+    "description": "**What I did**\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/26269\n\nFix HFTelOrch::isSupportedHFTel() with proper SAI capability detection. The function now performs three validation gates:\n\na) Streaming stats capability query (existing check, retained)\nb) Attribute create/set capability checks for 8 SAI attributes across 2 object types (SWITCH, TAM_COLLECTOR).\n\n| ATTR | OBJECT |\n| :--- | :--- |\n|SAI_SWITCH_ATTR_TAM_TEL_TYPE_CONFIG_CHANGE_NOTIFY |SAI_OBJECT_TYPE_SWITCH  |\n| SAI_SWITCH_ATTR_TAM_OBJECT_ID | SAI_OBJECT_TYPE_SWITCH  |\n| SAI_TAM_COLLECTOR_ATTR_SRC_IP | SAI_OBJECT_TYPE_TAM_COLLECTOR |\n| SAI_TAM_COLLECTOR_ATTR_DST_IP |\u2002SAI_OBJECT_TYPE_TAM_COLLECTOR |\n| SAI_TAM_COLLECTOR_ATTR_TRANSPORT | SAI_OBJECT_TYPE_TAM_COLLECTOR |\n| SAI_TAM_COLLECTOR_ATTR_LOCALHOST |\u2002SAI_OBJECT_TYPE_TAM_COLLECTOR |\n| SAI_TAM_COLLECTOR_ATTR_HOSTIF_TRAP |\u2002SAI_OBJECT_TYPE_TAM_COLLECTOR |\n| SAI_TAM_COLLECTOR_ATTR_DSCP_VALUE\u2002|\u2002SAI_OBJECT_TYPE_TAM_COLLECTOR |\n\nc) Enum value support checks for enum values used.\n\n| ATTR | OBJECT | ENUM|\n| :--- | :--- | :--- |\n| SAI_TAM_TRANSPORT_ATTR_TRANSPORT_TYPE | SAI_OBJECT_TYPE_TAM_TRANSPORT | SAI_TAM_TRANSPORT_TYPE_NONE |\n| SAI_TAM_ATTR_TAM_BIND_POINT_TYPE_LIST | SAI_OBJECT_TYPE_TAM | SAI_TAM_BIND_POINT_TYPE_SWITCH |\n\nIf any check fails, isSupportedHFTel() returns false with a log message identifying the specific unsupported capability, so HFTel is not configured on platforms that lack the required SAI support.\n\n**Why I did it**\nThe SONiC high-frequency telemetry (HFTel) implementation is built around Genetlink transport and IPFIX report format. Today, support is inferred only by querying Streaming Stats capability (e.g. sai_query_stats_st_capability() for SAI_OBJECT_TYPE_PORT). OCP SAI, however, allows streaming telemetry to be implemented with other transports and report formats; some platforms support streaming telemetry in these other transports but do not support the Genetlink transport or IPFIX format that SONiC HFTel requires. Because the current capability check is incomplete, HFTel init will continue on such platforms. When the orchagent then tries to create the Hostif, TAM, and related objects using Genetlink and IPFIX-specific attributes and enum values, the SAI adapter rejects the operations and the orchagent boot aborts.\n\n**How I verified it**\nTested on the platform with partial attribute support from above checks\n```\n2026 Mar 19 <IPV6>.071264 sonic NOTICE swss#orchagent: :- isSupportedHFTel: HFTel: SAI_TAM_COLLECTOR_ATTR_SRC_IP capability query failed, HFTel disabled\n2026 Mar 19 <IPV6>.071264 sonic NOTICE swss#orchagent: :- init: High Frequency Telemetry is not supported on this platform\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511",
+    "files": [
+      {
+        "path": "orchagent/high_frequency_telemetry/hftelorch.cpp",
+        "additions": 89,
+        "deletions": 1
+      },
+      {
+        "path": "tests/mock_tests/Makefile.am",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/hftelorch_is_supported_sai_wrap.cpp",
+        "additions": 144,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/hftelorch_is_supported_sai_wrap.h",
+        "additions": 26,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/hftelorch_ut.cpp",
+        "additions": 94,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

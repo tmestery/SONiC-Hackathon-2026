@@ -1,0 +1,56 @@
+{
+  "id": "buildimage-19058",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 19058,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/19058",
+    "title": "[systemd/systemd-sonic-generator] Introduction of networkd causes error log message \"Timeout occurred while waiting for network connectivity\"",
+    "created_at": "2024-05-23T21:38:45Z",
+    "closed_at": "2024-08-05T16:05:33Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT",
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nAfter the introduction of networkd in the sonic-buildimage repository in #18178, when apt-daily.service and apt-daily-upgrade.service are running we get a error log message after 30 seconds:\n`ERR systemd-networkd-wait-online[50532]: Timeout occurred while waiting for network connectivity`\n\nThis is due to the\n`ExecStartPre=-/usr/lib/apt/apt-helper wait-online`\nin both apt-daily.service and apt-daily-upgrade.service. In non-smartswitch systems since we do not have any interfaces managed by networkd, the apt-helper call for wait-online times out after 30 seconds (https://salsa.debian.org/apt-team/apt/-/blob/main/cmdline/apt-helper.cc#L227) and an error log is generated.\n\n#### Steps to reproduce the issue:\n1. Use sonic on a switch which has no interfaces managed by networkd\n2. `systemctl start apt-daily.service` or `systemctl start apt-daily-upgrade.service`\n3. `tail -f /var/log/syslog | grep systemd-networkd-wait-online`\n\n#### Describe the results you received:\n`ERR systemd-networkd-wait-online[50532]: Timeout occurred while waiting for network connectivity`\n`INFO apt-helper[11911]: E: Sub-process /lib/systemd/systemd-networkd-wait-online returned an error code (1)`\nis seen in the syslog after 30 seconds\n\n#### Describe the results you expected:\nNo errors in the logs\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\nsystemd-networkd-wait-online times out and adds an error log if no interfaces are managed by networkd :\nhttps://github.com/systemd/systemd/blob/c09f7e5a8208fab5680bfeba8df5707887a8c080/src/network/wait-online/manager.c#L205\nFurther information regarding this behaviour:\nhttps://www.github.com/systemd/systemd/issues/27822"
+  },
+  "resolution": {
+    "pr_number": 19107,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/19107",
+    "title": "[Fixbug][systemctl]: Disable networkd in non-smartswitch platform",
+    "merged_at": "2024-08-05T16:05:32Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/19058\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n1. Marked `systemd-networkd.service` as `/dev/null` to disable it by default.\n2. systemd-sonic-generator will remove this null link if the target platform is smartswitch.\n\n#### How to verify it\n1. According to the [issue page](https://github.com/sonic-net/sonic-buildimage/issues/19058), we shouldn't get the error log```ERR systemd-networkd-wait-online[50532]: Timeout occurred while waiting for network connectivity\nINFO apt-helper[11911]: E: Sub-process /lib/systemd/systemd-networkd-wait-online returned an error code (1)``` after `systemctl start apt-daily.service`\n2. Regress test the previous verification: https://github.com/sonic-net/sonic-buildimage/pull/18178\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/sonic_debian_extension.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/systemd-sonic-generator/ssg-test.cc",
+        "additions": 25,
+        "deletions": 5
+      },
+      {
+        "path": "src/systemd-sonic-generator/systemd-sonic-generator.cpp",
+        "additions": 9,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

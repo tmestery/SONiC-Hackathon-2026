@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-8888",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8888,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8888",
+    "title": "config qos reload followed by config save commands leads to config save command failing with traceback",
+    "created_at": "2021-10-01T03:33:03Z",
+    "closed_at": "2021-10-07T15:58:39Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nSometimes, config qos reload followed by config save commands leads to config save command failing with traceback.\n\nThe reason for the traceback is, config qos reload triggers a write to DB and a write to config db triggers hostcfgd to update kdump. (There are no duplicate checks) https://github.com/Azure/sonic-buildimage/blob/b2659dcdbc454ceee5128a597fb34f041b1aeb9f/src/sonic-host-services/scripts/hostcfgd#L742\n\nAs part of kdump processing, some changes were introduced to save to startup config file.\nhttps://github.com/Azure/sonic-utilities/pull/1284\n\nWhile this is executing and writing to config file in the background, config save command too writes to config file. As part of the flow to write to config_db.json the file is first read using read_json_file and then sorted.\nIf this happens simultaneously with the flow where kdump directly writes to config file, the trackback is observed. Since there are no file protection mechanisms implemented  it results in reading incomplete data in the middle of the write.\n\nIdeally the config save command alone should write to config_db.json. If multiple writers are required, then file protection mechanisms should be implemented to avoid reading incorrect data during writes.\n\nBelow is an example of the failed traceback.\n\n  ```\nconfig qos reload\n\n/usr/local/bin/sonic-cfggen  -d --write-to-db -t /usr/share/sonic/device/x86_64-mlnx_msn3800-r0/ACS-MSN3800/buffers_dynamic.json.j2,config-db -t /usr/share/sonic/device/x86_64-mlnx_msn3800-r0/ACS-MSN3800/qos.json.j2,config-db -y /etc/sonic/sonic_version.yml\nBuffer calculation model updated, restarting swss is required to take effect\n\nconfig save -y\n\nRunning command: [0m[32m/usr/local/bin/sonic-cfggen -d --print-data > /etc/sonic/config_db.json\n\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.7/dist-packages/config/main.py\", line 116, in read_json_file\n\n     result = json.load(f)\n  File \"/usr/lib/python3.7/json/__init__.py\", line 296, in load\n\n     parse_constant=parse_constant, object_pairs_hook=object_pairs_hook, **kw)\n  File \"/usr/lib/python3.7/json/__init__.py\", line 348, in loads\n\n     return _default_decoder.decode(s)\n  File \"/usr/lib/python3.7/json/decoder.py\", line 337, in decode\n\n     obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n  File \"/usr/lib/python3.7/json/decoder.py\", line 353, in raw_decode\n\n     obj, end = self.scan_once(s, idx)\njson.decoder.JSONDecodeError: Expecting ':' delimiter: line 3723 column 24 (char 131228)\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/usr/local/bin/config\", line 8, in\n    sys.exit(config())\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 764, in __call__\n    return self.main(*args, **kwargs)\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 717, in main\n    rv = self.invoke(ctx)\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 1137, in invoke\n    return _process_result(sub_ctx.command.invoke(sub_ctx))\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 956, in invoke\n\n     return ctx.invoke(self.callback, **ctx.params)\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 555, in invoke\n    return callback(*args, **kwargs)\n  File \"/usr/local/lib/python3.7/dist-packages/config/main.py\", line 1048, in save\n    config_db = sort_dict(read_json_file(file))\n  File \"/usr/local/lib/python3.7/dist-packages/config/main.py\", line 118, in read_json_file\n    raise Exception(str(e))\nException: Expecting ':' delimiter: line 3723 column 24 (char 131228)\n```\n\n#### Steps to reproduce the issue:\n1. config qos reload\n2. config save\n3.\n\n#### Describe the results you received:\nconfig save fails with a crash\n\n#### Describe the results you expected:\nconfig save shouldn't fail.\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: SONiC.202106.17-4536f35f2_Internal\nDistribution: Debian 10.10\nKernel: 4.19.0-12-2-amd64\nBuild commit: 4536f35f2\nBuild date: Wed Sep 22 <IPV6> UTC 2021\nBuilt by: sw-r2d2-bot@r-build-sonic-ci02-244\n\nPlatform: x86_64-mlnx_msn4700-r0\nHwSKU: ACS-MSN4700\nASIC: mellanox\nASIC Count: 1\nSerial Number: Undefined.\nModel Number: Undefined.\nHardware Revision: N/A\nUptime: <IPV6> up 0 min,  1 user,  load average: 0.43, 0.10, 0.03\n\nDocker images:\nREPOSITORY                    TAG                            IMAGE ID            SIZE\ndocker-syncd-mlnx             202106.17-4536f35f2_Internal   0c04f10f2c2c        997MB\ndocker-syncd-mlnx             latest                         0c04f10f2c2c        997MB\ndocker-platform-monitor       202106.17-4536f35f2_Internal   227fb1ee97f4        746MB\ndocker-platform-monitor       latest                         227fb1ee97f4        746MB\ndocker-dhcp-relay             latest                         2d2618c074d5        420MB\ndocker-snmp                   202106.17-4536f35f2_Internal   bd7b6e158f3e        455MB\ndocker-snmp                   latest                         bd7b6e158f3e        455MB\ndocker-teamd                  202106.17-4536f35f2_Internal   e4d76906805a        425MB\ndocker-teamd                  latest                         e4d76906805a        425MB\ndocker-lldp                   202106.17-4536f35f2_Internal   ac6ef41594e4        453MB\ndocker-lldp                   latest                         ac6ef41594e4        453MB\ndocker-database               202106.17-4536f35f2_Internal   0c00992e77ea        413MB\ndocker-database               latest                         0c00992e77ea        413MB\ndocker-router-advertiser      202106.17-4536f35f2_Internal   5b4d531fb734        413MB\ndocker-router-advertiser      latest                         5b4d531fb734        413MB\ndocker-orchagent              202106.17-4536f35f2_Internal   95b72c53b4ee        443MB\ndocker-orchagent              latest                         95b72c53b4ee        443MB\ndocker-nat                    202106.17-4536f35f2_Internal   95d2ccfbf36c        428MB\ndocker-nat                    latest                         95d2ccfbf36c        428MB\ndocker-macsec                 202106.17-4536f35f2_Internal   2d103b4b2d0f        428MB\ndocker-macsec                 latest                         2d103b4b2d0f        428MB\ndocker-sonic-telemetry        202106.17-4536f35f2_Internal   563dc1a9b412        502MB\ndocker-sonic-telemetry        latest                         563dc1a9b412        502MB\ndocker-sonic-mgmt-framework   202106.17-4536f35f2_Internal   58b3da73944d        570MB\ndocker-sonic-mgmt-framework   latest                         58b3da73944d        570MB\ndocker-fpm-frr                202106.17-4536f35f2_Internal   7258659b2c3d        443MB\ndocker-fpm-frr                latest                         7258659b2c3d        443MB\ndocker-sflow                  202106.17-4536f35f2_Internal   79306ace497b        426MB\ndocker-sflow                  latest                         79306ace497b        426MB\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 1859,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/1859",
+    "title": "[kdump] Remove automatic saving of kdump config in startup config",
+    "merged_at": "2021-10-07T15:58:39Z",
+    "description": "Fix https://github.com/Azure/sonic-buildimage/issues/8888\n\nWarn user to save the config instead of saving the kdump config\nin config_db.json under the covers. Having more than one actors\noperate on config_db.json can result in an exception.\n\n#### What I did\nRemove automatic saving of kdump config in startup config. Warn user to save the config instead of saving the kdump config in config_db.json under the covers.\n\n#### How I did it\nModified the sonic-kdump-config script to not save kdump configuration. Modified config/kdump.py to show an additional note.\n\n#### How to verify it\nconfig kdump enable\nconfig kdump disable\nconfig kdump memory\n\n#### Previous command output (if the output of a command-line utility has changed)\nroot@sonic:/home/admin# config kdump disable\nroot@sonic:/home/admin# config kdump enable\nroot@sonic:/home/admin# config kdump memory 512M\n\n#### New command output (if the output of a command-line utility has changed)\nroot@sonic:/home/admin# config kdump disable\nKDUMP configuration changes may require a reboot to take effect.\nSave SONiC configuration using 'config save' before issuing the reboot command.\n\nroot@sonic:/home/admin# config kdump enable\nKDUMP configuration changes may require a reboot to take effect.\nSave SONiC configuration using 'config save' before issuing the reboot command.\n\nroot@sonic:/home/admin# config kdump memory 0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M\nKDUMP configuration changes may require a reboot to take effect.\nSave SONiC configuration using 'config save' before issuing the reboot command.",
+    "files": [
+      {
+        "path": "config/kdump.py",
+        "additions": 6,
+        "deletions": 0
+      },
+      {
+        "path": "scripts/sonic-kdump-config",
+        "additions": 0,
+        "deletions": 39
+      },
+      {
+        "path": "show/kdump.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

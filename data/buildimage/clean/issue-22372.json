@@ -1,0 +1,108 @@
+{
+  "id": "buildimage-22372",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 22372,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/22372",
+    "title": "Enhancement: Improve Generic Config Updater (GCU) performance",
+    "created_at": "2025-04-18T19:06:54Z",
+    "closed_at": "2025-05-13T17:33:46Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "enhancement",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the enhancement\n\nGeneric Configuration Updater is woefully slow, so much so that it is basically unusable in a lot of situations.\n\n### Current Behavior\n\nIn a configuration I have, it takes about 15 minutes to apply.\n\nSee PRs for detailed information.  This ticket was created to aid in visibility.\n\n### Proposed Behavior\n\nIt would be expected this to take no more than a minute or two.\n\n### Implementation\n* https://github.com/sonic-net/sonic-buildimage/pull/22254\n* https://github.com/sonic-net/sonic-utilities/pull/3831\n\nAlso a bug was discovered during the implementation that still needs to be addressed which would improve performance even further.\n* https://github.com/sonic-net/sonic-buildimage/issues/22255"
+  },
+  "resolution": {
+    "pr_number": 3831,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/3831",
+    "title": "Generic Configuration Updater (GCU) performance enhancements",
+    "merged_at": "2025-11-03T05:42:39Z",
+    "description": "***Important***: Please review each commit (including commit message) individually.  Looking at the patch-set as a whole may cause confusion.\n\n#### What I did\n\nGeneric Configuration Updater is extremely slow, using the python profiler it was possible to determine the worst offenders where changes could be made without affecting the overall algorithm and HLD design documentation.\n\nBrief overview of changes:\n* Prevent copy.deepcopy() calls where possible\n* Don't run validation twice back to back\n* Move configdb path <> xpath conversion logic to sonic-yang-mgmt where it belongs and enhance it to support schema conversion (not just data) and add caching.\n* Sort table keys by the number of schema backlinks and must statements for the node to try better guess the right order of the patches to generate rather than doing it in alphabetical order which is likely to cause validation failures.\n* Add ability to Group patches together in some commits where its known they will not cause issues, these are things like grouping parameter updates under the same key.\n* When applying changes, do not re-read the configuration from redis twice between each applied patch (this is **extremely** slow, and actually hid a race condition).  We are mutating the configuration and a lock is held so we know the expected before and after.  There is still a final validation to ensure something didn't go sideways.\n\nDependencies:\n * sonic-yang-mgmt enhancements: https://github.com/sonic-net/sonic-buildimage/pull/22254\n * sonic-yang-mgmt parse uses/grouping: https://github.com/sonic-net/sonic-buildimage/pull/21907\n * sonic-utilities rely on sonic-yang-mgmt uses/grouping handling: https://github.com/sonic-net/sonic-utilities/pull/3814\n\nStats below ... (stats need both this and the sonic-utilities PR to be relevant)...\n\n<ins>**Original Performance:**</ins>\nDry Run:\n```\ntime sudo config replace -d ./config_db.json\n...\nreal\t2m51.588s\nuser\t2m23.777s\nsys\t0m25.300s\n```\n\nFull:\n```\ntime sudo config replace ./config_db.json\n...\nreal\t14m53.772s\nuser\t12m2.376s\nsys\t2m8.908s\n```\n\n<ins>**With Patch**:</ins>\nDry Run:\n```\ntime sudo config replace -d ./config_db.json\n...\nreal\t0m59.602s\nuser\t0m56.434s\nsys\t0m2.110s\n```\n\nFull:\n```\ntime sudo config replace ./config_db.json\n...\nreal\t1m54.303s\nuser\t0m58.482s\nsys\t0m2.545s\n```\n\nSo that's roughly 3x improvement for dry-run, and 7.5x improvement for full commit.  There is room for improvement on the full commit due to a `sleep(1)` being used between each patch because of a race condition found in the prior code (that was hidden due to a costly sanity check that has been removed).\n\n#### How I did it\n\nProfiling via cProfiler\n\n#### How to verify it\n\nRun sonic-utilities test cases, they still pass\n\n#### Previous command output (if the output of a command-line utility has changed)\n\nN/A\n\n#### New command output (if the output of a command-line utility has changed)\n\nN/A\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/22372",
+    "files": [
+      {
+        "path": "generic_config_updater/change_applier.py",
+        "additions": 36,
+        "deletions": 15
+      },
+      {
+        "path": "generic_config_updater/generic_updater.py",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "generic_config_updater/gu_common.py",
+        "additions": 124,
+        "deletions": 553
+      },
+      {
+        "path": "generic_config_updater/patch_sorter.py",
+        "additions": 576,
+        "deletions": 95
+      },
+      {
+        "path": "tests/generic_config_updater/change_applier_test.py",
+        "additions": 8,
+        "deletions": 5
+      },
+      {
+        "path": "tests/generic_config_updater/files/patch_sorter_test_success.json",
+        "additions": 155,
+        "deletions": 385
+      },
+      {
+        "path": "tests/generic_config_updater/gcu_feature_patch_application_test.py",
+        "additions": 2,
+        "deletions": 4
+      },
+      {
+        "path": "tests/generic_config_updater/generic_updater_test.py",
+        "additions": 5,
+        "deletions": 3
+      },
+      {
+        "path": "tests/generic_config_updater/gu_common_test.py",
+        "additions": 3,
+        "deletions": 73
+      },
+      {
+        "path": "tests/generic_config_updater/gutest_helpers.py",
+        "additions": 45,
+        "deletions": 0
+      },
+      {
+        "path": "tests/generic_config_updater/multiasic_change_applier_test.py",
+        "additions": 14,
+        "deletions": 8
+      },
+      {
+        "path": "tests/generic_config_updater/patch_sorter_test.py",
+        "additions": 124,
+        "deletions": 113
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 22254,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/22254",
+      "title": "sonic-yang-mgmt: Generic Config Updater - performance dependencies",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

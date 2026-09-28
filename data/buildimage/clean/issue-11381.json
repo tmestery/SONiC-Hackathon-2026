@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-11381",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 11381,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/11381",
+    "title": "[VS] ARP packets are being dropped on the VS Image When used as a L2 device",
+    "created_at": "2022-07-07T18:11:57Z",
+    "closed_at": "2022-08-04T16:18:01Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\n#### Steps to reproduce the issue:\n1. Topology: HA <-> Eth0, HB <-> Eth4\n2. config vlan add 10\n3. config vlan member add 10 Ethernet0 -u\n4. config vlan member add 10 Ethernet4 -u\n5. Assign IP addresses in the same network to HA & HB\n6. Ping HB from HA\n\n#### Describe the results you received:\n- ARP request is being dropped by the VS\n- This is because of the ebtable rules configured.\n\nThese rules might be required on the real HW but these shouldn't be there for VS\n```\n-A FORWARD -p ARP -j DROP\n-A FORWARD -p 802_1Q --vlan-encap ARP -j DROP\n```\n\n#### Describe the results you expected:\nARP shouldn't be dropped\n\n#### Work-Around:\n\nTo allow ARP frames forwarded via the switch, please, remove corresponding ebtables entries:\n```\nsudo ebtables -D FORWARD -p 802_1Q --vlan-encap ARP -j DROP\nsudo ebtables -D FORWARD -p ARP -j DROP\n```"
+  },
+  "resolution": {
+    "pr_number": 11585,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/11585",
+    "title": "[KVM]Preventing ebtables cfg to be applied on KVM",
+    "merged_at": "2022-08-04T16:18:00Z",
+    "description": "#### Why I did it\nTo fix https://github.com/Azure/sonic-buildimage/issues/11381\n\nPreventing ebtables rules to be applied on KVM image. The ebtables rules in  SONiC are added to prevent ARP as well as L2 forwarding to be blocked in linux kernel since the hardware will take care of the actual L2 forward. However this is not the case with KVM where linux needs to forward even L2 packets\n\n#### How I did it\nAdded check in docker_image_ctl.j2 to apply the ebtables rules only when platform is not vs which is set for KVM\n\n#### How to verify it\nLoaded KVM image built with the changes and verified ebtables are not present\n\nBefore\n```\nroot@sonic:~# ebtables -L\nBridge table: filter\n\nBridge chain: INPUT, entries: 0, policy: ACCEPT\n\nBridge chain: FORWARD, entries: 3, policy: ACCEPT\n-d BGA -j DROP\n-p ARP -j DROP\n-p 802_1Q --vlan-encap ARP -j DROP\n\nBridge chain: OUTPUT, entries: 0, policy: ACCEPT\nroot@sonic:~#\n```\n\nAfter\n```\nebtables -L\nBridge table: filter\n\nBridge chain: INPUT, entries: 0, policy: ACCEPT\n\nBridge chain: FORWARD, entries: 0, policy: ACCEPT\n\nBridge chain: OUTPUT, entries: 0, policy: ACCEPT\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

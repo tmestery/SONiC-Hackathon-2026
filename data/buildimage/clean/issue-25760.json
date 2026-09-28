@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-25760",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25760,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25760",
+    "title": "[sonic-vpp][Data Plane][t1-lag] ECMP - Enable data plane testing on VPP KVM testbed",
+    "created_at": "2026-03-02T05:51:11Z",
+    "closed_at": "2026-08-12T07:53:05Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P3",
+    "issue_type": null,
+    "platform": "vpp",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "> :robot: *Created by DevAce, Jianquan's AI Agent, on his behalf.*\n\n## Description\n\nEnable ecmp data plane testing on the SONiC-VPP KVM testbed.\n\n## Test Module Coverage\n\n| Feature | sonic-vpp | vpp | Status | Notes |\n|---------|:---:|:---:|--------|-------|\n| `ecmp` | :warning: | :warning: | Partial | VPP only supports 5-tuple hashing |\n\n## Priority\n\n**P1** --- Test cases are data plane related and supported by both sonic-vpp and VPP.\n\n> **Note:** VPP only supports 5-tuple hashing\n\n## Acceptance Criteria\n\n- [ ] Identify which ECMP test cases are compatible with 5-tuple hashing\n- [ ] Compatible test cases pass on VPP KVM testbed\n- [ ] Document unsupported hashing scenarios"
+  },
+  "resolution": {
+    "pr_number": 26756,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26756",
+    "title": "[ecmp] Enable test_udp_packets and test_udp_packets_ecmp on sonic-vpp",
+    "merged_at": "2026-08-12T07:53:04Z",
+    "description": "### Description of PR\n\nSummary: Enable `tests/ecmp/test_ecmp_balance.py` on `asic_type == 'vpp'` t0/t1 topologies \u2014 both `test_udp_packets` (5-tuple ECMP distribution) and `test_udp_packets_ecmp` (seed change re-distributes a fixed flow). Adds a `VPPPlatformHandler` and relaxes the Broadcom-only `conditional_mark` rule.\n\nFixes sonic-net/sonic-buildimage#25760. Same pattern as the FIB enablement (#24721).\n\n> [!IMPORTANT]\n> **Depends on sonic-net/sonic-sairedis#2019**, which implements `SAI_SWITCH_ATTR_ECMP_DEFAULT_HASH_SEED` in saivpp. Merge only after that change is in the sonic-vpp image \u2014 otherwise the seed never reaches VPP and `test_udp_packets_ecmp` fails by design.\n\n### Type of change\n\n- [ ] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A \u2014 no backport requested.\nFailure type: other (new platform enablement, not a regression)\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n\n- master: `SONiC.master.1151527` on converged `vms-kvm-vpp-t1-lag`, with sonic-net/sonic-sairedis#2019 in the image \u2014 **4 passed** (`test_udp_packets` and `test_udp_packets_ecmp`, ipv4 + ipv6).\n\n### Approach\n\n#### What is the motivation for this PR?\n\nThe file is restricted to `asic_type == 'broadcom'`, but sonic-vpp executes 5-tuple ECMP correctly (VPP's default `ip4/ip6-lookup` hash covers src/dst IP, proto, src/dst port), so the blanket skip leaves the whole file uncovered on this topology. Two gaps had to be closed: there was no `VPPPlatformHandler` (so every test skipped with *\"Platform is either not implemented or not supported\"*), and `test_udp_packets_ecmp` needs to mutate the hash seed, which on VPP is only reachable via SAI.\n\n#### How did you do it?\n\n2 files, +103 / \u22123:\n\n| File | Change |\n|---|---|\n| `tests/ecmp/platform_handler.py` | Add `VPPPlatformHandler` (registered in `PlatformHandlerFactory`). Any sonic-vpp t0/t1 non-dualtor testbed, no SKU allow-list \u2014 behaviour is VPP-driven, not HWSKU-dependent. Seed GET reads `ecmp_hash_seed` from APPL_DB, SET pushes it via `swssconfig`. |\n| `tests_mark_conditions.yaml` | Relax the file-level skip from `asic_type not in ['broadcom']` to `['broadcom', 'vpp']`. |\n| `.azure-pipelines/pr_test_scripts.yaml` | Add `tests/ecmp` to the `t1-lag-vpp` PR test set (see note below). |\n\n`test_ecmp_balance.py` itself is unchanged.\n\n**On the other `tests/ecmp` modules.** The whole directory is listed, not just\n`test_ecmp_balance.py`, so the modules that cannot run on sonic-vpp today are\nreported as *expected skips* rather than silently not running at all \u2014 and they\nstart running by themselves if sonic-vpp later gains the required support. All of\nthem skip cleanly via existing markers, so they cost no runtime and cannot fail:\n\n| Module | Skips because |\n|---|---|\n| `inner_hashing/*` (4 modules) | `topology('t0')` marker; this is a t1 topology. Also needs PBH, which saivpp does not implement. |\n| `test_fgnhg.py` | `topology('t0')` marker. |\n| `test_ecmp_sai_value.py` | `asic('broadcom')` marker; verifies the seed by reading Broadcom ASIC registers via `bcmcmd`, which has no VPP equivalent. |\n| `test_ecmp_group_members_increment.py` | `asic('broadcom')` marker. |\n\n#### How did you verify/test it?\n\n```\npytest ecmp/test_ecmp_balance.py --inventory ../ansible/veos_vtb     --host-pattern vlab-vpp-01 --testbed_file ../ansible/vtestbed.yaml     --testbed vms-kvm-vpp-t1-lag --module-path ../ansible/library     --skip_sanity --disable_loganalyzer --assert plain -rsxv\n```\n\n`4 passed`. The dependency was verified rather than assumed: on a stock image the same run gives `2 passed, 2 failed`, both `test_udp_packets_ecmp` cases failing at the distribution-change assertion.\n\n#### Any platform specific information?\n\n`VPPPlatformHandler` is selected only for `asic_type == 'vpp'`; no other ASIC changes. Dualtor is excluded (same constraint the Mellanox handler applies).\n\nStill out of scope on sonic-vpp: `test_ecmp_sai_value.py`, `test_fgnhg.py`, `inner_hashing/*`, `test_ecmp_group_members_increment.py`.\n\n#### Supported testbed topology if it's a new test case?\n\nNot a new test case. Verified on `t1-lag-vpp`; the handler also accepts t0.\n\n### Documentation\n\nNo HLD needed \u2014 test enablement on an existing topology, no new test cases.",
+    "files": [
+      {
+        "path": ".azure-pipelines/pr_test_scripts.yaml",
+        "additions": 13,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/ecmp/platform_handler.py",
+        "additions": 120,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

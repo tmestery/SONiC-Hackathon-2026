@@ -1,0 +1,98 @@
+{
+  "id": "buildimage-8979",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8979,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8979",
+    "title": "[chassis] Default route learnt from peer linecard is not installed",
+    "created_at": "2021-10-14T20:32:11Z",
+    "closed_at": "2021-11-24T23:32:16Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nIn a SONiC chassis in T2 topology, on the linecard with no upstream(T3) neighbors the default route is learnt over the internal iBGP session from the remote linecard which has connected to upstream routers.\n\nExample\n```\nadmin@str2-sonic-lc7-1:~$ show ip route <IP>/0\nRouting entry for <IP>/0\n  Known via \"bgp\", distance 200, metric 0\n  Last update <IPV6> ago\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n      <IP>, via Ethernet-IB0 onlink, weight 1\n\nRouting entry for <IP>/0\n  Known via \"static\", distance 200, metric 0, best\n  Last update 1d01h47m ago\n  * <IP>, via eth0, weight 1\n```\n\nHowever, the default route learnt from BGP is not installed in the kernel because it is not considered as best route.\nThe static route programmed for the management gateway address has the same distance, so it is considered as the best route\nThis results in no default route present in the APP_DB and ASIC_DB\n\n#### Describe the results you received:\nDefault route install in kernel\n```\nadmin@str2-sonic-lc7-1:~$ sudo ip route show <IP>/0\ndefault via <IP> dev eth0 proto 196 metric 20\n```\nDefault route missing in APP_DB, as routes with nexthop as `eth0` is not added to APP_DB\n```\nadmin@str2-sonic-lc7-1:~$ redis-cli keys *<IP>/0*\n(empty array)\nadmin@str2-sonic-lc7-1:~$\n```\n#### Describe the results you expected:\nThe default route learnt from the remote linecard should be installed\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: SONiC.202106.41991-7aa9fde3e\nDistribution: Debian 10.10\nKernel: 4.19.0-12-2-amd64\nBuild commit: 7aa9fde3e\nBuild date: Thu Oct  7 <IPV6> UTC 2021\nBuilt by: AzDevOps@sonic-build-workers-000RRM\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 9182,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/9182",
+    "title": "remove staticd.conf.j2",
+    "merged_at": "2021-11-24T23:32:16Z",
+    "description": "Signed-off-by: Arvindsrinivasan Lakshmi Narasimhan <<EMAIL>>\n\n#### Why I did it\nresolves #8979 and #9055\n\n#### How I did it\nRemove the file `static.conf.j2`,which adds the default route on eth0  from frr docker\n\n#### How to verify it\n\n- Check no default route present on eth0 when all eBGP sessions are shutdown\n```\nadmin@str2-sonic-lc3-1:~$ show ip bgp summary\n\nIPv4 Unicast Summary:\nBGP router identifier <IP>, local AS number 65100 vrf-id 0\nBGP table version 144872\nRIB entries 425, using 81600 bytes of memory\nPeers 23, using 501768 KiB of memory\nPeer groups 3, using 192 bytes of memory\n\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down    State/PfxRcd    NeighborName\n-----------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\n<IP>        4  65100        806     191275         0      0       0  <IPV6>   1458\n<IP>        4  65100        806     191275         0      0       0  <IPV6>   1458\n<IP>       4  65200       4277      10673         0      0       0  <IPV6>   Idle (Admin)    ARISTA01T3\n<IP>       4  65202       4278      13527         0      0       0  <IPV6>   Idle (Admin)    ARISTA05T3\n<IP>      4  65203       4276      10985         0      0       0  <IPV6>   Idle (Admin)    ARISTA07T3\n<IP>      4  65204       4276      11024         0      0       0  <IPV6>   Idle (Admin)    ARISTA09T3\n<IP>      4  65205       4274      11141         0      0       0  <IPV6>   Idle (Admin)    ARISTA11T3\n<IP>      4  65206       4276      11219         0      0       0  <IPV6>   Idle (Admin)    ARISTA13T3\n<IP>      4  65207       4275      11297         0      0       0  <IPV6>   Idle (Admin)    ARISTA15T3\n<IP>      4  65208       4274      11336         0      0       0  <IPV6>   Idle (Admin)    ARISTA17T3\n<IP>      4  65210       4276      11454         0      0       0  <IPV6>   Idle (Admin)    ARISTA19T3\n<IP>      4  65211       4275      11571         0      0       0  <IPV6>   Idle (Admin)    ARISTA20T3\n<IP>      4  65212       4276      11688         0      0       0  <IPV6>   Idle (Admin)    ARISTA21T3\n<IP>      4  65213       4276      11805         0      0       0  <IPV6>   Idle (Admin)    ARISTA22T3\n<IP>      4  65214       4276      11961         0      0       0  <IPV6>   Idle (Admin)    ARISTA23T3\n<IP>      4  65215       4275      12156         0      0       0  <IPV6>   Idle (Admin)    ARISTA24T3\n<IP>      4  65216       4278      12312         0      0       0  <IPV6>   Idle (Admin)    ARISTA25T3\n<IP>      4  65217       4278      12507         0      0       0  <IPV6>   Idle (Admin)    ARISTA26T3\n<IP>      4  65218       4277      12585         0      0       0  <IPV6>   Idle (Admin)    ARISTA27T3\n<IP>      4  65219       4277      12780         0      0       0  <IPV6>   Idle (Admin)    ARISTA28T3\n<IP>      4  65220       4278      12936         0      0       0  <IPV6>   Idle (Admin)    ARISTA29T3\n<IP>      4  65221       4278      13054         0      0       0  <IPV6>   Idle (Admin)    ARISTA30T3\n<IP>      4  65222       4278      13296         0      0       0  <IPV6>   Idle (Admin)    ARISTA31T3\n\nTotal number of neighbors 23\nadmin@str2-sonic-lc3-1:~$ show ip route <IP>/0\n\nadmin@str2-sonic-lc3-1:~$\n```\n- Start the eBGP session and verify the default route is learnt from all the external peers and install in APP_DB\n```\nadmin@str2-sonic-lc3-1:~$ sudo config bgp startup all\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor <IP>...\nStarting up BGP session with neighbor fc00::12...\nStarting up BGP session with neighbor fc00::1a...\nStarting up BGP session with neighbor fc00::2...\nStarting up BGP session with neighbor fc00::22...\nStarting up BGP session with neighbor fc00::2a...\nStarting up BGP session with neighbor fc00::32...\nStarting up BGP session with neighbor fc00::3a...\nStarting up BGP session with neighbor fc00::42...\nStarting up BGP session with neighbor fc00::4a...\nStarting up BGP session with neighbor fc00::4e...\nStarting up BGP session with neighbor fc00::52...\nStarting up BGP session with neighbor fc00::56...\nStarting up BGP session with neighbor fc00::5a...\nStarting up BGP session with neighbor fc00::5e...\nStarting up BGP session with neighbor fc00::62...\nStarting up BGP session with neighbor fc00::66...\nStarting up BGP session with neighbor fc00::6a...\nStarting up BGP session with neighbor fc00::6e...\nStarting up BGP session with neighbor fc00::72...\nStarting up BGP session with neighbor fc00::76...\nStarting up BGP session with neighbor fc00::7a...\nadmin@str2-sonic-lc3-1:~$ show ip route <IP>/0\nRouting entry for <IP>/0\n  Known via \"bgp\", distance 20, metric 0, best\n  Last update <IPV6> ago\n  * <IP>, via PortChannel0002, weight 1\n  * <IP>, via PortChannel0004, weight 1\n  * <IP>, via PortChannel0006, weight 1\n  * <IP>, via PortChannel0008, weight 1\n  * <IP>, via PortChannel0010, weight 1\n  * <IP>, via PortChannel0012, weight 1\n  * <IP>, via PortChannel0014, weight 1\n  * <IP>, via Ethernet64, weight 1\n  * <IP>, via Ethernet72, weight 1\n  * <IP>, via Ethernet76, weight 1\n  * <IP>, via Ethernet80, weight 1\n  * <IP>, via Ethernet84, weight 1\n  * <IP>, via Ethernet88, weight 1\n  * <IP>, via Ethernet92, weight 1\n  * <IP>, via Ethernet96, weight 1\n  * <IP>, via Ethernet100, weight 1\n  * <IP>, via Ethernet104, weight 1\n  * <IP>, via Ethernet108, weight 1\n  * <IP>, via Ethernet112, weight 1\n  * <IP>, via Ethernet116, weight 1\n  * <IP>, via Ethernet120, weight 1\n\nadmin@str2-sonic-lc3-1:~$ redis-cli HGETALL \"ROUTE_TABLE:<IP>/0\"\n1) \"ifname\"\n2) \"PortChannel0002,PortChannel0004,PortChannel0006,PortChannel0008,PortChannel0010,PortChannel0012,PortChannel0014,Ethernet64,Ethernet72,Ethernet76,Ethernet80,Ethernet84,Ethernet88,Ethernet92,Ethernet96,Ethernet100,Ethernet104,Ethernet108,Ethernet112,Ethernet116,Ethernet120\"\n3) \"nexthop\"\n4) \"<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>\"\nadmin@str2-sonic-lc3-1:~$\n```\n- Shutdown eBGP session and verify the default route is removed from kernel and APP_DB\n```\nadmin@str2-sonic-lc3-1:~$\nadmin@str2-sonic-lc3-1:~$ sudo config bgp shutdown all\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor <IP>...\nShutting down BGP session with neighbor fc00::12...\nShutting down BGP session with neighbor fc00::1a...\nShutting down BGP session with neighbor fc00::2...\nShutting down BGP session with neighbor fc00::22...\nShutting down BGP session with neighbor fc00::2a...\nShutting down BGP session with neighbor fc00::32...\nShutting down BGP session with neighbor fc00::3a...\nShutting down BGP session with neighbor fc00::42...\nShutting down BGP session with neighbor fc00::4a...\nShutting down BGP session with neighbor fc00::4e...\nShutting down BGP session with neighbor fc00::52...\nShutting down BGP session with neighbor fc00::56...\nShutting down BGP session with neighbor fc00::5a...\nShutting down BGP session with neighbor fc00::5e...\nShutting down BGP session with neighbor fc00::62...\nShutting down BGP session with neighbor fc00::66...\nShutting down BGP session with neighbor fc00::6a...\nShutting down BGP session with neighbor fc00::6e...\nShutting down BGP session with neighbor fc00::72...\nShutting down BGP session with neighbor fc00::76...\nShutting down BGP session with neighbor fc00::7a...\nadmin@str2-sonic-lc3-1:~$ redis-cli HGETALL \"ROUTE_TABLE:<IP>/0\"\n(empty array)\nadmin@str2-sonic-lc3-1:~$\n```\n\nTo verify the issue #8979 check if the default route is present in APP_DB on the peer linecard\n```\nadmin@str2-sonic-lc6-1:~$ show ip route <IP>/0\nRouting entry for <IP>/0\n  Known via \"bgp\", distance 200, metric 0, best\n  Last update <IPV6> ago\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n    <IP> (recursive), weight 1\n  *   <IP>, via Ethernet-IB0 onlink, weight 1\n\nadmin@str2-sonic-lc6-1:~$ redis-cli -n 0 KEYS *<IP>/0*\n1) \"ROUTE_TABLE:<IP>/0\"\nadmin@str2-sonic-lc6-1:~$ redis-cli -n 0 HGETALL *<IP>/0*\n(empty array)\nadmin@str2-sonic-lc6-1:~$ redis-cli -n 0 HGETALL \"ROUTE_TABLE:<IP>/0\"\n1) \"ifname\"\n2) \"Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0\"\n3) \"nexthop\"\n4) \"<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>,<IP>\"\nadmin@str2-sonic-lc6-1:~$\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ x] 201911\n- [ ] 202006\n- [ x] 202012\n- [ x] 202106\n\n#### Description for the changelog\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "dockers/docker-fpm-frr/frr/frr.conf.j2",
+        "additions": 0,
+        "deletions": 2
+      },
+      {
+        "path": "dockers/docker-fpm-frr/frr/staticd/staticd.conf.j2",
+        "additions": 0,
+        "deletions": 2
+      },
+      {
+        "path": "dockers/docker-fpm-frr/frr/staticd/staticd.default_route.conf.j2",
+        "additions": 0,
+        "deletions": 10
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/frr.conf.j2/all.conf",
+        "additions": 0,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.conf",
+        "additions": 0,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.conf.json",
+        "additions": 0,
+        "deletions": 5
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.default_route.conf",
+        "additions": 0,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.default_route.conf.json",
+        "additions": 0,
+        "deletions": 7
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_sonic-cfggen.py",
+        "additions": 0,
+        "deletions": 6
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/frr.conf",
+        "additions": 0,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/frr.conf",
+        "additions": 0,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_frr.py",
+        "additions": 0,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

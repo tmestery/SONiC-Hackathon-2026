@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-9916",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 9916,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/9916",
+    "title": "[Security] caclmgrd always allows all control plane traffic sourced from port TCP/179",
+    "created_at": "2022-02-04T08:28:30Z",
+    "closed_at": "2022-02-17T23:05:00Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Security"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nI detected that all traffic that uses a source port TCP/179 will be allowed with no option of disabling this.\n\nAn attacker can trivially send packets with any source port they wish, so this would allow bypassing any control plane ACL.\n\n#### Steps to reproduce the issue:\n\n1. Use SONiC and **optionally** apply control plane ACLs (even with or without control plane ACLs this exploit is possible)\n\n#### Describe the results you received:\n\nOne of the first (i.e. highest priority) rules installed into iptables by caclmgrd is `iptables -A INPUT -p tcp --sport 179 -j ACCEPT` and `ip6tables -A INPUT -p tcp --sport 179 -j ACCEPT`.\n\nSince source port is fully controllable by the client establishing the connection, hitting this rule is trivial. Since this rule is one of the highest priority rules (higher than block IP2ME and custom control plane ACLs) it is impossible to configure SONiC to not allow this traffic.\n\n#### Describe the results you expected:\n\nControl plane traffic should not judge traffic based on source port. Leave it to conntrack.\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\n\nExample exploitation of an otherwise locked down IP2ME loopback address.\n\n```\nsudo nmap -g 179 -sS <IP>\nStarting Nmap 7.70 ( https://nmap.org ) at 2022-01-27 20:22 UTC\nNmap scan report for <IP>\nHost is up (0.000064s latency).\nNot shown: 996 closed ports\nPORT     STATE SERVICE\n22/tcp   open  ssh\n179/tcp  open  bgp\n443/tcp  open  https\n8080/tcp open  http-proxy\n\nNmap done: 1 IP address (1 host up) scanned in 14.91 seconds\n```\n\nFull disclosure: I filed this issue to help my PR fixing this #9827 move forward."
+  },
+  "resolution": {
+    "pr_number": 9827,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/9827",
+    "title": "[Security] caclmgrd: remove permit source port 179",
+    "merged_at": "2022-02-17T23:05:00Z",
+    "description": "#### Why I did it\n\nFixes #9916.\n\nI detected that all traffic that uses a source port TCP/179 will be allowed with no option of disabling this.\n\nAn attacker can trivially send packets with any source port they wish, so this would allow bypassing any control plane ACL.\n\n#### How I did it\n\nI removed these statements. They appear to be for allowing BGP, but the needed rules are already present:\n\n - Allow destination port 179\n - Allow established connections\n\n#### How to verify it\n\nIf this patch is wrong BGP would not work, so test BGP and see that it works.\nAlso, you can check in a running instance /without/ this patch that `iptables -vnL` shows that 0 packets have been accepted into the `tcp spt:179` rule.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [x] 202012\n- [x] 202106\n- [x] 202111\n\nReason: Security patch. caclmgrd was introduced in 202012 it seems.\n\n#### Description for the changelog\n\ncaclmgrd: Remove explicit permit source port 179\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n![image](https://user-images.githubusercontent.com/149442/150579667-9b28c8d7-ed67-4b57-9b16-d731f967097f.png)",
+    "files": [
+      {
+        "path": "src/sonic-host-services/scripts/caclmgrd",
+        "additions": 0,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

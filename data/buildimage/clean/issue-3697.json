@@ -1,0 +1,86 @@
+{
+  "id": "buildimage-3697",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 3697,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/3697",
+    "title": "Boot type during config reload after fast reboot is invalid",
+    "created_at": "2019-11-01T13:21:36Z",
+    "closed_at": "2019-11-12T20:59:14Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\nAfter the fast reboot, on the next config reload, the system behaves in the same way as during the fast reboot flow.\n\nIt seems that the boot type detection logic in sonic-buildimage and sonic-sairedis are not aligned:\n\nsonic-buildimage/files/scripts/syncd.sh\n```bash\nfunction getBootType()\n{\n    # same code snippet in files/build_templates/docker_image_ctl.j2\n    case \"$(cat /proc/cmdline)\" in\n    *SONIC_BOOT_TYPE=warm*)\n        TYPE='warm'\n        ;;\n    *SONIC_BOOT_TYPE=fastfast*)\n        TYPE='fastfast'\n        ;;\n    *SONIC_BOOT_TYPE=fast*|*fast-reboot*)\n        TYPE=$(awk '{ if ($1 <= 180) print \"fast\"; else print \"cold\" }' /proc/uptime)\n        ;;\n    *)\n        TYPE='cold'\n    esac\n    echo \"${TYPE}\"\n}\n```\n\nsonic-sairedis/syncd/scripts/syncd_init_common.sh\n```bash\ncase \"$(cat /proc/cmdline)\" in\n  *SONIC_BOOT_TYPE=fastfast*)\n    if [ -e /var/warmboot/warm-starting ]; then\n        FASTFAST_REBOOT='yes'\n    fi\n    ;;\n  *SONIC_BOOT_TYPE=fast*|*fast-reboot*)\n     FAST_REBOOT='yes'\n    ;;\n  *)\n     FAST_REBOOT='no'\n     FASTFAST_REBOOT='no'\n    ;;\nesac\n\n...\n\nfunction set_start_type()\n{\n    if [ x\"$WARM_BOOT\" == x\"true\" ]; then\n        CMD_ARGS+=\" -t warm\"\n    elif [ x\"$FAST_REBOOT\" == x\"yes\" ]; then\n        CMD_ARGS+=\" -t fast\"\n    elif [ x\"$FASTFAST_REBOOT\" == x\"yes\" ]; then\n        CMD_ARGS+=\" -t fastfast\"\n    fi\n}\n```\n\n**Steps to reproduce the issue:**\n1. fast-reboot\n2. config reload -y\n\n**Describe the results you received:**\n```bash\nroot@sonic:/home/admin# docker exec -ti syncd bash\nroot@sonic:/# ps -aux | grep [s]yncd\nroot        23  5.1  2.5 1265152 207064 pts/0  Sl   13:15   0:04 /usr/bin/syncd -u -p /tmp/sai.profile -t fast -r -m /usr/share/sonic/hwsku/port_config.ini\n```\n\n**Describe the results you expected:**\n```bash\nroot@sonic:/home/admin# docker exec -ti syncd bash\nroot@sonic:/# ps -aux | grep [s]yncd\nroot        23  5.1  2.5 1265152 207064 pts/0  Sl   13:15   0:04 /usr/bin/syncd -u -p /tmp/sai.profile -t cold -r -m /usr/share/sonic/hwsku/port_config.ini\n```\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n* N/A"
+  },
+  "resolution": {
+    "pr_number": 3741,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/3741",
+    "title": "Save fast-reboot state into the db",
+    "merged_at": "2019-12-04T22:10:20Z",
+    "description": "Fixes https://github.com/Azure/sonic-buildimage/issues/3697\n\n**- What I did**\n1. Put a flag for fast-reboot to the db\n2. Using this flag in other part of SONiC to start in Fast-reboot mode\n\n**- How I did it**\n1. Using EXPIRE feature of db\n2. If we reload a config, the state in the db will be removed.\n\n**- How to verify it**\nBuild your DUT and test on your dut.\n\n**- Description for the changelog**\n\n**- A picture of a cute animal (not mandatory but encouraged)**",
+    "files": [
+      {
+        "path": "dockers/docker-base-stretch/Dockerfile.j2",
+        "additions": 7,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-orchagent/Dockerfile.j2",
+        "additions": 0,
+        "deletions": 7
+      },
+      {
+        "path": "dockers/docker-sonic-telemetry/Dockerfile.j2",
+        "additions": 1,
+        "deletions": 8
+      },
+      {
+        "path": "dockers/docker-teamd/Dockerfile.j2",
+        "additions": 1,
+        "deletions": 8
+      },
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "files/scripts/syncd.sh",
+        "additions": 6,
+        "deletions": 1
+      },
+      {
+        "path": "rules/docker-base-stretch.mk",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-quagga",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 529,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/529",
+      "title": "Enable FastReboot if we have key \"FAST_REBOOT|system\" in State db",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

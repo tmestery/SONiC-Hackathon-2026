@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-1457",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 1457,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/1457",
+    "title": "[LLDP] lldp portidsubtype was NOT set to \"locally assigned\" but \"mac address\"",
+    "created_at": "2018-03-05T15:37:59Z",
+    "closed_at": "2018-03-08T01:08:46Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "In the latest version\n```\nSONiC Software Version: SONiC.HEAD.253-20ab99b\nDistribution: Debian 8.10\nKernel: 3.16.0-5-amd64\nBuild commit: 20ab99b\nBuild date: Sun Mar  4 <IPV6> UTC 2018\nBuilt by: johnar@jenkins-worker-3\n```\nthe lldp portidsubtype wasn't set to \"locally assigned\" but \"mac address\", it can be verified on the peer Arista VM with t0 topology.\n\n```\nARISTA04T1#show lldp neighbors detail\nInterface Ethernet1 detected 1 LLDP neighbors:\n\n  Neighbor 248a.0740.0966/248a.0740.0940, age 2 seconds\n  Discovered <IPV6> ago; Last changed <IPV6> ago\n  - Chassis ID type: MAC address (4)\n    Chassis ID     : 248a.0740.0966\n  - Port ID type: MAC address (3)\n    Port ID     : 248a.0740.0940\n  - Time To Live: 120 seconds\n  - Port Description: \"Ethernet120\"\n  - System Name: \"arc-mtbc-1001\"\n  - System Description: \"Debian GNU/Linux 8 (jessie) Linux 3.16.0-5-amd64 #1 SMP Debian 3.16.51-3+deb8u1 (2018-01-08) x86_64\"\n  - System Capabilities : Bridge, WLAN Access Point, Router, Station Only\n    Enabled Capabilities: Bridge, Router\n  - Management Address Subtype: IPv4\n    Management Address        : <IP>\n    Interface Number Subtype  : ifIndex (2)\n    Interface Number          : 2\n    OID String                :\n  - Management Address Subtype: IPv6\n    Management Address        : fc00:2::32\n    Interface Number Subtype  : ifIndex (2)\n    Interface Number          : 2\n    OID String                :\n  - IEEE802.1/IEEE802.3 Link Aggregation\n    Link Aggregation Status: Capable, Disabled (0x01)\n    Port ID                : 0\n  - IEEE802.3 MAC/PHY Configuration/Status\n    Auto-negotiation       : Not Supported\n    Operational MAU Type   : Unknown\n```\nThis is different with the version build on 28th Feb, on this version it was set to \"locally assigned\"\n\n```\nARISTA04T1#show lldp neighbors detail\nInterface Ethernet1 detected 1 LLDP neighbors:\n\n  Neighbor 248a.0740.0966/\"Ethernet120\", age 27 seconds\n  Discovered <IPV6> ago; Last changed <IPV6> ago\n  - Chassis ID type: MAC address (4)\n    Chassis ID     : 248a.0740.0966\n  - Port ID type: Locally assigned (7)\n    Port ID     : \"Ethernet120\"\n  - Time To Live: 120 seconds\n  - Port Description: \"ARISTA04T1:Ethernet1\"\n  - System Name: \"arc-mtbc-1001\"\n  - System Description: \"Debian GNU/Linux 8 (jessie) Linux 3.16.0-5-amd64 #1 SMP Debian 3.16.51-3+deb8u1 (2018-01-08) x86_64\"\n  - System Capabilities : Bridge, WLAN Access Point, Router, Station Only\n    Enabled Capabilities: Bridge, Router\n  - Management Address Subtype: IPv4\n    Management Address        : <IP>\n    Interface Number Subtype  : ifIndex (2)\n    Interface Number          : 1\n    OID String                :\n  - Management Address Subtype: IPv6\n    Management Address        : fc00:1::32\n    Interface Number Subtype  : ifIndex (2)\n    Interface Number          : 1\n    OID String                :\n  - IEEE802.1/IEEE802.3 Link Aggregation\n    Link Aggregation Status: Capable, Disabled (0x01)\n    Port ID                : 0\n  - IEEE802.3 MAC/PHY Configuration/Status\n    Auto-negotiation       : Not Supported\n    Operational MAU Type   : Unknown\n```\nwhen this happened, the lldpmgrd is running:\n\n```\nroot@arc-mtbc-1001:/# ps -A\n  PID TTY          TIME CMD\n    1 ?        <IPV6> supervisord\n   16 ?        <IPV6> rsyslogd\n   21 ?        <IPV6> lldpd\n   23 ?        <IPV6> lldpd\n   25 ?        <IPV6> python2\n   31 ?        <IPV6> python\n  191 ?        <IPV6> bash\n  196 ?        <IPV6> ps\n\nroot@arc-mtbc-1001:/# cat /proc/31/environ\nTERM=xtermSUPERVISOR_SERVER_URL=unix:///var/run/supervisor.sockDEBIAN_FRONTEND=noninteractiveHOSTNAME=arc-mtbc-1001SUPERVISOR_ENABLED=1SUPERVISOR_PROCESS_NAME=lldpmgrdSUPERVISOR_GROUP_NAME=lldpmgrdHOME=/rootPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nroot@arc-mtbc-1001:/#\n```"
+  },
+  "resolution": {
+    "pr_number": 26144,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26144",
+    "title": "[lldp] Fix transient MAC address Port ID during LLDP daemon startup",
+    "merged_at": "2026-03-17T06:20:02Z",
+    "description": "#### Why I did it\n\nWhen lldpd starts (or restarts), it sends the first LLDP frames with **MAC addresses as Port IDs** instead of the configured interface aliases (e.g., `Ethernet1/1`). This is because:\n\n1. lldpd starts in paused state and loads its config file (`/etc/lldpd.conf`)\n2. The config file only configures the management port (`eth0`) portidsubtype \u2014 no front-panel port configs exist\n3. After processing all config lines, lldpd internally **auto-resumes** (hardcoded behavior in lldpd's internal lldpcli)\n4. The first LLDP frames are sent with default MAC-based Port IDs\n5. lldpmgrd starts 2-3 seconds later and reconfigures each port with the correct alias via `lldpcli`\n6. This triggers an **MSAP change** (shutdown frame + new frame with correct Port ID) on every port\n\nPeers see transient neighbor flapping: a MAC-based entry appears briefly, then gets replaced by the correct interface name entry. This can trigger monitoring alerts and confuse network management systems (e.g., LLDP-based topology discovery, automated cabling validation).\n\nRelated issues:\n- Fixes #1488\n- Fixes #1457\n\n##### Work item tracking\n- Microsoft ADO **37084792**:\n\n#### How I did it\n\nAdded port ID subtype configuration for **all front-panel ports** directly in the `lldpd.conf.j2` Jinja2 template. The template iterates over the `PORT` table from ConfigDB and generates `configure ports <name> lldp portidsubtype local <alias>` lines for every port that has an alias defined.\n\nThese configuration lines are processed by lldpd during startup config loading, **before** the internal auto-resume fires. This ensures the very first LLDP frame already carries the correct interface alias as Port ID, eliminating the transient MAC-based Port ID window entirely.\n\nThe change is additive \u2014 lldpmgrd continues to handle dynamic port configuration changes at runtime. When lldpmgrd later processes the same ports, the portidsubtype is already correct, so no MSAP change occurs (only the port description gets added, which is expected).\n\n**Key technical findings from investigation:**\n- lldpd starts paused by default (the `pause` directive in config is actually redundant)\n- lldpd's internal lldpcli auto-resumes after ALL config file lines are processed \u2014 this cannot be prevented via config\n- The `resume` call in `waitfor_lldp_ready.sh` (from PR #5493) fires after auto-resume, so it's also redundant\n- The `PORT` variable is available in sonic-cfggen template context from ConfigDB's PORT table\n\n#### How to verify it\n\n**Tested on:** Arista-7260CX3-C64 running SONiC.20251110.15 (64 front-panel ports)\n\n**Test procedure:**\n1. Applied the template change inside the lldp container\n2. Verified template rendering: `sonic-cfggen -d -t /usr/share/sonic/templates/lldpd.conf.j2` \u2014 confirmed 67 portidsubtype lines (1 eth0 + 66 Ethernet ports)\n3. Started tcpdump on Ethernet0: `tcpdump -i Ethernet0 -e ether proto 0x88cc -v`\n4. Restarted lldp service: `systemctl restart lldp`\n5. Captured the **very first** LLDP frame from the DUT\n\n**tcpdump results \u2014 first frame after restart:**\n```\n<IPV6>.610005 LLDP, length 233\n  Chassis ID TLV (1), length 7\n    Subtype MAC address (4): <IPV6>\n  Port ID TLV (2), length 12\n    Subtype Local (7): Ethernet1/1        <-- CORRECT from first frame!\n  Time to Live TLV (3), length 2: TTL 120s\n  System Name TLV (5), length 14: bjw-can-7260-8\n```\n\n**Before this fix**, the first frame showed:\n```\n  Port ID TLV (2), length 8\n    Subtype MAC address (3): <IPV6>   <-- MAC address, WRONG\n```\n\n**Before:** MAC address as Port ID for 2-3 seconds \u2192 MSAP change \u2192 correct alias\n**After:** Correct alias (`Ethernet1/1`) from the very first LLDP frame \u2192 no MSAP change\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [x] 202411\n- [x] 202505\n- [x] 202511\n\n**Reason:** This race condition affects all SONiC versions using lldpd with the current startup architecture. The transient MAC-based Port ID causes neighbor flapping visible to peers on every LLDP container restart or device boot, which can trigger false alerts in production monitoring systems.\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] SONiC.20251110.15 (master-based, Arista-7260CX3-C64)\n\n#### Description for the changelog\n\nFix LLDP Port ID showing MAC address instead of interface name during daemon startup by pre-configuring portidsubtype in lldpd.conf.j2 template.\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no ConfigDB or YANG schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83e\udd94",
+    "files": [
+      {
+        "path": "dockers/docker-lldp/lldpd.conf.j2",
+        "additions": 19,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/data/lldp/mgmt_iface_ipv4_with_ports.json",
+        "additions": 41,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv4-iface-with-ports.conf",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_j2files.py",
+        "additions": 7,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

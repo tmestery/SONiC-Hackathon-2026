@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-28073",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28073,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28073",
+    "title": "Bug: [Err Log] [SmartSwitch] [HA] ERR swss#orchagent: :- addHaScopeEntry: HA Set entry does not exist for haset0_0",
+    "created_at": "2026-06-24T15:55:37Z",
+    "closed_at": "2026-07-28T22:05:00Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nDuring `test_ha_dpu_failure[Standby DPU Fail-Standby Traffic]`, after standby DPU reboot/restart, `orchagent` receives `DASH_HA_SCOPE_TABLE|haset0_0` entries without a preceding `DASH_HA_SET_TABLE|haset0_0` entry. Since the HA set is not present in `DashHaOrch::m_ha_set_entries`, `addHaScopeEntry()` logs repeated errors.\n\n### Steps to Reproduce\n\nRun:\n\npython3 -m pytest ha/test_ha_dpu_power_down.py\n\nRelevant test case:\n\ntest_ha_dpu_failure[Standby DPU Fail-Standby Traffic]\n\n### Actual Behavior and Expected Behavior\n\nActual: after standby DPU restart, `swss.rec` shows `DASH_HA_SCOPE_TABLE|haset0_0` issued from HaMgrD without `DASH_HA_SET_TABLE|haset0_0`, causing repeated `orchagent` errors.\n\nExpected: HA set config should be given before HA scope config\n\n### Relevant log output\n\n```\n2026 Jun 23 <IPV6> smartswitch-dpu-0 ERR swss#orchagent: :- addHaScopeEntry: HA Set entry does not exist for haset0_0\n2026 Jun 23 <IPV6> smartswitch-dpu-0 WARNING swss#orchagent: :- convertKfvToHaScopePb: Unknown field ha_term in HA Scope entry\n2026 Jun 23 <IPV6> smartswitch-dpu-0 ERR swss#orchagent: :- addHaScopeEntry: HA Set entry does not exist for haset0_0\n```\n\nswss.rec evidence:\n\n```\n2026-06-23.<IPV6>.077819|recording started\n2026-06-23.<IPV6>.404692|DASH_HA_SCOPE_TABLE|haset0_0|SET|version:1|ha_set_id:haset0_0|ha_role:standalone|ha_term:3\n2026-06-23.<IPV6>.404723|DASH_HA_SCOPE_TABLE|haset0_0|SET|ha_role:dead|version:1|ha_term:3|ha_set_id:haset0_0\n```\n\nNo post-reboot `DASH_HA_SET_TABLE|haset0_0|SET` appears before these scope entries.\n\n### Output of `show version`, `show techsupport`\n\nVersion: master, 202605\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 210,
+    "repository": "sonic-net/sonic-dash-ha",
+    "url": "https://github.com/sonic-net/sonic-dash-ha/pull/210",
+    "title": "swss-common-bridge: replay unchanged producer updates",
+    "merged_at": "2026-07-28T22:04:59Z",
+    "description": "### Description of PR\n\nSummary:\nThe producer bridge cached the last update and skipped identical requests. That cache can outlive a DPU control-plane reset, so an HA_SET entry removed from the destination DB was not restored when hamgrd replayed unchanged data. Always apply valid producer requests so replay can recover externally lost DB state. Consumer-side caching remains unchanged.\n\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/28073\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [x] Test improvement\n\n### Approach\n#### What is the motivation for this PR?\n\nA DPU control-plane reset can clear DASH_HA_SET_TABLE while swss-common-bridge remains running. Replaying the same HA_SET data previously returned \"No change in data\" without writing it, leaving the destination DB entry missing.\n\n#### How did you do it?\n\n- Removed producer-side TableCache deduplication.\n- Apply every valid Set or Del request to the ProducerTable.\n- Kept TableCache for consumer-side incremental merge and duplicate-notification filtering.\n- Updated duplicate and ZMQ consumer-recreation tests to require identical updates to be replayed.\n\n#### How did you verify/test it?\n\n- `cargo fmt --check --all`\n- `cargo build --workspace --all-features`\n- `cargo test -p swss-common-bridge` (9 passed)\n- Built the Debian runtime and debug-symbol packages.\n- Installed and verified the packages in dash-hadpu0 through dash-hadpu3 on two SmartSwitches.\n- Completed config reload on both switches and verified all eight hamgrd processes were running.\n\n#### Any platform specific information?\n\nValidated on SONiC SmartSwitch DPU containers using both Redis ProducerStateTable and ZmqProducerStateTable paths.\n\n### Documentation\n\nNo documentation change is required; this restores producer replay correctness without changing the public interface.",
+    "files": [
+      {
+        "path": "crates/swss-common-bridge/src/lib.rs",
+        "additions": 2,
+        "deletions": 24
+      },
+      {
+        "path": "crates/swss-common-bridge/src/producer.rs",
+        "additions": 27,
+        "deletions": 26
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

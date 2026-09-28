@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-13568",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 13568,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/13568",
+    "title": "201911 -> 202211 fast/warm-upgrade failure due to \"unknown\" compression",
+    "created_at": "2023-01-31T13:38:33Z",
+    "closed_at": "2023-03-06T11:36:45Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nWarm reboot fails due to failure in attempt to mount next image squashfs. This is needed for several things including asic config check, FW upgrade on Nvidia platform, etc. The compression algorithm was changed to ```zstd``` in 202211 but in 201911 this compression is not supported leading to errors and unability to perform warm reboot. Commit that introduced ```zstd```: https://github.com/sonic-net/sonic-buildimage/commit/d5365928d4dc1fa9081cf9fe61ab47e0ef306e9c\n\n#### Steps to reproduce the issue:\n1. boot 201911 image\n2. install 202211 image\n3. sudo warm-reboot -vvvf\n\n#### Describe the results you received:\n\n```\nroot@r-tigris-04:/home/admin# sonic_installer install 202211.bin -y\nImage SONiC-OS-202211_RC_2.2-02e5d77ca_Internal is already installed. Setting it as default...\nCommand: grub-set-default --boot-directory=/host 1\n\nCommand: sync;sync;sync\n\nCommand: sleep 3\n\nDone\nroot@r-tigris-04:/home/admin# fast-reboot\nmount: wrong fs type, bad option, bad superblock on /dev/loop2,\n       missing codepage or helper program, or other error\n\n       In some cases useful info is found in syslog - try\n       dmesg | tail or so.\n\nERROR: no such file: /tmp/image-202211_RC_2.2-02e5d77ca_Internal-fs//etc/mlnx/fw-SPC2.mfa\n\nroot@r-tigris-04:/home/admin# echo $?\n1\nroot@r-tigris-04:/home/admin#\n```\n\ndmesg output:\n\n```\nadmin@str-msn2700-22:~$ sudo dmesg | tail\n[34260.312537] squashfs: SQUASHFS error: Filesystem uses \"unknown\" compression. This is not supported\n```\n\n#### Describe the results you expected:\n\nSuccessful warm-reboot operation\n\n#### Output of `show version`:\n\n```\nSONiC-OS-202211_RC_2.2-02e5d77ca_Internal\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 13837,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/13837",
+    "title": "[Mellanox] Place FW binaries under platform directory instead of squashfs",
+    "merged_at": "2023-03-06T11:36:43Z",
+    "description": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/13568\n\nUpgrade from old image always requires squashfs mount to get the next image FW binary. This can be avoided if we put FW binary under platform directory which is easily accessible after installation:\n\n```\nadmin@r-spider-05:~$ ls /host/image-fw-new-loc.0-dirty-20230208.193534/platform/fw-SPC.mfa\n/host/image-fw-new-loc.0-dirty-20230208.193534/platform/fw-SPC.mfa\nadmin@r-spider-05:~$ ls -al /tmp/image-fw-new-loc.0-dirty-20230208.193534-fs/etc/mlnx/fw-SPC.mfa\nlrwxrwxrwx 1 root root 66 Feb  8 17:57 /tmp/image-fw-new-loc.0-dirty-20230208.193534-fs/etc/mlnx/fw-SPC.mfa -> /host/image-fw-new-loc.0-dirty-20230208.193534/platform/fw-SPC.mfa\n```\n\n#### Why I did it\n\n202211 and above uses different squashfs compression type that 201911 kernel can not handle. Therefore, we avoid mounting squashfs altogether with this change.\n\n#### How I did it\n\n- Place FW binary under /host/image-<version>/platform/mlnx/, soft links in /etc/mlnx are created to avoid breaking existing scripts/automation.\n- /etc/mlnx/fw-SPCX.mfa is a soft link always pointing to the FW that should be used in current image\n- mlnx-fw-upgrade.sh is updated to prefer /host/image-<version>/platform/mlnx location and fallback to /etc/mlnx in squashfs in case new location does not exist. This is necessary to do image downgrade.\n\n#### How to verify it\n\n- Upgrade from 201911 to master\n- master to 201911 downgrade\n- master -> master reboot\n- ONIE -> master boot (First FW burn)\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [x] 202211\n\n#### Description for the changelog\n\n#### Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/sonic_debian_extension.j2",
+        "additions": 12,
+        "deletions": 4
+      },
+      {
+        "path": "platform/mellanox/mlnx-fw-upgrade.j2",
+        "additions": 24,
+        "deletions": 11
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

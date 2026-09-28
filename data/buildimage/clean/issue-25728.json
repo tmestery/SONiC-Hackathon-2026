@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-25728",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25728,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25728",
+    "title": "Bug: chrony not coming up correctly after reload when running in mgmt VRF",
+    "created_at": "2026-02-27T09:45:01Z",
+    "closed_at": "2026-03-12T04:52:00Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen chrony is configured to start in the mgmt vrf, it needs to be ordered after interfaces-config.service, since that's the service that sets up the mgmt vrf. Since no such ordering dependency exists today, a race condition exists; if chrony starts before the mgmt vrf is set up, it fails to set up valid connections and therefore fails to ever sync. You can restart chrony to get bring it back online as a workaround.\n\nNote that this issue assumes https://github.com/sonic-net/sonic-buildimage/issues/25726 has been resolved (otherwise chrony will fail when configured in the mgmt VRF unconditionally).\n\n### Steps to Reproduce\n\nStart with NTP configured for the mgmt VRF, and the mgmt VRF enabled:\n```\n$ show mgmt-vrf | head -2\n\nManagementVRF : Enabled\n\n$ show ntp --verbose\nCommand: sudo ip vrf exec mgmt chronyc -n tracking\nReference ID    : 0AFA36FE (<IP>)\nStratum         : 5\nRef time (UTC)  : Fri Feb 27 <IPV6> 2026\nSystem time     : 0.000001452 seconds slow of NTP time\nLast offset     : -0.000003191 seconds\nRMS offset      : 0.000003191 seconds\nFrequency       : 11.260 ppm fast\nResidual freq   : +0.085 ppm\nSkew            : 0.204 ppm\nRoot delay      : 0.006934130 seconds\nRoot dispersion : 0.001427774 seconds\nUpdate interval : 2.0 seconds\nLeap status     : Normal\nCommand: sudo ip vrf exec mgmt chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^* <IP>                 4   6    17     2  -1662ns[-4853ns] +/- 4887us\n```\nReload the device:\n```\n$ sudo config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container and routeCheck monitoring ...\nStopping SONiC target ...\nRunning command: /usr/local/bin/sonic-cfggen -j /etc/sonic/init_cfg.json -j /etc/sonic/config_db.json --write-to-db\nRunning command: /usr/local/bin/db_migrator.py -o migrate\nRunning command: /usr/local/bin/sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t /usr/share/sonic/templates/sonic-environment.j2,/etc/sonic/sonic-environment\nRestarting SONiC target ...\n```\nWait a bit to make sure NTP is up and then check that it's syncing:\n```\n$ sleep 5\n$ show ntp --verbose\nCommand: sudo ip vrf exec mgmt chronyc -n tracking\nReference ID    : 00000000 ()\nStratum         : 0\nRef time (UTC)  : Thu Jan 01 <IPV6> 1970\nSystem time     : 0.000000001 seconds fast of NTP time\nLast offset     : +0.000000000 seconds\nRMS offset      : 0.000000000 seconds\nFrequency       : 11.260 ppm fast\nResidual freq   : +0.000 ppm\nSkew            : 0.000 ppm\nRoot delay      : 1.000000000 seconds\nRoot dispersion : 1.000000000 seconds\nUpdate interval : 0.0 seconds\nLeap status     : Not synchronised\nCommand: sudo ip vrf exec mgmt chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^? <IP>                 0   6     0     -     +0ns[   +0ns] +/-    0ns\n```\nRestart chrony and observer that it comes up correctly:\n```\n$ sudo systemctl restart chrony\n$ sleep 5\n$ show ntp --verbose\nCommand: sudo ip vrf exec mgmt chronyc -n tracking\nReference ID    : 0AFA36FE (<IP>)\nStratum         : 5\nRef time (UTC)  : Fri Feb 27 <IPV6> 2026\nSystem time     : 0.000000633 seconds fast of NTP time\nLast offset     : +0.000003306 seconds\nRMS offset      : 0.000003306 seconds\nFrequency       : 11.260 ppm fast\nResidual freq   : -0.428 ppm\nSkew            : 0.210 ppm\nRoot delay      : 0.006950619 seconds\nRoot dispersion : 0.001525881 seconds\nUpdate interval : 2.0 seconds\nLeap status     : Normal\nCommand: sudo ip vrf exec mgmt chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^* <IP>                 4   6    17     5    +13us[  +16us] +/- 4986us\n```\n\n### Actual Behavior and Expected Behavior\n\nExpected:\nchrony should run smoothly after reload when configured for the mgmt VRF.\n\nActual:\nchrony occasionally fails to come up after reload when configured for the mgmt VRF.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25729,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25729",
+    "title": "Issue 25728: Add vrf ordering dependency to chrony config",
+    "merged_at": "2026-03-12T04:51:57Z",
+    "description": "When chrony is configured to start in the mgmt vrf, it needs to be ordered after interfaces-config.service, since that's the service that sets up the mgmt vrf.\n\nCloses #25728\n\nWhy I did it\nNTP/chrony service is not coming up correctly after reboot/reload when configured to start in the mgmt vrf.\n\nHow I did it\nWhen being run in the mgmt vrf, chrony needs to wait to start up until the mgmt vrf is created, so add an After dependency in the chrony config override file that waits for the appropriate service to finish (interfaces-config.service).\n\nHow to verify it\nManually verified. Configure the device to enable the mgmt vrf and to have ntp configured to use the mgmt vrf. Then issue a reboot or 'config reload'. Without these changes, chrony will come up incorrectly and require a restart to function (this is a race condition, so the exact failure can be different, and it can even work occasionally, but fails pretty consistently). With these changes, reboot/reload work as expected.\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/image_config/chrony/override.conf",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

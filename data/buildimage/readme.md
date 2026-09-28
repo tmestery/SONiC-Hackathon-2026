@@ -6,10 +6,10 @@ Dataset mined from [sonic-net/sonic-buildimage](https://github.com/sonic-net/son
 
 In SONiC, build issues, image configuration regressions, daemon startup failures, and test environment problems are tracked in `sonic-buildimage` issues. When an issue is resolved by a linked pull request, the pair provides:
 
-1. **Failure Signature & Context** (from the Issue): Bug reports, environment details, traceback logs, reproduction steps, and triage comments.
-2. **True Root Cause & Resolution** (from the linked PR): Developer analysis ("Why I did it", "How I did it"), changelog descriptions, discussion comments, and the exact code diff fixing the issue.
+1. **Failure Signature & Context** (from the Issue): Bug reports, environment details, traceback logs, and reproduction steps.
+2. **True Root Cause & Resolution** (from the linked PR): Developer analysis ("Why I did it", "How I did it") in the PR description, plus the files the PR changed.
 
-This pairing serves as ground-truth training and benchmark data for automated failure diagnosis.
+This pairing is labeled data for SLM **training, validation, and testing**, and for a public benchmark later. It is **not** a RAG corpus. Retrieval context comes only from [`data/documentation/`](../documentation/).
 
 ## Directory Layout
 
@@ -18,9 +18,17 @@ data/buildimage/
 ├── raw/                      # Unprocessed mined data (immutable)
 │   ├── issue-<number>.json   # Per-issue raw payload with linked PRs
 │   └── manifest.json         # Index of all mined issues and linked PRs
-├── clean/                    # Cleaned, standardized dataset records
-├── format.md                 # Target schema for entries in clean/
+├── clean/                    # Schema 1.0 records for train/val/test
+│   ├── issue-<number>.json
+│   └── manifest.json
+├── format.md                 # Schema for entries in clean/
 └── readme.md                 # This documentation
+```
+
+See [`format.md`](format.md) for field definitions. Rebuild clean records with:
+
+```
+python3 scripts/buildimage/clean_buildimage.py
 ```
 
 ## Raw Data Specification (`raw/`)
@@ -80,11 +88,11 @@ Each record in `raw/issue-<number>.json` contains the unedited GitHub API payloa
 
 ## Mining Methodology
 
-Data was mined using the GitHub GraphQL API via `scripts/mine_buildimage.py`:
+Data was mined using the GitHub GraphQL API via `scripts/buildimage/mine_buildimage.py`:
 
 - **Filter**: All issues in `sonic-net/sonic-buildimage` with `state: CLOSED` where `closedByPullRequestsReferences.totalCount > 0`.
 - **Query mechanism**: Cursor-based GraphQL pagination querying batches of 35 issues per page to maximize retrieval speed while staying well within API complexity limits.
-- **Reproducibility**: Re-run `python3 scripts/mine_buildimage.py` to refresh or verify mined entries.
+- **Reproducibility**: Re-run `python3 scripts/buildimage/mine_buildimage.py` to refresh or verify mined entries.
 
 ## Mining Statistics
 
@@ -94,8 +102,52 @@ Data was mined using the GitHub GraphQL API via `scripts/mine_buildimage.py`:
 - **Total raw JSON files saved**: 997 issue files + 1 manifest (`data/buildimage/raw/`)
 - **Total raw data size**: ~15 MB
 
+## Clean records (`clean/`)
+
+Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked PR.
+
+| Use | Fields |
+|---|---|
+| Model input | `issue.title` + `failure.body` |
+| Label | `resolution.description` (PR body, HTML comments stripped) |
+| Auxiliary | `resolution.files` |
+| Audit | `issue.url`, `resolution.url` |
+| Filter / splits | `metadata` (severity, priority, issue_type, platform, target_releases, topics), dates, `quality.has_diagnostic_signal` |
+
+**How the resolving PR is chosen.** Among `linkedPullRequests` with `merged == true`, take the latest `mergedAt`. Other linked PRs are listed in `related_prs` without bodies. Cross-repo PRs keep `repository` + `url`. Issues with no merged PR are skipped (13 in the current mine). Discussion comments stay in `raw/` only — they often name the fix.
+
+**Metadata.** Derived during clean, never guessed:
+
+- `severity` from issue body `Importance or Severity`
+- `priority` / `issue_type` / `target_releases` / `topics` from labels (emoji shortcodes stripped)
+- `platform` from `Is it platform specific`, else vendor/platform labels
+
+**Train/val/test.** Prefer `quality.has_diagnostic_signal == true` (error/traceback/fail/log-like text in the issue body). Explicit `split` values are not assigned in v1.
+
+**RAG.** Do not index these records. Use [`data/documentation/`](../documentation/) only.
+
+### Clean statistics (schema 1.0)
+
+- **Cleaned date**: September 28, 2026
+- **Raw issues examined**: 997
+- **Clean records written**: 984
+- **Skipped (no merged PR)**: 13
+- **With diagnostic signal**: 854
+
+Rebuild with `python3 scripts/buildimage/clean_buildimage.py`. Counts by severity/priority/type are in `clean/manifest.json`.
+
+## Unified diffs (not in v1)
+
+`resolution.patch` is omitted until diffs are fetched on purpose:
+
+```
+python3 scripts/buildimage/enrich_patches.py --limit 5
+```
+
+Use `--sidecar` to write large diffs under `clean/patches/` instead of inlining them. Do not run this as part of ordinary cleaning.
+
 ## Ground Rules
 
 1. **`raw/` is immutable**: Never manually edit or prune files inside `raw/`.
-2. **Filtering for `clean/`**: Not every closed issue contains a test failure (some are build toolchain updates, feature requests, or documentation). The cleaning pipeline filters for issues with diagnostic signals (error messages, test failure logs, crash dumps) and distills them into the standardized benchmark format.
-3. **Data hygiene**: Ensure proprietary identifiers, private IP ranges, and any internal credentials are scrubbed before moving entries to `clean/`.
+2. **`clean/` is derived**: Only write it via `scripts/buildimage/clean_buildimage.py`. Keep records conformant to [`format.md`](format.md).
+3. **Data hygiene**: IPs, internal hostnames, emails, and obvious secrets are scrubbed in `failure.body` and `resolution.description`.

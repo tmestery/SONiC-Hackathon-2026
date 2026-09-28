@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-18540",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 18540,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/18540",
+    "title": "T2-VOQ: Correlate and rephrase the Midplane/Module connectivity related logs if its a genuine scenario ",
+    "created_at": "2024-04-02T20:20:53Z",
+    "closed_at": "2024-05-15T17:33:18Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "nokia",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nCurrently, we have Module midplane connectivity logs for the cases when supervisor looses connectivity with linecards.\nHowever these logs also come for some genuine scenarios:\n   a. Supervisor reboot\n pmon#chassisd: Module LINE-CARD1 midplane connectivity is up\n\n   b. Individual linecard reboot\npmon#chassisd: Module LINE-CARD1 lost midplane connectivity\nsr_device_mgr: Unable to reach slot 1 (Linecard) via Midplane\nsr_device_mgr: Slot 1 (Linecard) is Reachable via Midplane (after missing count: 6)\npmon#chassisd: Module LINE-CARD1 midplane connectivity is up\n\nCan we rephrase it for genuine scenarios, so that we could better distinguish between expected and not-expected cases.\n\n#### Steps to reproduce the issue:\n1. T2-VOQ chassis\n2. Supervisor reboot: Monitor sup syslog\n3. Linecard reboot: Monitor sup syslog\n\n#### Describe the results you received:\nSyslogs suggesting that something is wrong.\n\n#### Describe the results you expected:\nHave the syslog Indicating that these messages are expected for genuine scenarios\n\n#### Output of `show version`:\n20220532.55\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 480,
+    "repository": "sonic-net/sonic-platform-daemons",
+    "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/480",
+    "title": "[chassis][midplane] Modify the chassisd to log expected/unexpected midplane connectivity messages",
+    "merged_at": "2024-05-15T17:33:17Z",
+    "description": "Modified the SUP chassisd check_midplane_reachability() function to use the CHASSIS_MODULE_REBOOT_INFO_TABLE data (which is set by Linecard \"sudo reboot\" command)  log expected or unexpected  module lost midplane connectivity.  This address issue  https://github.com/sonic-net/sonic-buildimage/issues/18540\n\n#### Description\nAdd a new method is_module_reboot_expected() to check if CHASSIS_MODULE_REBOOT_INFO_TABLE|LINECARD# entry exists in CHASSIS_STATE_DB when a linecard is not reachable from SUP.  If entry exists, it is expected reboot.  check_midplane_reachability() will log  \"pmon#chassisd: Expected: Module LINE-CARD1 lost midplane connectivity\".  If entry doesn't exist, it will log \"pmon#chassisd: Unexpected: Module LINE-CARD1 lost midplane connectivity\".  The  CHASSIS_MODULE_REBOOT_INFO_TABLE|LINECARD# entry created and insert by linecard \"sudo reboot\" command by PR.  It means that Users issue a linecard reboot, \"lost midplane connectivity\" is expected.  Otherwise, such a linecard crash or missing heartbeat reboot, etc is unexpected.\nAdd new method module_reboot_set_time() and is_module_reboot_system_up_expired() to check if an expected reboot of linecard is not able to be up and detected by SUP in 3 minutes, check_midplane_reachabikity() will log  \"pmon#chassisd: Unexpected: Module LINE-CARD1 lost midplane connectivity\". This provides the log message to the monitoring tool to take any further action.\nThis PR is required and associated with the following PRs\nPR https://github.com/sonic-net/sonic-buildimage/pull/18805\nhttps://github.com/sonic-net/sonic-utilities/pull/3292\nhttps://github.com/sonic-net/sonic-platform-daemons/pull/480\nhttps://github.com/sonic-net/sonic-buildimage/pull/18862\n\n#### Motivation and Context\nThis provides a proper log message whether a module \"lost midplane connectivity\" is expected or not.  This provides an efficient information log to the monitoring tool to take any further action. Fixes https://github.com/sonic-net/sonic-buildimage/issues/18540\n\n#### How Has This Been Tested?\nThis PR requires PRhttps://github.com/sonic-net/sonic-utilities/pull/3292 and  to work with\n1) Test expected log. Use the CLI command \"sudo reboot\" to reboot  a linecard, then check the syslog on Supervisor.  The below message is logged\n```\nApr 25 <IPV6>.818378 ixre-cpm-chassis7 WARNING pmon#chassisd: Expected: Module LINE-CARD0 lost midplane connectivity\n```\n2. Test unepxpected log.  Using \"sudo /sbin/reboot\" or reboot a linecard with any crash method, then ccheck the syslog on Supervusor. The below message is logged.\n```\nApr 25 <IPV6>.549416 ixre-cpm-chassis7 WARNING pmon#chassisd: Unexpected: Module LINE-CARD0 lost midplane connectivity\n```\n3. Test the expexcted reboot with timeout case.  Use the CLI command \"sudo reboot\" on linecard. and keep it down for more than 4 minutes. The below messages are logged.\n```\nApr 25 <IPV6>.877143 ixre-cpm-chassis7 WARNING sr_device_mgr: Unable to reach slot 1 (Linecard) via Midplane\nApr 25 <IPV6>.402511 ixre-cpm-chassis7 WARNING pmon#chassisd: Module LINE-CARD0 went off-line!\nApr 25 <IPV6>.658959 ixre-cpm-chassis7 WARNING pmon#chassisd: Expected: Module LINE-CARD0 lost midplane connectivity.\n( 3 minutes after the first log)\nApr 25 <IPV6>.259527 ixre-cpm-chassis7 WARNING pmon#chassisd: Unexpected: Module LINE-CARD0 midplane connectivity is not restored in 180 seconds\n```\n\n#### Additional Information (Optional)\nThis PR needs to be back ported to branchs:\n[x]  202205",
+    "files": [
+      {
+        "path": "sonic-chassisd/scripts/chassisd",
+        "additions": 52,
+        "deletions": 2
+      },
+      {
+        "path": "sonic-chassisd/tests/test_chassisd.py",
+        "additions": 124,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

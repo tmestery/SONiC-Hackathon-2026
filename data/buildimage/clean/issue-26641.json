@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-26641",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26641,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26641",
+    "title": "Bug: [yang] sonic-kdump.yang ssh_string accepts POSIX-invalid usernames",
+    "created_at": "2026-04-07T21:08:13Z",
+    "closed_at": "2026-06-20T17:37:43Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n**Description**\n\nThe `ssh_string` leaf in `sonic-kdump.yang` uses:\n\n    pattern \"([a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+|[0-9]{1,3}(\\\\.[0-9]{1,3}){3}))\";\n\nThe user portion `[a-zA-Z0-9._%+-]+` allows the first character to be\nany of `. _ % + -`, but POSIX login names (per `useradd(8)` /\nNAME_REGEX) must start with `[a-zA-Z_]`. Values like `-x@host`,\n`.x@host`, `+x@host` pass YANG validation but cannot correspond to a\nreal account on the remote kdump target \u2014 the SSH login will always\nfail.\n\nA leading `-` also makes the value look like a CLI option flag when\npassed positionally to downstream tools.\n\n**Steps to reproduce**\n\n    config kdump ssh-string -- '-foo@<IP>'   # accepted by YANG\n\n**Expected**\n\nPattern restricts first char of the user part to `[a-zA-Z_]`:\n\n    pattern \"([a-zA-Z_][a-zA-Z0-9._%+-]*@([a-zA-Z0-9.-]+|[0-9]{1,3}(\\\\.[0-9]{1,3}){3}))\";\n\n**Affected file**\n\n`src/sonic-yang-models/yang-models/sonic-kdump.yang:65`\n\n### Steps to Reproduce\n\nNA\n\n### Actual Behavior and Expected Behavior\n\nNA\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26663,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26663",
+    "title": "[yang] Restrict ssh_string username to POSIX-compliant format",
+    "merged_at": "2026-06-20T17:37:42Z",
+    "description": "Fixes #26641\n\n1] Problem\nThe existing ssh_string YANG pattern allows usernames starting with characters\nsuch as '-', '.', '+', or digits. These are not valid POSIX login names.\n\nAs a result:\n- The configuration is accepted at the YANG validation layer.\n- SSH attempts fail at runtime because the username is invalid.\n- This leads to silent failures in remote kdump dump transfer.\n\n2] Root Cause\nThe regex:\n[a-zA-Z0-9._%+-]+\n\nallows any of these characters at the start of the username, without enforcing\nPOSIX-compliant username rules.\n\n3] Solution\nUpdate the pattern to enforce a valid starting character:\n\n[a-zA-Z_][a-zA-Z0-9._%+-]*\n\nThis ensures:\n- The username starts with a letter or underscore.\n- Remaining characters follow the existing allowed set.\n- Host validation logic remains unchanged.\n\n4] Impact\n- Invalid usernames are rejected at configuration time.\n- Prevents runtime SSH failures.\n- Improves system reliability and debugging correctness for kdump.\n\n5] Validation\nTested via logical validation of regex behavior:\n\nRejected inputs:\n- '-foo@<IP>'\n- '.user@host'\n- '+abc@host'\n- '1user@host'\n\nAccepted inputs:\n- 'user@<IP>'\n- 'abc_123@host'\n- 'a@host'\n\n6] Scope\n- Change is limited to YANG schema validation.\n- No impact on runtime logic or other modules.",
+    "files": [
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests/kdump.json",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests_config/kdump.json",
+        "additions": 15,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/yang-models/sonic-kdump.yang",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-26789",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26789,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26789",
+    "title": "Bug: teamsyncd crashes with SIGABRT when creating large number of PortChannels (fd >= FD_SETSIZE)",
+    "created_at": "2026-04-15T05:13:19Z",
+    "closed_at": "2026-05-05T23:30:09Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nteamsyncd crashes with SIGABRT when creating a large number of PortChannels. The crash is triggered by libteamdctl internally calling select(), which hits the glibc FORTIFY_SOURCE check when a socket file descriptor reaches or exceeds FD_SETSIZE (1024).\n\nRoot Cause\nPR [#3984](https://github.com/sonic-net/sonic-swss/pull/3984) added teamdctl_connect() in the TeamPortSync constructor to verify teamd is alive before updating STATE_DB. For each new PortChannel, a new Unix socket is opened to connect to teamd. As PortChannels are created, open file descriptors accumulate and eventually a socket fd \u2265 1024 is assigned.\nInside libteamdctl.so, teamdctl_state_item_value_set() uses select() internally. When called with fd \u2265 1024, glibc's __fdelt_chk() aborts the process:\n\n*** bit out of range 0 - FD_SETSIZE on fd_set ***\nAborted (core dumped)\n\n### Steps to Reproduce\n\nOn a SONiC device with sufficient LAG capacity, after merging PR #[3984](https://github.com/sonic-net/sonic-swss/pull/3984):\n\nfor i in $(seq 1 200); do\n    sudo config portchannel add PortChannel$i\ndone\n\n### Actual Behavior and Expected Behavior\n\nteamsyncd will crash with SIGABRT partway through. The exact threshold depends on how many file descriptors are already open when teamsyncd starts.\n\nTo confirm:\nsudo systemctl status swss\nsudo grep -i \"teamsyncd\\|aborted\\|core\" /var/log/syslog\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27123,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27123",
+    "title": "Replace FD_SET/select() with poll() to avoid FD_SETSIZE abort",
+    "merged_at": "2026-05-05T23:30:08Z",
+    "description": "#### Why I did it\nfixes https://github.com/sonic-net/sonic-buildimage/issues/26789\n\nEach `TeamPortSync` instance keeps five long-lived file descriptors alive: four `libnl` sockets and one `epoll` `fd` opened by `team_alloc()` and `team_init()`. Once the `fd` table grows past `FD_SETSIZE` (1024 in `glibc`), the next unix socket that `teamdctl_connect()` opens inside the constructor - for the per-LAG liveness check - is assigned a fd \u2265 1024. The follow-up `teamdctl_config_get_raw_direct()` call hands that fd to `FD_SET()` inside `cli_usock_wait_recv()`. Under glibc's `_FORTIFY_SOURCE=2`, `FD_SET` expands to `__fdelt_chk()`, which aborts the process with `*** bit out of range 0 - FD_SETSIZE` on `fd_set`. `teamsyncd` dies via `SIGABRT`, and eventually `systemd` cascades the failure into a `teamd` restart.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nAdded a patch to replace both `FD_SET`/`select()` call sites with `poll()`, which takes raw `fd` numbers and has no `FD_SETSIZE` ceiling. Behavior is preserved end to end: each site waits for read-readiness on a single `fd` with the original timeout (5000 ms in `cli_usock_wait_recv`, non-blocking in `team_check_events`).\n\n#### How to verify it\nTest that were failing with high scale portchannels have been passing on DUTs with the changes.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/libteam/patch/0018-Replace-FD_SET-select-with-poll-to-avoid-FD_SETSIZE-abort.patch",
+        "additions": 115,
+        "deletions": 0
+      },
+      {
+        "path": "src/libteam/patch/series",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

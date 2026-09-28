@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-27330",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27330,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27330",
+    "title": "Bug:sFlow initialization is degradaded",
+    "created_at": "2026-05-13T00:54:51Z",
+    "closed_at": "2026-05-15T04:58:57Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nsFlow initialization is degraded after this PR https://github.com/sonic-net/sonic-buildimage/pull/26699\nFor a system with 500+ ports it takes 10 minutes from the start of sflow to send samples and prior to this it was less than 10 seconds.\n\nFor a system with 52 ports it took 1 minute after this change. Before this change it was just 10 seconds\n\nWhen starting hsflowd with verbose mode we see the following logs in console\n\n```\ndbg1:sonic db_ifIndexMapCB: ifindex=string(3)=\"420\"\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:hsflowd: evt_poll_tick() waitConfig\ndbg1:sonic db_ifIndexMapCB: reply=array(4)\ndbg1:sonic db_ifIndexMapCB: index=string(3)=\"394\"\ndbg1:sonic db_ifIndexMapCB: ifindex=string(3)=\"401\"\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:hsflowd: evt_poll_tick() waitConfig\ndbg1:sonic db_ifIndexMapCB: reply=array(4)\ndbg1:sonic db_ifIndexMapCB: index=string(3)=\"360\"\ndbg1:sonic db_ifIndexMapCB: ifindex=string(3)=\"367\"\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:hsflowd: evt_poll_tick() waitConfig\ndbg1:sonic db_ifIndexMapCB: reply=array(4)\ndbg1:sonic db_ifIndexMapCB: index=string(3)=\"312\"\ndbg1:sonic db_ifIndexMapCB: ifindex=string(3)=\"319\"\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:hsflowd: evt_poll_tick() waitConfig\ndbg1:sonic db_ifIndexMapCB: reply=array(4)\ndbg1:sonic db_ifIndexMapCB: index=string(3)=\"485\"\ndbg1:sonic db_ifIndexMapCB: ifindex=string(3)=\"492\"\n```\n\n### Steps to Reproduce\n\nconfig sflow enable and check the collector for samples\n\n### Actual Behavior and Expected Behavior\n\nsFlow takes several minutes on systems with large number of ports to start sending samples. Previously it took only few seconds\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27368,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27368",
+    "title": "[sflow] Batch port discovery to fix 10-minute init regression (#27330)",
+    "merged_at": "2026-05-15T04:58:56Z",
+    "description": "#### What I did\n\nAfter the hiredis 1.2.0 deferral patch (0006), `mapPorts()` and `discoverNewPorts()` only process one port per `evt_tick` (1-second interval). On systems with 500+ ports this causes sFlow to take 500+ seconds to initialize instead of ~10 seconds.\n\nThe root cause is that the original code relied on callbacks calling `redisAsyncCommand()` to chain to the next port (a \"chain reaction\" pattern). After hiredis 1.2.0, `redisAsyncCommand()` from within callbacks is deferred, breaking the chain \u2014 only one port gets dispatched per event loop tick.\n\nFix by changing `mapPorts()` and `discoverNewPorts()` to dispatch **all** pending ports at once using a `while` loop, leveraging Redis async pipelining. Since callbacks no longer chain, firing all queries in a single call is both correct and efficient.\n\nFixes: #27330\n\n#### How I did it\n\nChanged `mapPorts()` from popping one port and returning to a `while` loop that pops and dispatches all unmapped ports. Same change for `discoverNewPorts()`.\n\n**Before (one port per tick):**\n```c\nHSPSonicPort *prt = UTArrayPop(mdata->unmappedPorts);\nif(prt) {\n    prt->unmappedPort = NO;\n    db_getIfIndexMap(mod, prt);\n    return YES;\n}\n```\n\n**After (all ports in one burst):**\n```c\nbool dispatched = NO;\nHSPSonicPort *prt;\nwhile((prt = UTArrayPop(mdata->unmappedPorts)) != NULL) {\n    prt->unmappedPort = NO;\n    db_getIfIndexMap(mod, prt);\n    dispatched = YES;\n}\nif(dispatched) return YES;\n```\n\n#### How to verify it\n\n**VS KVM testbed (32 ports) \u2014 all sflow tests pass:**\n```\n$ pytest sflow/ --inventory veos_vtb --testbed_file vtestbed.yaml --testbed vms-kvm-t0 --device_type=vs\n15 passed\n```\n\n**Console evidence (`hsflowd -dd`) \u2014 AFTER fix:**\nAll 32 `db_getIfIndexMap()` calls fire in a single burst with no `evt_poll_tick` between them:\n```\ndbg1:sonic system_ready 0 -> 1\n...\ndbg1:sonic db_portNamesCB: new port Ethernet96 -> oid:0x100000000001a\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\n[... 32 consecutive calls, no evt_poll_tick between them ...]\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:hsflowd: evt_poll_tick() waitConfig   <-- first tick AFTER all 32 dispatched\n```\n\nCompare with **BEFORE fix** (from issue #27330 \u2014 one port per tick):\n```\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:hsflowd: evt_poll_tick() waitConfig   <-- tick between EACH port\ndbg1:sonic db_ifIndexMapCB: reply=array(4)\ndbg1:sonic db_ifIndexMapCB: index=string(3)=\"394\"\ndbg1:sonic db_ifIndexMapCB: ifindex=string(3)=\"401\"\ndbg1:sonic db_getIfIndexMap()\ndbg1:sonic db_getIfIndexMap() returned 0\ndbg1:hsflowd: evt_poll_tick() waitConfig   <-- another tick, another port\n```\n\n**Performance improvement:**\n- Before: N ports \u00d7 1s/tick = **N seconds** (32 ports = ~32s, 500 ports = ~500s)\n- After: All N ports dispatched in **<1 second** regardless of port count\n\n#### Previous command output (if the output of a command-Loss/redirect)\n\nN/A",
+    "files": [
+      {
+        "path": "src/sflow/hsflowd/patch/0008-mod_sonic-batch-port-discovery.patch",
+        "additions": 51,
+        "deletions": 0
+      },
+      {
+        "path": "src/sflow/hsflowd/patch/series",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

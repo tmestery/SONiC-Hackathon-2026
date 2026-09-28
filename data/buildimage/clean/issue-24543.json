@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-24543",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24543,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24543",
+    "title": "Bug: [Trixie] dash-ha@dpu<n>.service is started even when the feature is not enabled",
+    "created_at": "2025-11-18T01:06:44Z",
+    "closed_at": "2026-02-23T22:46:56Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "Trixie"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWe see from the unit file below that dash-ha@dpu<n>.sevice is started with ExecCondition when it is either npu or dpu (with is-npu-or-dpu.sh). But we shouldn't start this service unless the dash-ha feature is enabled. We need to update the logic for when these services are started.\n\n```\nroot@sonic:/var/log# systemctl cat dash-ha@dpu0\n# /usr/lib/systemd/system/dash-ha@.service\n[Unit]\nDescription=DASH HA container\nRequires=database@%i.service config-setup.service swss.service\nAfter=database@%i.service swss.service interfaces-config.service\nBindsTo=sonic.target\nAfter=sonic.target\nBefore=ntp-config.service\nStartLimitIntervalSec=1200\nStartLimitBurst=3\n\n[Service]\nUser=admin\nExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh\nExecStartPre=/usr/local/bin/dash-ha.sh start %i\nExecStart=/usr/local/bin/dash-ha.sh wait %i\nExecStop=/usr/local/bin/dash-ha.sh stop %i\nRestartSec=30\n\n[Install]\nWantedBy=sonic.target\n\n# /run/systemd/generator/dash-ha@.service.d/environment.conf\n[Service]\nEnvironment=\"NUM_DPU=4\"\nEnvironment=\"IS_DPU_DEVICE=false\"\n\n```\n\nThis is cause the following failures\n\n```\nroot@sonic:/var/log# systemctl status dash-ha@dpu0\n\u00d7 <EMAIL> - DASH HA container\n     Loaded: loaded (/usr/lib/systemd/system/dash-ha@.service; enabled-runtime; preset: enabled)\n    Drop-In: /run/systemd/generator/dash-ha@.service.d\n             environment.conf\n     Active: failed (Result: exit-code) since Mon 2025-11-17 <IPV6> UTC; 7h ago\n   Duration: 373ms\n Invocation: 0ffc41a7b1c74b14881fa2eb7134a920\n   Main PID: 25039 (code=exited, status=255/EXCEPTION)\n   Mem peak: 30.3M\n        CPU: 566ms\n\nNov 17 <IPV6> sonic systemd[1]: Started <EMAIL> - DASH HA container.\nNov 17 <IPV6> sonic container[25060]: container_wait: BEGIN\nNov 17 <IPV6> sonic container[25060]: read_data: config:True feature:dash-hadpu0 fields:[('set_owner', 'local'), ('no_fallback_to_local', False), ('state', 'disabled')] val:['local', False, 'disabled']\nNov 17 <IPV6> sonic container[25060]: read_data: config:False feature:dash-hadpu0 fields:[('current_owner', 'none'), ('remote_state', 'none'), ('container_id', '')] val:['none', 'none', '']\nNov 17 <IPV6> sonic container[25060]: docker get image version for dash-hadpu0 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu0/json: Not Found (\"No such container: dash-hadpu0\")\nNov 17 <IPV6> sonic container[25060]: container_wait: dash-hadpu0: set_owner:local ct_owner:none state:none id:dash-hadpu0 pend=0\nNov 17 <IPV6> sonic container[25060]: container_wait: END -- transitioning to docker wait\nNov 17 <IPV6> sonic docker-rs[25060]: Unable to wait on container: Docker error\nNov 17 <IPV6> sonic systemd[1]: <EMAIL>: Main process exited, code=exited, status=255/EXCEPTION\nNov 17 <IPV6> sonic systemd[1]: <EMAIL>: Failed with result 'exit-code'.\n\n```\n\n### Steps to Reproduce\n\nReboot the device to find the following error in syslog on a Smartswitch\n```\nERR container: docker get image version for dash-hadpu3 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu3/json: Not Found (\"No such container: dash-hadpu3\")\n2025 Nov  7 <IPV6>.686475 sonic ERR container: docker get image version for dash-hadpu3 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu3/json: Not Found (\"No such container: dash-hadpu3\")\n2025 Nov  7 <IPV6>.686745 sonic ERR container: docker get image version for dash-hadpu1 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu1/json: Not Found (\"No such container: dash-hadpu1\")\n2025 Nov  7 <IPV6>.687632 sonic ERR container: docker get image version for dash-hadpu2 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu2/json: Not Found (\"No such container: dash-hadpu2\")\n```\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior: dash-hadpu@dpu<n>.service is started on every smartswitch npu/dpu. It must only start on the npu of a smartswitch which has dash ha feature enabled\n\n### UPDATE: DPU SIDE\n--The issue with the same-root cause is also observed on the DPU--\nSimilarly on the dpu side we have dash-ha.service which is using the same ExecCondition (is-npu-or-dpu.sh) and always starting on dpu whether dash-ha feature is enabled or not causing the following failure. The dpu side needs to be updated as well.\n\n```\nsyslog.<IPV6> Nov 20 <IPV6>.180770 sonic ERR resolv-config: [update-containers:update_container_resolv] Failed to start container dash-ha (23ada928ec34)\nyslog.<IPV6> Nov 20 <IPV6>.351405 sonic INFO systemd[1]: Started dash-ha.service - DASH HA container.\nsyslog.<IPV6> Nov 20 <IPV6>.531933 sonic NOTICE systemd[1]: dash-ha.service: Main process exited, code=exited, status=255/EXCEPTION\nsyslog.<IPV6> Nov 20 <IPV6>.532120 sonic WARNING systemd[1]: dash-ha.service: Failed with result 'exit-code'.\n```"
+  },
+  "resolution": {
+    "pr_number": 25390,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25390",
+    "title": "Disable dash-ha service by default",
+    "merged_at": "2026-02-23T22:46:54Z",
+    "description": "#### Why I did it\n\n Fixes #24543\n\nDespite reworking systemd-sonic-generator in 78edc2e572419e55ee4e4ff4155aacd6623982ff, the dash-ha service files (and the dpu\\* instances) still need to be masked for proper functionality. This is because the container needs to be in a disabled state by default; however, SONiC configs that might be loaded might not say anything about the dash-ha feature.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nWhen building the image, bring back the change that was done in #21621 to symlink the dash-ha instances to `/dev/null` by default.\n\n#### How to verify it\n\nTested on a smartswitch platform and verified that the dash-ha service did not start up.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/per_namespace/dash-ha.service.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "files/build_templates/sonic_debian_extension.j2",
+        "additions": 4,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-1488",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 1488,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/1488",
+    "title": "[Debian9-S6100]: In LLDP for port id , instead of interface name ,mac address  is advertised ",
+    "created_at": "2018-03-13T09:50:32Z",
+    "closed_at": "2018-08-24T23:21:12Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "dellemc",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\nIn LLDP for port id , instead of interface name ,mac address  is advertised\n\n**Steps to reproduce the issue:**\n1. Check for LLDP information in peer device\n\n**Describe the results you received:**\nIn Peer Arista VM :\n\nARISTA01T1#show lldp neighbors\nLast table change time   : <IPV6> ago\nNumber of table inserts  : 19\nNumber of table deletes  : 18\nNumber of table drops    : 0\nNumber of table age-outs : 9\n\nPort       Neighbor Device ID               Neighbor Port ID           TTL\n**_Et1        sonic-s6100-01                   4c76.25f4.7081             120_**\nARISTA01T1#\n\n**Describe the results you expected:**\nThe sonic DUT should be advertising interface name as the port id.\n\n**Additional information **\n\n **Output of show version sonic DUT:**\n\n_Build : buildimage-brcm-stretch-all 138_\n\nroot@sonic-s6100-01:~# show ver\nSONiC Software Version: SONiC.HEAD.138-b0b8d69\nDistribution: Debian 9.4\nKernel: 4.9.0-5-amd64\nBuild commit: b0b8d69\nBuild date: Mon Mar 12 <IPV6> UTC 2018\nBuilt by: johnar@jenkins-worker-4\n\nDocker images:\nREPOSITORY                 TAG                 IMAGE ID            SIZE\ndocker-syncd-brcm          HEAD.138-b0b8d69    d92b77a90440        331.6 MB\ndocker-syncd-brcm          latest              d92b77a90440        331.6 MB\ndocker-orchagent-brcm      HEAD.138-b0b8d69    ae0ca94d991a        260.5 MB\ndocker-orchagent-brcm      latest              ae0ca94d991a        260.5 MB\ndocker-lldp-sv2            HEAD.138-b0b8d69    0451d4fe2056        270.7 MB\ndocker-lldp-sv2            latest              0451d4fe2056        270.7 MB\ndocker-dhcp-relay          HEAD.138-b0b8d69    d1c0ab97120f        253.6 MB\ndocker-dhcp-relay          latest              d1c0ab97120f        253.6 MB\ndocker-database            HEAD.138-b0b8d69    175362bcb375        252.3 MB\ndocker-database            latest              175362bcb375        252.3 MB\ndocker-teamd               HEAD.138-b0b8d69    d6911b887ad9        257.6 MB\ndocker-teamd               latest              d6911b887ad9        257.6 MB\ndocker-snmp-sv2            HEAD.138-b0b8d69    03312ccf30c8        292 MB\ndocker-snmp-sv2            latest              03312ccf30c8        292 MB\ndocker-router-advertiser   HEAD.138-b0b8d69    5400a265ea98        250 MB\ndocker-router-advertiser   latest              5400a265ea98        250 MB\ndocker-platform-monitor    HEAD.138-b0b8d69    56e07878c4d7        271.9 MB\ndocker-platform-monitor    latest              56e07878c4d7        271.9 MB\ndocker-fpm-quagga          HEAD.138-b0b8d69    94b4ade9f44d        264.1 MB\ndocker-fpm-quagga          latest              94b4ade9f44d        264.1 MB"
+  },
+  "resolution": {
+    "pr_number": 26144,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26144",
+    "title": "[lldp] Fix transient MAC address Port ID during LLDP daemon startup",
+    "merged_at": "2026-03-17T06:20:02Z",
+    "description": "#### Why I did it\n\nWhen lldpd starts (or restarts), it sends the first LLDP frames with **MAC addresses as Port IDs** instead of the configured interface aliases (e.g., `Ethernet1/1`). This is because:\n\n1. lldpd starts in paused state and loads its config file (`/etc/lldpd.conf`)\n2. The config file only configures the management port (`eth0`) portidsubtype \u2014 no front-panel port configs exist\n3. After processing all config lines, lldpd internally **auto-resumes** (hardcoded behavior in lldpd's internal lldpcli)\n4. The first LLDP frames are sent with default MAC-based Port IDs\n5. lldpmgrd starts 2-3 seconds later and reconfigures each port with the correct alias via `lldpcli`\n6. This triggers an **MSAP change** (shutdown frame + new frame with correct Port ID) on every port\n\nPeers see transient neighbor flapping: a MAC-based entry appears briefly, then gets replaced by the correct interface name entry. This can trigger monitoring alerts and confuse network management systems (e.g., LLDP-based topology discovery, automated cabling validation).\n\nRelated issues:\n- Fixes #1488\n- Fixes #1457\n\n##### Work item tracking\n- Microsoft ADO **37084792**:\n\n#### How I did it\n\nAdded port ID subtype configuration for **all front-panel ports** directly in the `lldpd.conf.j2` Jinja2 template. The template iterates over the `PORT` table from ConfigDB and generates `configure ports <name> lldp portidsubtype local <alias>` lines for every port that has an alias defined.\n\nThese configuration lines are processed by lldpd during startup config loading, **before** the internal auto-resume fires. This ensures the very first LLDP frame already carries the correct interface alias as Port ID, eliminating the transient MAC-based Port ID window entirely.\n\nThe change is additive \u2014 lldpmgrd continues to handle dynamic port configuration changes at runtime. When lldpmgrd later processes the same ports, the portidsubtype is already correct, so no MSAP change occurs (only the port description gets added, which is expected).\n\n**Key technical findings from investigation:**\n- lldpd starts paused by default (the `pause` directive in config is actually redundant)\n- lldpd's internal lldpcli auto-resumes after ALL config file lines are processed \u2014 this cannot be prevented via config\n- The `resume` call in `waitfor_lldp_ready.sh` (from PR #5493) fires after auto-resume, so it's also redundant\n- The `PORT` variable is available in sonic-cfggen template context from ConfigDB's PORT table\n\n#### How to verify it\n\n**Tested on:** Arista-7260CX3-C64 running SONiC.20251110.15 (64 front-panel ports)\n\n**Test procedure:**\n1. Applied the template change inside the lldp container\n2. Verified template rendering: `sonic-cfggen -d -t /usr/share/sonic/templates/lldpd.conf.j2` \u2014 confirmed 67 portidsubtype lines (1 eth0 + 66 Ethernet ports)\n3. Started tcpdump on Ethernet0: `tcpdump -i Ethernet0 -e ether proto 0x88cc -v`\n4. Restarted lldp service: `systemctl restart lldp`\n5. Captured the **very first** LLDP frame from the DUT\n\n**tcpdump results \u2014 first frame after restart:**\n```\n<IPV6>.610005 LLDP, length 233\n  Chassis ID TLV (1), length 7\n    Subtype MAC address (4): <IPV6>\n  Port ID TLV (2), length 12\n    Subtype Local (7): Ethernet1/1        <-- CORRECT from first frame!\n  Time to Live TLV (3), length 2: TTL 120s\n  System Name TLV (5), length 14: bjw-can-7260-8\n```\n\n**Before this fix**, the first frame showed:\n```\n  Port ID TLV (2), length 8\n    Subtype MAC address (3): <IPV6>   <-- MAC address, WRONG\n```\n\n**Before:** MAC address as Port ID for 2-3 seconds \u2192 MSAP change \u2192 correct alias\n**After:** Correct alias (`Ethernet1/1`) from the very first LLDP frame \u2192 no MSAP change\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [x] 202411\n- [x] 202505\n- [x] 202511\n\n**Reason:** This race condition affects all SONiC versions using lldpd with the current startup architecture. The transient MAC-based Port ID causes neighbor flapping visible to peers on every LLDP container restart or device boot, which can trigger false alerts in production monitoring systems.\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] SONiC.20251110.15 (master-based, Arista-7260CX3-C64)\n\n#### Description for the changelog\n\nFix LLDP Port ID showing MAC address instead of interface name during daemon startup by pre-configuring portidsubtype in lldpd.conf.j2 template.\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no ConfigDB or YANG schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83e\udd94",
+    "files": [
+      {
+        "path": "dockers/docker-lldp/lldpd.conf.j2",
+        "additions": 19,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/data/lldp/mgmt_iface_ipv4_with_ports.json",
+        "additions": 41,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv4-iface-with-ports.conf",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_j2files.py",
+        "additions": 7,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

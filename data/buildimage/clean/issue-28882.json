@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-28882",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28882,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28882",
+    "title": "Bug: [vpp] VLAN SVI neighbor host route not installed in VPP data plane (downstream traffic to SVI hosts dropped at glean)",
+    "created_at": "2026-08-06T12:01:01Z",
+    "closed_at": "2026-08-07T01:13:10Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\ngeneric (VPP platform / `docker-syncd-vpp`, `libsaivs` vslib)\n\n### Importance or Severity\nHigh\n\n### Description of the bug\nOn the VPP platform, an IP neighbor whose router interface is a **VLAN SVI** (`Vlan<id>`, `SAI_ROUTER_INTERFACE_TYPE_VLAN`, realized in VPP as a BVI `bvi<vlan_id>`) is **never programmed into the VPP data plane**. No neighbor adjacency and no `/32` (or `/128`) host route are installed on the BVI.\n\nAs a result, routed traffic destined to a host that sits on a VLAN subnet (e.g. uplink \u2192 downlink to a server on `Vlan1000`) has no host route to match. It falls through to the connected `/21` **glean** entry on the BVI, where VPP emits an ARP and **drops** the triggering packet. Downstream delivery to SVI hosts is silently dropped until (and unless) VPP happens to resolve the host by its own ARP.\n\nRoot cause is in `SwitchVpp::addRemoveIpNbr()` (`vslib/vpp/SwitchVppNbr.cpp`). It resolves `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` **before** it branches on the RIF type:\n\n```cpp\nattr.id = SAI_ROUTER_INTERFACE_ATTR_PORT_ID;\nCHECK_STATUS(get(SAI_OBJECT_TYPE_ROUTER_INTERFACE, nbr_entry.rif_id, 1, &attr));\nauto port_obj_type = objectTypeQuery(attr.value.oid);\nif (port_obj_type != SAI_OBJECT_TYPE_PORT && port_obj_type != SAI_OBJECT_TYPE_LAG)\n{\n    return SAI_STATUS_SUCCESS;   // <-- VLAN SVI RIF has no PORT_ID => returns here, neighbor never programmed\n}\n```\n\nA VLAN SVI RIF has **no** `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` (it references a VLAN, not a single port), so the neighbor is dropped before the RIF type is ever considered. Only `PORT` and `SUB_PORT` RIFs are handled.\n\nThis is the neighbor/host-route counterpart of the RIF-attribute-update bug tracked separately (VLAN RIF updates); both stem from resolving `PORT_ID` before dispatching on RIF type.\n\n### Steps to Reproduce\n1. Deploy a VPP KVM testbed with a VLAN SVI, e.g. `Vlan1000` with an IP (dual-ToR t0 exercises this heavily; the server-facing `/32`s live on the SVI).\n2. Create an IP neighbor on the SVI (learned normally, or via mux/host-route programming). The SAI `NEIGHBOR_ENTRY` appears in `ASIC_DB` with a valid `DST_MAC`.\n3. Inspect the VPP data plane:\n   - `docker exec syncd vppctl show ip neighbor | grep <host>` \u2192 **absent**\n   - `docker exec syncd vppctl show ip fib <host>` \u2192 only the connected `/21` **glean**, no `/32`.\n4. Route a packet to that host from an uplink \u2192 it is dropped at `ip4-glean` (no host route/adjacency).\n\n### Actual Behavior and Expected Behavior\n**Actual:** A SAI `NEIGHBOR_ENTRY` on a VLAN SVI RIF is accepted by SONiC (present in `ASIC_DB`, MAC learned in the VPP L2 FDB) but **not** realized in VPP L3 \u2014 no adjacency, no host route. Downstream packets to the host glean-and-drop.\n\n**Expected:** Creating the neighbor should install the L3 adjacency and the host route on the BVI (`bvi<vlan_id>`), so routed traffic to the host forwards immediately \u2014 matching ASIC behavior, where a `NEIGHBOR_ENTRY` installs the host route regardless of whether the switch has itself ARPed the host. `addRemoveIpNbr()` should dispatch on RIF type first and resolve the BVI for `SAI_ROUTER_INTERFACE_TYPE_VLAN` (mirroring `vpp_create_bvi_interface()`), instead of requiring `PORT_ID`.\n\n### Relevant log output\n```\n# ASIC_DB has the neighbor with a valid MAC:\nredis-cli -n 1 keys '*NEIGHBOR_ENTRY*<IP>*'\n  ASIC_STATE:SAI_OBJECT_TYPE_NEIGHBOR_ENTRY:{\"ip\":\"<IP>\",\"rif\":\"oid:0x6...\",\"switch_id\":\"oid:0x21...\"}\n  SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS = <IPV6>\n\n# ... but VPP has no L3 neighbor for it:\ndocker exec syncd vppctl show ip neighbor | grep <IP>\n  (absent)\n\n# ... and the VPP FIB has only the connected /21 glean (no /32 host route):\ndocker exec syncd vppctl show ip fib <IP>\n  <IP>/21 fib:0 index:150 locks:2\n    ... cfg-flags:glean, bvi1000\n  forwarding: unicast-ip4-chain\n    [0] [@4]: ipv4-glean: [src:<IP>/21] bvi1000: ... ffffffffffff22ada23408760806\n```\n\n### Output of `show version`, `show techsupport`\n```\nSONiC Software Version: SONiC.master.1182394-fc9ea17bb\nDistribution: Debian 13.5\nKernel: 6.12.41+deb13-sonic-amd64\nPlatform: x86_64-kvm_x86_64-r0\nHwSKU: Force10-S6000\nASIC: vpp\nASIC Count: 1\n```\n\n### Fix\nDispatch on RIF type before resolving `PORT_ID`; for `SAI_ROUTER_INTERFACE_TYPE_VLAN`, resolve the BVI (`bvi<vlan_id>`) and program the neighbor adjacency + host route there (static, since SONiC owns the SVI neighbor lifecycle)."
+  },
+  "resolution": {
+    "pr_number": 2023,
+    "repository": "sonic-net/sonic-sairedis",
+    "url": "https://github.com/sonic-net/sonic-sairedis/pull/2023",
+    "title": "[vpp] Program VLAN router-interface neighbors on the BVI",
+    "merged_at": "2026-08-07T01:13:09Z",
+    "description": "### Description of PR\n\nSummary:\nFixes https://github.com/sonic-net/sonic-buildimage/issues/28882\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [ ] Test improvement\n\n### Approach\n#### What is the motivation for this PR?\n\nIP neighbors on a VLAN SVI (`SAI_ROUTER_INTERFACE_TYPE_VLAN`, realized in VPP as bvi<vlan_id>) were never programmed into VPP. `addRemoveIpNbr()` read `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` before dispatching on RIF type and only accepted `PORT`/`SUB_PORT`; a VLAN RIF has no `PORT_ID`, so the neighbor was dropped. With no `/32` on the `BVI`, routed uplink\u2192downlink traffic to VLAN hosts fell to the connected `/21` glean and was dropped.\n\nSigned-off-by: Longxiang Lyu <<EMAIL>>\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How did you do it?\n\nvslib/vpp/SwitchVppNbr.cpp (addRemoveIpNbr):\n\n- Query RIF type first; accept VLAN alongside PORT/SUB_PORT.\n- Gate the PORT_ID/OUTER_VLAN_ID lookup to the PORT/SUB_PORT branch only.\n- For VLAN, resolve the VLAN id (RIF VLAN_ID \u2192 VLAN object SAI_VLAN_ATTR_VLAN_ID, same as vpp_create_bvi_interface()) and program the neighbor on bvi<vlan_id>; BVI\u2192member delivery uses the existing L2 FIB.\n- Program the VLAN neighbor static (is_static=true) since SONiC owns the SVI neighbor lifecycle and it must not be aged/re-ARP'd. IPv4 and IPv6 both handled.\n\n#### How did you verify/test it?\n\nOn a dual-ToR VPP KVM testbed, for an active-side SVI host (<IP> on Vlan1000):\n\n* Before: NEIGHBOR_ENTRY present in ASIC_DB, but show ip neighbor absent and show ip fib <IP> = /21 glean only -> downstream packets glean-drop.\n* After: /32 + adjacency installed on bvi1000; routed downstream traffic forwards to the member port.\n\n#### Any platform specific information?\n\n### Documentation",
+    "files": [
+      {
+        "path": "vslib/vpp/SwitchVppNbr.cpp",
+        "additions": 60,
+        "deletions": 25
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

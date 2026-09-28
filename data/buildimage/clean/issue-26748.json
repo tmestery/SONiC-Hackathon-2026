@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-26748",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26748,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26748",
+    "title": "Bug:Race condition causes `CONFIG_DB_INITIALIZED` to be set to 0 causing swss start to fail",
+    "created_at": "2026-04-14T02:51:08Z",
+    "closed_at": "2026-04-20T18:19:25Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nOn a **smart switch** (NPU plus one or more DPUs), SONiC runs **several database Docker instances**: the main **`database`** service and per-DPU instances such as **`database@dpu0`**, **`database@dpu1`**, and so on. Each instance is brought up through the same overall pattern: **systemd** runs **`/usr/local/bin/database.sh`**, which delegates to **`/usr/bin/database.sh`** \u2014 the script generated from **`docker_image_ctl.j2`** for the database image.\n\nDuring container start, that generated script updates the host indicator **`CONFIG_DB_INITIALIZED`** in **host `CONFIG_DB`**. For DPU database instances, the CLI path still targets the **same** host `CONFIG_DB` Redis as the NPU (not an isolated DB per DPU for this key). As a result, **every** database instance that executes the initialization block can **`SET`** the same key, often toggling **`0`** and later **`1`**, depending on whether first-boot pending configuration is present and which branch of the script runs.\n\n**`config-setup.service`** runs in parallel with early container bring-up on boot. Near the end of first-time (or factory) configuration it removes **`/tmp/pending_config_initialization`** and sets **`CONFIG_DB_INITIALIZED`** to **`1`** after loading configuration (for example via **`config reload`**). Because **`config-setup`** can **finish** (systemd reports the unit complete) in the **same narrow time window** as **`database@dpu*`** units still running their **`docker_image_ctl`** start logic, another database instance can still run the branch that **`SET`s `CONFIG_DB_INITIALIZED` to `0`** on the host after **`config-setup`** has already set **`1`**. There is a short window where the value is wrong, or, if the script does not reach the final **`SET 1`**, the key can remain **`0`**.\n\n**`swss`** (and related start logic) **waits for `CONFIG_DB_INITIALIZED` to become `1`** before proceeding. If it observes **`0`** during that wait, or startup ordering is unlucky, **`swss`** can hit **start-pre timeouts** or otherwise fail to start cleanly even though configuration was applied successfully \u2014 a failure mode that presents as **`swss` not coming up** rather than as a clear configuration error.\n\nIn short: **multiple writers** on a **single** host key, **non-deterministic** completion order across **`config-setup`** and **`database` / `database@dpu*`**, and **`swss`** blocking on that key combine into a **race** that is especially plausible on smart-switch images with several database instances.\n\n### Steps to Reproduce\n\nReproduce on a **smart-switch** SKU where **`database.service`** and **`database@dpu*`** units are all enabled, using a boot path that **creates** **`/tmp/pending_config_initialization`** and runs **full first-boot configuration** (for example **factory default**, **ZTP**, runs **`config-setup`** and **`config reload`** while containers are starting).\n\nPower-cycle or cold-boot the system (or otherwise run a **first boot** where **`config-setup`** and **all database instances** start together). The race is timing-dependent: it may not trigger on every boot, but it becomes more likely when **many DPU database containers** start close to **`config-setup`** completion and each executes the **`CONFIG_DB_INITIALIZED`** logic against **host `CONFIG_DB`**.\n\nCollecting **ordered logs** for **`config-setup`**, **`database`**, **`database@dpu*`**, and **`swss`**, and optionally sampling **`sonic-db-cli CONFIG_DB GET CONFIG_DB_INITIALIZED`** during the first minute after boot, helps confirm the overlap when the issue appears.\n\n### Actual Behavior and Expected Behavior\n\n- **`CONFIG_DB_INITIALIZED`** on **host `CONFIG_DB`** may be **written multiple times** by **different** database **`docker_image_ctl`** start paths (main **`database`** plus **`dpu*`** instances), not only by **`config-setup`** / **`config reload`**.\n- Around **`config-setup`** completion, the key can momentarily go to **`0`** again or stay **`0`** if a later writer\u2019s sequence does not complete as intended.\n- **`swss`** may **block or time out** in **start-pre** waiting for initialization, leading to **service start failure** or delayed dataplane bring-up even when the underlying config load succeeded.\n\n**Expected Behavior**\n- **`swss`** should reliably observe **`CONFIG_DB_INITIALIZED == 1`** once configuration is valid, and **start** without spurious **timeouts** caused by **cross-instance** writes to the same key.\n\n### Relevant log output\n\n```shell\n2026-04-09T02:45:26.662945+00:00 sonic systemd[1]: Finished config-setup.service - Config initialization and migration service.\n2026-04-09T02:45:26.662945+00:00 sonic systemd[1]: Finished config-setup.service - Config initialization and migration service.\n2026-04-09T02:45:26.673736+00:00 sonic root: Started databasedpu0 service...\n2026-04-09T02:45:26.673736+00:00 sonic root: Started databasedpu0 service...\n2026-04-09T02:45:26.674022+00:00 sonic root: Started databasedpu3 service...\n2026-04-09T02:45:26.674022+00:00 sonic root: Started databasedpu3 service...\n....\n....\n2026 Apr  9 <IPV6>.923853 sonic WARNING systemd[1]: swss.service: start-pre operation timed out. Terminating.\n2026 Apr  9 <IPV6>.926191 sonic INFO swss.sh[20685]: Terminated\n2026 Apr  9 <IPV6>.927742 sonic WARNING systemd[1]: swss.service: Control process exited, code=killed, status=15/TERM\n2026 Apr  9 <IPV6>.927951 sonic WARNING systemd[1]: swss.service: Failed with result 'timeout'.\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n202511 latest hash\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26762,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26762",
+    "title": "[database]: Skip CONFIG_DB_INITIALIZED writes for DPU database instances",
+    "merged_at": "2026-04-20T18:19:23Z",
+    "description": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/26748\n\n#### Why I did it\n\nDPU database instances must not touch the host CONFIG_DB_INITIALIZED flag. Only the main NPU database instance should manage this key to avoid a race where DPU instances overwrite CONFIG_DB_INITIALIZED back to 0 after config-setup has already set it to 1, causing swss startup to fail.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nAdded a gate for `$DATABASE_TYPE` before CONFIG_DB_INITIALIZED is set in docker postStartAction(). CONFIG_DB_INITIALIZED is allowed to be touched only if `$DATABASE_TYPE` is not `dpudb`.\n\n#### How to verify it\n\n - Make sure first boot of a new image with the fix proceeds successfully with all critical containers including swss coming up on the NPU.\n - Cold boot a smartswitch multiple times with the fix and make sure that all critical containers including swss come up on the NPU.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 22,
+        "deletions": 16
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

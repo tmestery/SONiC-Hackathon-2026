@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-24562",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24562,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24562",
+    "title": "Bug: [Trixie] Some timezones not settable due to tzdata update",
+    "created_at": "2025-11-18T11:52:51Z",
+    "closed_at": "2026-02-09T17:49:54Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "Trixie"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThe test of test_clock.py::test_config_clock_timezone fails with the following errors:\nERR timedatectl[120334]: Failed to set time zone: Invalid or not installed time zone 'PST8PDT'\nERR hostcfgd: ['timedatectl', 'set-timezone', 'PST8PDT'] - failed: return code - 1, output:#012None\n\n**Observation:**\n/usr/share/zoneinfo/PST8PDT is missing on the Trixie image,\nbut appears in 'timedatectl list-timezones'.\nIn the master image, the /usr/share/zoneinfo/PST8PDT exists.\n\n**tzdata** package version (dpkg -l | grep tzdata):\nmaster: 2025b-0+deb12u2\nTrixie: **2025b-4+deb13u1**\n\n**Root Cause:**\nThe tzdata package was updated in the Trixie image (2025b-4+deb13u1).\nAccording to the tzdata NEWS file:\n**https://sources.debian.org/src/tzdata/2025b-4%2Bdeb13u1/NEWS**\n\"This affects only the legacy zones EST5EDT, CST6CDT, MST7MDT, **PST8PDT**, CET, MET, and EET, which previously used nonzero types for these timestamps.\"\n\nThe update removed or changed the structure of legacy POSIX zone files like PST8PDT.\ntimedatectl CLI requires a real zoneinfo file to set /etc/localtime, so it now fails.\n\n**Flow:**\n1. tests/clock/test_clock.py:ClockUtils.get_valid_timezones:\nshow clock timezones\n2. src/sonic-utilities/show/main.py:timezones:\ntimedatectl list-timezones\n3. This will list all timezones, including legacy entries like PST8PDT.\n4. tests/clock/test_clock.py:test_config_clock_timezone:\nconfig clock timezone PST8PDT\n5. src/sonic-host-services/scripts/hostcfgd:DeviceMetaCfg:timezone_update:\ntimedatectl set-timezone PST8PDT\n6. Error: Invalid or not installed time zone 'PST8PDT'\n\n### Steps to Reproduce\n\nOption 1: Run test_clock.py::test_config_clock_timezone\nOption 2: config clock timezone PST8PDT\nOption 3: timedatectl set-timezone PST8PDT\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\nERR timedatectl[120334]: Failed to set time zone: Invalid or not installed time zone 'PST8PDT'\nERR hostcfgd: ['timedatectl', 'set-timezone', 'PST8PDT'] - failed: return code - 1, output:#012None\n\nExpected Behavior:\nTimezone update passed successfully.\n\n### Relevant log output\n\n```shell\nERR timedatectl[120334]: Failed to set time zone: Invalid or not installed time zone 'PST8PDT'\nERR hostcfgd: ['timedatectl', 'set-timezone', 'PST8PDT'] - failed: return code - 1, output:#012None\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25272,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25272",
+    "title": "Install tzdata-legacy to allow using legacy timezones from timedatectl",
+    "merged_at": "2026-02-09T17:49:53Z",
+    "description": "Fixes #24562\n\n#### Why I did it\n\nThe tzdata package has moved the legacy/deprecated timezone names into a separate package called tzdata-legacy. However, the version of systemd in Trixie doesn't filter out timezones that are listed in zone.tab, but not actually physically present on the device, resulting in an error if those timezones try to get set.\n\nDebian bug: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1124737\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nAs a workaround, install the tzdata-legacy package to make all timezones that are listed in timedatectl work.\n\n#### How to verify it\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "build_debian.sh",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

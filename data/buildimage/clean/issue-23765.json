@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-23765",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 23765,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/23765",
+    "title": "Bug: ndppd keeps spinning even with vlan interface config",
+    "created_at": "2025-08-20T16:07:55Z",
+    "closed_at": "2025-09-11T01:08:39Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThis is similar to the issue reported in https://github.com/sonic-net/sonic-buildimage/issues/6823 where ndppd keeps spinning at 100% when route scale is high. The difference here is that there are no vlan interfaces in the config, so the fix merged earlier (https://github.com/sonic-net/sonic-buildimage/pull/7456) doesn't apply.\n\n```\ntop - <IPV6> up  3:05,  4 users,  load average: 1.46, 1.37, 1.50\nTasks: 439 total,   2 running, 424 sleeping,   0 stopped,  13 zombie\n%Cpu(s):  1.1 us,  7.0 sy,  0.0 ni, 91.9 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\nMiB Mem :  31905.2 total,  18852.7 free,   7100.6 used,   6758.9 buff/cache\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  24804.6 avail Mem\n\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n  12865 root      20   0   49744  47412   3280 R 100.0   0.1 118:54.07 ndppd\n  10372 root      20   0 4416380   1.5g 530956 S  10.0   4.8  54:07.61 syncd\n   7566 tss       20   0  706904 329344   9092 S   7.0   1.0  34:45.71 redis-server\n  19618 root      20   0   74692  48088   8092 S   3.0   0.1   2:55.88 python3\n  19585 root      20   0   65920  48700  17676 S   2.7   0.1   4:07.26 python3\n```\n\nWe need to add `route-ttl` option in the j2 template outside of the `if VLAN_INTERFACE` block\n\n### Steps to Reproduce\n\n- Have a route scale of about 500K routes in system and do not have any vlan interfaces in config.\n\n### Actual Behavior and Expected Behavior\n\n- ndppd should not keep spinning like crazy.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 23767,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/23767",
+    "title": "[docker-orchagent]: Increase ndppd route-ttl option in ndppd.conf.j2 unconditionally ",
+    "merged_at": "2025-09-11T01:08:38Z",
+    "description": "#### Why I did it\n\n`route-ttl` option in `ndppd` is a global option, but the `ndppd.conf.j2` template adds it conditional on vlan interfaces with prefix length > 0 being present. This causes `route-ttl` to not get set on POC setups without VLAN interfaces, causing ndppd to keep spinning reading route table in case of route scale. Keeping this option out of the `if VLAN_INTERFACE` block in jinja template.\n\nfixes #23765\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\ntake `route-ttl` knob out of the `if VLAN_INTERFACE` block to set it unconditionally.\n\n#### How to verify it\n\nHave a very large number of routes (~500k used in our testing) with no VLAN_INTERFACE in config_db. ndppd does not show up spinning at 100% anymore.\n\nBefore:\n\n```\nadmin@sonic:~$ sonic-db-cli ASIC_DB keys \"*ROUTE_ENTRY*\" | wc -l\n506841\n\ntop inside swss container:\n\ntop - <IPV6> up  3:05,  4 users,  load average: 1.46, 1.37, 1.50\nTasks: 439 total,   2 running, 424 sleeping,   0 stopped,  13 zombie\n%Cpu(s):  1.1 us,  7.0 sy,  0.0 ni, 91.9 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\nMiB Mem :  31905.2 total,  18852.7 free,   7100.6 used,   6758.9 buff/cache\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  24804.6 avail Mem\n\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n  12865 root      20   0   49744  47412   3280 R 100.0   0.1 118:54.07 ndppd\n  10372 root      20   0 4416380   1.5g 530956 S  10.0   4.8  54:07.61 syncd\n   7566 tss       20   0  706904 329344   9092 S   7.0   1.0  34:45.71 redis-server\n```\n\nAfter:\n\n```\nadmin@sonic:~$ sonic-db-cli ASIC_DB keys \"*ROUTE_ENTRY*\" | wc -l\n500012\n\nadmin@sonic:~$ sonic-db-cli APPL_DB keys \"*ROUTE_TABLE*\" | wc -l\n500004\nadmin@sonic:~$\n\ntop inside swss container:\n\nTasks:  23 total,   1 running,  22 sleeping,   0 stopped,   0 zombie\n%Cpu(s): 19.9 us,  2.9 sy,  0.0 ni, 77.1 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\nMiB Mem :  31905.2 total,  15919.4 free,   9908.2 used,   6887.4 buff/cache\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  21997.0 avail Mem\n\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n      1 root      20   0   42008  36684  10440 S   0.0   0.1   0:27.13 supervisord\n     42 root      20   0  130984  32620  17140 S   0.0   0.1   0:03.65 python3\n     45 root      20   0  221836   6912   3444 S   0.0   0.0   3:21.87 rsyslogd\n     50 root      20   0   88208   6260   5640 S   0.0   0.0   0:02.87 portsyncd\n     55 root      20   0  865364 627232  21600 S   0.0   1.9  24:39.90 orchagent\n     88 root      20   0   88500   7760   6976 S   0.0   0.0   0:02.83 coppmgrd                                                                                                                                                                                                     115 root      20   0    4436   3280   2904 S   0.0   0.0   0:03.49 arp_update\n    116 root      20   0   88360   7664   6796 S   0.0   0.0   0:01.42 neighsyncd                                                                                                                                                                                                   120 root      20   0   88508   7992   7204 S   0.0   0.0   0:02.86 vlanmgrd\n    122 root      20   0   88652   7988   7128 S   0.0   0.0   0:03.03 intfmgrd\n    123 root      20   0   88344   6516   5888 S   0.0   0.0   0:02.69 fabricmgrd\n    125 root      20   0   88584   7992   7156 S   0.0   0.0   0:02.93 portmgrd\n    129 root      20   0   88708   7828   6992 S   0.0   0.0   0:15.42 buffermgrd\n    140 root      20   0   88476   7864   7056 S   0.0   0.0   0:02.79 vrfmgrd\n    150 root      20   0   88384   6372   5744 S   0.0   0.0   0:02.76 nbrmgrd\n    156 root      20   0   88516   7880   7120 S   0.0   0.0   0:02.82 vxlanmgrd\n    167 root      20   0   88240   6368   5744 S   0.0   0.0   0:01.39 fdbsyncd\n    171 root      20   0   88468   7660   6920 S   0.0   0.0   0:02.84 tunnelmgrd\n   1972 root      20   0    5788   1968   1796 S   0.0   0.0   0:01.12 ndppd\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "dockers/docker-orchagent/ndppd.conf.j2",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-config-engine/tests/data/ndppd/empty_vlan_interfaces.json",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_j2files.py",
+        "additions": 13,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

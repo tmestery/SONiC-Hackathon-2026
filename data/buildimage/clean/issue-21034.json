@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-21034",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21034,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21034",
+    "title": "[frr/bgpd] unified config missing fpm option breaking VXLAN EVPN",
+    "created_at": "2024-12-05T00:03:57Z",
+    "closed_at": "2025-03-12T22:04:34Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "routing"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nDuring debugging of VXLAN EVPN using unified vs split configuration, the same BGP configuration is made with one exception, the setting of `no fpm use-next-hop-groups` is forcibly set for all FRR instances in split mode as it calls:\nhttps://github.com/sonic-net/sonic-buildimage/blob/214fa2e91d468ebbfc96a71450df9be9b742de54/dockers/docker-fpm-frr/docker_init.sh#L44-L52\n\nThis setting is needed for VXLAN EVPN VTEPS to come online.\n\nThis change was introduced in PR #12852 when switching to the new fpm dataplane plugin.\n\nIt appears this PR never updated unified mode's setting in  https://github.com/sonic-net/sonic-buildimage/blob/214fa2e91d468ebbfc96a71450df9be9b742de54/src/sonic-frr-mgmt-framework/templates/frr/frr.conf.j2#L1-L33\n\nIt appears the zebra config used in `separated` mode would work as it contains this logic:\nhttps://github.com/sonic-net/sonic-buildimage/blob/214fa2e91d468ebbfc96a71450df9be9b742de54/dockers/docker-fpm-frr/frr/zebra/zebra.conf.j2#L10-L17\n\nI have not validated separated mode, unified is the default and likely what most will use unless they're generating their own configurations.\n\nTo verify this is the cause of the issue, you can run\n```\nvtysh -c \"config\" -c \"no fpm use-next-hop-groups\"\n```\nand observe the VTEP magically comes online.\n\n#### Steps to reproduce the issue:\n1. Configure a minimal VXLAN setup using a unified config with sonic master and https://github.com/sonic-net/sonic-swss/pull/3383 applied to get the vtep state to show up.\n2. view that the status is down in `show vxlan remotevtep`\n3. run `vtysh -c \"config\" -c \"no fpm use-next-hop-groups\"`\n4. view the status is now up in `show vxlan remotevtep`\n\n#### Describe the results you received:\n\nvtep stays down\n\n#### Describe the results you expected:\n\nvtep should come online\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: SONiC.master-broadcom.0-369d470b0\nSONiC OS Version: 12\nDistribution: Debian 12.8\nKernel: 6.1.0-22-2-amd64\nBuild commit: 369d470b0\nBuild date: Wed Dec  4 <IPV6> UTC 2024\nBuilt by: brad@github-runner-ubuntu-2004\n\nPlatform: x86_64-dellemc_s5248f_c3538-r0\nHwSKU: DellEMC-S5248f-P-25G\nASIC: broadcom\nASIC Count: 1\nSerial Number: 638J8K3\nModel Number: 04JXCV\nHardware Revision: N/A\nUptime: <IPV6> up 47 min,  1 user,  load average: 0.58, 0.55, 0.53\nDate: Thu 05 Dec 2024 <IPV6>\n\nDocker images:\nREPOSITORY                    TAG                           IMAGE ID       SIZE\ndocker-orchagent              latest                        7d8529e558ac   354MB\ndocker-orchagent              master-broadcom.0-369d470b0   7d8529e558ac   354MB\ndocker-fpm-frr                latest                        2a5079b6b9a8   375MB\ndocker-fpm-frr                master-broadcom.0-369d470b0   2a5079b6b9a8   375MB\ndocker-nat                    latest                        2653522a87ef   344MB\ndocker-nat                    master-broadcom.0-369d470b0   2653522a87ef   344MB\ndocker-macsec                 latest                        357e36ee2310   344MB\ndocker-sflow                  latest                        d1164bf8ba03   342MB\ndocker-sflow                  master-broadcom.0-369d470b0   d1164bf8ba03   342MB\ndocker-teamd                  latest                        415984ca7bc7   341MB\ndocker-teamd                  master-broadcom.0-369d470b0   415984ca7bc7   341MB\ndocker-syncd-brcm             latest                        3629f9e843af   753MB\ndocker-syncd-brcm             master-broadcom.0-369d470b0   3629f9e843af   753MB\ndocker-platform-monitor       latest                        4bca0fae11ac   431MB\ndocker-platform-monitor       master-broadcom.0-369d470b0   4bca0fae11ac   431MB\ndocker-dhcp-relay             latest                        969b3600f58b   321MB\ndocker-snmp                   latest                        d5b355f43560   356MB\ndocker-snmp                   master-broadcom.0-369d470b0   d5b355f43560   356MB\ndocker-sonic-mgmt-framework   latest                        aca3d34650a0   399MB\ndocker-sonic-mgmt-framework   master-broadcom.0-369d470b0   aca3d34650a0   399MB\ndocker-router-advertiser      latest                        f356005105f4   312MB\ndocker-router-advertiser      master-broadcom.0-369d470b0   f356005105f4   312MB\ndocker-mux                    latest                        131c5a2a48cd   363MB\ndocker-mux                    master-broadcom.0-369d470b0   131c5a2a48cd   363MB\ndocker-lldp                   latest                        c73bcd484bb1   357MB\ndocker-lldp                   master-broadcom.0-369d470b0   c73bcd484bb1   357MB\ndocker-database               latest                        421b12badbea   320MB\ndocker-database               master-broadcom.0-369d470b0   421b12badbea   320MB\ndocker-sonic-bmp              latest                        f11c55c250b0   313MB\ndocker-sonic-bmp              master-broadcom.0-369d470b0   f11c55c250b0   313MB\ndocker-sonic-gnmi             latest                        0b4adc93a15b   401MB\ndocker-sonic-gnmi             master-broadcom.0-369d470b0   0b4adc93a15b   401MB\ndocker-eventd                 latest                        6516930df9c5   312MB\ndocker-eventd                 master-broadcom.0-369d470b0   6516930df9c5   312MB\ndocker-gbsyncd-broncos        latest                        aee8c4c5bd59   351MB\ndocker-gbsyncd-broncos        master-broadcom.0-369d470b0   aee8c4c5bd59   351MB\ndocker-gbsyncd-credo          latest                        5fe475762db9   324MB\ndocker-gbsyncd-credo          master-broadcom.0-369d470b0   5fe475762db9   324MB\n```\n#### Output of `show techsupport`:\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 21053,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/21053",
+    "title": "[frr/bgpd] fix frr VXLAN EVPN configuration for unified config",
+    "merged_at": "2025-03-12T22:04:33Z",
+    "description": "#### Why I did it\nDuring debugging of VXLAN EVPN using unified vs split configuration, the same BGP configuration is made with one exception, the setting of `no fpm use-next-hop-groups` which is forcibly set for all FRR instances.\n\nThis change was introduced in PR #12852 when switching to the new fpm dataplane plugin.\n\nWhen running `vtysh -c \"config\" -c \"no fpm use-next-hop-groups\"` it can be seen the VTEP immediately comes online and traffic flows as expected.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nThis adds the option as is present in dockers/docker-fpm-frr/frr/zebra/zebra.conf.j2 controlled by the DEVICE_METADATA nexthop_group option.\n\n#### How to verify it\n\nSee #21034 for details\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [X] 202305\n- [X] 202311\n- [X] 202405\n- [X] 202411\n\n#### Tested branch (Please provide the tested image version)\n\nmaster as of 20241205\n\n#### Description for the changelog\n[frr/bgpd] fix frr VXLAN EVPN configuration for unified config\n\n#### Link to config_db schema for YANG module changes\nN/A\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\nFixes #21034\nSigned-off-by: Brad House (@bradh352)",
+    "files": [
+      {
+        "path": "src/sonic-frr-mgmt-framework/templates/frr/frr.conf.j2",
+        "additions": 11,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

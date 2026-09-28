@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-11290",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 11290,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/11290",
+    "title": "[chassis] Remote ASIC SYSTEM_INTERFACE is not created if it is received before remote SYSTEM_LAG from the Chassis DB",
+    "created_at": "2022-06-29T19:23:45Z",
+    "closed_at": "2022-07-27T18:40:36Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Chassis"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nIn a Sonic chassis the Chassis DB is used to exchange SYSTEM_LAG and SYSTEM_INTERFACE on the LAG from one asic to another. The asic where the LAG and the Interface are local \u2013 creates entries in the Chassis DB. These tables are subscribed to and received by the OrchAgent on the other ASICs. Sometimes it is possible that the OrchAgent received the SYSTEM_INTERFACE entry (for a LAG) before it receives the entry for the SYSTEM_LAG (on which the interface is to be created). In this scenario it is expected that the OrchAgent waits until the LAG creation and then then create the ROUTER_INTERFACE on top of it. But because of a bug in the IntfsOrch code for handling remote system interface \u2013 the ROUTER_INTERFACE is never created.\n\n#### Steps to reproduce the issue:\n1. Validate that neighbor entry for all the eBGP peers on all the asics are present on all the asics in the chassis.  For a T2 topology, this can be done as below:\n\n```\nadmin@sonic:~$ sudo ip netns exec asic0 ip neigh show | grep 10.0.0  | wc -l\n52\nadmin@ixre-egl-board7:~$ sudo ip netns exec asic0 ip neigh show | grep fc00  | wc -l\n52\n```\n2.  Reboot the supervisor card on a T2 chassis, which in turn would cause all the linecards to reboot.\n3.  After all cards rebooted and eBGP's are up, validate that neighbor entry for all the eBGP peers on all the asics are present on all the asics in the chassis\n4.\n\n#### Describe the results you received:\nNumber of ip neigh entries for ipv4 and ipv6 eBGP peers in a T2 topology don't add up to 104 on all the asics.\n\n#### Describe the results you expected:\nNumber of ip neigh entries for ipv4 and ipv6 eBGP peers in a T2 topology should add up to 104 on all the asics.\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 2364,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/2364",
+    "title": "Fix for System interface for remote asic LAG not getting created if received prior to SYSTEM_LAG creation from Chassis DB",
+    "merged_at": "2022-07-27T18:40:35Z",
+    "description": "**What I did**\nChanged interface and neighbor orch code in orchagent which handle updates from Chassis DB for system interface and remote neighbors. Fixes https://github.com/Azure/sonic-buildimage/issues/11290\n\n**Why I did it**\nIf an update from the Chassis DB for a system interface or a remote neighbor is received prior to receiving an update for the creation of the SYSTEM LAG or SYSTEM_PORT - the current code incorrectly treats this as an update from the local asic and ignores it. As a result the SYSTEM_INTERFACE or the Remote neighbor is not creating when this specific sequence of updates are received.\n\nThis change correctly verifies that an update is from the local asic before ignoring it.\n\n**How I verified it**\nPrior to the fix - adding a the system_interface to the Chassis DB before adding the corresponding System LAG would result in the ROUTER_INTERFACE never getting created by SAI. After the fix the ROUTER_INTERFACE is correctly created for this scenario.\n\nThe sonic-mgmt supervisor reset tests that were failing prior to this fix - passed after the fix was applied.\n\n**Details if related**",
+    "files": [
+      {
+        "path": "orchagent/intfsorch.cpp",
+        "additions": 17,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/intfsorch.h",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/neighorch.cpp",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

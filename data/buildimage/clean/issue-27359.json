@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-27359",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27359,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27359",
+    "title": "Bug: [rsyslog] RELP forwarding in container rsyslog causes blocking syslog writes, degrading initialization performance under high log load",
+    "created_at": "2026-05-14T03:00:22Z",
+    "closed_at": "2026-06-16T19:59:29Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n## Summary\n\nPR #18113 switched Docker container rsyslog forwarding from UDP (`omfwd`) to RELP (`omrelp`). RELP is a TCP-based protocol that requires per-message ACKs. Under high syslog load, this creates a blocking chain that causes any container process writing to syslog to hang inside `sendto()`, significantly degrading initialization and configuration performance.\n\n## Root Cause\n\nRELP requires the sender to wait for a TCP ACK before sending the next message. When the host rsyslog is under load (e.g., during `config reload` or cold reboot), ACKs are delayed, which propagates back-pressure through the entire syslog stack inside the container:\n\n```\nhost rsyslog slow to ACK\n  \u2192 container rsyslog omrelp send queue exhausted (queue.size=20000)\n    \u2192 container rsyslog stops reading from /dev/log Unix socket\n      \u2192 /dev/log socket buffer fills (kernel default: 512 slots)\n        \u2192 any process calling syslog() \u2192 sendto() BLOCKS\n```\n\nWith the previous UDP (`omfwd`) configuration, `sendto()` returns immediately regardless of host rsyslog state \u2014 messages may be dropped under extreme load, but the caller never blocks.\n\n## Affected Scope\n\n`dockers/docker-base-bookworm/etc/rsyslog.conf` is the base image for **all** SONiC containers. Any initialization-heavy service is at risk during high log-load periods:\n\n- `config reload` / cold reboot (many containers starting simultaneously)\n- Large-scale interface provisioning (PortChannels, VLANs, etc.)\n- FRR/LLDP convergence events\n- syncd/orchagent bulk ASIC operations\n\n### Steps to Reproduce\n\nNA\n\n### Actual Behavior and Expected Behavior\n\nNA\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27408,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27408",
+    "title": "[rsyslog] Prevent RELP backpressure from blocking containers",
+    "merged_at": "2026-06-16T19:59:28Z",
+    "description": "## Why\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/27359.\n\nContainer rsyslog forwards to the host with RELP. If host-side backpressure fills the RELP action queue, the default enqueue timeout can block rsyslog's imuxsock processing path and make service initialization callers stall in `syslog()`/`sendto()`.\n\n## What\n\nSet `queue.timeoutEnqueue=\"0\"` on container RELP action queues so queue saturation drops immediately instead of blocking container syslog producers. This preserves RELP behavior while the queue has capacity, but restores the important pre-RELP property that syslog forwarding must not stall critical service startup paths under log storms.\n\nCovered configs:\n\n- `dockers/docker-base-bookworm/etc/rsyslog.conf`\n- `dockers/docker-base-trixie/etc/rsyslog.conf`\n- `dockers/docker-base-bullseye/etc/rsyslog.conf`\n- `dockers/docker-platform-monitor/etc/rsyslog.conf`\n\n## Test\n\n- `git diff --check`\n- `rsyslogd -N1` not run locally: `rsyslogd` is not installed on the worker host.",
+    "files": [
+      {
+        "path": "dockers/docker-base-bookworm/etc/rsyslog.conf",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-base-bullseye/etc/rsyslog.conf",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-base-trixie/etc/rsyslog.conf",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-platform-monitor/etc/rsyslog.conf",
+        "additions": 4,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-18554",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 18554,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/18554",
+    "title": "[Chassis][multi-asic] Stopping swss services on SFMs should remove the related fabric reachability links but it does not",
+    "created_at": "2024-04-03T14:30:56Z",
+    "closed_at": "2024-05-13T05:58:52Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nWhen stopping swss services on SFMs,  the related fabric reachability information do not get remove from the database.\n\n#### Steps to reproduce the issue:\n1.Ensure the related swss a syncd are up and running.\n\n```\nadmin@ixre-cpm-chassis11:~$ docker ps -a\nCONTAINER ID   IMAGE                                COMMAND                             CREATED      STATUS    PORTS     NAMES\n1c6ac7cd1594   docker-syncd-brcm-dnx:latest     \"/usr/local/bin/supe\u00e2\u00a6\"   5 days ago   Up 27 hours            syncd15\n2a0675724b5a   docker-orchagent:latest              \"/usr/bin/docker-ini\u00e2\u00a6\"   5 days ago   Up 27 hours             swss14\n9f06a06e5907   docker-orchagent:latest               \"/usr/bin/docker-ini\u00e2\u00a6\"   5 days ago   Up 27 hours             swss15\n7b6bde1b5460   docker-syncd-brcm-dnx:latest   \"/usr/local/bin/supe\u00e2\u00a6\"   5 days ago   Up 27 hours             syncd14\n```\n2.show fabric reachability information for acic14 and asic15\n\nadmin@ixre-cpm-chassis11:~$ show fabric reachability -n asic14 | grep up | wc\n     72     288    3960\nadmin@ixre-cpm-chassis11:~$ show fabric reachability -n asic15 | grep up | wc\n     72     288    3960\n\n3.Stop swss services\n\nadmin@ixre-cpm-chassis11:~$ sudo systemctl stop swss@14\nadmin@ixre-cpm-chassis11:~$ sudo systemctl stop swss@15\n\n4. Check swss and syncd dockers. Ensure they have exited.\n\n```\nadmin@ixre-cpm-chassis11:~$ docker ps -a\n1c6ac7cd1594   docker-syncd-brcm-dnx:latest     \"/usr/local/bin/supe\u00e2\u00a6\"   5 days ago   Exited (0) 5 seconds ago     syncd15\n2a0675724b5a   docker-orchagent:latest              \"/usr/bin/docker-ini\u00e2\u00a6\"   5 days ago   Exited (0) 26 seconds ago    swss14\n9f06a06e5907   docker-orchagent:latest               \"/usr/bin/docker-ini\u00e2\u00a6\"   5 days ago   Exited (0) 11 seconds ago    swss15\n7b6bde1b5460   docker-syncd-brcm-dnx:latest   \"/usr/local/bin/supe\u00e2\u00a6\"   5 days ago   Exited (0) 18 seconds ago    syncd14\n```\n\n5. Show fabric reachibilty information on each related asics.   These entries should have been removed but they are not.\n\nadmin@ixre-cpm-chassis11:~$ show fabric reachability -n asic15 | grep up | wc\n     72     288    3960\nadmin@ixre-cpm-chassis11:~$ show fabric reachability -n asic14 | grep up | wc\n     72     288    3960\n\n#### Describe the results you received:\n\n#### Describe the results you expected:\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 18611,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/18611",
+    "title": "Clear FABRIC_PORT_TABLE when swss is got down",
+    "merged_at": "2024-05-13T05:58:51Z",
+    "description": "#### Why I did it\nfix #18554\n\nIssue 18554(https://github.com/sonic-net/sonic-buildimage/issues/18554) describes an issue of that when stopping swss services on SFMs, the related fabric reachability information do not get remove from the database.\n\nIt's found that corresponding fabric port status information is in STATE_DB with key FABRIC_PORT_TABLE|PORTxxx.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nAdd clean table action for FABRIC_PORT_TABLE in STATE_DB when swss service is down.\n\n#### How to verify it\nMade changes and loaded the changes into chassis. Run \"show fabric reachability -n asic7\" to see the fabric ports. Also checked STATE_DB by using \"sonic-db-cli -n asic7 STATE_DB hgetall \"FABRIC_PORT_TABLE|PORT112\" where port 112 is connected and up.\n\nIssue \"sudo systemctl stop swss@7\". Check \"show fabric reachability -n asic7\". It's empty now.\nIssue \"sudo systemctl start swss@7\" or \"docker start swss7\". Wait for 1 minutes. Run \"show fabric reachability -n asic7\", all connected port are displayed there. Also checked STATE_DB and all entries with key FABRIC_PORT_TABLE|PORTxxx are correct.\nIssue \"docker kill swss7\". Repeat testing steps in 1). It works as exepcted.\nEnter container swss7. Run \"kill 35\" where 35 is task id for orchagent. Watched container swss7 is stopped and then restarted. Watched the \"Cleared FABRIC_PORT_TABLE from STATE_DB for swss7\" log showed up after container is stopped.\n#### Which release branch to backport (provide reason below if selected)\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [X] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\nmaster, 202205",
+    "files": [
+      {
+        "path": "files/scripts/swss.sh",
+        "additions": 4,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

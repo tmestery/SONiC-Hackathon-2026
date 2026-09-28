@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-27541",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27541,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27541",
+    "title": "[orchagent] Missing notification forwarding for FDB/BFD when ZMQ southbound is enabled",
+    "created_at": "2026-05-26T05:34:13Z",
+    "closed_at": "2026-07-09T16:40:21Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Description\n\nWith the recent merge of ZMQ southbound support for regular switches (sonic-buildimage #26638, sonic-swss #4556, sonic-sairedis #1835), we identified a gap in SAI notification handling that would affect switches using this feature.\n\nWhen ZMQ southbound is enabled via `DEVICE_METADATA|localhost.orch_southbound_zmq_enabled`, syncd sends notifications via a ZMQ PUSH socket instead of the Redis `NOTIFICATIONS` PUB/SUB channel. On the orchagent side, notifications arrive on the libsairedis ZMQ thread and are dispatched to SAI callback functions in `orchagent/notifications.cpp`.\n\nFor DPU enablement (PR sonic-swss#3547), `on_port_state_change` was updated to forward notifications from the ZMQ thread to the Redis `NOTIFICATIONS` channel where orchagent's main select loop processes them. However, several other callbacks remain as empty no-ops since DPUs don't exercise those features.\n\nAs we look to enable ZMQ southbound on regular switches for route programming performance, these callbacks would need the same forwarding treatment.\n\n### Notifications Requiring Updates\n\n| Notification | Consumer Orch | Functional Area |\n|---|---|---|\n| `fdb_event` | FdbOrch | L2 MAC learning/aging |\n| `bfd_session_state_change` | BfdOrch | BFD session state tracking |\n| `port_host_tx_ready` | PortsOrch | Port host TX readiness |\n| `icmp_echo_session_state_change` | IcmpOrch | ICMP echo monitoring |\n\n### Notifications Already Working in ZMQ Mode\n\n- `port_state_change` \u2014 forwarding added in sonic-swss#3547\n- `switch_shutdown_request` \u2014 direct `quick_exit()`, no Redis needed\n- `switch_asic_sdk_health_event` \u2014 direct call to SwitchOrch\n- `ha_set_event`, `ha_scope_event`, `flow_bulk_get_session_event` \u2014 forwarding added for DPU HA\n- `macsec_post_status` \u2014 forwarding added in sonic-swss#4449\n\n### Expected Impact Without Fix\n\nIf ZMQ southbound is enabled on a switch without addressing this:\n- Hardware-learned MAC entries would not propagate to FdbOrch\n- BFD session state transitions would not reach BfdOrch\n- ICMP echo session monitoring would not function\n\n### Is it platform specific\n\ngeneric (any platform with `orch_southbound_zmq_enabled` set to true)\n\n### Importance or Severity\n\nHigh (known Gap \u2014 ZMQ southbound not yet enabled on switches)"
+  },
+  "resolution": {
+    "pr_number": 4619,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4619",
+    "title": "[orchagent]: Forward SAI notifications to Redis in ZMQ southbound mode",
+    "merged_at": "2026-07-09T16:40:20Z",
+    "description": "**What I did**\n\nForward SAI notifications to Redis `NOTIFICATIONS` channel when orchagent runs in ZMQ southbound mode. Six notification callbacks (`fdb_event`, `bfd_session_state_change`, `twamp_session_event`, `port_host_tx_ready`, `tam_tel_type_config_change`, `icmp_echo_session_state_change`) were empty stubs that silently dropped events. Also refactors `on_port_state_change` to use cached static connections for consistency.\n\n**Why I did it**\n\nWhen ZMQ southbound is enabled for route performance, SAI notifications arrive via libsairedis ZMQ thread but never reach the Redis NOTIFICATIONS channel. The consuming Orch classes (`FdbOrch`, `BfdOrch`, `PortsOrch`, etc.) subscribe to Redis and never see the events \u2014 breaking FDB learning, BFD failover, TWAMP session monitoring, and other features.\n\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/27541\n\n**How I verified it**\n\n- **Unit Tests (1430 pass, 0 fail):**\n  - SWSS mock tests (bookworm): 770 tests \u2705\n  - SWSS mock tests (trixie): 590+70 tests \u2705\n  - New `notifications_ut.cpp`: 14 tests covering all ZMQ notification callbacks\n  - VS image build: SUCCESS\n\n- **Integration Tests \u2014 ZMQ southbound enabled (KVM T0 testbed, sonic-mgmt):**\n\n  ZMQ mode enabled via `DEVICE_METADATA|localhost`:\n  - `orch_southbound_zmq_enabled` = `true`\n  - `orch_northbound_route_zmq_enabled` = `true`\n  - orchagent running with `-z zmq_sync -q tcp://<IP>`\n\n  FDB test results (10/10 pass):\n  - `test_fdb[ethernet]` \u2705\n  - `test_fdb[arp_request]` \u2705\n  - `test_fdb[arp_reply]` \u2705\n  - `test_fdb[cleanup]` \u2705\n  - `test_self_mac_not_learnt[ethernet]` \u2705\n  - `test_self_mac_not_learnt[arp_request]` \u2705\n  - `test_self_mac_not_learnt[arp_reply]` \u2705\n  - `test_self_mac_not_learnt[cleanup]` \u2705\n  - `testFdbMacLearning` \u2705\n  - `testARPCompleted` \u2705\n\n  **Evidence of ZMQ notification path exercised** (from `sairedis.rec` during test):\n  ```\n  |n|fdb_event|[{...\"mac\":\"<IPV6>\"...\"SAI_FDB_EVENT_LEARNED\"...}]\n  |n|fdb_event|[{...\"mac\":\"<IPV6>\"...\"SAI_FDB_EVENT_LEARNED\"...}]\n  |n|fdb_event|[{...\"SAI_FDB_EVENT_FLUSHED\"...}]\n  ```\n\n  Port state change notifications also flowing via ZMQ:\n  ```\n  NOTICE swss#orchagent: :- handleNotification: Get port state change notification id:... status:2 (DOWN)\n  NOTICE swss#orchagent: :- handleNotification: Get port state change notification id:... status:1 (UP)\n  ```\n\n**Details if related**\n\n### Implementation Pattern\n\nEach callback uses `static thread_local` cached `DBConnector`/`NotificationProducer` (thread-safe for concurrent libsairedis notification threads, avoids per-call reconnect overhead):\n\n```cpp\nvoid on_xxx(params...)\n{\n    if (gRedisCommunicationMode == SAI_REDIS_COMMUNICATION_MODE_ZMQ_SYNC)\n    {\n        static thread_local swss::DBConnector db(\"ASIC_DB\", 0);\n        static thread_local swss::NotificationProducer xxxNotifier(&db, \"NOTIFICATIONS\");\n        std::string sdata = sai_serialize_xxx(params);\n        std::vector<swss::FieldValueTuple> values;\n        xxxNotifier.send(\"op_name\", sdata, values);\n    }\n}\n```\n\n### Why This Approach (vs Long-Term)\n\n**Short-term (this PR):** Forwarding in callbacks is minimal, safe, and immediately deployable. Zero impact on existing Redis-mode deployments. No changes to consumer code required.\n\n**Long-term vision:** Move notification forwarding into `libsairedis` itself \u2014 either by having `syncd` publish to Redis directly (alongside ZMQ delivery), or by adding a notification-forwarding layer inside `libsairedis` that bridges ZMQ\u2192Redis transparently. This would eliminate per-callback forwarding code in orchagent but requires coordination with sairedis maintainers and is a larger architectural change.",
+    "files": [
+      {
+        "path": "orchagent/icmporch.cpp",
+        "additions": 9,
+        "deletions": 2
+      },
+      {
+        "path": "orchagent/notifications.cpp",
+        "additions": 43,
+        "deletions": 13
+      },
+      {
+        "path": "tests/mock_tests/Makefile.am",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/notifications_ut.cpp",
+        "additions": 231,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

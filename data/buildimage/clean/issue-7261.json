@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-7261",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 7261,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/7261",
+    "title": " Static route is incorrect when max PortChannels are configured and removed",
+    "created_at": "2021-04-08T10:35:16Z",
+    "closed_at": "2021-05-13T01:57:28Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nFirstly create max number of PortChannels depending on system type and remove them. Secondly create one PortChannel, and  add static route with this PortChannel. After that we can find the static route info is not correct, namely the PortChannel is not the specified PortChannel.\n\n#### Steps to reproduce the issue:\n1.  Create max number of PortChannels:\n      sudo config portchannel add PortChannel1\n      sudo config portchannel add PortChannel2\n      sudo config portchannel add PortChannel3\n      sudo config portchannel add PortChannel4\n      ......\n\n      show interfaces portchannel\n      sudo config save -y\n      reboot\n      show interfaces portchannel\n\n2.  Del all PortChannels created by step 1\n     sudo config portchannel del PortChannel1\n     sudo config portchannel del PortChannel2\n     sudo config portchannel del PortChannel3\n     .....\n\n3.  Configure route like following example:\n     sudo config route add prefix <IP>/32 nexthop PortChannel0001\n\n3.  Check route info:\n      show ip route <IP>\n\n#### Describe the results you received:\n   Known via \"static\", distance 1, metric 0, best\n   Last update <IPV6> ago\n  * directly connected, **PortChannel1**, weight 1\n\n#### Describe the results you expected:\n   Known via \"static\", distance 1, metric 0, best\n   Last update <IPV6> ago\n  * directly connected, **PortChannel0001**, weight 1\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: .master branch, commit hash: 01b03307\n\n```\nAttached below is sysdump log:\n[sysdump_test_basic_static_route.tar.gz](https://github.com/Azure/sonic-buildimage/files/6277919/sysdump_test_basic_static_route.tar.gz)\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\n(First case: create portchannel. Second case: create static route)\nThe first test has created a port-channel with the name PortChannel1.\n\nAt the end of the test, the cleanup has removed the port-channels the tests have created but did not reload the configuration or the switch.\n\nApparently, there is a cache inside vtyshs that remembered this port-channel name, and when we added a route to PortChannel0001 it added it under the name of the previously created port-channel (PortChannel1).\n\nReloading the BGP service recreates the routes with the correct values and the tests pass.\n\nTo prevent the tests from failing we can run at the end of the test config reload or change the tests to use the same pattern of the port-channel name. But doing so won't fix the issue that the route was added to a non-existing port-channel, this could be done by forcing to reload the service after removing a port-channel, but we probably don't want to do this like this."
+  },
+  "resolution": {
+    "pr_number": 1534,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/1534",
+    "title": "[config]Static routes to config_db",
+    "merged_at": "2021-05-13T01:57:27Z",
+    "description": "**What I did**\nfixes https://github.com/Azure/sonic-buildimage/issues/6997\nAdded process for writing static routes to config_db.\n\nfixes https://github.com/Azure/sonic-buildimage/issues/7261\nAdded interface validation before creating route.\n\n**How I did it**\nRefactored add/del route functions. Wrote generic function that returns a vtysh command and an entry for config_db with name.\n```\nsudo config route add prefix <IP>/32 nexthop <IP>\nsudo config route add prefix <IP>/32 nexthop <IP>\nsudo config route add prefix <IP>/32 nexthop <IP>\nsudo config route add prefix vrf Vrf-RED <IP>/32 nexthop <IP>\nsudo config save -y\nsudo reboot\n```\nInstead of running the vtysh command, it creates config_db entries that will be loaded by the ffr daemon:\n```\n    \"STATIC_ROUTE\": {\n        \"<IP>/32\": {\n            \"nexthop\": \"<IP>\"\n        },\n        \"<IP>/32\": {\n            \"nexthop\": \"<IP>\"\n        },\n        \"<IP>/32\": {\n            \"nexthop\": \"<IP>\"\n        },\n        \"Vrf-RED|<IP>/32\": {\n            \"nexthop\": \"<IP>\"\n        }\n    }\n```",
+    "files": [
+      {
+        "path": "config/main.py",
+        "additions": 198,
+        "deletions": 88
+      },
+      {
+        "path": "doc/Command-Reference.md",
+        "additions": 78,
+        "deletions": 0
+      },
+      {
+        "path": "tests/static_routes_test.py",
+        "additions": 365,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

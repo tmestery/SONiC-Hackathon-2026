@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-28414",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28414,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28414",
+    "title": "Bug: system-health reports Hardware \"Not OK - Failed to get PSU information\" when devices_to_ignore has 'psu' but not 'pdb'",
+    "created_at": "2026-07-14T20:19:42Z",
+    "closed_at": "2026-07-21T19:54:23Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\ngeneric\n\n### Importance or Severity\nMedium\n\n### Description of the bug\n`show system-health detail` reports **Hardware: Not OK** with reason **\"Failed to get PSU information\"** on platforms that have no PSUs and whose `system_health_monitoring_config.json` lists `psu` in `devices_to_ignore` **but not** `pdb`. Even though `psu` appears in the ignore list, the Hardware category is still marked Not OK and the PSU object shows `Not OK`.\n\nThis is a regression introduced by #26829 (\"Add PDB support for system-health\").\n\n### Steps to Reproduce\n1. On a platform with no `PSU_INFO` entries in STATE_DB, set `devices_to_ignore` to include `psu` (and `fan`) **but not** `pdb` in `/usr/share/sonic/device/<platform>/system_health_monitoring_config.json`.\n2. Restart the `system-health` / `healthd` service (or wait for the next polling interval).\n3. Run `show system-health detail`.\n\n### Actual Behavior and Expected Behavior\n**Actual:**\n```\nHardware:\n    Status: Not OK\n    Reasons: Failed to get PSU information\n...\nPSU        Not OK    PSU\n```\nwhile `psu` is simultaneously listed under the ignore list.\n\n**Expected:** With `psu` in `devices_to_ignore`, PSU checks \u2014 including the empty-`PSU_INFO` case \u2014 should be suppressed and Hardware should report OK, matching the behavior before #26829.\n\n### Root Cause\nIn `src/system-health/health_checker/hardware_checker.py`, #26829 changed the early-return guard in `_check_psu_status` from:\n```python\nif config.ignore_devices and 'psu' in config.ignore_devices:\n    return\n```\nto:\n```python\nif config.ignore_devices and 'psu' in config.ignore_devices and 'pdb' in config.ignore_devices:\n    return\n```\nNow **both** `psu` and `pdb` must be ignored for the check to be skipped. When only `psu` is ignored, the checker proceeds, finds an empty `PSU_INFO`, and calls `set_object_not_ok('PSU', 'PSU', 'Failed to get PSU information')`. The same change also silently re-enables per-PSU checks on any switch that ignores the `psu` category but not `pdb`.\n\n### Proposed Fix\nHonor `psu` and `pdb` independently in `_check_psu_status`:\n- Skip the whole check only when **both** are ignored.\n- Report the empty-`PSU_INFO` failure only when `psu` is **not** ignored (so a genuinely broken `psud` on a real switch is still detected).\n- Per row, skip PSU rows when `psu` is ignored and PDB rows (keyed `PDB N`) when `pdb` is ignored.\n\n### Additional context / Version\n202605. Issue is reproducible on all DPUs who don't have PSU hardware"
+  },
+  "resolution": {
+    "pr_number": 28415,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28415",
+    "title": "[system-health]: Honor 'psu' and 'pdb' device ignore independently in hardware checker",
+    "merged_at": "2026-07-21T19:54:22Z",
+    "description": "#### Why I did it\n\n`show system-health detail` reports **Hardware: Not OK** with reason **\"Failed to get PSU information\"** on platforms that have no PSUs and whose `system_health_monitoring_config.json` lists `psu` in `devices_to_ignore` **but not** `pdb` \u2014 even though `psu` is shown as ignored.\n\nThis is a regression from #26829 (\"Add PDB support for system-health\"), which changed the `_check_psu_status` early-return guard to require **both** `psu` and `pdb` to be ignored. When only `psu` is ignored, the checker proceeds, finds an empty `PSU_INFO`, and reports the failure. The same change also silently re-enabled per-PSU checks on switches that ignore the `psu` category but not `pdb`.\n\nfixes #28414\n\n##### Work item tracking\n- Microsoft ADO **(number only)**: 38803669\n\n#### How I did it\n\nIn `src/system-health/health_checker/hardware_checker.py`, `_check_psu_status` now honors `psu` and `pdb` independently:\n- Skip the whole check only when **both** `psu` and `pdb` are ignored.\n- Report the empty-`PSU_INFO` \"Failed to get PSU information\" failure only when `psu` is **not** ignored (so a genuinely broken `psud` on a real switch is still detected).\n- Per row, skip PSU rows when `psu` is ignored and PDB rows (keyed `PDB N`) when `pdb` is ignored.\n\nAdded regression unit tests in `src/system-health/tests/test_system_health.py`.\n\n#### How to verify it\n\n1. Unit tests:\n   ```\n   cd src/system-health && python3 -m pytest tests/test_system_health.py -k \"hardware or psu or pdb or config\"\n   ```\n2. Manual: on a platform with no `PSU_INFO` in STATE_DB, set `devices_to_ignore` to include `psu` (and `fan`) but **not** `pdb`, restart the `system-health` service, and confirm `show system-health detail` reports **Hardware: OK** (previously **Not OK \u2014 Failed to get PSU information**).\n3. Confirm a platform that exposes PSUs still reports PSU failures when `psu` is not ignored, and that PDB rows are still evaluated when only `psu` is ignored.\n\nVerified with both 202605 and master image. PSU is correctly ignored on a DPU, while it is correctly checked on the NPU.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n\nReason: the regression (#26829) is present on `master` and `202605`; the fix should follow it wherever `#26829` is merged.\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] Validated via the unit tests above on `master`; the regression was originally observed on `20260510`.\n\n#### Description for the changelog\n\n[system-health] Fix false \"Failed to get PSU information\" when only 'psu' (not 'pdb') is in devices_to_ignore\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no YANG/config_db schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83d\udc3e\ud83d\udc31",
+    "files": [
+      {
+        "path": "src/system-health/health_checker/hardware_checker.py",
+        "additions": 13,
+        "deletions": 2
+      },
+      {
+        "path": "src/system-health/tests/test_system_health.py",
+        "additions": 32,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

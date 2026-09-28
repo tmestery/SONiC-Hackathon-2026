@@ -1,0 +1,61 @@
+{
+  "id": "buildimage-28517",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28517,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28517",
+    "title": "Bug: ONIE install intermittently leaves DUT unbootable on master (kernel 6.12/Trixie) \u2014 boot hangs early",
+    "created_at": "2026-07-21T01:09:48Z",
+    "closed_at": "2026-09-12T06:27:14Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "mellanox",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nmellanox\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter a successful onie-nos-install of a master (kernel 6.12.41+deb13-sonic-amd64, Debian Trixie), the DUT intermittently fails to boot into the new image. On serial console the box freezes at the GRUB hand-off and never reaches a usable kernel.\n\nRoot cause: [patches-sonic/revert-acpi-osl-use-threaded-irq-for-sci.patch](https://github.com/sonic-net/sonic-linux-kernel/commit/7113ba807ec0c01ffd86820637120cc968c46585), which reverts the upstream 6.12 change that made the ACPI SCI interrupt threaded, forcing it back to a hard IRQ and altering early-boot interrupt-servicing timing globally.  Removing the patch fixes the issue.\n\n### Steps to Reproduce\n\n1. Install a master/master_RC image (kernel 6.12) via ONIE (onie-nos-install /tmp/sonic-<vendor>.bin).\n2. Let the DUT reboot into the installed image; watch the serial console.\n3. Repeat \u2014 roughly 1 in 3 boots hangs at the GRUB kernel/initrd load.\n\n### Actual Behavior and Expected Behavior\n\nActual: Boot hangs after GRUB loads the kernel/initrd\n\nExpected: DUT boots into the installed image reliably\n\n### Relevant log output\n\n```shell\nBooting 'SONiC-OS-master'\nLoading SONiC-OS OS kernel ...\nLoading SONiC-OS OS initial ramdisk ...\nEFI stub: UEFI Secure Boot is enabled.\n<hangs forever>\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 618,
+    "repository": "sonic-net/sonic-linux-kernel",
+    "url": "https://github.com/sonic-net/sonic-linux-kernel/pull/618",
+    "title": "Fully revert ACPI SCI Handler to Bookworm Behavior",
+    "merged_at": "2026-09-12T06:27:13Z",
+    "description": "#### Why I did it\n\nReverting `7a36b901a6eb` (\"ACPI: OSL: Use a threaded interrupt handler for SCI\") puts the ACPI SCI\nback on a non-threaded handler requested with plain IRQF_SHARED. Three later upstream commits had\nadjusted the surrounding code to suit the threaded, IRQF_ONESHOT SCI:\n\n- `8e57de4307` dropped the interrupt disable from the ACPICA spin lock primitives.\n- `655a6e7c0d` threaded the EC dedicated IRQ handler.\n- `8f812373d1` added IRQF_ONESHOT to the INT0002 request.\n\nRestore all three to their pre-`7a36b901a6eb` behavior, so the ACPI locking, the EC dedicated IRQ,\nand the INT0002 flags match the SCI handler we restored.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**: N/A\n\n#### How I did it\n- Re-land `revert-acpi-osl-use-threaded-irq-for-sci.patch` (#580) and\n  `platform-x86-int0002-remove-irqf-oneshot.patch` (#607), which already carries the INT0002 side.\n- Add `revert-acpi-osl-use-spin-locks-without-disabling-interrupts.patch` and\n  `revert-acpi-ec-use-threaded-handler-for-dedicated-irq.patch`.\n- Keep the four ordered as one block in `series`, matching upstream `master`, with a comment noting\n  they are a dependent set.\n\n#### How to verify it\n\n1. Reboot repeatedly from ONIE Install, SONiC Reboot, and Power Cycling to confirm hang does not occur on kernel start\n\n#### Which release branch to backport (provide reason below if selected)\n\n#### Tested branch (Please provide the tested image version)\n- [x] master\n\n#### Description for the changelog\n\nFully revert ACPI SCI Handler to Bookworm Behavior",
+    "files": [
+      {
+        "path": "patches-sonic/revert-acpi-ec-use-threaded-handler-for-dedicated-irq.patch",
+        "additions": 51,
+        "deletions": 0
+      },
+      {
+        "path": "patches-sonic/revert-acpi-osl-use-spin-locks-without-disabling-interrupts.patch",
+        "additions": 65,
+        "deletions": 0
+      },
+      {
+        "path": "patches-sonic/series",
+        "additions": 9,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 607,
+      "repository": "sonic-net/sonic-linux-kernel",
+      "url": "https://github.com/sonic-net/sonic-linux-kernel/pull/607",
+      "title": "Cherry-pick int0002 IRQF_ONESHOT removal on top of the SCI revert",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

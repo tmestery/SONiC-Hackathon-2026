@@ -1,0 +1,290 @@
+{
+  "id": "buildimage-4554",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 4554,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/4554",
+    "title": "supervisor consumes lot of CPU during switch startup",
+    "created_at": "2020-05-07T11:13:21Z",
+    "closed_at": "2020-05-22T18:01:29Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "enhancement",
+    "platform": null,
+    "target_releases": [
+      "201911"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\nDuring switch bootup supervisorctl is called lot of times from different SONiC containers to start daemons. It consumes a lot of CPU. It makes containers to start slower and has impact on cold/fast/warm boot timings.\n\n**Steps to reproduce the issue:**\nNo specific steps, just perform any kind of reload/reboot and start some profiling tool (bootchart, perf&flamegraphs)\n\n**Describe the results you received:**\nsupervisorctl is a very CPU intensive utility, however it is used everywhere, causing slow start.\n\nFast boot suffers because platform SDK may not be able to perfrom switch init and reconfiguration fast enough if other CPU intensive tasks are running in parallel.\nFast/Warm boot suffers because switch control plane downtime is increased.\n\n**Describe the results you expected:**\nMore new containers will use supervisorctl to start daemons. To my understanding the job of supervisor is to fork the daemon and wait - which is blocking operation, so no intensive tasks are performed. However, supervisorctl (mainly) and supervisord take a lot of CPU during startup. Ideally there should not be high CPU usage for those processes.\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\nThis is very platform specific, depending on platform CPU you may have different results.\n\n**Output of `show version`:**\n\nThe version is debug version compiled with SONIC_PROFILING_ON=y and '-fno-omit-frame-pointer':\nAttached is system perf recording and generated flamegraph during bootup. Perf was started at /etc/<HOSTNAME> phase with command:\n```perf_4.9 record -F 99 -a -g -o /home/admin/perf -- sleep 100 &```\n[system-perf.svg.gz](https://github.com/Azure/sonic-buildimage/files/4592510/system-perf.svg.gz)\nWe can see a lot of supervisorctl samples collected, more than any critical SONiC component, like SDK, syncd, orchagent or redis-server.\n\nBootchart plot (https://elinux.org/Bootchart)\n![bootchart](https://user-images.githubusercontent.com/38952541/81287145-f172ff00-906a-11ea-84e6-801097e249b3.png)\nWe can see lot of supervisor invocations during SDK start and configuration.\n\n```\nSONiC Software Version: SONiC.201911.0-8367dfeb\nDistribution: Debian 9.12\nKernel: 4.9.0-11-2-amd64\nBuild commit: 8367dfeb\nBuild date: Wed May  6 <IPV6> UTC 2020\nBuilt by: stepanb@r-build-sonic02\n\nPlatform: x86_64-mlnx_msn2700-r0\nHwSKU: Mellanox-SN2700-D48C8\nASIC: mellanox\nSerial Number: MT1822K07823\nUptime: <IPV6> up 8 min,  1 user,  load average: 1.61, 1.69, 0.99\n\nDocker images:\nREPOSITORY                        TAG                 IMAGE ID            SIZE\ndocker-platform-monitor-dbg       201911.0-8367dfeb   af5e7e595e0c        641MB\ndocker-platform-monitor-dbg       latest              af5e7e595e0c        641MB\ndocker-platform-monitor           201911.0-8367dfeb   af5e7e595e0c        641MB\ndocker-platform-monitor           latest              af5e7e595e0c        641MB\ndocker-sflow-dbg                  201911.0-8367dfeb   7a794dfac076        332MB\ndocker-sflow-dbg                  latest              7a794dfac076        332MB\ndocker-sflow                      201911.0-8367dfeb   7a794dfac076        332MB\ndocker-sflow                      latest              7a794dfac076        332MB\ndocker-fpm-frr-dbg                201911.0-8367dfeb   231d4d8e8fbd        385MB\ndocker-fpm-frr-dbg                latest              231d4d8e8fbd        385MB\ndocker-fpm-frr                    201911.0-8367dfeb   231d4d8e8fbd        385MB\ndocker-fpm-frr                    latest              231d4d8e8fbd        385MB\ndocker-lldp-sv2-dbg               201911.0-8367dfeb   63600bb51fad        326MB\ndocker-lldp-sv2-dbg               latest              63600bb51fad        326MB\ndocker-lldp-sv2                   201911.0-8367dfeb   63600bb51fad        326MB\ndocker-lldp-sv2                   latest              63600bb51fad        326MB\ndocker-orchagent-dbg              201911.0-8367dfeb   1f2d3cbf41c4        376MB\ndocker-orchagent-dbg              latest              1f2d3cbf41c4        376MB\ndocker-orchagent                  201911.0-8367dfeb   1f2d3cbf41c4        376MB\ndocker-orchagent                  latest              1f2d3cbf41c4        376MB\ndocker-snmp-sv2-dbg               201911.0-8367dfeb   36b4cb692870        357MB\ndocker-snmp-sv2-dbg               latest              36b4cb692870        357MB\ndocker-snmp-sv2                   201911.0-8367dfeb   36b4cb692870        357MB\ndocker-snmp-sv2                   latest              36b4cb692870        357MB\ndocker-nat-dbg                    201911.0-8367dfeb   8b9e98228c50        362MB\ndocker-nat-dbg                    latest              8b9e98228c50        362MB\ndocker-nat                        201911.0-8367dfeb   8b9e98228c50        362MB\ndocker-nat                        latest              8b9e98228c50        362MB\ndocker-sonic-mgmt-framework-dbg   201911.0-8367dfeb   f6f222fbb114        443MB\ndocker-sonic-mgmt-framework-dbg   latest              f6f222fbb114        443MB\ndocker-sonic-mgmt-framework       201911.0-8367dfeb   f6f222fbb114        443MB\ndocker-sonic-mgmt-framework       latest              f6f222fbb114        443MB\ndocker-teamd-dbg                  201911.0-8367dfeb   aea02a411903        360MB\ndocker-teamd-dbg                  latest              aea02a411903        360MB\ndocker-teamd                      201911.0-8367dfeb   aea02a411903        360MB\ndocker-teamd                      latest              aea02a411903        360MB\ndocker-syncd-mlnx-dbg             201911.0-8367dfeb   a6067b546dec        416MB\ndocker-syncd-mlnx-dbg             latest              a6067b546dec        416MB\ndocker-syncd-mlnx                 201911.0-8367dfeb   a6067b546dec        416MB\ndocker-syncd-mlnx                 latest              a6067b546dec        416MB\ndocker-sonic-telemetry-dbg        201911.0-8367dfeb   2653e5a6978d        369MB\ndocker-sonic-telemetry-dbg        latest              2653e5a6978d        369MB\ndocker-sonic-telemetry            201911.0-8367dfeb   2653e5a6978d        369MB\ndocker-sonic-telemetry            latest              2653e5a6978d        369MB\ndocker-database-dbg               201911.0-8367dfeb   e224f6c86f35        303MB\ndocker-database-dbg               latest              e224f6c86f35        303MB\ndocker-database                   201911.0-8367dfeb   e224f6c86f35        303MB\ndocker-database                   latest              e224f6c86f35        303MB\ndocker-router-advertiser-dbg      201911.0-8367dfeb   eddcecf2bd70        306MB\ndocker-router-advertiser-dbg      latest              eddcecf2bd70        306MB\ndocker-router-advertiser          201911.0-8367dfeb   eddcecf2bd70        306MB\ndocker-router-advertiser          latest              eddcecf2bd70        306MB\ndocker-dhcp-relay-dbg             201911.0-8367dfeb   e1cc48d4ce38        312MB\ndocker-dhcp-relay-dbg             latest              e1cc48d4ce38        312MB\ndocker-dhcp-relay                 201911.0-8367dfeb   e1cc48d4ce38        312MB\ndocker-dhcp-relay                 latest              e1cc48d4ce38        312MB\n ```\n\n**Attach debug file `sudo generate_dump`:**\n[sonic_dump.tar.gz](https://github.com/Azure/sonic-buildimage/files/4592532/sonic_dump.tar.gz)"
+  },
+  "resolution": {
+    "pr_number": 4599,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/4599",
+    "title": "[dockers]: use supervisord dependent startup to start services",
+    "merged_at": "2020-05-22T18:01:29Z",
+    "description": "**- Why I did it**\nto remove multiple 'supervisorctl start' in the start.sh which consumes lots of cpus\n\n**- How I did it**\nuse supervisord dependent startup plugin and list the service startup dependency in the supervisor config file.\n\nother changes:\n- move rsyslogd as the first process to start to capture any logs (use -iNONE to avoid creating rsyslogd.pid)\n\n**- How to verify it**\nverify by manually modify the bgp docker (to build image the test)\n\n**- Description for the changelog**\n\n**- A picture of a cute animal (not mandatory but encouraged)**",
+    "files": [
+      {
+        "path": "dockers/docker-base-buster/Dockerfile.j2",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-base-buster/etc/supervisor/supervisord.conf",
+        "additions": 0,
+        "deletions": 4
+      },
+      {
+        "path": "dockers/docker-base-stretch/Dockerfile.j2",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-base-stretch/etc/supervisor/supervisord.conf",
+        "additions": 0,
+        "deletions": 4
+      },
+      {
+        "path": "dockers/docker-database/supervisord.conf.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/docker-dhcp-relay.supervisord.conf.j2",
+        "additions": 21,
+        "deletions": 5
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/start.sh",
+        "additions": 0,
+        "deletions": 15
+      },
+      {
+        "path": "dockers/docker-fpm-frr/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 3
+      },
+      {
+        "path": "dockers/docker-fpm-frr/docker_init.sh",
+        "additions": 4,
+        "deletions": 22
+      },
+      {
+        "path": "dockers/docker-fpm-frr/frr/supervisord/supervisord.conf.j2",
+        "additions": 42,
+        "deletions": 24
+      },
+      {
+        "path": "dockers/docker-iccpd/start.sh",
+        "additions": 0,
+        "deletions": 6
+      },
+      {
+        "path": "dockers/docker-iccpd/supervisord.conf",
+        "additions": 19,
+        "deletions": 6
+      },
+      {
+        "path": "dockers/docker-lldp-sv2/Dockerfile.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-lldp-sv2/start.sh",
+        "additions": 0,
+        "deletions": 30
+      },
+      {
+        "path": "dockers/docker-lldp-sv2/supervisord.conf.j2",
+        "additions": 34,
+        "deletions": 5
+      },
+      {
+        "path": "dockers/docker-lldp-sv2/waitfor_lldp_ready.sh",
+        "additions": 24,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-nat/start.sh",
+        "additions": 0,
+        "deletions": 10
+      },
+      {
+        "path": "dockers/docker-nat/supervisord.conf",
+        "additions": 25,
+        "deletions": 8
+      },
+      {
+        "path": "dockers/docker-orchagent/Dockerfile.j2",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "dockers/docker-orchagent/arp_update.conf",
+        "additions": 9,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-orchagent/docker-init.sh",
+        "additions": 3,
+        "deletions": 33
+      },
+      {
+        "path": "dockers/docker-orchagent/supervisord.conf",
+        "additions": 61,
+        "deletions": 42
+      },
+      {
+        "path": "dockers/docker-platform-monitor/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "dockers/docker-platform-monitor/docker-pmon.supervisord.conf.j2",
+        "additions": 33,
+        "deletions": 8
+      },
+      {
+        "path": "dockers/docker-platform-monitor/docker_init.sh",
+        "additions": 32,
+        "deletions": 8
+      },
+      {
+        "path": "dockers/docker-platform-monitor/start.sh",
+        "additions": 33,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-platform-monitor/start.sh.j2",
+        "additions": 0,
+        "deletions": 81
+      },
+      {
+        "path": "dockers/docker-router-advertiser/Dockerfile.j2",
+        "additions": 3,
+        "deletions": 4
+      },
+      {
+        "path": "dockers/docker-router-advertiser/docker-init.sh",
+        "additions": 13,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-router-advertiser/docker-router-advertiser.supervisord.conf",
+        "additions": 0,
+        "deletions": 35
+      },
+      {
+        "path": "dockers/docker-router-advertiser/docker-router-advertiser.supervisord.conf.j2",
+        "additions": 65,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-router-advertiser/start.sh",
+        "additions": 0,
+        "deletions": 32
+      },
+      {
+        "path": "dockers/docker-sflow/Dockerfile.j2",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-sflow/start.sh",
+        "additions": 0,
+        "deletions": 7
+      },
+      {
+        "path": "dockers/docker-sflow/supervisord.conf",
+        "additions": 14,
+        "deletions": 11
+      },
+      {
+        "path": "dockers/docker-snmp-sv2/start.sh",
+        "additions": 0,
+        "deletions": 6
+      },
+      {
+        "path": "dockers/docker-snmp-sv2/supervisord.conf",
+        "additions": 25,
+        "deletions": 9
+      },
+      {
+        "path": "dockers/docker-sonic-mgmt-framework/start.sh",
+        "additions": 0,
+        "deletions": 6
+      },
+      {
+        "path": "dockers/docker-sonic-mgmt-framework/supervisord.conf",
+        "additions": 20,
+        "deletions": 6
+      },
+      {
+        "path": "dockers/docker-sonic-restapi/start.sh",
+        "additions": 0,
+        "deletions": 5
+      },
+      {
+        "path": "dockers/docker-sonic-restapi/supervisord.conf",
+        "additions": 26,
+        "deletions": 10
+      },
+      {
+        "path": "dockers/docker-sonic-telemetry/start.sh",
+        "additions": 0,
+        "deletions": 7
+      },
+      {
+        "path": "dockers/docker-sonic-telemetry/supervisord.conf",
+        "additions": 23,
+        "deletions": 7
+      },
+      {
+        "path": "dockers/docker-teamd/start.sh",
+        "additions": 0,
+        "deletions": 7
+      },
+      {
+        "path": "dockers/docker-teamd/supervisord.conf",
+        "additions": 25,
+        "deletions": 9
+      },
+      {
+        "path": "platform/barefoot/docker-syncd-bfn/start.sh",
+        "additions": 0,
+        "deletions": 5
+      },
+      {
+        "path": "platform/barefoot/docker-syncd-bfn/supervisord.conf",
+        "additions": 20,
+        "deletions": 6
+      },
+      {
+        "path": "platform/broadcom/docker-syncd-brcm/Dockerfile.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "platform/broadcom/docker-syncd-brcm/start.sh",
+        "additions": 0,
+        "deletions": 39
+      },
+      {
+        "path": "platform/broadcom/docker-syncd-brcm/start_led.sh",
+        "additions": 37,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

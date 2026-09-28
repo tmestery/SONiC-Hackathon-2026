@@ -1,0 +1,103 @@
+{
+  "id": "buildimage-28317",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28317,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28317",
+    "title": "[interfaces] mgmt IPv6 address not assigned when IPv6 is disabled on the mgmt port",
+    "created_at": "2026-07-09T04:25:24Z",
+    "closed_at": "2026-07-10T15:56:46Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Describe the bug**\n\nWhen `MGMT_INTERFACE` has an IPv6 address, `ifup` writes the `eth0 inet6 static` stanza, but IPv6 can be **disabled on the mgmt port** \u2014 `net.ipv6.conf.eth0.disable_ipv6=1`, inherited from the runtime per-interface default. `90-sonic.conf` only clears `net.ipv6.conf.all.disable_ipv6`, not `default`/`eth0`. With IPv6 disabled on the port, `ifup` cannot assign the mgmt IPv6 address, so eth0 ends up with **no IPv6 at all** (not even a link-local) even though CONFIG_DB and `/etc/network/interfaces` list one.\n\n**Steps to reproduce the issue**\n\n1. Configure `MGMT_INTERFACE` with an IPv6 address in CONFIG_DB.\n2. Boot / `systemctl restart interfaces-config` on an image where IPv6 is disabled by the inherited per-interface default (`net.ipv6.conf.default.disable_ipv6=1`).\n3. Observe `ifup eth0` cannot assign the IPv6 address.\n\n**Describe the results you received**\n\n- `ifup` reports `IPv6 is disabled on this device` and the mgmt IPv6 address is never assigned.\n- eth0 has no IPv6 address (not even link-local) despite the `inet6 static` stanza in `/etc/network/interfaces`.\n- Concrete downstream symptom: `snmpd` is configured (from CONFIG_DB) to listen on the mgmt IPv6 address, fails to bind it (`Cannot assign requested address` / `EADDRNOTAVAIL`), exits `1` on every start, hits the systemd start-limit, and the `snmp` container stays down \u2014 which trips `monit container_checker` (`Expected containers not running: snmp`) every minute and any LogAnalyzer-gated test.\n\n```\nsnmpd: failed to bind ... 99 Cannot assign requested address\nsnmpd: Server Exiting with code 1\n```\n\n**Describe the results you expected**\n\nThe mgmt interface IPv6 address is programmed on eth0 whenever CONFIG_DB / `/etc/network/interfaces` list one, regardless of the inherited per-interface `disable_ipv6` default, and dependent services (e.g. `snmpd`) can bind it.\n\n**Additional information you deem important**\n\nRoot cause is that `90-sonic.conf` only clears `net.ipv6.conf.all.disable_ipv6`, not `default`/`eth0`, so the mgmt port inherits `disable_ipv6=1` and `ifup` can't add the address. Fix: re-enable IPv6 on the mgmt port (`sysctl -w net.ipv6.conf.<name>.disable_ipv6=0`) in the mgmt-interface `inet6` stanza before the address is assigned, mirroring the existing per-interface `disable_ipv6=0` pattern already used elsewhere in the tree (e.g. `usb-network-init.sh`). This is a general SONiC mgmt-IPv6 bug (not platform- or topology-specific).\n\nPR: fixed by the accompanying `[interfaces] Enable IPv6 on the mgmt port before assigning its IPv6 address`."
+  },
+  "resolution": {
+    "pr_number": 28318,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28318",
+    "title": "[interfaces] Enable IPv6 on the mgmt port before assigning its IPv6 address",
+    "merged_at": "2026-07-10T15:56:45Z",
+    "description": "Fixes #28317\n\n#### Why I did it\n\nWhen `MGMT_INTERFACE` has an IPv6 address, `ifup` writes the `eth0 inet6 static` stanza, but IPv6 can be **disabled on the mgmt port** \u2014 `net.ipv6.conf.eth0.disable_ipv6=1`, inherited from the runtime per-interface default. `90-sonic.conf` only clears `net.ipv6.conf.all.disable_ipv6`, not `default`/`eth0`. With IPv6 disabled on the port, `ifup` cannot assign the mgmt IPv6 address, so eth0 ends up with **no IPv6 at all** (not even a link-local) even though CONFIG_DB and `/etc/network/interfaces` list one.\n\nObserved command output: `IPv6 is disabled on this device`; and, as a concrete downstream symptom, `snmpd` fails to bind the mgmt IPv6 address (`failed to bind ... 99 Cannot assign requested address` \u2192 `Server Exiting with code 1`), exits on every start, hits the systemd start-limit, so the `snmp` container stays down and `monit container_checker` logs `Expected containers not running: snmp` every minute \u2192 trips LogAnalyzer in gated tests.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nIn the mgmt-interface stanza of `interfaces.j2`, when the prefix is IPv6, add a `pre-up sysctl -w net.ipv6.conf.<name>.disable_ipv6=0` before the address is assigned. This mirrors the existing per-interface `disable_ipv6=0` pattern already used in the tree (e.g. `usb-network-init.sh`). IPv4-only mgmt stanzas are unaffected.\n\n#### How to verify it\n\n- **Template render:** the new `pre-up` line appears only on the IPv6 (`inet6`) mgmt stanza; IPv4-only mgmt config is byte-for-byte unchanged.\n- **Live:** starting from a broken baseline (IPv6 disabled on eth0, `ifup` unable to assign the mgmt IPv6 address), `ifdown eth0 && ifup eth0` now re-enables IPv6 on the port and assigns the address; `snmpd` binds successfully, the `snmp` container stays Up, and the per-minute `monit container_checker` noise stops.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Description for the changelog\n\nEnable IPv6 on the mgmt interface before assigning its IPv6 address, so it is programmed even when IPv6 was disabled on the port by the inherited per-interface default.\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/image_config/interfaces/interfaces.j2",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_mgmt31",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_syslog",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_syslog_vrf",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/mvrf_interfaces",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/two_mgmt_interfaces",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_mgmt31",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_syslog",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_syslog_vrf",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/mvrf_interfaces",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/two_mgmt_interfaces",
+        "additions": 4,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

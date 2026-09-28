@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-29466",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 29466,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/29466",
+    "title": "[SmartSwitch] [CPO] Early CONFIG_DB access during SmartSwitch database startup",
+    "created_at": "2026-09-10T18:36:53Z",
+    "closed_at": "2026-09-23T17:25:41Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "nexthop-ai"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe CPO discovery added to `ChassisBase.__init__()` introduces a live CONFIG_DB dependency into chassis construction. On a SmartSwitch, the existing slot queries in `database-chassis.service` and `database.service` construct a platform/chassis object before the main database configuration is available. CPO discovery then attempts to resolve the HwSKU through CONFIG_DB and emits:\n\n```text\nparseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\n```\n\nThe lookup accesses CONFIG_DB before it can determine whether an HwSKU-specific `cpo.json` exists.\n\nRelevant upstream changes:\n\n- [sonic-platform-common PR #700](https://github.com/sonic-net/sonic-platform-common/pull/700) adds CPO discovery to `ChassisBase.__init__()`.\n- [sonic-buildimage PR #28077](https://github.com/sonic-net/sonic-buildimage/pull/28077) adds `get_cpo_data()` and the HwSKU-first file lookup.\n\nChassis-based CPO initialization is part of the [CPO port-mapping HLD](https://github.com/sonic-net/SONiC/blob/c82481d44dc988ecf90df724d2ceb95f9750475c/doc/platform/port_mapping_for_cpo.md#732-chassis-and-cpo-object-creation). The issue is the resulting CONFIG_DB access during early database startup.\n\nInstrumented runtime call chain:\n\n```text\ndatabase.sh: postStartAction()\n  -> get_my_slot() / get_supervisor_slot() query constructs Platform\n  -> SmartSwitchChassis -> Chassis -> ChassisBase.__init__()\n  -> device_info.get_cpo_data()\n  -> _find_cpo_file()\n  -> get_path_to_hwsku_dir()\n  -> get_hwsku()\n  -> get_localhost_info(\"hwsku\")\n  -> ConfigDBConnector.connect()\n  -> parseDatabaseConfig: missing database_config.json\n```\n\nWhy the tested SmartSwitch triggers the issue:\n\n`docker_image_ctl.j2` runs slot queries from `postStartAction()` under this condition:\n\n```sh\nCHASSISDB_CONF=\"/usr/share/sonic/device/$PLATFORM/chassisdb.conf\"\nif [[ -f $CHASSISDB_CONF && $DATABASE_TYPE != \"dpudb\" ]]; then\n    # Construct Platform/Chassis to query local and supervisor slot IDs.\n    ...\nfi\n```\n\nThe affected SmartSwitch provides this file, so database startup constructs its chassis to query the local and supervisor slot IDs. That construction enters the CPO lookup before the main database configuration is available.\n\nTwo early startup paths were observed on the SmartSwitch:\n\n1. `database-chassis.service` executes the slot queries before main `database.service` starts. The slot-query guard excludes `dpudb` but not `chassisdb`.\n2. Main `database.service` executes a slot query after `docker start`, but before the entrypoint first publishes `database_config.json`. Its existing database readiness wait occurs later in `postStartAction()`.\n\nIn one instrumented SmartSwitch boot, two `database-chassis.service` slot-query PIDs and the first `database.service` slot-query PID entered CPO discovery while `database_config.json` was absent. All three produced the matching missing-file parser error. The second main-database query ran after the file existed and did not produce that error. Instrumentation was removed afterward.\n\ncc @bgallagher-nexthop\n\n### Steps to Reproduce\n\nObserved setup: NVIDIA/Mellanox SmartSwitch with `chassisdb.conf`, using an image containing the upstream CPO changes above.\n\n1. Boot the switch through its normal database startup sequence.\n2. Collect boot logs for both services:\n\n   ```sh\n   sudo journalctl -b -u database-chassis.service -u database.service --no-pager -o short-precise\n   ```\n\n3. Look for missing-file parser errors immediately before the `database-chassis slot_id=...` and `database slot_id=...` messages.\n4. For caller attribution, instrument the CPO lookup helpers to record the Python stack reaching `device_info.get_localhost_info()` and correlate parser-error PIDs with systemd units. This attribution was performed in the observed experiment; ordinary syslog alone does not contain the full stack.\n\nThe triggering slot-query expressions are:\n\n```python\nimport sonic_platform.platform\nplatform_chassis = sonic_platform.platform.Platform().get_chassis()\nprint(platform_chassis.get_my_slot())\n```\n\nand the equivalent query for `get_supervisor_slot()`. Running these after database initialization is complete may not reproduce the issue. No fixed failure frequency is claimed.\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior**\n\nDuring SmartSwitch boot, slot queries from `database-chassis.service` and `database.service` enter CPO discovery through `ChassisBase.__init__()`. Resolving the HwSKU-specific `cpo.json` path attempts to access CONFIG_DB before `/var/run/redis/sonic-db/database_config.json` exists, producing missing-file `parseDatabaseConfig` errors.\n\n**Expected behavior**\n\nThe chassis initialization used by SmartSwitch database-service slot queries should complete without CPO discovery producing missing-database-config errors before CONFIG_DB is ready. The intended CPO topology initialization and HwSKU-specific configuration precedence should be preserved.\n\n### Relevant log output\n\n```shell\n2026-09-10 <IPV6>.059485 UTC unit=database-chassis.service pid=3291 :- parseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\n2026-09-10 <IPV6>.266167 UTC unit=database-chassis.service pid=3401 :- parseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\n2026-09-10 <IPV6>.294738 UTC unit=database-chassis.service pid=3097 database-chassis slot_id=<class 'NotImplementedError'> supervisor_slot_id=<class 'NotImplementedError'>\n2026-09-10 <IPV6>.564779 UTC unit=database.service pid=8368 :- parseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\n2026-09-10 <IPV6>.806253 UTC unit=database.service pid=7681 database slot_id=<class 'NotImplementedError'> supervisor_slot_id=<class 'NotImplementedError'>\n\nThe debug records show that `database_config.json` was absent at CPO lookup entry for PIDs 3291, 3401, and 8368. Each PID then emitted the corresponding parser error above. The second main-database slot query (PID 8723) entered the lookup at `<IPV6>.773776 UTC`, when the file existed with a size of 3010 bytes; it produced no matching parser error.\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC OS Version: 13\nDistribution: Debian 13.6\nKernel: 6.12.41+deb13-sonic-amd64\nASIC: mellanox\nASIC Count: 1\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 29498,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/29498",
+    "title": "Remove ability to define cpo.json in hwsku directory",
+    "merged_at": "2026-09-23T17:25:39Z",
+    "description": "Fixes #29466\n\n#### Why I did it\n\nAs observed in #29466, attempting to determine what the current hwsku is requires Config DB access. This results in errors being logged when a `ChassisBase` object is constructed before Redis is up (which disaggregated chassis code does).\n\n##### Work item tracking\nN/A\n\n#### How I did it\nDeleted the ability to define `cpo.json` in a hwsku directory.\n\n#### How to verify it\n\nUnit-tests.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A\nFailure type: bugfix\n\n#### Tested branch\n\n- [X] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n\nUnit-tests passed.\n\n#### Description for the changelog\n\nRemove ability to define cpo.json in hwsku directory\n\n#### Link to config_db schema for YANG module changes\nN/A",
+    "files": [
+      {
+        "path": "src/sonic-py-common/sonic_py_common/device_info.py",
+        "additions": 11,
+        "deletions": 37
+      },
+      {
+        "path": "src/sonic-py-common/tests/device_info_test.py",
+        "additions": 9,
+        "deletions": 17
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

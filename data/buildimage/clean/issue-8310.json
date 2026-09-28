@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-8310",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8310,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8310",
+    "title": "sonic-cfggen L2 config_db.json missing information causing SNMP test failure",
+    "created_at": "2021-08-02T15:13:05Z",
+    "closed_at": "2021-08-18T06:20:50Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202012"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nseveral SNMP tests are failing on setups with Microsoft HWsku and L2 configuration(i.e, Mellanox-SN2700-D48C8)\nAfter deploying the L2 configuration with sonic-cfggen the config_db.json doesn't include \"description\" for ports  this is causing several tests to fail.\n\n#### Steps to reproduce the issue:\n##### deploy t0 topo\n##### deploy L2 on the switch with Microsoft HWSKU\nsudo sonic-cfggen -H -k <HWSKU> -p --preset l2 > /tmp/config_db.json\nsudo cp /tmp/config_db.json /etc/sonic/config_db.json\nsudo config reload -y\n\n##### run the snmp \"test_snmp_interfaces.py\"\n\n#### Describe the results you received:\n\non setup with L2 config_db.json :\n\n\"Ethernet0\": {\n\n            \"lanes\": \"0,1\",\n\n            \"alias\": \"etp1a\",\n\n            \"index\": \"1\",\n\n            \"speed\": \"50000\",\n\n            \"admin_status\": \"up\"\n\n        }\n\non other setups  config_db.json:\n\n        \"Ethernet180\": {\n\n            \"alias\": \"Ethernet180\",\n\n            \"description\": \"Ethernet180\",\n\n            \"index\": \"46\",\n\n            \"lanes\": \"180\",\n\n            \"mtu\": \"9100\",\n\n            \"pfc_asym\": \"off\",\n\n            \"speed\": \"25000\"\n\n        },\n\nthis is causing the issues of KeyError: 'description',\n\n```\nsnmp/test_snmp_interfaces.py:199:\n\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\nduthost = <MultiAsicSonicHost> arc-switch1025\n\nports_list = ['Ethernet8', 'Ethernet2', 'Ethernet0', 'Ethernet6', 'Ethernet4', 'Ethernet46', ...]\n\nnamespace = None\n\n    def collect_all_facts(duthost, ports_list, namespace=None):\n\n        \"\"\"\n\n        Collect all data needed for test per each port from DUT\n\n        :param duthost: DUT host object\n\n        :return: dict with data collected from DUT per each port\n\n        \"\"\"\n\n        result = {}\n\n        setup = duthost.interface_facts(namespace=namespace)['ansible_facts']['ansible_interface_facts']\n\n        config_facts = duthost.config_facts(host=duthost.hostname, source=\"running\", namespace=namespace)['ansible_facts']\n\n        if not namespace:\n\n            sonic_db_cmd = \"sonic-db-cli\"\n\n        else:\n\n            sonic_db_cmd = \"sonic-db-cli -n {}\".format(namespace)\n\n        for name in ports_list:\n\n            key = name\n\n            # 6 stands for ethernet-csmacd and 161 stands for ieee8023adLag\n\n            if_type = '161' if name.startswith(\"PortChannel\") else '6'\n\n            if name.startswith(\"Eth\"):\n\n                portname = config_facts['port_name_to_alias_map'][name]\n\n                result.setdefault(portname, {})\n\n                result[portname].update({'speed': int(config_facts.get('PORT', {})[name]['speed'])})\n\n                result[portname].update({'mtu': str(setup[key]['mtu'])})\n\n                result[portname].update({'type': if_type})\n\n                # Workaround, some ports have missing key admin_status in config\n\n                try:\n\n                    admin = config_facts.get('PORT', {})[name]['admin_status']\n\n                except KeyError:\n\n                    admin = duthost.shell('{} APPL_DB HGET \"PORT_TABLE:{}\" \"admin_status\"'.format(sonic_db_cmd, name), module_ignore_errors=False)['stdout']\n\n                result[portname].update({'adminstatus': admin})\n\n                oper = duthost.shell('{} APPL_DB HGET \"PORT_TABLE:{}\" \"oper_status\"'.format(sonic_db_cmd, name), module_ignore_errors=False)['stdout']\n\n                result[portname].update({'operstatus': oper})\n\n>               result[portname].update({'description': config_facts.get('PORT', {})[name]['description']})\n\nE               KeyError: 'description'\n'''\n```\n\n#### Describe the results you expected:\nAll test_snmp_interfaces.py tests should pass on  a setup with L2 configuration\n\n#### Output of `show version`:\n\n```\nSONiC-OS-202012.131-01efb5454_Internal\n```\n#### Output of `show techsupport`:\n\n```\n[sonic_dump_arc-switch1025_20210721_130839.tar.gz](https://github.com/Azure/sonic-buildimage/files/6917820/sonic_dump_arc-switch1025_20210721_130839.tar.gz)\n\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 4058,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/4058",
+    "title": "[snmp] test_snmp_interfaces_mibs fix KEY_ERROR issue on L2 config",
+    "merged_at": "2021-08-18T06:20:49Z",
+    "description": "Signed-off-by: Andrii-Yosafat Lozovyi <<EMAIL>>\n\n### Description of PR\n\nSummary: Changed the way value was extracted from dict by using **get('description', '')** function, in order to fix test case fail with L2 config deployed on DUT.\nFix https://github.com/Azure/sonic-buildimage/issues/8310\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n\n### Approach\n#### What is the motivation for this PR?\nFix test fail with L2 configuration deployed on DUT.\n#### How did you do it?\nChanged the way value was extracted from dict.\n#### How did you verify/test it?\nRun test case with L2 config deployed on DUT:\nsnmp/test_snmp_interfaces.py::test_snmp_interfaces_mibs PASSED\n#### Any platform specific information?\n```\nSONiC Software Version: SONiC.202012.28274-0162cee66\nDistribution: Debian 10.10\nKernel: 4.19.0-12-2-amd64\nBuild commit: 0162cee66\nBuild date: Tue Aug 10 <IPV6> UTC 2021\nBuilt by: AzDevOps@sonic-build-workers-000KZF\nPlatform: x86_64-arista_7170_64c\nHwSKU: Arista-7170-64C\n```\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/snmp/test_snmp_interfaces.py",
+        "additions": 2,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

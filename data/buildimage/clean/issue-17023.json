@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-17023",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 17023,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/17023",
+    "title": "Build the sonic-vs.img.gz failed based on master branch. ERROR: Cannot change symbolic links when kdump is loaded ... failed!",
+    "created_at": "2023-10-26T10:37:26Z",
+    "closed_at": "2025-05-30T00:40:33Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nHello,\nI attempted to build the vs image based on commit 9a15221e46b0921162a53cf0e68084d14d379da2, but it failed when build the target/sonic-vs.img,gz.  And I tried build it based on latest master branch, the issue still appears.\n\n_**The error is that \"Cannot change symbolic links when kdump is loaded ... failed!\"**_\n\nAnd there is a variety issue about even if i do not load kdump.\nDoes anyone have the idea for the issue?  By the way, could the master  branch compile fine at this point? Thanks\n\n#### Steps to reproduce the issue:\n1.  git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git\n2.  cd sonic-buildimage/\n3.  git checkout -b test 9a15221e46b0921162a53cf0e68084d14d379da2\n4.  make init\n5.  make configure PLATFORM=vs\n6.  make SONIC_BUILD_JOBS=4 target/sonic-vs.img.gz\n\n#### Describe the results you received:\n```\nCreating config file /etc/default/kdump-tools with new version\nRunning in chroot, ignoring request.\nCreated symlink /etc/systemd/system/multi-user.target.wants/kdump-tools.service \u2192 /lib/systemd/system/kdump-tools.service.\nProcessing triggers for initramfs-tools (0.140) ...\nupdate-initramfs: Generating /boot/initrd.img-5.10.0-18-2-amd64\n+ cat files/image_config/kdump/kdump-tools\n+ sudo tee -a ./fsroot-vs/etc/default/kdump-tools\n++ ls ./fsroot-vs/lib/modules/\n+ for kernel_release in $(ls $FILESYSTEM_ROOT/lib/modules/)\n+ sudo LANG=C chroot ./fsroot-vs /etc/kernel/postinst.d/kdump-tools 5.10.0-18-2-amd64\n+ sudo LANG=C chroot ./fsroot-vs kdump-config symlinks 5.10.0-18-2-amd64\nCannot change symbolic links when kdump is loaded ... failed!\n+ clean_sys\n+ sudo chroot ./fsroot-vs umount /sys/fs/cgroup/blkio /sys/fs/cgroup/cpu /sys/fs/cgroup/cpu,cpuacct /sys/fs/cgroup/cpuacct /sys/fs/cgroup/cpuset /sys/fs/cgroup/devices /sys/fs/cgroup/freezer /sys/fs/cgroup/hugetlb /sys/fs/cgroup/memory /sys/fs/cgroup/net_cls /sys/fs/cgroup/net_cls,net_prio /sys/fs/cgroup/net_prio /sys/fs/cgroup/perf_event /sys/fs/cgroup/pids /sys/fs/cgroup/rdma /sys/fs/cgroup/systemd /sys/fs/cgroup /sys\numount: /sys/fs/cgroup/cpu: no mount point specified.\numount: /sys/fs/cgroup/cpu,cpuacct: no mount point specified.\numount: /sys/fs/cgroup/cpuacct: no mount point specified.\numount: /sys/fs/cgroup/net_cls: no mount point specified.\numount: /sys/fs/cgroup/net_cls,net_prio: no mount point specified.\numount: /sys/fs/cgroup/net_prio: no mount point specified.\numount: /sys/fs/cgroup/systemd: no mount point specified.\n+ true\n+ true\n+ sudo LANG=C chroot ./fsroot-vs umount /proc\n+ true\n[  FAIL LOG END  ] [ target/sonic-vs.img.gz ]\nmake: *** [slave.mk:1267: target/sonic-vs.img.gz] Error 1\nmake[1]: *** [Makefile.work:602: target/sonic-vs.img.gz] Error 2\nmake[1]: Leaving directory '/home/sonic/sonic-buildimage'\nmake: *** [Makefile:41: target/sonic-vs.img.gz] Error 2\n```\n#### Describe the results you expected:\n\nBuild Pass\n#### Output of server's configuration:\n\n#####OS\nMy operate system is a server with 4 cores and 32G memory and 550g disk-space\n\n```\nLinux Reyn 5.4.0-163-generic #180-Ubuntu SMP Tue Sep 5 <IPV6> UTC 2023 x86_64 x86_64 x86_64 GNU/Linux\n```\n#### The attached file is the detailed information about the issue.\n\n[sonic-vs.img.gz.log](https://github.com/sonic-net/sonic-buildimage/files/13176249/sonic-vs.img.gz.log)"
+  },
+  "resolution": {
+    "pr_number": 22553,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/22553",
+    "title": "[build] Fix kdump build failure (Fixes 5097 17023)",
+    "merged_at": "2025-05-30T00:40:32Z",
+    "description": "#### Why I did it\n\nThe build fails if kdump is enabled on the build host, even though the relevant build step is performed in a dockerized chroot.\n\n```\n+ sudo LANG=C chroot ./fsroot-cisco-8000 kdump-config symlinks 5.10.0-23-2-amd64\nCannot change symbolic links when kdump is loaded ... failed!\n```\n\nFixes #5097, Fixes #17023\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nkdump installation checks if kdump is already running and aborts if so. This is good in most cases, but it's not relevant when installing into a chroot inside a docker container. This adds a basic patch to disable this check during build.\n\nNote that the kdump status of the build host is imported into the docker build container via the sysfs file system:\n\n```\n$ ls -id /sys/kernel/kexec_crash_loaded && cat /sys/kernel/kexec_crash_loaded\n7824 /sys/kernel/kexec_crash_loaded\n0\n\n$ docker run --rm debian bash -c \"ls -id /sys/kernel/kexec_crash_loaded && cat /sys/kernel/kexec_crash_loaded\"\n7824 /sys/kernel/kexec_crash_loaded\n0\n```\n\nThe inodes and file content are identical inside and outside of the container.\n\n#### How to verify it\n\n1. Enable kdump on the build host\n2. Confirm baseline build fails with the \"Cannot change symbolic links when kdump is loaded\" error\n3. Apply this change and build succeeds\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [x] 202405\n- [x] 202411\n- [x] 202505\n\n#### Tested branch (Please provide the tested image version)\n\nmaster (29752056ef87ace404d073901cba6179ab074a12)\n\n#### Description for the changelog\n\n[build] fix build failure on kdump-enabled hosts\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/kdump-tools/patch/0004-disable-kdump-load-check.patch",
+        "additions": 16,
+        "deletions": 0
+      },
+      {
+        "path": "src/kdump-tools/patch/series",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

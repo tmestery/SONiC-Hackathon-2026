@@ -1,0 +1,63 @@
+{
+  "id": "buildimage-20048",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 20048,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/20048",
+    "title": "Replace sonic-cfggen with sonic-db-cli in banner-config & hostname-config",
+    "created_at": "2024-08-28T05:33:17Z",
+    "closed_at": "2024-10-04T00:25:40Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "nvidia",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nsonic-cfggen is an expensive call to make especially on devices with weaker CPU's\n\nEg:\n```\nroot@sn2700:/home/admin# time sonic-cfggen\n\nreal\t0m0.484s\nuser\t0m0.414s\nsys\t0m0.069s\n\nroot@sn2700/home/admin# time sonic-cfggen -d -v 'BANNER_MESSAGE[\"global\"][\"state\"]'\ndisabled\n\nreal\t0m0.726s\nuser\t0m0.507s\nsys\t0m0.090s\n\nroot@rsn2700:/home/admin# time sonic-db-cli CONFIG_DB HGET \"BANNER_MESSAGE|global\" state\ndisabled\n\nreal\t0m0.016s\nuser\t0m0.014s\nsys\t0m0.001s\n```\n\nServices like banner-config, hostname-config just read from CONFIG_DB and proceed with their own stuff. Profiling with would show this.\n\nThese services complete with swss start and add some lantency to the overall control plan downtime during WR/FW.\n\n<img width=\"771\" alt=\"image\" src=\"https://github.com/user-attachments/assets/1dbf02d6-6fbb-4f64-b1db-55d9d7febd5a\">\n\n<img width=\"1244\" alt=\"image\" src=\"https://github.com/user-attachments/assets/0d1a8e98-b679-4840-a95e-43399da4dd3c\">\n\nThere are straightforward calls to DB which doesn't require sonic-cfggen"
+  },
+  "resolution": {
+    "pr_number": 20232,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/20232",
+    "title": "Replace straightforward sonic-cfggen calls with sonic-db-cli",
+    "merged_at": "2024-10-04T00:25:39Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/20048\n\nIt is explained in ticket above, how sonic-cfggen calls in the hostname.sh, pcie-check.sh and banner-config and hogging the CPU and slightly delaying the start of swss\n\n**pcie-check.sh**\nredis-cli call is also replaced with sonic-db-cli since redis-cli is a wrapper around the actual redis-cli under database container\n<img width=\"1113\" alt=\"image\" src=\"https://github.com/user-attachments/assets/bed9d055-3b9f-4f75-aabd-1e0335716396\">\n\n**swss start**\nIf the SKU has create_only_config_db_buffers.json set to true, the only config that's updated today is.\n```\n{\n    \"DEVICE_METADATA\": {\n        \"localhost\": {\n            \"create_only_config_db_buffers\": \"true\"\n        }\n    }\n}\n```\nWe use sonic-cfggen which cause 1.5 sec delay in the start of swss container. Thus replace with sonic-db-cli. If a complex use case arises in future, this can be updated.\n<img width=\"1483\" alt=\"Screenshot 2024-09-16 at 12 45 05\u202fPM\" src=\"https://github.com/user-attachments/assets/ee3248b5-7623-42c4-9b50-81b114c71ae7\">\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n#### How to verify it\n\n**Note: Everything was tested on MSN2700 device, Intel Celeron CPU with 2 cores**\n\n- 1.5 sec saved in the swss container start\n<img width=\"1298\" alt=\"image\" src=\"https://github.com/user-attachments/assets/817739f1-26a2-41ad-89e4-1e76e31532ac\">\n\n- 1.6 sec saved in the start of swss service. Previously, it took almost 1.8 sec after config-setup is finished for the swss to start. After replacing the calls, it start almost 0.2 sec after config-setup is finished\n\nIn total, anywhere between 2.5 - 3.5 sec is saved\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "files/image_config/bannerconfig/banner-config.sh",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "files/image_config/hostname/hostname-config.sh",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "files/image_config/pcie-check/pcie-check.sh",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "files/image_config/rsyslog/rsyslog-config.sh",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

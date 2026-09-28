@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-10785",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 10785,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/10785",
+    "title": "[DHCPv6] dhcpv6 packets doesn't forwarded",
+    "created_at": "2022-05-09T11:06:35Z",
+    "closed_at": "2022-05-24T21:37:17Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\ndhcpv6 packets doesn't forwarded\n\nThe suspicious changes:\n\nhttps://github.com/Azure/sonic-buildimage/pull/10486\nhttps://github.com/Azure/sonic-buildimage/pull/10712\n\n#### Steps to reproduce the issue:\nReproduced on simple setup which contains the 2 Hosts and 1 Switch. The Hosts are connected by one cable directly to the switch and don't connect between themselves.\nHostA <-> Switch <-> HostB\n\n**The connectivity in the provided example:**\nHostA::enp4s0f0 <-> Switch::Ethernet64\nHostB::enp6s0f0<-> Switch::Ethernet0\n\n**HostA configurations:**\n```\nsudo ip link add link enp4s0f0 name enp4s0f0.690 type vlan id 690\nsudo ip link set enp4s0f0.690 up\necho \"timeout 10;\" > dhclient.conf\n```\n\n**HostB configurations:**\nUpdate the file /etc/dhcp/dhcpd6.conf:\n```\ndefault-lease-time 600;\nmax-lease-time 7200;\nlog-facility local7;\n\n# VLAN 69\nsubnet6 6900::/64 {\nrange6 6900::129 6900::254;\n}\n# VLAN 690\nsubnet6 6900:1::/64 {\nrange6 6900:1::129 6900:1::254;\n}\n```\n\n2. Cli configurations:\n```\nsudo ip link add bond0 type bond\nsudo ip link set dev bond0 type bond mode 4\nsudo ip link set enp6s0f0 down\nsudo ip link set enp6s0f0 master bond0\nsudo ip link set enp6s0f0 up\nsudo ip link set bond0 up\nsudo ip link add link bond0 name bond0.69 type vlan id 69\nsudo ip link set bond0.69 up\nsudo ip addr add 6900::2/64 dev bond0.69\nsudo ip route add 6900:1::/64 via 6900::1\nsed -e \"s/INTERFACESv6=\\\"\\\"/INTERFACESv6=\\\"bond0.69\\\"/g\" -i /etc/default/isc-dhcp-server\n/etc/init.d/isc-dhcp-server restart\n```\n\n**Switch configurations:**\n```\nsudo config portchannel add PortChannel0002\nsudo config portchannel member add PortChannel0002 Ethernet0\n\nsudo config vlan add 69\nsudo config vlan member add 69 PortChannel0002\nsudo config vlan add 690\nsudo config vlan member add 690 Ethernet64\n\nsudo config interface ip add Vlan690 6900:1::1/64\nsudo config interface ip add Vlan69 6900::1/64\n\nsudo sonic-db-cli CONFIG_DB HSET \"DHCP_RELAY|Vlan690\" \"dhcpv6_servers@\" \"6900::2\"\nsudo sonic-db-cli CONFIG_DB HSET \"VLAN|Vlan690\" \"dhcpv6_servers@\" \"6900::2\"\nsudo service dhcp_relay restart\n\n# validate the server\nshow dhcprelay_helper ipv6\n```\n\n#### Describe the results you received:\nOn the switch, the requests from the Client are not forwarded to the PortChannel member.\nNo answer to the request from the client (HostA):\n```\nhostA:~#timeout 10 dhclient -6 enp4s0f0.690 -v\n\nInternet Systems Consortium DHCP Client 4.4.1\nCopyright 2004-2018 Internet Systems Consortium.\nAll rights reserved.\nFor info, please visit https://www.isc.org/software/dhcp/\n\nListening on Socket/enp4s0f0.690\nSending on   Socket/enp4s0f0.690\nPRC: Soliciting for leases (INIT).\nXMT: Forming Solicit, 0 ms elapsed.\nXMT:  X-- IA_NA <IPV6>\nXMT:  | X-- Request renew in  +3600\nXMT:  | X-- Request rebind in +5400\nXMT: Solicit on enp4s0f0.690, interval 1020ms.\nXMT: Forming Solicit, 1020 ms elapsed.\nXMT:  X-- IA_NA <IPV6>\nXMT:  | X-- Request renew in  +3600\nXMT:  | X-- Request rebind in +5400\nXMT: Solicit on enp4s0f0.690, interval 1980ms.\nXMT: Forming Solicit, 3000 ms elapsed.\nXMT:  X-- IA_NA <IPV6>\nXMT:  | X-- Request renew in  +3600\nXMT:  | X-- Request rebind in +5400\nXMT: Solicit on enp4s0f0.690, interval 4090ms.\nXMT: Forming Solicit, 7090 ms elapsed.\nXMT:  X-- IA_NA <IPV6>\nXMT:  | X-- Request renew in  +3600\nXMT:  | X-- Request rebind in +5400\nXMT: Solicit on enp4s0f0.690, interval 7840ms.\n```\n\n#### Describe the results you expected:\nThe Client got a reply:\n```\nhostA~# timeout 10 dhclient -6 enp4s0f0.690 -v\nInternet Systems Consortium DHCP Client 4.4.1\nCopyright 2004-2018 Internet Systems Consortium.\nAll rights reserved.\nFor info, please visit https://www.isc.org/software/dhcp/\n\nListening on Socket/enp4s0f0.690\nSending on   Socket/enp4s0f0.690\nPRC: Confirming active lease (INIT-REBOOT).\nXMT: Forming Confirm, 0 ms elapsed.\nXMT:  X-- IA_NA <IPV6>\nXMT:  | X-- Confirm Address 6900:1::254\nXMT:  V IA_NA appended.\nXMT: Confirm on enp4s0f0.690, interval 960ms.\nRCV: Reply message on enp4s0f0.690 from fe80::<IPV6>.\nRCV:  X-- Server ID: <IPV6>:<IPV6>\nmessage status code Success: \"All addresses still on link.\"\nPRC: Bound to lease <IPV6>:<IPV6>.\n```\n\ntcpdump on the portchannel member:\n```\n<IPV6>.069132 IP6 6900:1::1.dhcpv6-server > 6900::2.dhcpv6-server: dhcp6 relay-fwd\n<IPV6>.069673 IP6 6900::2.dhcpv6-server > 6900:1::1.dhcpv6-server: dhcp6 relay-reply\n<IPV6>.730597 IP6 6900:1::1.dhcpv6-server > 6900::2.dhcpv6-server: dhcp6 relay-fwd\n<IPV6>.731189 IP6 6900::2.dhcpv6-server > 6900:1::1.dhcpv6-server: dhcp6 relay-reply\n```\n#### Output of `show version`:\n\n```\nroot@r-51:/home/admin# show version\n\nSONiC Software Version: SONiC.202111.66-375e20338_Internal\nDistribution: Debian 11.3\nKernel: 5.10.0-8-2-amd64\nBuild commit: 375e20338\nBuild date: Sun May  8 <IPV6> UTC 2022\nBuilt by: sw-r2d2-bot@r-build-sonic-ci02-242\n\nPlatform: x86_64-mlnx_msn3700-r0\nHwSKU: ACS-MSN3700\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT1949X06182\nModel Number: MSN3700-VS2F\nHardware Revision: A3\nUptime: <IPV6> up  1:54,  1 user,  load average: 0.43, 0.64, 0.61\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 10819,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/10819",
+    "title": "[dhcp6relay] Fix option parsing and add dhcpv6 client messages",
+    "merged_at": "2022-05-24T21:37:17Z",
+    "description": "#### Why I did it\nFixed option parsing function and added missing dhcpv6 messages.\nConfirm message type was not added in PR https://github.com/Azure/sonic-buildimage/pull/10486 when client side message types are checked.\n\n#### How I did it\n\n#### How to verify it\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [x] 202111\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-relay/cli-plugin-tests/test_show_dhcp6relay_counters.py",
+        "additions": 17,
+        "deletions": 15
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/cli/show/plugins/show_dhcp_relay.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/dhcp6relay/src/relay.cpp",
+        "additions": 15,
+        "deletions": 9
+      },
+      {
+        "path": "src/dhcp6relay/src/relay.h",
+        "additions": 3,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

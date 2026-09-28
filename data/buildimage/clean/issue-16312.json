@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-16312",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 16312,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/16312",
+    "title": "chassis-packet: arp_update script failed to refresh a FAILED nexthop entry",
+    "created_at": "2023-08-29T04:01:07Z",
+    "closed_at": "2023-09-01T18:41:48Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "cisco",
+    "target_releases": [],
+    "topics": [
+      "chassis-packet"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nOn Chassis-packet Line-card, sometimes it was observed that arp_update script fails to refresh a FAILED neighbor entry.\n\n<IPV6>::1 dev PortChannel19 router FAILED\n\narp_update fetch the ip neighbor entry and use cut to get data from index 3 and 4.\n\nThis works fine when 'ip neigh show'  displays the entry as\n<IPV6>::1 dev PortChannel19 FAILED\n\nwhere index 4 gives state 'FAILED'\n\nBut in case of a failed entry where there is extra keyword 'router', it fails to retry as it does not match the compare criteria .\n\nThis kind of entry may happen when the state is in transition and the kernel is aware of the nexthop type and gets arp resultion failure.\n\ne.g. if the entry is in STALE state and far end goes down, a ping try will result in this state with 'router' keyword.\n\nThis affects the internal BFD session on the Cisco chassis-packet as the session is not created for FAILED arp neighbor.\n\n#### Steps to reproduce the issue:\n1.\n2.\n3.\n\n#### Describe the results you received:\n\n#### Describe the results you expected:\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 16311,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/16311",
+    "title": "chassis-packet: Update arp_update script for FAILED and STALE check",
+    "merged_at": "2023-09-01T18:41:47Z",
+    "description": "Signed-off-by: anamehra <EMAIL>\n\n#### Why I did it\nFixes https://github.com/sonic-net/sonic-buildimage/issues/16312\n\n1. Fixing an issue with FAILED entry resolution retry. Neighbor entries in arp table may sometimes enter a FAILED state when the far end is down and reports the state as follows:\n```\n<IPV6>::1 dev PortChannel19 router FAILED\n```\n\nWhile the arp_update script handles the entries for FAILED in the following format, the above was not handled due to the token location (extra router keyword at index 4):\n```\n<IPV6>::1 dev PortChannel19 FAILED\n```\n\nThe former format may appear if an arp resolution is tried on a link that is known but the far end goes down, e.g., pinging a STALE entry while the far end is down.\n\n2. Refreshing STALE entries to make sure the far end is reachable. STALE entries for some backend ports may appear in chassis-packet when no traffic is received for a while on the port. When the far end goes down, it is expected for BFD to stop sending packets on the session for which the far end is not reachable. But as the entry is known as stale, on the Cisco chassis, BFD keeps sending packets. Refreshing the stale entry will keep active links as reachable in the neighbor table while the entries for the far end down will enter a failed state. FAILED state entries will be retired and entered reachable when far end comes back up.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nModified arp_update state check to use grep for states in neighbor data string place of using the position. If a string contains any of the matching patterns from INCOMPLETE, FAILED or STALE, try ping to resolve.\n\n#### How to verify it\n\nOn a chassis-packet Chassis LC:\n\n1. Bring down far end asic or LC.\n2. run arp_update on local namespace swss docker\n3. check ip netns exec ip -4 neigh show\n4. There will be FAILED entries\n5. bringup far end and wait for links to be up\n6. run arp_update on local namespace swss docker\n7. Failed entries for this far end should change to reachable\n8. Wait for couple of mins and check for STALE entries.\n9. run arp_update and this should resolve STALE entries to reachable\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [x] 202205\n- [ ] 202211\n- [x] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/scripts/arp_update",
+        "additions": 12,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

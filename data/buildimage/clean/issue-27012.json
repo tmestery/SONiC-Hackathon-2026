@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-27012",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27012,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27012",
+    "title": "Bug: FRR failed to clean up static blackhole route when recovering from ungraceful exits.",
+    "created_at": "2026-04-27T22:15:40Z",
+    "closed_at": "2026-05-06T21:31:51Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "routing"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWe observed that FRR failed to remove stale static blackhole route when it recovered from previous ungraceful exits.\n\n### Steps to Reproduce\n\nOn a running SONiC device, perform the following steps:\n1. configure a static blackhole route: sonic-db-cli CONFIG_DB hset \"STATIC_ROUTE|default|::/0\" nexthop \"\" blackhole \"true\"\n2. kill the FRR ungracefully (can be done via many ways): sudo kill -9 <pid-of-zebra>\n3. remove the blackhole route config: sonic-db-cli CONFIG_DB del \"STATIC_ROUTE|default|::/0\"\n4. restart the BGP container: sudo systemctl restart bgp\n5. check kernel routing table: ip -6 route | grep blackhole\n\nyou will see that the route is still there :(\n\n### Actual Behavior and Expected Behavior\n\nThe blackhole route should be removed since it is no longer in SONiC or FRR configuration\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27093,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27093",
+    "title": "zebra: defer RIB sweep until metaqueue is drained",
+    "merged_at": "2026-05-06T21:31:49Z",
+    "description": "#### What I did\n\nSONiC-only carry patch for FRR zebra \u2014 defer RIB sweep until the metaqueue drains. Adds bounded retry logic (50 retries \u00d7 20ms = ~1s cap).\n\n**To be dropped** when the upstream startup-ordering rework ([FRRouting/frr#21550](https://github.com/FRRouting/frr/pull/21550)) lands in a future FRR tag bump.\n\n#### How I did it\n\nWhen zebra starts without `-K` (`graceful_restart=0`), the sweep timer fires with 0-second delay but the metaqueue `work_queue` has a 10ms batching hold (`ZEBRA_RIB_PROCESS_HOLD_TIME`). This causes the sweep to walk an empty RIB and miss stale routes still queued in the metaqueue.\n\nThe patch checks `zrouter.mq->size > 0` before sweeping. If the metaqueue is non-empty, it reschedules the sweep at 2\u00d7 the hold time (20ms), up to 50 retries (~1 second). After max retries, it sweeps anyway with a warning log.\n\n#### How to verify it\n\n1. Boot a SONiC VS image with this patch\n2. Verify stale kernel routes are properly swept after startup\n3. Check syslog for `RIB sweep deferred` debug messages (with `debug rib` enabled)\n\n#### Which release branch to backport\n\n202511, msft-202412\n\n**Cherry-pick tracking:**\n\n| Branch | PR | Patch # | Status |\n|--------|-----|---------|--------|\n| `master` | #27093 | 0108 | \u2705 Merged |\n| `202511` | #27210 | 0107 | \u23f3 CI pending |\n| `msft-202412` | [Azure/sonic-buildimage-msft#2260](https://github.com/Azure/sonic-buildimage-msft/pull/2260) | 0147 | \u23f3 CI pending |\n\n#### Upstream references\n\n- [FRRouting/frr#21550](https://github.com/FRRouting/frr/pull/21550) \u2014 structural fix (pending merge upstream, will supersede this patch)\n- [FRRouting/frr#21826](https://github.com/FRRouting/frr/pull/21826) \u2014 this targeted fix (closed in favor of [#21550](https://github.com/FRRouting/frr/pull/21550))\n- Fixes: #27012",
+    "files": [
+      {
+        "path": "src/sonic-frr/patch/0108-zebra-defer-rib-sweep-until-metaqueue-drained.patch",
+        "additions": 76,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-frr/patch/series",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

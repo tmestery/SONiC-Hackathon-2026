@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-28715",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28715,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28715",
+    "title": "Bug: [Aspeed][pmon] hw-watchdog-mgrd IPC socket is not accessible inside pmon",
+    "created_at": "2026-07-30T10:53:41Z",
+    "closed_at": "2026-08-08T23:35:41Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe Aspeed watchdog platform communicates with the host `hw-watchdog-mgrd` service through the Unix socket:\n\n`/run/hw-watchdog-mgrd.sock`\n\nThe daemon runs on the host. During sonic-mgmt Platform API test fixture runs, `platform_api_server` runs inside the `pmon` container so the watchdog API calls made by the tests execute inside that container.\n\n Because pmon has a separate `/run` mount namespace and `docker_image_ctl.j2` does not bind-mount the watchdog socket, arm() and disarm() cannot reach the daemon and fail with `FileNotFoundError`.\n\n### Steps to Reproduce\n\nVerify that the watchdog manager and socket exist on the host\n\n```\nsystemctl is-active hw-watchdog-mgrd\nls -l /run/hw-watchdog-mgrd.sock\n```\n\nInside pmon:\n```\n$ docker exec pmon ls -l /run/hw-watchdog-mgrd.sock\nls: cannot access '/run/hw-watchdog-mgrd.sock': No such file or directory\n```\n\n```\ndocker exec pmon python3 -c '\nfrom sonic_platform.platform import Platform\nwatchdog = Platform().get_chassis().get_watchdog()\nprint(watchdog.arm(60))\n'\n```\n`FileNotFoundError: [Errno 2] No such file or directory`\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behaviour\n\nWhen called through platform_api_server, the exception produces a null response, observed by sonic-mgmt as Python None, instead of a valid timeout or -1.\n\n### Expected Behaviour\n\nThe watchdog IPC socket should be accessible inside pmon.\n\nWatchdog arm, re-arm, status, remaining-time, and disarm requests originating from pmon should reach the host `hw-watchdog-mgrd` daemon and return documented values.\n\n### Attach files (if any)\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/2005cfadac08a60032213ceca36c8cb904290d51/files/build_templates/docker_image_ctl.j2#L822\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/platform_tests/api/test_watchdog.py#L273\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/helpers/platform_api/watchdog.py#L9\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/platform/device_utils.py#L1145-L1209"
+  },
+  "resolution": {
+    "pr_number": 28803,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28803",
+    "title": "Issue-28715: [aspeed] Make hw-watchdog-mgrd IPC socket reachable inside pmon",
+    "merged_at": "2026-08-08T23:35:40Z",
+    "description": "watchdogutil talks to the hw-watchdog-mgrd daemon over a Unix domain socket, but the socket lived directly under /run and was not visible inside the pmon container, so watchdogutil could not run there.\n\nMove the socket into a dedicated directory\n(/run/hw-watchdog-mgrd/hw-watchdog-mgrd.sock) and bind-mount that whole directory into pmon. A directory bind-mount (rather than a single-file one) keeps working across a daemon restart, which unlinks and recreates the socket inode, and does not require the socket to already exist when pmon starts.\n\n- hw-watchdog-mgrd.py: introduce SOCKET_DIR and makedirs() it before binding the socket.\n- sonic_platform/watchdog.py: update the client SOCKET_PATH to match.\n- docker_image_ctl.j2: bind-mount /run/hw-watchdog-mgrd into pmon for aspeed. sysfs (/sys) is already mounted into pmon, so the is_armed() sysfs fallback works there too.\n\nFixes sonic-net/sonic-buildimage#28715\n\n#### Why I did it\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n#### How to verify it\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type:\n\n#### Tested branch\n\n- [ ] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "platform/aspeed/aspeed-platform-services/scripts/hw-watchdog-mgrd.py",
+        "additions": 14,
+        "deletions": 3
+      },
+      {
+        "path": "platform/aspeed/sonic-platform-modules-nexthop/common/sonic_platform/watchdog.py",
+        "additions": 2,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

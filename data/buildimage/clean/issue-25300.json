@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-25300",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25300,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25300",
+    "title": "Enhancement:Reduce PMON docker image size by stripping grpc native extensions",
+    "created_at": "2026-02-02T04:39:29Z",
+    "closed_at": "2026-03-13T20:02:08Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "enhancement",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the enhancement\n\nThe `docker-platform-monitor` (PMON) container installs `grpcio` and `grpcio-tools` to satisfy platform dependencies. These Python packages include native extension `.so` files that retain unneeded symbols, which contributes to a larger container image size.\n\nSince PMON is widely deployed and frequently rebuilt, reducing the image size\u2014even by a modest amount\u2014helps improve build efficiency and resource usage. This enhancement proposes optimizing the PMON container by stripping unneeded symbols from the gRPC native Python extensions, without changing any runtime behavior or functionality.\n\n### Current Behavior\n\nThe `docker-platform-monitor` container installs `grpcio` and `grpcio-tools` as pinned Python dependencies. The native Python extension `.so` files provided by these packages are included in the image with unneeded debug and symbol information intact, which increases the overall PMON container image size. There is currently no step in the Dockerfile to optimize or strip these artifacts after installation.\n\n190863320 overlay2//diff/usr/local/lib/python3.11/dist-packages/grpc/_cython/cygrpc.cpython-311-aarch64-linux-gnu.so\n91524168 overlay2//diff/usr/local/lib/python3.11/dist-packages/grpc_tools/_protoc_compiler.cpython-311-aarch64-linux-gnu.so\n\n### Proposed Behavior\n\nAfter installing the `grpcio` and `grpcio-tools` Python dependencies in the `docker-platform-monitor` image, temporarily install the required tooling to strip unneeded symbols from the gRPC native Python extension `.so` files. Remove the temporary tooling during the existing cleanup phase so that the final PMON container image is smaller, while preserving identical runtime behavior and functionality.\n8539944 overlay2//diff/usr/local/lib/python3.11/dist-packages/grpc/_cython/cygrpc.cpython-311-aarch64-linux-gnu.so\n5456608 overlay2//diff/usr/local/lib/python3.11/dist-packages/grpc_tools/_protoc_compiler.cpython-311-aarch64-linux-gnu.so"
+  },
+  "resolution": {
+    "pr_number": 25627,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25627",
+    "title": "[pmon] Strip debug symbols from grpc native extensions",
+    "merged_at": "2026-03-13T20:02:07Z",
+    "description": "#### What I did\nStrip unneeded symbols from `grpcio` and `grpcio-tools` native `.so` files after installation in the `docker-platform-monitor` container.\n\n#### Why I did it\nThese Python extensions include native C/C++ shared libraries that retain debug and symbol information not needed at runtime. On aarch64, the two largest files are:\n\n- `cygrpc.cpython-311-aarch64-linux-gnu.so` \u2014 ~190 MB\n- `_protoc_compiler.cpython-311-aarch64-linux-gnu.so` \u2014 ~91 MB\n\nStripping these with `--strip-unneeded` significantly reduces the PMON container image size with zero impact on runtime behavior.\n\n#### How I verified it\nThe `strip --strip-unneeded` command only removes non-essential symbols (debug info, unused exports). The gRPC Python modules continue to function identically after stripping \u2014 this is the same technique used by standard Linux package builds (`dh_strip`).\n\n#### Which release branch to backport\n`202411`\n\nFixes: #25300",
+    "files": [
+      {
+        "path": "dockers/docker-platform-monitor/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

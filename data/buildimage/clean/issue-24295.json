@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-24295",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24295,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24295",
+    "title": "Bug: GCU apply-patch error logs although patch applied - ACL_TABLE",
+    "created_at": "2025-10-20T13:22:55Z",
+    "closed_at": "2026-04-01T23:00:49Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nHello,\n\nThere are json patches that throw unexpected syslog error logs when they are applied, although test case passes.\nError logs are not seen in console output when giving the command, except if called with the verbosity output.\nThe operation is successful and change is applied but the existence of error logs is unexpected.\n\nFor example:\n\nExecution with no verbosity enabled:\n\n```\nadmin@ixre-egl-board30:~$ sudo config apply-patch -d /tmp/acl.json\n** DRY RUN EXECUTION **\nPatch Applier: asic0: Patch application starting.\nPatch Applier: asic0: Patch: [{\"op\": \"replace\", \"path\": \"/ACL_TABLE/EVERFLOW/ports\", \"value\": [\"\"]}]\nPatch Applier: asic0 getting current config db.\nPatch Applier: asic0: simulating the target full config after applying the patch.\nPatch Applier: asic0: validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: asic0: validating target config does not have empty tables,\n                            since they do not show up in ConfigDb.\nPatch Applier: asic0: sorting patch updates.\nPatch Applier: The asic0 patch was converted into 3 changes:\nPatch Applier: asic0: applying 3 changes in order:\nPatch Applier:   * [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\"}]\n** DryRun: Would apply [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\"}]\nPatch Applier:   * [{\"op\": \"add\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\", \"value\": \"\"}]\n** DryRun: Would apply [{\"op\": \"add\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\", \"value\": \"\"}]\nPatch Applier:   * [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/1\"}]\n** DryRun: Would apply [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/1\"}]\nPatch Applier: asic0: verifying patch updates are reflected on ConfigDB.\nPatch Applier: asic0 patch application completed.\nPatch applied successfully.\n```\n\nExecution with verbosity enabled:\n\n```\nadmin@ixre-egl-board30:~$ sudo config apply-patch -d -v /tmp/acl.json\n** DRY RUN EXECUTION **\nPatch Applier: asic0: Patch application starting.\nPatch Applier: asic0: Patch: [{\"op\": \"replace\", \"path\": \"/ACL_TABLE/EVERFLOW/ports\", \"value\": [\"\"]}]\nPatch Applier: asic0 getting current config db.\nPatch Applier: asic0: simulating the target full config after applying the patch.\nPatch Applier: asic0: validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: asic0: validating target config does not have empty tables,\n                            since they do not show up in ConfigDb.\nPatch Applier: asic0: sorting patch updates.\nPatch Sorter - Strict: Validating patch is not making changes to tables without YANG models.\nPatch Sorter - Strict: Validating target config according to YANG models.\nPatch Sorter - Strict: Sorting patch updates.\nlibyang[0]: Invalid JSON data (unexpected value). (path: /sonic-acl:sonic-acl/ACL_TABLE/ACL_TABLE_LIST[ACL_TABLE_NAME='EVERFLOW']/ports)\nsonic_yang(3):Data Loading Failed:Invalid JSON data (unexpected value).\nPatch Applier: The asic0 patch was converted into 3 changes:\nPatch Applier: asic0: applying 3 changes in order:\nPatch Applier:   * [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\"}]\n** DryRun: Would apply [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\"}]\nPatch Applier:   * [{\"op\": \"add\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\", \"value\": \"\"}]\n** DryRun: Would apply [{\"op\": \"add\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/0\", \"value\": \"\"}]\nPatch Applier:   * [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/1\"}]\n** DryRun: Would apply [{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports/1\"}]\nPatch Applier: asic0: verifying patch updates are reflected on ConfigDB.\nPatch Applier: asic0 patch application completed.\nPatch applied successfully.\n```\n\nBoth cases produce following syslog log:\n`ERR sonic_yang: Data Loading Failed:Invalid JSON data (unexpected value).`\n\n### Steps to Reproduce\n\n1. Create a json file` /tmp/patch_acl.json` that removes ports from ACL_TABLE:\n\n```\n[\n    {\n        \"op\": \"add\",\n        \"path\": \"/asic0/ACL_TABLE/DATAACL/ports\",\n        \"value\": [\"\"]\n    }\n]\n```\n\n2. Apply-patch\n\n` sudo config apply-patch -d /tmp/patch_acl.json`\n\n3. Check syslog\nFollowing log is produced:\n> ERR sonic_yang: Data Loading Failed:Invalid JSON data (unexpected value).\n\nSame behavior happens if we replace Step 1) with all the below json files for ACL_TABLE :\n\n- ` [{\"op\": \"add\", \"path\": \"/ACL_TABLE/EVERFLOW/ports\", \"value\": [\"\"]}]`\n- ` [{\"op\": \"replace\", \"path\": \"/ACL_TABLE/EVERFLOW/ports\", \"value\": [\"\"]}]`\n- `[{\"op\": \"remove\", \"path\": \"/ACL_TABLE/EVERFLOW/ports\"}]`\n\n### Actual Behavior and Expected Behavior\n\nSyslog log should not be printed since the operation is successful.\nOR\nIf there is indeed an error the patch should fail with appropriate reasoning.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25535,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25535",
+    "title": "[yang-mgmt] Downgrade loadData error log from ERR to WARNING",
+    "merged_at": "2026-04-01T23:00:47Z",
+    "description": "### Description\n[agent]\n\n`loadData()` in `sonic_yang_ext.py` logs to syslog at `LOG_ERR` when YANG data validation fails. However, callers like GCU's `validate_config_db_config()` treat validation failure as an **expected outcome** during patch sorting \u2014 the exception is caught and the sorter simply tries a different move ordering.\n\nThis causes spurious `ERR sonic_yang: Data Loading Failed:Invalid JSON data (unexpected value).` entries in syslog even when `config apply-patch` operations succeed.\n\n### Root Cause\n\nDuring GCU patch sorting, `FullConfigMoveValidator` calls `validate_config_db_config()` \u2192 `loadData()` for many intermediate configurations. Invalid intermediate states are expected \u2014 the sorter catches the `SonicYangException` and tries other orderings. But the `LOG_ERR` syslog entry is already written before the exception is raised.\n\n### Fix\n\n- Change the default error log level in `loadData()` from `LOG_ERR` to `LOG_WARNING`\n- Add an `error_log_level` parameter so callers can override if needed\n- The exception is always re-raised, so callers that need ERR-level logging can pass `error_log_level=syslog.LOG_ERR` explicitly\n\n### Testing\n\nReproduced on SONiC VS (master branch):\n1. Created ACL table: `sudo config acl add table EVERFLOW MIRROR --ports Ethernet0,Ethernet4`\n2. Applied patch: `[{\"op\": \"replace\", \"path\": \"/ACL_TABLE/EVERFLOW/ports\", \"value\": [\"\"]}]`\n3. **Before fix:** `journalctl -p err` shows `ERR sonic_yang: Data Loading Failed:Invalid JSON data (unexpected value).`\n4. **After fix:** No ERR entries in syslog. Message appears at WARNING level only. Patch still applies successfully.\n\nFixes #24295",
+    "files": [
+      {
+        "path": "src/sonic-yang-mgmt/sonic_yang_ext.py",
+        "additions": 4,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

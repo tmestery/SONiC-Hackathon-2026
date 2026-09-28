@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-14706",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 14706,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/14706",
+    "title": "sailibthrift is reading data from port_map.ini instead of config_db.json",
+    "created_at": "2023-04-18T17:39:53Z",
+    "closed_at": "2023-07-03T20:57:38Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P0",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "We encountered an issue where the sai-thrift library in syncd-rpc container in the SONiC image is reading the port information(lanes, speed) etc from the port_config.ini instead of the /etc/sonic/config_db.json. My understanding is that config_db.json is the place to read this information once it has been created and saved.\n\nWhen the issue happens, the sai thrift call returns an empty value for port OID. I have attached the packet trace during this call.\n\nSteps done:\nWe configured the port speeds and lanes for 8 ports  (Ethernet96 to Ethernet152) from 400G to 100G. This was done in config_db.json, and then config-reload or reboot. The port_config.ini was not changed. This caused the following issue:\n\n**The below is the syslog that appears that time:**\nApr 13 <IPV6>.818545 chu-dut INFO syncd#/supervisord: message repeated 2 times: [ dshell_client [<IPV6>] {/usr/bin/dshell_client.py:1676} INFO - sai_thrift_get_port_id_by_front_port]\nApr 13 <IPV6>.818545 chu-dut INFO syncd#/supervisord: dshell_client [<IPV6>] {/usr/bin/dshell_client.py:1676} INFO - Didn't find port\nApr 13 <IPV6>.819073 chu-dut INFO syncd#/supervisord: dshell_client [<IPV6>] {/usr/bin/dshell_client.py:1676} INFO - sai_thrift_get_port_id_by_front_port\n\nThis causes **qos/test_qos.py::TestQosSai::testQosSaiSharedReservationSize to fail**. The sai-port-id from the DUT is 0 for Ethernet96(one of the new 100G ports). You can see that **Ethernet0 is returning a valid port ID, but Ethernet96 is returning 0**. This is causing the script to fail.\nroot@chu-dut:/home/cisco# show int stat | grep \"96 \"\n     Ethernet96  1536,1537,1538,1539     100G   9100     rs    etp12   PortChannel102      up       up                                  QSFP28 or later         off\n    Ethernet196      260,261,262,263     100G   9100    N/A   etp24b           routed      up     down  QSFP-DD Double Density 8X Pluggable Transceiver         off\n\n(Pdb) client.sai_thrift_get_port_id_by_front_port(\"Ethernet96\")\n0\n(Pdb) client.sai_thrift_get_port_id_by_front_port(\"Ethernet0\")\n72057594037927956\n(Pdb)\nThis issue is happening in all the new 100G ports:\n(Pdb) for i in range(96,153,8): client.sai_thrift_get_port_id_by_front_port(\"Ethernet\"+str(i))\n0\n0\n0\n0\n0\n0\n0\n0\n(Pdb) client.sai_thrift_get_port_id_by_front_port(\"Ethernet160\") **<<< Normal port.**\n72057594037927980\n(Pdb)"
+  },
+  "resolution": {
+    "pr_number": 15831,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/15831",
+    "title": "[submodule update] sonic-sairedis",
+    "merged_at": "2023-07-20T01:12:54Z",
+    "description": "What I did:\n\nAdvance SAI submodule with below commit:\n\n`56aee6c0dfc4705584764edd35b7b2977bb762eb (HEAD -> 202205, origin/202205) [202205] Advance SAI submodule to fix issue https://github.com/sonic-net/sonic-buildimage/issues/14706 (#1265)`\n\nMicrosoft ADO: 17890678\n\nHow I verify:\n\n- Verification of sonic-mgmt qos tests on native 400G platform running at speed 100G\n- Verified on pizza box T1 also\n\n```\nsudo ./run_tests.sh -n vms1-8  -i ../ansible/str,../ansible/veos -c qos/test_qos_sai.py::TestQosSai::testQosSaiDscpQueueMapping -u -e \"--skip_sanity --disable_loganalyzer\" -l info\n\n==================== 1 passed, 2 skipped in 458.82 seconds =====================\n```",
+    "files": [
+      {
+        "path": "src/sonic-sairedis",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 1814,
+      "repository": "opencomputeproject/SAI",
+      "url": "https://github.com/opencomputeproject/SAI/pull/1814",
+      "title": "fix the issue where port sai oid not correct when speed change is done from 400G to 100G",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

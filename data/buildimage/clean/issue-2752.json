@@ -1,0 +1,113 @@
+{
+  "id": "buildimage-2752",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 2752,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/2752",
+    "title": "dhcp_relay service stopped with \"systemctl stop swss\" but not restarted with \"systemctl restart swss\"",
+    "created_at": "2019-04-05T21:18:12Z",
+    "closed_at": "2019-05-01T15:02:39Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "radv and telemtry have same issue.\n\n1.\n```\nroot@ASW-A1-1:/home/admin# docker ps\nCONTAINER ID        IMAGE                             COMMAND                  CREATED              STATUS              PORTS               NAMES\nd17116c39db5        docker-dhcp-relay:latest          \"/usr/bin/docker_ini\u2026\"   About a minute ago   Up About a minute                       dhcp_relay\n3baeea28ba32        docker-teamd:latest               \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       teamd\na5cf04c6e080        docker-syncd-brcm:latest          \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       syncd\n9c0381c276ba        docker-router-advertiser:latest   \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       radv\nf3b57ce00e88        docker-sonic-telemetry:latest     \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       telemetry\n3f9b631c1602        docker-orchagent-brcm:latest      \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       swss\n736600c72cb2        docker-platform-monitor:latest    \"/usr/bin/docker_ini\u2026\"   About a minute ago   Up About a minute                       pmon\n05e987143a5a        docker-lldp-sv2:latest            \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       lldp\ndc8a0ed534d6        docker-fpm-quagga:latest          \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       bgp\n41e0893dbd6b        docker-database:latest            \"/usr/bin/supervisord\"   2 days ago           Up About a minute                       database\nroot@ASW-A1-1:/home/admin#\n```\n2.\n```\n systemctl stop swss\n\nroot@ASW-A1-1:/home/admin#\nroot@ASW-A1-1:/home/admin# docker ps\nCONTAINER ID        IMAGE                            COMMAND                  CREATED             STATUS              PORTS               NAMES\n3baeea28ba32        docker-teamd:latest              \"/usr/bin/supervisord\"   3 minutes ago       Up 3 minutes                            teamd\n736600c72cb2        docker-platform-monitor:latest   \"/usr/bin/docker_ini\u2026\"   3 minutes ago       Up 3 minutes                            pmon\n05e987143a5a        docker-lldp-sv2:latest           \"/usr/bin/supervisord\"   3 minutes ago       Up 3 minutes                            lldp\ndc8a0ed534d6        docker-fpm-quagga:latest         \"/usr/bin/supervisord\"   3 minutes ago       Up 3 minutes                            bgp\n41e0893dbd6b        docker-database:latest           \"/usr/bin/supervisord\"   2 d\n```\n3.\n```\nroot@ASW-A1-1:/home/admin# systemctl restart swss\n```\n4.\n```\n\nroot@ASW-A1-1:/home/admin# docker ps\nCONTAINER ID        IMAGE                            COMMAND                  CREATED              STATUS              PORTS               NAMES\n139613d18af2        docker-syncd-brcm:latest         \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       syncd\n66b27759a437        docker-orchagent-brcm:latest     \"/usr/bin/supervisord\"   About a minute ago   Up About a minute                       swss\n3baeea28ba32        docker-teamd:latest              \"/usr/bin/supervisord\"   5 minutes ago        Up 5 minutes                            teamd\n736600c72cb2        docker-platform-monitor:latest   \"/usr/bin/docker_ini\u2026\"   5 minutes ago        Up 5 minutes                            pmon\n05e987143a5a        docker-lldp-sv2:latest           \"/usr/bin/supervisord\"   5 minutes ago        Up 5 minutes                            lldp\ndc8a0ed534d6        docker-fpm-quagga:latest         \"/usr/bin/supervisord\"   5 minutes ago        Up 5 minutes                            bgp\n41e0893dbd6b        docker-database:latest           \"/usr/bin/supervisord\"   2 days ago           Up 5 minutes                            database\nroot@ASW-A1-1:/home/admin#\n```"
+  },
+  "resolution": {
+    "pr_number": 2845,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/2845",
+    "title": "[services] Restart SwSS service upon unexpected critical process exit",
+    "merged_at": "2019-05-01T15:02:39Z",
+    "description": "**- What I did**\nRestart SwSS service (and also restart dependent services) if any critical processes running in the swss container exit abnormally.\n\n**- How I did it**\n- Add `supervisor-proc-exit-listener` event listener plugin for Supervisor in SwSS Docker container which in turn loads a list of critical processes for which to monitor for unexpected exits.\n- Configure swss.service to always auto-restart the service if it stops, with a delay of 30 seconds [Also set a rate limit of 3 restarts within 20 minutes (1200 seconds). If this number of restarts is exceeded, systemd will stop attempting to restart the service and place it in a 'failed' state. To restart the service after entering this state, one must first run `systemctl reset-failed` [we should probably also call this command in `config load_minigraph` before restarting services]\n- Add systemd dependencies to ensure dependents services also gets restarted along with SwSS\n- Also add \"WantedBy=swss.service\" option to unit files of services which need to be started with SwSS (currently teamd, snmp, dhcp_relay and radv). The \"Requires=swss.service\" option causes the dependent services to stop and restart along with SwSS (when calling `systemctl stop swss.service` and `systemctl restart swss.service`). However this will not cause them to start with SwSS (when calling `systemctl start swss.service`). This functionality is enabled with the addition of the \"WantedBy=\" option.\n- Also change the way the DHCP relay Docker container waits for interfaces to be ready before starting the relay agent process. Rather than using `ip` commands, now check STATE_DB for interface entries with \"state\" == \"ok\"\n- `supervisor-proc-exit-listener` script resides in files/scripts/ so that the same script can be installed in multiple Docker containers. To add this solution to another container, one simply needs to do the following:\n    1. Add the script to the container's \"_FILES\" variable in the container's Makefile, and ensure it gets copied into the container in the container's Dockerfile\n    2. Add a `/etc/supervisor/critical_processes` file to the container specifying all critical processes, one per line\n    3. Add the event listener as a process to the container's supervisor config file\n\n**- How it Works**\n- If a critical process running in the swss container crashes/exits abnormally, `supervisor-proc-exit-listener` will send a `SIGTERM` signal to Supervisor, causing it to exit also\n- Since Supervisor is running as PID 1 within the Docker container, when Supervisor process exits, it will cause the container to stop\n- When the SwSS Docker container stops, systemd will consider the swss.service to have stopped unexpectedly. Systemd will wait 30 seconds, then stop dependent services, restart SwSS, and lastly restart dependent services (currently syncd, teamd, snmp, dhcp_relay, radv and telemetry), unless it has reached the threshold for restarting, in which case it will move the service into a 'failed' state and not attempt to restart it.\n\n**- How to verify it**\n\nSend a signal to one of the critical processes to cause it to appear to exit abnormally (e.g., `pkill -11 orchagent`). Ensure the swss, syncd, teamd, snmp, dhcp_relay, radv and telemetry services get restarted per the above details.\n\nNOTE: My updates to systemd dependencies in this PR also fixes https://github.com/Azure/sonic-buildimage/issues/2752",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-relay/wait_for_intf.sh.j2",
+        "additions": 18,
+        "deletions": 20
+      },
+      {
+        "path": "dockers/docker-orchagent/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-orchagent/critical_processes",
+        "additions": 11,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-orchagent/supervisord.conf",
+        "additions": 7,
+        "deletions": 1
+      },
+      {
+        "path": "files/build_templates/dhcp_relay.service.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "files/build_templates/radv.service.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "files/build_templates/snmp.service.j2",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "files/build_templates/swss.service.j2",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "files/build_templates/teamd.service.j2",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "files/image_config/systemd/journald.conf",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "files/scripts/supervisor-proc-exit-listener",
+        "additions": 45,
+        "deletions": 0
+      },
+      {
+        "path": "rules/docker-dhcp-relay.mk",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "rules/docker-orchagent.mk",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "rules/scripts.mk",
+        "additions": 5,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/wait_for_intf.sh",
+        "additions": 24,
+        "deletions": 26
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

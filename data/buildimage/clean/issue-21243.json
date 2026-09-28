@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-21243",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21243,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21243",
+    "title": "[dualtor] CRM test fails on test_crm_nexthop_group when tunnel route created for PortChannel neighbor",
+    "created_at": "2024-12-20T11:45:01Z",
+    "closed_at": "2025-08-06T05:32:49Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202405",
+      "202411"
+    ],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nCRM test fails on test_crm_nexthop_group test case due to orchagent crash:\n\n```\n2024 Dec 19 <IPV6>.382634 sonic ERR swss#orchagent: :- removeRoutePost: Failed to remove route prefix:<IP>/32\n2024 Dec 19 <IPV6>.382654 sonic NOTICE swss#orchagent: :- removeRoutePost: Remove Nexthop Group <IP>@PortChannel101,<IP>@PortChannel101\n2024 Dec 19 <IPV6>.382654 sonic INFO swss#orchagent: :- isMuxNexthops: No mux nexthop found\n2024 Dec 19 <IPV6>.382666 sonic INFO swss#orchagent: :- removeRoutePost: Remove route <IP>/32 with next hop(s) <IP>@PortChannel101,<IP>@PortChannel101\n2024 Dec 19 <IPV6>.382884 sonic NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group <IP>@PortChannel101,<IP>@PortChannel101\n2024 Dec 19 <IPV6>.383167 sonic NOTICE pmon#ycabled: Async client port = Ethernet76 exception occured because of StatusCode.UNAVAILABLE tid YCableAsyncNotificationTask\n2024 Dec 19 <IPV6>.387805 sonic INFO swss#orchagent: :- flush_removing_entries: ObjectBulker.flush removing_entries 2 rc=0 statuses[0]=0\n2024 Dec 19 <IPV6>.387805 sonic ERR swss#orchagent: :- meta_generic_validation_remove: object 0x5000000001c67 reference count is 1, can't remove\n2024 Dec 19 <IPV6>.387829 sonic ERR swss#orchagent: :- removeNextHopGroup: Failed to remove next hop group 5000000001c67, rv:-17\n2024 Dec 19 <IPV6>.387840 sonic ERR swss#orchagent: :- handleSaiRemoveStatus: Encountered failure in remove operation, exiting orchagent, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_OBJECT_IN_US\nE\n2024 Dec 19 <IPV6>.387846 sonic NOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\n```\n\nAlso, during some investigation found another flow which triggers a different crash:\n\n```\nfrom swsscommon import swsscommon\n\ndef to_fvs(fvs):\n    return swsscommon.FieldValuePairs([(k, v) for k, v in fvs.items()])\n\ndb = swsscommon.DBConnector(\"APPL_DB\", 0)\nntbl = swsscommon.ProducerStateTable(db, \"NEIGH_TABLE\")\nrtbl = swsscommon.ProducerStateTable(db, \"ROUTE_TABLE\")\n\nip = \"<IP>\"\nip2 = \"<IP>\"\n\nntbl.set(f\"PortChannel101:{ip2}\", to_fvs({\"neigh\": \"<IPV6>\", \"family\": \"IPv4\"}))\nrtbl.set(\"<IP>/8\", to_fvs({\"protocol\": \"kernel\", \"nexthop\": f\"<IP>\", \"ifname\": \"PortChannel101\"}))\n\nntbl.set(f\"PortChannel101:{ip}\", to_fvs({\"neigh\": \"<IPV6>\", \"family\": \"IPv4\"})) # needs to be 0 mac\n\nrtbl.set(ip, to_fvs({\"protocol\": \"kernel\", \"nexthop\": f\"{ip2},{ip}\", \"ifname\": \"PortChannel101,PortChannel101\"}))\n\nntbl.set(f\"PortChannel101:{ip}\", to_fvs({\"neigh\": \"<IPV6>\", \"family\": \"IPv4\"}))\n\nrtbl._del(ip)\nntbl._del(f\"PortChannel101:{ip}\")\n\nntbl._del(f\"PortChannel101:{ip2}\")\nrtbl._del(\"<IP>/8\")\n```\n\nGot failure:\n\n```\n27:17.657861 r-tigon-21 NOTICE swss#orchagent: :- addNeighbor: Created neighbor ip <IP>, <IPV6> on PortChannel101\n2024 Dec 19 <IPV6>.663114 r-tigon-21 NOTICE swss#orchagent: :- addNextHop: Created next hop <IP> on PortChannel101\n2024 Dec 19 <IPV6>.668304 r-tigon-21 NOTICE swss#orchagent: :- remove_route: Removed tunnel route to <IP>/32\n2024 Dec 19 <IPV6>.671257 r-tigon-21 NOTICE swss#orchagent: :- addNextHopGroup: Create next hop group <IP>@PortChannel101,<IP>@PortChannel101\n2024 Dec 19 <IPV6>.674968 r-tigon-21 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"<IP>/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} doesn't exist\n2024 Dec 19 <IPV6>.675064 r-tigon-21 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1, status: SAI_STATUS_ITEM_NOT_FOUND\n2024 Dec 19 <IPV6>.675101 r-tigon-21 ERR swss#orchagent: :- addRoutePost: Failed to set route <IP>/32 with next hop(s) <IP>@PortChannel101,<IP>@PortChannel101\n2024 Dec 19 <IPV6>.675123 r-tigon-21 ERR swss#orchagent: :- handleSaiSetStatus: Encountered failure in set operation, exiting orchagent, SAI API: SAI_API_ROUTE, status: SAI_STATUS_NOT_EXECUTED\n2024 Dec 19 <IPV6>.675151 r-tigon-21 NOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\n2024 Dec 19 <IPV6>.996722 r-tigon-21 NOTICE swss#orchagent: :- sai_redis_notify_syncd: invoked DUMP succeeded\n2024 Dec 19 <IPV6>.014192 r-tigon-21 INFO swss#supervisord 2024-12-19 <IPV6>,012 WARN exited: orchagent (terminated by SIGABRT (core dumped); not expected)\n```\n\n#### Steps to reproduce the issue:\n1. Run test:\n```\npython3 -m pytest crm/test_crm.py --inventory=\"../ansible/inventory,../ansible/veos\" --host-pattern mtvr-tigon-02,mtvr-tigon-04 --module-path ../ansible/library/ --testbed sonic-dual-tor-tigon-01-dualtor-aa --testbed_file ../ansible/testbed.yaml --allow_recover  --assert plain --log-cli-level debug --show-capture=no -ra --showlocals -v --clean-alluredir --alluredir=/tmp/allure-results --timeout 6000 --session-timeout 6000 --allure_server_addr=\"allure.nvidia.com\" --allure_server_port= --topology dualtor,any,util,t0 --skip_sanity --dynamic_update_skip_reason --random_seed=1734183076 --store_la_logs --ignore_la_failure\n```\n\n#### Describe the results you received:\n\nOrchagent creates tunnel route when receiving neighbor with 0 Mac on PortChannel, causing various issues when same prefix is installed via RouteOrch.\nOrchagent crash due to an attempt to remove NHG which is still referenced by a route.\n\n#### Describe the results you expected:\n\nNo crashing, no tunnel route created on PortChannel.\n\n#### Output of `show version`:\n\n```\n\nSONiC Software Version: SONiC.202405_RC.60-4952d6aea_Internal\nSONiC OS Version: 12\nDistribution: Debian 12.8\nKernel: 6.1.0-22-2-amd64\nBuild commit: 51824d390\nBuild date: Wed Dec 18 <IPV6> UTC 2024\nBuilt by: sw-r2d2-bot@r-build-sonic-ci03-243\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 19003,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/19003",
+    "title": "[crm] Fix test failures on SN4700 by batching neighbor creation",
+    "merged_at": "2025-08-06T05:32:48Z",
+    "description": "### Description of PR\ntest_crm_nexthop_group was failing on sn4700 testbeds due to a known orchagent crash. The crash is caused by a few factors:\n\n- Expected neighbor entry missing from kernel, causing tunnel-route to be programmed for unresolved nexthop.\n- tunnel-route being removed when nexthop group was deleted\n- route bulker ending early due to ITEM_NOT_FOUND (not processing remaining bulk removes)\n- next-hop group delete failing due to OBJECT_IN_USE.\n\nThis PR addresses the first issue.\n\nDuring neighbor generation for the test, some of the neighbor updates were being missed from APPL_DB on sn4700 devices. Previously, the neighbors were programmed in the kernel in a single ip command, this fix splits up the neighbor programming into batches in order to prevent updates from being dropped.\n\nSummary:\nFixes https://github.com/sonic-net/sonic-buildimage/issues/21243\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n### Approach\n#### What is the motivation for this PR?\nCRM test was failing on dualtor sn4700 platforms\n\n#### How did you do it?\nbuffered neighbor creation to prevent updates from being dropped\n\n#### How did you verify/test it?\nran test case on sn4700 dualto testbed\n\n#### Any platform specific information?\nonly changes test run on sn4700\n\n### Documentation\nado: #33294907",
+    "files": [
+      {
+        "path": "tests/crm/test_crm.py",
+        "additions": 30,
+        "deletions": 11
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

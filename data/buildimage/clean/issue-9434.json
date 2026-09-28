@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-9434",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 9434,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/9434",
+    "title": "Routeorch calls SAI API set attribute for a routing entry which was just removed from SAI in the same bulk operation. Should recreate it in such case.",
+    "created_at": "2021-12-02T16:08:16Z",
+    "closed_at": "2021-12-14T06:50:15Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [
+      "202111"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nOrchagent exited due to setting a non-existing routing entry during bgp speaker test with the latest swss\nThe issue was observed during azure pipeline kvm t0 bgp speaker test of PR #9397.\n\n#### Steps to reproduce the issue:\n\n#### Describe the results you received:\nThe following error observed during bgp speaker test\n```\nNov 30 <IPV6>.998387 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"<IP>/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\nNov 30 <IPV6>.998979 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1000, status: SAI_STATUS_INVALID_PARAMETER\nNov 30 <IPV6>.999571 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"<IP>/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\nNov 30 <IPV6>.000069 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1000, status: SAI_STATUS_INVALID_PARAMETER\nNov 30 <IPV6>.000690 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"<IP>/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\nNov 30 <IPV6>.001128 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1000, status: SAI_STATUS_INVALID_PARAMETER\nNov 30 <IPV6>.001549 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"<IP>/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\nNov 30 <IPV6>.001984 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 321, status: SAI_STATUS_INVALID_PARAMETER\nNov 30 <IPV6>.003547 vlab-01 ERR swss#orchagent: :- addRoutePost: Failed to set route <IP>/0 with packet action forward, -23\nNov 30 <IPV6>.003869 vlab-01 ERR swss#orchagent: :- handleSaiSetStatus: Encountered failure in set operation, exiting orchagent, SAI API: SAI_API_ROUTE, status: SAI_STATUS_NOT_EXECUTED\n```\n\nroute orchagent operating flow on the routing entries:\n- set,\n- then remove\n- and then set again.\n\nSo for the second set operation, route orchagent should call \"create\" instead of \"set\".\nHowever, according to sairedis.rec, it called \"set\" for the second set operation when the routing entries didn't exist in SAI, which caused SAIredis failure.\n\nROUTE_TABLE in swss.rec:\n```\n2021-11-30.<IPV6>.627923|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>,<IP>,<IP>|ifname:PortChannel0002,PortChannel0003,PortChannel0004\n2021-11-30.<IPV6>.928608|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>,<IP>,<IP>|ifname:PortChannel0002,PortChannel0003,PortChannel0004\n2021-11-30.<IPV6>.119089|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>,<IP>,<IP>|ifname:PortChannel0002,PortChannel0003,PortChannel0004\n2021-11-30.<IPV6>.380784|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>,<IP>,<IP>|ifname:PortChannel0002,PortChannel0003,PortChannel0004\n2021-11-30.<IPV6>.852071|ROUTE_TABLE:<IP>/25|DEL\n2021-11-30.<IPV6>.872891|ROUTE_TABLE:<IP>/25|DEL\n2021-11-30.<IPV6>.901643|ROUTE_TABLE:<IP>/25|DEL\n2021-11-30.<IPV6>.941370|ROUTE_TABLE:<IP>/25|DEL\n2021-11-30.<IPV6>.723525|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>|ifname:PortChannel0001\n2021-11-30.<IPV6>.997692|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>|ifname:PortChannel0001\n2021-11-30.<IPV6>.004276|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>|ifname:PortChannel0001\n2021-11-30.<IPV6>.455867|ROUTE_TABLE:<IP>/25|SET|nexthop:<IP>|ifname:PortChannel0001\n```\n\n#### Describe the results you expected:\n\nShould not be error.\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\n\nThe flow should be like this.\nDuring the previous test, it announced the routing entries at the beginning and withdrew them after test finished. And then the next test started, the same set of routing entries were announced again.\nSo for each routing entry P, `fpmsyncd` issued the next operations:\n- add route P\n- remove route P\n- add route P\n\n`routeorch` should handle the notifications as below:\n- add route P: call SAI API create_route in bulk mode and then insert P into `m_syncdRoutes` after bulk call returned\n- remove route P: call SAI API remove_route in bulk mode and then remove it from `m_syncdRoutes` after bulk call returned\n- add route P: call SAI API create_route in bulk mode and then insert P into `m_syncdRoutes` after bulk call returned\n\nHowever, since there were a large amount of routing entries being notified, the notifications of P for `remove` and the second `add` were packed and handled in the same bulk call.\n\nThen the flow was:\n- add route P: called SAI API `gRouteBulker.create_entry` in bulk mode and then inserted P into `m_syncdRoutes` after bulk call returned\n- remove route P: called SAI API `gRouteBulker.remove_entry` in bulk mode, the call was pending.\n- add route P: called SAI API `gRouteBulker.set_entry_attribute` since P had not been removed from `m_syncdRoutes`, which is problematic because when this operation would be handled by SAI P had been removed.\n- called bulk.flush and then handled the result:\n\nWhen SAI handled the operations,\n- remove_entry: notified vendor SAI to remove P and removed P from `m_saiObjectCollection` as well.\n- set_entry_attribute: reported error since P had been removed from `m_saiObjectCollection` when `remove_entry` was called for P. Therefore, it notified orchagent to exit.\n\nI think this is a bug in the routeorch for a while but it occurs only in the very rare scenarios.\nIt is observed after PR Azure/sonic-swss#1992 was merged because in that PR there is an optimization that pushes notifications from redis-db table to `m_toSync` as many as possible:\nThe old logic:\n```\n        std::deque<KeyOpFieldsValuesTuple> entries;\n        subTable->pops(entries);\n        return addToSync(entries);\n```\nThe new logic:\n```\n        do\n        {\n            std::deque<KeyOpFieldsValuesTuple> entries;\n            subTable->pops(entries);\n            update_size = addToSync(entries);\n            total_size += update_size;\n        } while (update_size != 0);\n        return total_size;\n```\nSo in the new logic, there is a higher probability for orchagent to merge all notifications together and for `remove` and the second `set` to be bundled in one bulk, and therefore, it is more likely to trigger the bug.\n\nA solution can be:\n- Introduce a flag indicating whether a prefix is `pending removal`.\n- In add route process, if a prefix with the `pending removal` flag is about to be added, don't handle it until the bulk has been flushed.\n\nWAs can be:\n- Revert the optimization\n- Add delay between two tests where orchagent was aborted.\n\n<!--\n     Also attach debug file produced by `sudo generate_dump`\n--\n[<EMAIL>](https://github.com/Azure/sonic-buildimage/files/7643332/sonic-buildimage.kvmtest.t0.log%401.zip)\n>"
+  },
+  "resolution": {
+    "pr_number": 2071,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/2071",
+    "title": "[bulk mode] Fix bulk conflict when in case there are both remove and set operations",
+    "merged_at": "2021-12-14T06:50:15Z",
+    "description": "**What I did**\nCheck if there are items pending removal in bulk before calling bulk set API.\n\nFixes https://github.com/Azure/sonic-buildimage/issues/9434\n\n**Why I did it**\nWhen there are items pending removal in bulk before calling set API, it means the item will be removed before the set and it should do create instead.\n\n**How I verified it**\n\n**Details if related**",
+    "files": [
+      {
+        "path": "orchagent/bulker.h",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/mplsrouteorch.cpp",
+        "additions": 5,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/routeorch.cpp",
+        "additions": 5,
+        "deletions": 1
+      },
+      {
+        "path": "tests/mock_tests/bulker_ut.cpp",
+        "additions": 36,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

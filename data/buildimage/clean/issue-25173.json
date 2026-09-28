@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-25173",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25173,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25173",
+    "title": "Bug:Route Not Installed in FIB After Connected Route Deletion",
+    "created_at": "2026-01-23T04:04:45Z",
+    "closed_at": "2026-04-28T06:01:27Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "routing"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen a route prefix is programmed in the RIB by both a connected route and a static route, the connected route is preferred by the RIB and installed in the FIB. After the connected route is deleted, the RIB correctly selects the static route; however, the static route is not installed in the FIB.\n\n### Steps to Reproduce\n\n-Configure Ethernet264 with IP <IP>/24 (creates connected route for <IP>/24)\nsudo config interface ip add Ethernet264 <IP>/24\n\n-Configure Ethernet268 with IP <IP>/24 (for static route next-hop)\nsudo config interface ip add Ethernet4 <IP>/24\n\n-Bring up both interfaces\nsudo config interface startup Ethernet264\nsudo config interface startup Ethernet268\n\n-Add static route for <IP>/24 via <IP>\nsudo config route add prefix <IP>/24 nexthop <IP>\n\nsudo config interface shutdown Ethernet264\n\nStatic route <IP>/24 via <IP> is not installed in FIB.\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior: Static route <IP>/24 via <IP> is not installed in FIB.\nExpected Behavior:  Static route <IP>/24 via <IP> is expected to be installed in FIB.\n\n### Relevant log output\n\n```shell\nThe prefix affected by the issue is <IP>/24. After triggering an interface shutdown, the connected route is removed and an update for the <IP>/24 prefix is sent. The prefix is subsequently deleted upon the next update from the MRIB.\n\n2026-01-23 <IPV6>.078 [DEBG] zebra: [W3XNK-8CC35] rib_meta_queue_add: (default:254):<IP>/24: queued rn 0x558fb5042060 into sub-queue Connected Routes mq size 8\n2026-01-23 <IPV6>.087 [DEBG] zebra: [PM9ZJ-07RCP] 0:<IP>/24 Dplane route update ctx 0x558fb507a220 op ROUTE_UPDAT\n2026-01-23 <IPV6>.087 [DEBG] zebra: [GW4S4-NE28R] rib_meta_queue_add: (default:254):<IP>/24: rn 0x558fb5042060 is already queued in sub-queue Connected Routes\n2026-01-23 <IPV6>.087 [DEBG] zebra: [W3XNK-8CC35] rib_meta_queue_add: (default:254):<IP>/24 (MRIB): queued rn 0x558fb4bbfea0 into sub-queue Connected Routes mq size 9\n2026-01-23 <IPV6>.087 [DEBG] zebra: [GW4S4-NE28R] rib_meta_queue_add: (default:254):<IP>/24: rn 0x558fb5042060 is already queued in sub-queue Connected Routes\n2026-01-23 <IPV6>.088 [DEBG] zebra: [PM9ZJ-07RCP] 0:<IP>/24 Dplane route update ctx 0x558fb5081b00 op ROUTE_DELET\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC OS Version: 12 (202505)\nFRRouting (version 10.3)\n```\n\n### Attach files (if any)\n\n[RouteUpdateIssue.txt](https://github.com/user-attachments/files/24812731/RouteUpdateIssue.txt)\n\nThis issue is likely introduced by the commit https://github.com/FRRouting/frr/commit/3bff65abc75e952a15b98666e7271189ac28a2bc in FRR.\nPrior to this commit, routes from MRIB were blocked from flowing through the dataplane, which resulted in:\n   Routes never being marked as installed\n   MRIB nexthop tracking (NHT) not functioning for routes learned after the tracking request\n\nThe commit changed behavior by allowing MRIB routes to flow through the dataplane pipeline, but they are not sent to:\n   Linux kernel\n   FPM (Forwarding Plane Manager)\n\nThe commit modified upstream FRR\u2019s dplane_fpm_nl.c to filter routes from MRIB. SONiC uses dplane_fpm_sonic.c, and this filter was not added there.\n\nFix: Skipping routes from MRIB in dplane_fpm_sonic.c resolves the issue.\n\nIs this a known issue OR is there an open PR addressing it?"
+  },
+  "resolution": {
+    "pr_number": 26559,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26559",
+    "title": "[dplane_fpm_sonic]: Skip MRIB routes to prevent FIB route deletion",
+    "merged_at": "2026-04-28T06:01:26Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/25173\n\nFRR commit https://github.com/FRRouting/frr/commit/3bff65abc75e952a15b98666e7271189ac28a2bc changed behavior to allow MRIB routes through the dataplane pipeline, and upstream's `dplane_fpm_nl.c` was updated to filter them (See this [permalink](https://github.com/FRRouting/frr/blob/7d94895937ce058c654ef27ea39dd1bd55d75844/zebra/dplane_fpm_nl.c#L1785-L1806)). SONiC's `dplane_fpm_sonic.c` was not updated with the same filter, so MRIB ROUTE_DELETE events reach fpmsyncd and delete valid unicast routes from APP_DB.\n\n#### How I did it\n\nAdded a `SAFI_MULTICAST` check in `fpm_nl_process()` within `dplane_fpm_sonic.c`, mirroring the upstream FRR fix in `dplane_fpm_nl.c`. Route operations (`ROUTE_DELETE`, `ROUTE_INSTALL`, `ROUTE_UPDATE`) with `SAFI_MULTICAST` are skipped and not enqueued to fpmsyncd.\n\n#### How to verify it\n\nSee https://github.com/sonic-net/sonic-buildimage/issues/25173#issuecomment-4186559462 for issue replication instructions. After the fix, `show ip fib` should not miss `<IP>/24`.\n\n#### Description for the changelog\n\nSkip MRIB routes in dplane_fpm_sonic to prevent FIB route deletion when connected routes are withdrawn.",
+    "files": [
+      {
+        "path": "src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c",
+        "additions": 15,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

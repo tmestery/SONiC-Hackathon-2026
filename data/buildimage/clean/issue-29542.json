@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-29542",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 29542,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/29542",
+    "title": "[rsyslog] Read hostname from CONFIG_DB directly; drop shell-built `-a` JSON in rsyslog-config.sh",
+    "created_at": "2026-09-14T20:24:21Z",
+    "closed_at": "2026-09-24T00:03:45Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "## Background\n\n`files/image_config/rsyslog/rsyslog.conf.j2` renders the device hostname into three `$template SONiC*` directives (lines 60/62/63) using a Jinja variable `{{ hostname }}` that comes from `-a` in `files/image_config/rsyslog/rsyslog-config.sh`:\n\n```bash\nhostname=$(hostname)\n...\nsonic-cfggen -d -t /usr/share/sonic/templates/rsyslog.conf.j2 \\\n    -a \"{\\\"udp_server_ip\\\": \\\"$udp_server_ip\\\", \\\"hostname\\\": \\\"$hostname\\\", \\\"docker0_ip\\\": \\\"$docker0_ip\\\", \\\"forward_with_osversion\\\": \\\"$syslog_with_osversion\\\", \\\"os_version\\\": \\\"$os_version\\\", \\\"syslog_counter\\\": \\\"$syslog_counter\\\"}\" \\\n    > \"$TMPFILE\"\n```\n\nEvery other hostname-consuming template in the tree reads it directly from CONFIG_DB:\n\n- `dockers/docker-fpm-gobgp/zebra.conf.j2:10` \u2014 `hostname {{ DEVICE_METADATA['localhost']['hostname'] }}`\n- `dockers/docker-fpm-frr/frr/common/daemons.common.conf.j2:4` \u2014 same pattern\n- `dockers/docker-lldp/lldpd.conf.j2:29` \u2014 same pattern (with `\\n`/`\\r` scrub added in #29264)\n- `files/build_templates/qos_config.j2:33` \u2014 `{% set hostname = DEVICE_METADATA['localhost']['hostname'] %}`\n\nrsyslog is the only outlier.\n\n## Why change it\n\n1. **Bypasses YANG validation added in #29264.** `$(hostname)` returns the kernel value set by `sethostname(2)`, which accepts any bytes except NUL. Reading `DEVICE_METADATA['localhost']['hostname']` via `sonic-cfggen -d` runs through the same source lldpd uses and benefits from the leaf-level pattern constraint added by #29264.\n\n2. **Removes a fragile hand-quoted JSON blob.** The `-a \"{...}\"` string interpolates six shell variables into JSON with no escaping. Any embedded `\"` or `\\` in any of `hostname`, `udp_server_ip`, `docker0_ip`, `syslog_with_osversion`, `os_version`, `syslog_counter` produces malformed JSON. Today only `hostname` and `os_version` are addressed by #29519's sink-side scrub \u2014 the other four are latent injection surfaces if their upstream sources ever get looser.\n\n3. **Consistency.** Match the pattern the other four templates already use.\n\n## Proposed change\n\n`files/image_config/rsyslog/rsyslog.conf.j2`:\n\n```diff\n-{% set hostname = hostname | replace('\\n', '') | replace('\\r', '') | replace('\"', '') | replace('\\\\', '') | replace('%', '') -%}\n-{% set os_version = os_version | replace('\\n', '') | replace('\\r', '') | replace('\"', '') | replace('\\\\', '') | replace('%', '') -%}\n+{% set hostname = DEVICE_METADATA['localhost']['hostname'] | replace('\\n', '') | replace('\\r', '') | replace('\"', '') | replace('\\\\', '') | replace('%', '') -%}\n+{% set os_version = os_version | replace('\\n', '') | replace('\\r', '') | replace('\"', '') | replace('\\\\', '') | replace('%', '') -%}\n```\n\n`files/image_config/rsyslog/rsyslog-config.sh`:\n\n- Drop `hostname` from the `-a` JSON.\n- Keep `os_version` for now (comes from `sonic_version.yml`, not CONFIG_DB \u2014 separate follow-up to expose it via `-y` or a metadata table).\n- Longer-term: switch the whole `-a` blob to `jq -n --arg ... '{...}'` to remove the quoting hazard for the remaining fields.\n\nKeep the Jinja scrub. Direct `redis-cli hset` writes bypass YANG, so sink-side defense in depth still matters.\n\nGuard against missing `DEVICE_METADATA.hostname` with a Jinja `| default(...)`. Either fall back to `'sonic'` (matches SONiC bootstrap default) or keep `$(hostname)` in `-a` as the fallback and let the template prefer CONFIG_DB when present. Both preserve current behavior in the DEVICE_METADATA-missing edge case; the second option adds no new failure mode vs. today.\n\n## DB availability\n\n`rsyslog-config.service` already has `Requires=config-setup.service` / `After=config-setup.service`, and `rsyslog-config.sh:3` already calls `sonic-db-cli CONFIG_DB HGET 'DEVICE_METADATA|localhost' platform`. If Redis is down, the script already fails today. Switching the hostname source to CONFIG_DB adds no new failure mode.\n\n## Non-goals\n\n- Not a fix for any exploitable vuln \u2014 #29519 already closes the rsyslog hostname sink at the Jinja layer.\n- Not touching the shared `stypes:hostname` typedef. #29264 chose the leaf-scoped pattern deliberately.\n\n## Verification\n\n- `pytest src/sonic-config-engine/tests/test_j2files.py -k rsyslog` \u2014 existing hostname-injection tests should still pass with `additional_data` replaced by a `config_db.json` fragment containing `DEVICE_METADATA.localhost.hostname`.\n- Manual: set `DEVICE_METADATA|localhost hostname` to a clean value, run `rsyslog-config.sh`, diff `/etc/rsyslog.conf` \u2014 no functional change.\n\n## Related\n\n- #29519 \u2014 sink-side scrub for hostname/os_version (this issue is the follow-up cleanup)\n- #29264 \u2014 YANG leaf pattern on `DEVICE_METADATA.localhost.hostname` + lldpd sink scrub\n- Commit 8979ec0f9 \u2014 SYSLOG_SERVER field sanitization"
+  },
+  "resolution": {
+    "pr_number": 29543,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/29543",
+    "title": "[rsyslog]: Read hostname from CONFIG_DB",
+    "merged_at": "2026-09-24T00:03:44Z",
+    "description": "#### Why I did it\n\nrsyslog was the only hostname-consuming template sourcing the kernel hostname through hand-built `-a` JSON. Align it with CONFIG_DB-backed templates while retaining sink-side sanitization.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n- **Hostname source**\n  - Read `DEVICE_METADATA.localhost.hostname` in `rsyslog.conf.j2`.\n  - Fall back to `sonic` when metadata is absent.\n  - Retain newline, quote, backslash, and percent-character scrubbing.\n\n```jinja2\n{% set hostname = ((DEVICE_METADATA | default({})).get('localhost', {})).get('hostname') | default('sonic', true) | replace('\\n', '') | replace('\\r', '') | replace('\"', '') | replace('\\\\', '') | replace('%', '') -%}\n```\n\n- **cfggen input**\n  - Remove `$(hostname)` and the `hostname` field from `rsyslog-config.sh`\u2019s `-a` JSON.\n  - Preserve `os_version` and existing runtime inputs.\n\n- **Coverage**\n  - Update rsyslog template tests to obtain hostname exclusively from the CONFIG_DB fixture.\n\n#### How to verify it\n\n- Render `rsyslog.conf.j2` with `DEVICE_METADATA.localhost.hostname` set and confirm all SONiC templates use that value.\n- Render without hostname metadata and confirm the `sonic` fallback.\n- Confirm sanitized hostname values cannot alter rsyslog directives.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type:\n\n#### Tested branch\n\n- [ ] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n- [x] N/A\n\n#### Test result\n\nN/A\n\n#### Description for the changelog\n\nSource rsyslog hostname from CONFIG_DB instead of kernel-hostname cfggen input.\n\n#### Link to config_db schema for YANG module changes\n\nN/A\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n- Fixes #29542",
+    "files": [
+      {
+        "path": "files/image_config/rsyslog/rsyslog-config.sh",
+        "additions": 5,
+        "deletions": 9
+      },
+      {
+        "path": "files/image_config/rsyslog/rsyslog.conf.j2",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_j2files.py",
+        "additions": 45,
+        "deletions": 42
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

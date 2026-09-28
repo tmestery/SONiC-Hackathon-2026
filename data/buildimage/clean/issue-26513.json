@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-26513",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26513,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26513",
+    "title": "Bug:  docker-restapi-watchdog build fails due to MSRV bump, blocking CI",
+    "created_at": "2026-04-01T19:05:07Z",
+    "closed_at": "2026-04-02T05:12:55Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n`docker-restapi-watchdog` build fails on current master, blocking the CI/CD pipeline.\n\nThe Rust project at `dockers/docker-restapi-watchdog/watchdog/` does not have a `Cargo.lock` file committed. Without a lockfile, `cargo build` resolves transitive dependencies to their latest semver-compatible versions.\n\nThe dependency chain is: `redis 0.23.3` \u2192 `url` \u2192 `idna` \u2192 `icu_*`. The `icu_*` crates recently released v2.2.0 which bumped their minimum supported Rust version (MSRV) to 1.86. The Dockerfile pins rustc to 1.83.0, so the build fails.\n\n`docker-gnmi-watchdog` has the same missing `Cargo.lock` problem and is vulnerable to the same class of breakage, though it is not currently broken because its sole dependency (`chrono`) does not pull in `icu_*`.\n\nFor comparison, `docker-bmp-watchdog` and `docker-telemetry-watchdog` already have `Cargo.lock` files committed and are not affected.\n\n### Steps to Reproduce\n\nSee recent CI/CD builds.\n\nSample PR blocked: https://github.com/sonic-net/sonic-buildimage/pull/26498\nBuild Logs:\n- Broadcom: https://github.com/sonic-net/sonic-buildimage/pull/26498/checks?check_run_id=69573581963\n- marvell_prestera_armhf: https://github.com/sonic-net/sonic-buildimage/pull/26498/checks?check_run_id=69571778603\n\n### Actual Behavior and Expected Behavior\n\nActual: Broadcom / marvell_prestera_armhf builds fail. This also blocks CI/CD Pipeline\nExpected: Build goes through successfully\n\n### Relevant log output\n\n```shell\nActual behavior: `cargo build --release` fails inside the docker-restapi-watchdog Dockerfile with:\n\nerror: rustc 1.83.0 is not supported by the following packages:\n  icu_collections@2.2.0 requires rustc 1.86\n  icu_locale_core@2.2.0 requires rustc 1.86\n  icu_normalizer@2.2.0 requires rustc 1.86\n  icu_normalizer_data@2.2.0 requires rustc 1.86\n  icu_properties@2.2.0 requires rustc 1.86\n  icu_properties_data@2.2.0 requires rustc 1.86\n  icu_provider@2.2.0 requires rustc 1.86\n\nExpected behavior: build completes successfully.\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26514,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26514",
+    "title": "[watchdog]: Add Cargo.lock files for restapi and gnmi watchdogs",
+    "merged_at": "2026-04-02T05:12:54Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/26513\n\n`docker-restapi-watchdog` build fails on current master because the `icu_*` crates released v2.2.0 with MSRV 1.86, while the Dockerfile pins `rustc` to 1.83.0. We need a `Cargo.lock` to pin the `icu_*` version as well.\n\n`docker-gnmi-watchdog` has the same missing lockfile and is vulnerable to identical breakage from any future MSRV bump in its dependency tree.\n\nNote `docker-bmp-watchdog` and `docker-telemetry-watchdog` already commit `Cargo.lock` files and are unaffected \u2014 this PR brings the remaining two watchdogs in line with that convention.\n\n#### How I did it\n* Generated `Cargo.lock` for `dockers/docker-restapi-watchdog/watchdog/` and downgraded `icu_*` crates from v2.2.0 to v2.1.x (MSRV 1.83) to match the Dockerfile-pinned `rustc` version.\n* Generated `Cargo.lock` for `dockers/docker-gnmi-watchdog/watchdog/`.\n\n#### How to verify it\nCI/CD builds for Broadcom and marvell_prestera_armhf targets should pass.\n\n#### Description for the changelog\nAdd Cargo.lock files for docker-restapi-watchdog and docker-gnmi-watchdog to prevent build failures from transitive MSRV bumps.",
+    "files": [
+      {
+        "path": "dockers/docker-gnmi-watchdog/watchdog/Cargo.lock",
+        "additions": 284,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-restapi-watchdog/watchdog/Cargo.lock",
+        "additions": 466,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-14447",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 14447,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/14447",
+    "title": "[dhcp6_relay] [counters] dhcpv6 counters are not cleared on clear command",
+    "created_at": "2023-03-28T19:21:48Z",
+    "closed_at": "2023-06-05T15:57:26Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nHappening because the sonic-clear only clears data from STATE_DB. It doesn't clear from the internal cache of dhcp6relay\n\n#### Steps to reproduce the issue:\n0. Setup and send dhcpv6 client requests\n1. show dhcp6relay_counters counts\n2. clear dhcp6relay_counters -- see all zeros\n3. Initiate a dhcpv6 request\n4. show dhcp6relay_counters counts\n\n#### Describe the results you received:\n\n1. some counters continue counting from values before clear\n\n```\nroot@qa-eth-vt03-3-4600ca1:/home/admin# show dhcp6relay_counters counts\n       Message Type    Vlan10\n-------------------  --------\n            Unknown         0\n            Solicit        16\n          Advertise        13\n            Request        10\n            Confirm         0\n              Renew       733\n             Rebind         1\n              Reply       748\n            Release         4\n            Decline         0\n        Reconfigure         4\nInformation-Request         0\n      Relay-Forward       764\n        Relay-Reply       765\n          Malformed         0\n\nroot@qa-eth-vt03-3-4600ca1:/home/admin# clear dhcp6relay_counters\nroot@qa-eth-vt03-3-4600ca1:/home/admin# show dhcp6relay_counters counts\n       Message Type    Vlan10\n-------------------  --------\n            Unknown         0\n            Solicit         0\n          Advertise         0\n            Request         0\n            Confirm         0\n              Renew         0\n             Rebind         0\n              Reply         0\n            Release         0\n            Decline         0\n        Reconfigure         0\nInformation-Request         0\n      Relay-Forward         0\n        Relay-Reply         0\n          Malformed         0\n\nroot@qa-eth-vt03-3-4600ca1:/home/admin# show dhcp6relay_counters counts\n       Message Type    Vlan10\n-------------------  --------\n            Unknown         0\n            Solicit        20\n          Advertise        16\n            Request         0\n            Confirm         0\n              Renew         0\n             Rebind         0\n              Reply         0\n            Release         0\n            Decline         0\n        Reconfigure         0\nInformation-Request         0\n      Relay-Forward       776\n        Relay-Reply       769\n          Malformed         0\n```\n\n#### Describe the results you expected:\n\n2. real reset to zero and counting starting from zero\n\n#### Solution:\n\nA potential and easy fix would be to read and increment the value from state_db table instead of maintaining the internal cache. This would add an extra hget call per increase_counter method."
+  },
+  "resolution": {
+    "pr_number": 38,
+    "repository": "sonic-net/sonic-dhcp-relay",
+    "url": "https://github.com/sonic-net/sonic-dhcp-relay/pull/38",
+    "title": "fix dhcpv6 counters are not cleared on clear command",
+    "merged_at": "2023-06-05T15:57:24Z",
+    "description": "### Description of PR\nFix dhcpv6 counters are not cleared after \"clear dhcp6relay_counters\", or \"sonic-db-cli STATE_DB hmset \"DHCPv6_COUNTER_TABLE|Vlan1000\" {} 0\n\nSummary:\nFix https://github.com/sonic-net/sonic-buildimage/issues/14447\ndhcpv6 relay counter cached in original relay code, so even we clear counter in STATE_DB, next time when packets come from downlink or uplink ports, counter will be flushed with relay cached data + 1, so the counter flushed back to original data + 1.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n- [x] 202012\n- [x] 202205\nNeed in 202205 and 202012, need manually double commit because of code conflict.\n\n### Approach\n#### What is the motivation for this PR?\nFix clear counter issue\n\n#### How did you do it?\nRemove cache in dhcp_relay code, instead we will read count from STATE_DB then refresh.\n\n#### How did you verify/test it?\ntest_dhcpv6_relay.py::test_dhcpv6_relay_counter multiple times and with clear counter.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?",
+    "files": [
+      {
+        "path": ".github/workflows/codeql-analysis.yml",
+        "additions": 8,
+        "deletions": 1
+      },
+      {
+        "path": "src/relay.cpp",
+        "additions": 54,
+        "deletions": 69
+      },
+      {
+        "path": "src/relay.h",
+        "additions": 7,
+        "deletions": 7
+      },
+      {
+        "path": "test/mock_relay.cpp",
+        "additions": 10,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

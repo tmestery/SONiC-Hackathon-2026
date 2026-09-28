@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-24523",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24523,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24523",
+    "title": "Bug: [Trixie] systemd-networkd.socket starts on non-smartswitch platforms",
+    "created_at": "2025-11-14T00:31:52Z",
+    "closed_at": "2026-02-04T21:15:21Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "Trixie"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nsystemd-networkd.socket isn't expected to start on non-smartswitch npu/dpu platforms. However we see it tries to start and we see following errors in syslog.\n\n```\nERR systemd[1]: Failed to listen on systemd-networkd.socket - Network Service Netlink Socket.\nWARNING systemd[1]: systemd-networkd.socket: Failed with result 'service-start-limit-hit'.\n```\n\n### Steps to Reproduce\n\nInstall Debian 13 based sonic image on non-smartswitch platform\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior\nsystemd-networkd.socket tries to start on non-smartswitch platforms\n\n### Expected Behavior\nWe shouldn't see any errors and ideally we shouldn't start systemd-networkd.socket on non-smartswitch platforms.\n\n### Relevant log output\n\n```shell\nroot@sonic:/home/admin# systemctl status systemd-networkd.socket\n\u00d7 systemd-networkd.socket - Network Service Netlink Socket\n     Loaded: loaded (/usr/lib/systemd/system/systemd-networkd.socket; disabled; preset: enabled)\n     Active: failed (Result: service-start-limit-hit) since Thu 2025-11-13 <IPV6> UTC; 38s ago\n   Duration: 1min 8.775s\n Invocation: 0fb94c68161a4024837ff54c92e7eb71\n   Triggers: \u25cf systemd-networkd.service\n       Docs: man:systemd-networkd.service(8)\n             man:rtnetlink(7)\n     Listen: route 1361 (Netlink)\n\nroot@sonic:/home/admin# systemctl list-dependencies --reverse systemd-networkd.socket\nsystemd-networkd.socket\n\u25cb \u2514\u2500systemd-networkd.service\n```\n\nsystemd-networkd.service doesn't start as expected on non-smartswitch platforms because of ExecCondition option. However we don't such such option for the socket\n\n```\nroot@sonic:/home/admin# systemctl status systemd-networkd\n\u25cb systemd-networkd.service - Network Configuration\n     Loaded: loaded (/usr/lib/systemd/system/systemd-networkd.service; disabled; preset: enabled)\n    Drop-In: /usr/lib/systemd/system/systemd-networkd.service.d\n             \u2514\u2500override.conf\n     Active: inactive (dead) (Result: exec-condition) since Thu 2025-11-13 <IPV6> UTC; 1min 30s ago\n Invocation: 207328a3ce1d4861a43b389d393f6d37\nTriggeredBy: \u00d7 systemd-networkd.socket\n       Docs: man:systemd-networkd.service(8)\n             man:org.freedesktop.network1(5)\n    Process: 25127 ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh (code=exited, status=1/FAILURE)\n   FD Store: 0 (limit: 512)\n```"
+  },
+  "resolution": {
+    "pr_number": 25223,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25223",
+    "title": "[systemd]: Mask systemd-networkd on non-smart-switch platforms",
+    "merged_at": "2026-02-04T21:15:18Z",
+    "description": "#### Why I did it\n\nFix #25091\nFix #24523\n\nAfter a successful SONiC warm-reboot, the serial console prints repeated `[DEPEND] Dependency failed for systemd-networkd-persistent-storage.service` and similar messages on non-smart-switch platforms. This is a cosmetic issue that does not affect functionality but is jarring for anyone monitoring startup output.\n\nThe root cause is that `systemd-networkd.service` uses an `ExecCondition` to skip execution on non-smart-switch platforms. However, its dependent services (`systemd-networkd-persistent-storage.service`, `systemd-networkd-wait-online.service`) still attempt to start and fail with dependency errors.\n\n#### How I did it\n\n* Added `mask_networkd_for_non_smart_switch()` function to systemd-sonic-generator that creates a symlink to `/dev/null` for `systemd-networkd.service` when not on smart-switch platforms (DPU/NPU)\n* The masking occurs at early boot during generator execution, before systemd loads unit files\n* Masking systemd-networkd directly causes all dependent services to be automatically skipped by systemd's dependency resolution\n* Added `validate_masked_services()` test to verify correct masking behavior across all platform configurations\n\n#### How to verify it\n\n1. Build a SONiC image with this change\n2. Boot on a non-smart-switch platform (no DPU/DPUS in platform.json)\n3. Perform a warm-reboot: `warm-reboot`\n4. Monitor serial console output\n5. Verify no \"Dependency failed for systemd-networkd-persistent-storage.service\" or similar messages appear\n\n#### Description for the changelog\n\nMask systemd-networkd.service on non-smart-switch platforms to prevent dependency failure",
+    "files": [
+      {
+        "path": "src/systemd-sonic-generator/ssg-test.cc",
+        "additions": 21,
+        "deletions": 0
+      },
+      {
+        "path": "src/systemd-sonic-generator/systemd-sonic-generator.cpp",
+        "additions": 25,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-21816",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21816,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21816",
+    "title": "[Multi-asic] On LC init one ASIC ends up in `TSA` while the other ends up in `TSB`",
+    "created_at": "2025-02-20T22:50:48Z",
+    "closed_at": "2025-02-25T17:42:50Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "There is a race condition introduced by https://github.com/sonic-net/sonic-buildimage/pull/21587 where each swss instance is going to restart the `startup_tsa_tsb.service` when they come up.\nThis results in the `startup_tsa_tsb.service` stopping 2 times and starting 3 times.\n\nE.G.\n```\n2025 Feb 20 <IPV6>.844540 cmp227-4 NOTICE kernel: [    0.000000] Linux version 6.1.0-22-2-amd64\n```\n1. Started by Systemd\n```\n2025 Feb 20 <IPV6>.626593 cmp227-4 INFO systemd[1]: Started startup_tsa_tsb.service - STARTUP TSA-TSB SERVICE.\n2025 Feb 20 <IPV6>.631791 cmp227-4 INFO startup_tsa_tsb: asic0 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : false\n2025 Feb 20 <IPV6>.290011 cmp227-4 INFO startup_tsa_tsb: asic1 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : false\n2025 Feb 20 <IPV6>.290118 cmp227-4 INFO startup_tsa_tsb: Configuring TSA\n```\n2. Restarted by swss0 (stopped and started)\n```\n2025 Feb 20 <IPV6>.929423 cmp227-4 INFO swss.sh[3355]: swss0: starting TSA-TSB service\n2025 Feb 20 <IPV6>.939779 cmp227-4 INFO systemd[1]: Stopping startup_tsa_tsb.service - STARTUP TSA-TSB SERVICE...\n2025 Feb 20 <IPV6>.070178 cmp227-4 INFO startup_tsa_tsb: Resetting environment variable\n2025 Feb 20 <IPV6>.094711 cmp227-4 INFO systemd[1]: startup_tsa_tsb.service: Deactivated successfully.\n2025 Feb 20 <IPV6>.094981 cmp227-4 INFO systemd[1]: Stopped startup_tsa_tsb.service - STARTUP TSA-TSB SERVICE.\n2025 Feb 20 <IPV6>.375061 cmp227-4 INFO systemd[1]: Started startup_tsa_tsb.service - STARTUP TSA-TSB SERVICE.\n2025 Feb 20 <IPV6>.215203 cmp227-4 INFO startup_tsa_tsb: asic0 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : false\n2025 Feb 20 <IPV6>.788054 cmp227-4 INFO startup_tsa_tsb: asic1 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : false\n2025 Feb 20 <IPV6>.788102 cmp227-4 INFO startup_tsa_tsb: Configuring TSA\n2025 Feb 20 <IPV6>.479678 cmp227-4 INFO TSA: System Mode: Normal -> Maintenance\n```\n3. Restarted by swss1 (stopped and started)\n```\n2025 Feb 20 <IPV6>.888987 cmp227-4 INFO swss.sh[4588]: swss1: starting TSA-TSB service\n2025 Feb 20 <IPV6>.926216 cmp227-4 INFO systemd[1]: Stopping startup_tsa_tsb.service - STARTUP TSA-TSB SERVICE...\n2025 Feb 20 <IPV6>.087019 cmp227-4 INFO startup_tsa_tsb: Resetting environment variable\n2025 Feb 20 <IPV6>.124181 cmp227-4 INFO systemd[1]: startup_tsa_tsb.service: Deactivated successfully.\n2025 Feb 20 <IPV6>.124519 cmp227-4 INFO systemd[1]: Stopped startup_tsa_tsb.service - STARTUP TSA-TSB SERVICE.\n2025 Feb 20 <IPV6>.162638 cmp227-4 INFO systemd[1]: Started startup_tsa_tsb.service - STARTUP TSA-TSB SERVICE.\n2025 Feb 20 <IPV6>.030231 cmp227-4 INFO startup_tsa_tsb: asic0 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : true\n2025 Feb 20 <IPV6>.726294 cmp227-4 INFO startup_tsa_tsb: asic1 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : false\n2025 Feb 20 <IPV6>.736585 cmp227-4 INFO startup_tsa_tsb: Either TSA is already configured or switch sub_role is not Frontend - not configuring TSA\n```\n\nThe problem with this stopping and starting is we could kill the process at any point and could cause the state between asic instances to be out of sync.\n\nSee the last restart logs:\n```\n2025 Feb 20 <IPV6>.030231 cmp227-4 INFO startup_tsa_tsb: asic0 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : true\n2025 Feb 20 <IPV6>.726294 cmp227-4 INFO startup_tsa_tsb: asic1 - CONFIG_DB.BGP_DEVICE_GLOBAL.STATE.tsa_enabled : false\n```\n\n`tsa_enabled` is `True` for `asic0` but `False for `asic1`.\n\nThis is because `TSA` iterates over the asics one at a time and writes `tsa_enabled=true`, so if `swss1` kills this service when it's written to `asic0` but not `asic1` we end up in this state.\n\nThe bigger issue here is that `tsa_enabled=true` is set on either asic's config_db but the following entry doesn't exist in `STATE_DB`:\n`'sonic-db-cli', 'STATE_DB', 'HSET', 'ALL_SERVICE_STATUS|tsa_tsb_service', 'running', 'OK'`\n\nThis is because this write occurs after the `TSA` is complete:\n```\n69     if tsa_ena == True:\n70         logger.log_info(\"Configuring TSA\")\n71         subprocess.check_output(['TSA']).strip()\n72         logger.log_info(\"Setting TSA-TSB service field in STATE_DB\")\n73         subprocess.check_output([\n74             'sonic-db-cli', 'STATE_DB', 'HSET', 'ALL_SERVICE_STATUS|tsa_tsb_service', 'running', 'OK'\n75         ]).strip()\n```\nAnd note we don't see `Setting TSA-TSB service field in STATE_DB` in any of the logs above.\n\nWithout the `ALL_SERVICE_STATUS|tsa_tsb_service` we won't return True in `config_tsa`:\n```\n77         #check if tsa_tsb service is already running, restart the timer\n78         try:\n79             startup_tsa_tsb_service_status = subprocess.check_output([\n80                 'sonic-db-cli', 'STATE_DB', 'HGET', 'ALL_SERVICE_STATUS|tsa_tsb_service', 'running'\n81             ]).strip().decode('utf-8')  # Convert bytes to string\n82         except subprocess.CalledProcessError:\n83             startup_tsa_tsb_service_status = None  # Default if the field is missing\n84\n85         if startup_tsa_tsb_service_status == 'OK':\n86             logger.log_info(\"TSA-TSB service is already running, just restart the timer\")\n87             return True\n88         else:\n89             if num_asics > 1:\n90                 logger.log_info(\"Either TSA is already configured or switch sub_role is not Frontend - not configuring TSA\")\n91             else:\n92                 logger.log_info(\"Either TSA is already configured - not configuring TSA\")\n```\n\nWhich is why we see the log on line 90 instead.\n\nWith `config_tsa` returning `False` we won't start the timer and therefor won't take asic0 out of TSA\n```\n130 def start_tsa_tsb(timer):\n131     #Configure TSA if it was not configured already in CONFIG_DB\n132     tsa_enabled = config_tsa()\n133     if tsa_enabled == True:\n134         #Start the timer to configure TSB\n135         start_tsb_timer(timer)\n136     return\n```\n\n```\nroot@cmp227-4# TSC\nBGP0 : System Mode: Maintenance\nBGP1 : System Mode: Normal\nThe rates are calculated within 5 seconds period\n```"
+  },
+  "resolution": {
+    "pr_number": 21830,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/21830",
+    "title": "Fix TSA-TSB race condition on multi-asic platforms",
+    "merged_at": "2025-02-25T17:42:49Z",
+    "description": "#### Why I did it\nFixes https://github.com/sonic-net/sonic-buildimage/issues/21816\n\n##### Work item tracking\n- Microsoft ADO **31499777**:\n\n#### How I did it\nSetting the STATE_DB ALL_SERVICE_STATUS|tsa_tsb_service flag first as part of startup_tsa_tsb service, followed by configuring TSA.\nAnd as part of the case, when tsa_ena is False (genuine or due to race condition), we explictly call TSA again to ensure all asics go to TSA state.\n#### How to verify it\nReboot the multi-asic linecard, and validate that all asics are in TSA state and TSA-TSB timer is running\nconfig_reload\n\nTested following scenarios:\n1. reboot multi-asic linecard\n2. config reload\n3. execute TSA while the service is running\n4. TSA, config save and then config_reload\n5. execute TSB while the service is running\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n\n#### Tested branch (Please provide the tested image version)\n20240532.08\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/scripts/startup_tsa_tsb.py",
+        "additions": 4,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

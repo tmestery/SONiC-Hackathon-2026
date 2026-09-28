@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-6943",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 6943,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/6943",
+    "title": "frr-mgmt-framework syntax for PREFIX_SET is impossible to use in a route-map",
+    "created_at": "2021-03-02T22:57:03Z",
+    "closed_at": "2021-08-13T06:34:27Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nThe templates that write FRR configuration for route-maps and prefix-lists assume opposite and incompatible things about the `mode` field of each `PREFIX_SET`.\n\n`bgpd.conf.db.pref_list.j2` requires uppercase (eg., `IPv4`) to match: https://github.com/Azure/sonic-buildimage/blob/a171e6c5e4e51a360a70190903e09decb44ec7e3/src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.pref_list.j2#L5\n`bgpd.conf.db.route_map.j2` requires lowercase (eg., `ipv4`) to match: https://github.com/Azure/sonic-buildimage/blob/a171e6c5e4e51a360a70190903e09decb44ec7e3/src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.route_map.j2#L28\n\nThis makes it impossible to define a prefix-list and use it in a route-map.\n\nThe latest documentation in https://github.com/Azure/SONiC/pull/544 (not sure why this isn't merged) is also wrong. The document says that the database keys are `IP_PREFIX_SET` and `IP_PREFIX`, but the templates actually match `PREFIX_SET` and `PREFIX`.\n\n#### Steps to reproduce the issue:\nSnippet of `/etc/sonic/config_db.json` necessary to reproduce:\n```json\n{\n    \"DEVICE_METADATA\": {\n        \"localhost\": {\n            \"frr_mgmt_framework_config\": \"true\"\n        }\n    },\n    \"ROUTE_MAP\": {\n        \"LOOPBACK|10\": {\n            \"route_operation\": \"permit\",\n            \"match_prefix_set\": \"slash32\",\n            \"set_origin\": \"igp\"\n        }\n    },\n    \"PREFIX_SET\": {\n            \"slash32\": {\n                    \"mode\": \"ipv4\"\n            }\n    },\n    \"PREFIX\": {\n            \"slash32|<IP>/0|32..32\": {\n                    \"action\": \"permit\"\n            }\n    }\n}\n```\n\n#### Describe the results you received:\n\nThe snippet above produces the FRR configuration\n```\nroute-map LOOPBACK permit 10\n match ip address prefix-list slash32\n set origin igp\n!\nroute-map LOOPBACK deny 10000\n```\nwith no prefix-list defined. Changing the `mode` to `IPV4` instead results in\n```\nip prefix-list slash32 seq 5 permit <IP>/0 ge 32 le 32\n!\nroute-map LOOPBACK permit 10\n set origin igp\n!\nroute-map LOOPBACK deny 10000\n```\nwith no match conditions at all.\n\n#### Describe the results you expected:\n\nOther parts of the template are case-insensitive, so I'd expect either upper- or lower- case modes to result in\n```\nip prefix-list slash32 seq 5 permit <IP>/0 ge 32 le 32\n!\nroute-map LOOPBACK permit 10\n match ip address prefix-list slash32\n set origin igp\n!\nroute-map LOOPBACK deny 10000\n```\n\n#### Output of `show version`:\n\nBuilt from master a few days ago: c6178259fcafc1ab5cdf3cd77c9ebd3ea594065a. Confirmed that the bug still exists on master now.\n\n```\nSONiC Software Version: SONiC.master.0-dirty-20210225.203231\nDistribution: Debian 10.8\nKernel: 4.19.0-12-2-amd64\nBuild commit: c6178259\nBuild date: Thu Feb 25 <IPV6> UTC 2021\nBuilt by: admin@sonic-builder\n\nPlatform: x86_64-<irrelevant>\nHwSKU: <irrelevant>\nASIC: broadcom\nASIC Count: 1\nSerial Number: <irrelevant>\nUptime: <IPV6> up 23:58,  1 user,  load average: 1.48, 1.22, 1.07\n\nDocker images:\nREPOSITORY                    TAG                              IMAGE ID            SIZE\ndocker-syncd-brcm             latest                           1d03dbb9a55c        680MB\ndocker-syncd-brcm             master.0-dirty-20210225.203231   1d03dbb9a55c        680MB\ndocker-snmp                   latest                           508289a491d3        438MB\ndocker-snmp                   master.0-dirty-20210225.203231   508289a491d3        438MB\ndocker-teamd                  latest                           dd92523b5fcb        408MB\ndocker-teamd                  master.0-dirty-20210225.203231   dd92523b5fcb        408MB\ndocker-nat                    latest                           74f76f1f04b7        411MB\ndocker-nat                    master.0-dirty-20210225.203231   74f76f1f04b7        411MB\ndocker-router-advertiser      latest                           eebab6662190        398MB\ndocker-router-advertiser      master.0-dirty-20210225.203231   eebab6662190        398MB\ndocker-platform-monitor       latest                           66c7a5e1c931        605MB\ndocker-platform-monitor       master.0-dirty-20210225.203231   66c7a5e1c931        605MB\ndocker-macsec                 latest                           0f67d436bbfb        411MB\ndocker-macsec                 master.0-dirty-20210225.203231   0f67d436bbfb        411MB\ndocker-lldp                   latest                           c1b744a26c8c        438MB\ndocker-lldp                   master.0-dirty-20210225.203231   c1b744a26c8c        438MB\ndocker-database               latest                           5bccc7b5c3b9        397MB\ndocker-database               master.0-dirty-20210225.203231   5bccc7b5c3b9        397MB\ndocker-orchagent              latest                           704bb0e1843e        427MB\ndocker-orchagent              master.0-dirty-20210225.203231   704bb0e1843e        427MB\ndocker-dhcp-relay             latest                           7033e89cb01f        404MB\ndocker-dhcp-relay             master.0-dirty-20210225.203231   7033e89cb01f        404MB\ndocker-sonic-telemetry        latest                           04f550b9a1f1        487MB\ndocker-sonic-telemetry        master.0-dirty-20210225.203231   04f550b9a1f1        487MB\ndocker-sonic-mgmt-framework   latest                           66a24bffabf4        616MB\ndocker-sonic-mgmt-framework   master.0-dirty-20210225.203231   66a24bffabf4        616MB\ndocker-fpm-frr                latest                           d71c5fa70100        426MB\ndocker-fpm-frr                master.0-dirty-20210225.203231   d71c5fa70100        426MB\ndocker-sflow                  latest                           359186926960        409MB\ndocker-sflow                  master.0-dirty-20210225.203231   359186926960        409MB\n```"
+  },
+  "resolution": {
+    "pr_number": 8454,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/8454",
+    "title": "Fix constant casing for prefix-list mode",
+    "merged_at": "2021-08-13T06:34:27Z",
+    "description": "This change makes the template match PREFIX_SET and the documentation.\n\nFix #6943.\n\nSigned-off-by: Christian Svensson <<EMAIL>>\n\n#### Why I did it\n\nSee #6943.\n\n#### How I did it\n\nI updated the cases in the template as suggested in https://github.com/Azure/sonic-buildimage/issues/6943#issuecomment-789884878.\n\n#### How to verify it\n\nApply the patch and follow the repro in #6943.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [x] 202012\n- [x] 202106\n\nWhy: This is a breaking issue for a quite critical feature in BGP outside datacenter use.\n\n#### Description for the changelog\n\nfrr: Fix mode case for prefix lists.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n![image](https://user-images.githubusercontent.com/149442/129271409-b9dc6344-96d0-4134-bfc3-224c4ef7969b.png)",
+    "files": [
+      {
+        "path": "src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.route_map.j2",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

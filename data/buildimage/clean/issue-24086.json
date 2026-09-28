@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-24086",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24086,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24086",
+    "title": "Bug: [SmartSwitch] IP will not be assigned on midplane after DPU Image Upgrade from 202505 -> 202506+",
+    "created_at": "2025-09-24T00:47:47Z",
+    "closed_at": "2025-10-03T21:44:57Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nDHCP Server on NPU is not assigning Ip to DPU after upgrade from 202505 -> 202506+\n\n### Steps to Reproduce\n\n1) Install Image on NPU, setup smartswitch config and start dhcp_server\n2) Install 202505 on DPU / or power on DPU which has 202505 by default\n3) NPU assigns IP to DPU\n4) Install 202506 image.\n5) Check if IP is not assigned and is accessible from NPU\n\n### Actual Behavior and Expected Behavior\n\nIP will not be assigned to DPU. IP will be assigned after 3600 sec (This is lease expiration time) from the time of Step #3.  This is often too late and service will be started with incorrent database config and can lead to crash in DPU\n\n### Triage\nHappening because of this change where the Client-ID in the DHCP request is different between 202505/202506\n\nChange was made here: https://github.com/sonic-net/sonic-buildimage/pull/23805\n\nAnd the dhcp_server thinks the request is coming from a new device and it doesn't allocate the IP until the original lease expires\n\nWhere the ClientIdentifier was explicitly set to mac\n[midplane-network-dpu.network](https://github.com/sonic-net/sonic-buildimage/pull/23805/files#diff-687aa19d3525dfd9c111c920761f1967dbbdf9971463491ac40c4b2dd78ee26f)\n```\n[DHCPv4]\nClientIdentifier=mac\n```\n\n### Potential WA\nOne of these can be run after step#4, to WA this problem\n1) Reboot NPU after installing DPU\n2) Restart DHCP server service on NPU\n\n### Relevant log output\n\n```shell\n>>> 202505\n\n<IPV6>.937472 bridge-midplane B   IP (tos 0xc0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 315)\n    <IP>.bootpc > <IP>.bootps: BOOTP/DHCP, Request from <IPV6> (oui Unknown), length 287, xid 0x12701781, secs 64, Flags [none]\n      Client-Ethernet-Address <IPV6> (oui Unknown)\n        DHCP-Message (53), length 1: Discover\n        Client-ID (61), length 19: hardware-type 255, <IPV6>:<IPV6>:2a:71\n        Hostname (12), length 5: \"sonic\"\n\n>>> 202506\n\n        Client-ID (61), length 19: hardware-type 255, <IPV6>\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24141,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/24141",
+    "title": "[DPU] Perform explicit DHCP request to work around Client ID mismatch",
+    "merged_at": "2025-10-03T21:44:56Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/24086\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n#### How to verify it\n\n1. Install image and setup smartswitch config NPU\n2. Boot 202505 image on DPU (Client ID  = DUID)\n\n```\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 <IPV6>], cid=[<IPV6>:<IPV6>:<IPV6>], tid=0xb1d8e420: lease <IP> has been allocated for 3600 seconds\n```\n\n3. Install 202506 image on DPU (Client ID = MAC)\n4. Perform remote reboot on DPU\n```\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nWARN  ALLOC_ENGINE_V4_ALLOC_FAIL_SUBNET [hwtype=1 <IPV6>], cid=[<IPV6>], tid=0x6a7c428f: failed to allocate an IPv4 lease in the subnet <IP>/24, subnet-id 10000, shared network (none)\nWARN  ALLOC_ENGINE_V4_ALLOC_FAIL [hwtype=1 <IPV6>], cid=[<IPV6>], tid=0x6a7c428f: failed to allocate an IPv4 address after 1 attempt(s)\nWARN  ALLOC_ENGINE_V4_ALLOC_FAIL_CLASSES [hwtype=1 <IPV6>], cid=[<IPV6>], tid=0x6a7c428f: Failed to allocate an IPv4 address for client with classes: ALL, mtvr-bobcat-03:dpu0, UNKNOWN\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nINFO  DHCP4_LEASE_ADVERT [hwtype=1 <IPV6>], cid=[no info], tid=0xbc675619: lease <IP> will be advertised\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 <IPV6>], cid=[no info], tid=0xbc675619: lease <IP> has been allocated for 3600 seconds\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nINFO  DHCP4_LEASE_ADVERT [hwtype=1 <IPV6>], cid=[<IPV6>], tid=0x6a7c428f: lease <IP> will be advertised\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 <IPV6>], cid=[<IPV6>], tid=0x6a7c428f: lease <IP> has been allocated for 3600 seconds\n```\n\n5. Install another 202506 image (Client ID = MAC)\n6. remote reboot on DPU\n```\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nINFO  DHCP4_LEASE_ADVERT [hwtype=1 <IPV6>], cid=[<IPV6>], tid=0x15ca9721: lease <IP> will be advertised\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 <IPV6>], cid=[<IPV6>], tid=0x15ca9721: lease <IP> has been allocated for 3600 seconds\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/image_config/platform/rc.local",
+        "additions": 27,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

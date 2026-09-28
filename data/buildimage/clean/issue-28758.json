@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-28758",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28758,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28758",
+    "title": "Bug: gnoi-shutdown.service Wants=pmon.service causes optics link flap during warm reboot",
+    "created_at": "2026-07-31T17:08:21Z",
+    "closed_at": "2026-08-06T05:14:15Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nsonic-net/sonic-host-services#343 added `Wants=pmon.service` to `gnoi-shutdown.service`.\nSince `gnoi-shutdown.service` has `WantedBy=multi-user.target`, systemd pulls pmon into the boot sequence before `featured` can gate it via the `delayed` flag.\n\nDuring warm restart, orchagent re-applies FEC/serdes settings which bounces admin_state and toggles `host_tx_ready` in STATE_DB. Because xcvrd is already running (started early via pmon), it reacts by disabling then re-enabling the TX lanes on optics ports.\n\n202605 syslog - pmon.service is started by systemd right after reboot:\n```\n2026-07-27T16:54:50.126115+00:00 sonic process-reboot-cause[1808]: Starting up...\n2026-07-27T16:54:50.126115+00:00 sonic process-reboot-cause[1808]: Starting up...\n2026-07-27T16:54:50.127382+00:00 sonic process-reboot-cause[1808]: Previous reboot cause: User issued 'warm-reboot' command [User: admin, Time: Mon Jul 27 <IPV6> PM UTC 2026]\n2026-07-27T16:54:50.127382+00:00 sonic process-reboot-cause[1808]: Previous reboot cause: User issued 'warm-reboot' command [User: admin, Time: Mon Jul 27 <IPV6> PM UTC 2026]\n2026-07-27T16:54:50.129137+00:00 sonic systemd[1]: Starting hostname-config.service - Update hostname based on configdb...\n2026-07-27T16:54:50.129137+00:00 sonic systemd[1]: Starting hostname-config.service - Update hostname based on configdb...\n2026-07-27T16:54:50.139235+00:00 sonic systemd[1]: Starting interfaces-config.service - Update interfaces configuration...\n2026-07-27T16:54:50.139235+00:00 sonic systemd[1]: Starting interfaces-config.service - Update interfaces configuration...\n2026-07-27T16:54:50.147422+00:00 sonic systemd[1]: Starting phy-credo.service - Credo phy init...\n2026-07-27T16:54:50.147422+00:00 sonic systemd[1]: Starting phy-credo.service - Credo phy init...\n2026-07-27T16:54:50.157217+00:00 sonic systemd[1]: Starting pmon.service - Platform monitor container...\n2026-07-27T16:54:50.157217+00:00 sonic systemd[1]: Starting pmon.service - Platform monitor container...\n2026-07-27T16:54:50.174811+00:00 sonic systemd[1]: Started procdockerstatsd.service - Process and docker CPU/memory utilization data export daemon.\n2026-07-27T16:54:50.174986+00:00 sonic systemd[1]: Starting restapi.service - RestAPI container...\n2026-07-27T16:54:50.174811+00:00 sonic systemd[1]: Started procdockerstatsd.service - Process and docker CPU/memory utilization data export daemon.\n2026-07-27T16:54:50.174986+00:00 sonic systemd[1]: Starting restapi.service - RestAPI container...\n2026-07-27T16:54:50.190241+00:00 sonic systemd[1]: Starting serial-config.service - Update serial console config...\n2026-07-27T16:54:50.190241+00:00 sonic systemd[1]: Starting serial-config.service - Update serial console config...\n...\n2026 Jul 27 <IPV6>.193273 ld481 NOTICE pmon#xcvrd[39]: SFF-MAIN: Ethernet36: xcvr=present(inserted=False), host_tx_ready=false(changed=True), admin_status=up(changed=False)\n2026 Jul 27 <IPV6>.204368 ld481 NOTICE pmon#xcvrd[39]: SFF-MAIN: Ethernet36: TX was disabled with lanes mask: 0b1111\n2026 Jul 27 <IPV6>.212415 ld481 NOTICE pmon#xcvrd[39]: SFF-MAIN: Ethernet36: xcvr=present(inserted=False), host_tx_ready=true(changed=True), admin_status=up(changed=False)\n2026 Jul 27 <IPV6>.224514 ld481 NOTICE pmon#xcvrd[39]: SFF-MAIN: Ethernet36: TX was enabled with lanes mask: 0b1111\n```\n\n202511 syslog - pmon.service is correctly delay started by featured:\n```\n2026 Jul 28 <IPV6>.466726 ld481 INFO systemd[1]: Reloading finished in 849 ms.\n2026 Jul 28 <IPV6>.514719 ld481 INFO featured: Output:  , Stderr: The unit files have no installation config (WantedBy=, RequiredBy=, UpheldBy=,#012Also=, or Alias= settings in the [Install] section, and DefaultInstance= for#012template units). This means they are not meant to be enabled or disabled using systemctl.#012 #012Possible reasons for having these kinds of units are:#012\u2022 A unit may be statically enabled by being symlinked from another unit's#012  .wants/, .requires/, or .upholds/ directory.#012\u2022 A unit's purpose may be to act as a helper for some other unit which has#012  a requirement dependency on it.#012\u2022 A unit may be started when needed via activation (socket, path, timer,#012  D-Bus, udev, scripted systemctl call, ...).#012\u2022 In case of template units, the unit is meant to be enabled with some#012  instance name specified.\n2026 Jul 28 <IPV6>.514998 ld481 INFO featured: Running cmd: '['sudo', 'systemctl', 'start', 'pmon.service']'\n2026 Jul 28 <IPV6>.551170 ld481 INFO systemd[1]: Starting pmon.service - Platform monitor container...\n2026 Jul 28 <IPV6>.639348 ld481 INFO pmon.sh[9880]: Creating new pmon container with HWSKU Arista-7050CX3-32S-C32\n```\n\n### Steps to Reproduce\n\nRun warm-reboot on DUTs with optics ports\n\n### Actual Behavior and Expected Behavior\n\npmon.service should be delay started by featured and there should not be link flap on optics interfaces.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 418,
+    "repository": "sonic-net/sonic-host-services",
+    "url": "https://github.com/sonic-net/sonic-host-services/pull/418",
+    "title": "Remove pmon.service from gnoi-shutdown.service Wants dependency",
+    "merged_at": "2026-08-06T05:14:14Z",
+    "description": "gnoi-shutdown.service has WantedBy=multi-user.target, so its Wants=pmon.service (added by #343) causes systemd to pull pmon into the boot sequence. This bypasses featured's delayed startup gating for pmon, allowing xcvrd to start before orchagent completes warm restart port reconciliation. When orchagent bounces admin_state to re-apply FEC/serdes settings, the host_tx_ready toggle triggers xcvrd to disable/enable TX lanes on optics ports, causing MAC_REMOTE_FAULT link flaps.\n\nKeep pmon.service in After= to preserve startup ordering without forcing pmon to start. This is consistent with the original wait-for-sonic-core.sh (removed by #343) which treated pmon as advisory.\n\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/28758\n\n#### Which release branch to backport (provide reason below if selected)\n- [x] 202605\n\n#### Tested branch\n- [x] 202605\n\n#### Test result\n202605: upgrade_path/test_upgrade_path.py passed on DUT with optics ports",
+    "files": [
+      {
+        "path": "data/debian/sonic-host-services-data.gnoi-shutdown.service",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

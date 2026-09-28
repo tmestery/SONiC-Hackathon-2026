@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-7566",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 7566,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/7566",
+    "title": "Arista platform installation failure",
+    "created_at": "2021-05-09T05:06:24Z",
+    "closed_at": "2021-05-28T21:26:01Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P0",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "master"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nArista platform installation is failing after https://github.com/Azure/sonic-utilities/pull/1527\n\n#### Steps to reproduce the issue:\n1. Install master image with the change.\n2. Install another master image with the change\n3.\n\n#### Describe the results you received:\n\n```\nTraceback (most recent call last):\n  File \"/usr/local/bin/sonic_installer\", line 8, in <module>\n    sys.exit(sonic_installer())\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 764, in __call__\n    return self.main(*args, **kwargs)\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 717, in main\n    rv = self.invoke(ctx)\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 1137, in invoke\n    return _process_result(sub_ctx.command.invoke(sub_ctx))\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 956, in invoke\n    return ctx.invoke(self.callback, **ctx.params)\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 555, in invoke\n    return callback(*args, **kwargs)\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/main.py\", line 437, in install\n    migrate_sonic_packages(bootloader, binary_image_version)\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/main.py\", line 332, in migrate_sonic_packages\n    new_image_upper_dir = get_path(UPPERDIR_NAME)\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/main.py\", line 329, in get_path\n    return stack.enter_context(bootloader.get_path_in_image(new_image_dir, path))\n  File \"/usr/lib/python3.7/contextlib.py\", line 426, in enter_context\n    result = _cm_type.__enter__(cm)\n  File \"/usr/lib/python3.7/contextlib.py\", line 112, in __enter__\n    return next(self.gen)\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/bootloader/aboot.py\", line 198, in get_path_in_image\n    offset = self._get_swi_file_offset(swipath, path)\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/bootloader/aboot.py\", line 186, in _get_swi_file_offset\n    with zipfile.ZipFile(swipath) as swi:\n  File \"/usr/lib/python3.7/zipfile.py\", line 1204, in __init__\n    self.fp = io.open(file, filemode)\nFileNotFoundError: [Errno 2] No such file or directory: '/host/image-HEAD.725-bfae15fb/sonic.swi'\nadmin@str-7260cx3-acs-2:~$ ls /host/image-HEAD.725-bfae15fb/\nallowlist_paths.conf  docker/               .imagehash            platform/             sonic-config/         version\nboot/                 fs.squashfs           kernel-cmdline        .sonic-boot.swi       swi-signature\nadmin@str-7260cx3-acs-2:~$ ls /host/image-HEAD.725-bfae15fb/.sonic-boot.swi\n/host/image-HEAD.725-bfae15fb/.sonic-boot.swi\nadmin@str-7260cx3-acs-2:~$ vi /usr/local/lib/python3.7/dist-packages/sonic_installer/bootloader/aboot.py\n```\n\n#### Describe the results you expected:\n\nInstall image successful.\n\n#### Output of `show version`:\n\n```\nadmin@str-7260cx3-acs-2:~$ show version\n\nSONiC Software Version: SONiC.HEAD.725-bfae15fb\nDistribution: Debian 10.9\nKernel: 4.19.0-12-2-amd64\nBuild commit: bfae15fb\nBuild date: Sun May  9 <IPV6> UTC 2021\nBuilt by: johnar@jenkins-worker-22\n```\n#### Output of `show techsupport`:\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 1625,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/1625",
+    "title": "Fix Aboot breakage sonic-installer due to package migration",
+    "merged_at": "2021-05-28T21:26:01Z",
+    "description": "#### Failure cause\n\nFixes https://github.com/Azure/sonic-buildimage/issues/7566\n\nThe `get_rootfs_path` contextmanager was recently repurposed to implement\n`get_file_in_image` . It then got used as a function by leveraging some\npython complexity to bypass the restrictions coming with the contextmanager construct.\nThis was a conscious decision to prevent exactly what happened.\nThe method was then called multiple times to compute relative paths to the image directory.\nSimple path joins using `new_image_dir` could have been performed instead.\n\nThe `get_rootfs_path` implementation for Aboot bootloaders behaves differently\nwhen a rootfs is extracted or kept within the SWI image. It also behaves differently on secureboot systems.\nThe updated method was used by providing parameters it was never meant to process.\n\n#### Context around the failure\n\nOver time, the installation and boot process on Aboot has slightly diverged from\nthe ONIE one. There are 3 scenarios to consider.\n\n1) Regular boot similar to ONIE\nThis one should just work the same as the filesystem layout is unchanged.\n\n2) docker_inram where dockerfs.tar.gz is extracted in tmpfs at boot\nIn this scenario the boot is similar to the regular one beside that\n`dockerfs.tar.gz` is preserved intact on the flash and not extracted.\nBy design this does not fit the sonic-package-manager requierements and\nthe migration should be skipped which is what I did in this review.\nIn the coming months this boot mode will look closer to `3)` below.\n\n3) Secureboot on Arista devices\nIn this scenario the SWI image is kept intact and nothing extracted\nfrom it. By ensuring the integrity of the SWI we can guarantee that no\ncode/data has been tampered with. This mode also relies on\n`docker_inram` at the moment.\nIt could be enhanced when sonic-package-manager can guarantee the\nintegrity of code and data that is both installed and migrated.\n\n#### Solution provided\n\nThe method `get_file_in_image` was reverted to its original meaning\n`get_rootfs_path` as there is no point in keeping the new one.\nIt doesn't have the necessary logic to handle more than the rootfs and\nthe logic for which it was repurposed can easily be achieved by the following line.\n`os.path.join(bootloader.get_image_path(binary_image_name), 'something')`\nIf this is a desirable helper it should become a method of its own.\n\nA new `Bootloader` method called `support_package_migration` is\nintroduced to allow the bootloader to skip the package migration based\non the image (e.g docker_inram) or its own configuration (e.g secureboot).\nBy default all bootloaders enable the package migration.\n\nThat change leads to `1)` above running package migration while `2)` and `3)`\nskip it.\n\n#### New command output (if the output of a command-line utility has changed)\n\nThe temporary error message now becomes a warning message for platforms that do not\nsupport package migration.\n\n```\nCommand: losetup -d /dev/loop2\nWarning: SONiC package migration is not supported for this bootloader/image\nCommand: sync;sync;sync\n```",
+    "files": [
+      {
+        "path": "sonic_installer/bootloader/aboot.py",
+        "additions": 49,
+        "deletions": 11
+      },
+      {
+        "path": "sonic_installer/bootloader/bootloader.py",
+        "additions": 7,
+        "deletions": 2
+      },
+      {
+        "path": "sonic_installer/main.py",
+        "additions": 17,
+        "deletions": 20
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

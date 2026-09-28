@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-6103",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 6103,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/6103",
+    "title": "Kernel GP during swss/syncd/teamd shutdown",
+    "created_at": "2020-12-02T20:12:38Z",
+    "closed_at": "2021-01-12T17:26:12Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P0",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "master"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\n**Steps to reproduce the issue:**\n1. run autorestart test for teamd, swss, or syncd\n2.\n3.\n\n**Describe the results you received:**\nTest found following error in syslog, the system recovered from the test, GP happened during service shutdown. But this issue should be addressed anyways.\n\nINFO kernel: [34985.337998] traps: gearsyncd[16050] general protection ip:7fe030bb1aea sp:7fe03062f9b0 error:0 in libswsscommon.so.0.0.0[7fe030b95000+51000]\\n\n\n**Describe the results you expected:**\ntest pass\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\n    **Output of `show version`:**\n\n    ```\nSONiC Software Version: SONiC.master.507-7f21c0be\nDistribution: Debian 10.6\nKernel: 4.19.0-9-2-amd64\nBuild commit: 7f21c0be\nBuild date: Sat Nov 28 <IPV6> UTC 2020\nBuilt by: johnar@jenkins-worker-8\n    ```"
+  },
+  "resolution": {
+    "pr_number": 444,
+    "repository": "sonic-net/sonic-swss-common",
+    "url": "https://github.com/sonic-net/sonic-swss-common/pull/444",
+    "title": "[logger] Fix Kernel GP seen for any short-lived *syncd process",
+    "merged_at": "2021-01-12T17:26:12Z",
+    "description": "Fixes: https://github.com/Azure/sonic-buildimage/issues/6103\n\nThis PR is to fix the Kernel GP errors that are seen in any short-lived process within swss.\n\nAs part of *syncd initialization, `Logger::linkToDbNative` function is called. This call starts a `SettingThread` in the background.\nWhen the main *syncd process terminates the destructor `Logger::~Logger` simply detaches the `SettingThread`. This leads to the detached thread's continued exection in the background.\n\nAt the same time, the exiting main process deletes the static variables that were in its scope.\nFault is hit when the detached thread (still executing in the infinite loop) tries to access these freed up variables.\n\nThis issue is easily reproducible when these *syncd process are short lived (and the detached `SettingThread` is still executing). Below are the examples by simply executing the `help` option:\n\n`Sample 1 : Orchagent core and Kernel GP:`\n```\nfor i in {1..10}; do docker exec -it swss /usr/bin/orchagent -h  ; done\n\nJan 11 <IPV6>.690125 str-s6100-acs-2 INFO kernel: [ 1198.660072] traps: orchagent[6172] general protection ip:7fda4ccf34fa sp:7fda4c0eb210 error:0 in libswsscommon.so.0.0.0[7fda4cccf000+5b000]\nJan 11 <IPV6>.810183 str-s6100-acs-2 INFO kernel: [ 1207.781516] traps: orchagent[7380] general protection ip:7f2bfd3724fa sp:7f2bfc76a210 error:0 in libswsscommon.so.0.0.0[7f2bfd34e000+5b000]\n\n-rw-rw-rw- 1 root root 331K Jan 11 23:32 orchagent.1610407968.6463.core.gz\n```\n\n`Sample 2 : Gearsyncd core and Kernel GP:`\n```\nfor i in {1..10}; do docker exec -it swss /usr/bin/gearsyncd -h  ; done\n\nJan 11 <IPV6>.959207 str-s6100-acs-2 INFO kernel: [  588.941879] traps: gearsyncd[25118] general protection ip:7f5e3ec924fa sp:7f5e3e706690 error:0 in libswsscommon.so.0.0.0[7f5e3ec6e000+5b000]\nJan 11 <IPV6>.426841 str-s6100-acs-2 INFO kernel: [  589.409417] traps: gearsyncd[25188] general protection ip:7f35fd1504fa sp:7f35fcbc49b0 error:0 in libswsscommon.so.0.0.0[7f35fd12c000+5b000]\n\n-rw-rw-rw- 1 root root 142K Jan 11 23:20 gearsyncd.1610407223.879.core.gz\n```\n\n`Sample 3 : portsyncd core and Kernel GP:`\n\n```\nfor i in {1..10}; do docker exec -it swss /usr/bin/portsyncd -h  ; done\n\nJan 11 <IPV6>.478111 str-s6100-acs-2 INFO kernel: [  421.443939] traps: portsyncd[6052] general protection ip:7f36b47714fa sp:7f36b41e59b0 error:0 in libswsscommon.so.0.0.0[7f36b474d000+5b000]\nJan 11 <IPV6>.570082 str-s6100-acs-2 INFO kernel: [  422.536931] traps: portsyncd[6207] general protection ip:7f9e208ce4fa sp:7f9e203429b0 error:0 in libswsscommon.so.0.0.0[7f9e208aa000+5b000]\n\n-rw-rw-rw- 1 root root 144K Jan 11 23:20 portsyncd.1610407201.848.core.gz\n\n```\n\nFix:\n1. Before exiting the main process, set the flag in Logger destructor to signal the detached thread that the main process is finishing up.\n2. Instead of detaching the thread (which leaves this thread access the undefined static variables), join the `SettingThread` thread.",
+    "files": [
+      {
+        "path": "common/logger.cpp",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "common/logger.h",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

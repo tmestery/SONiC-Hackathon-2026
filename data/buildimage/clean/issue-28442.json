@@ -1,0 +1,88 @@
+{
+  "id": "buildimage-28442",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28442,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28442",
+    "title": "Secure Boot images fail to boot: Debian shim-unsigned 16.1-2 revokes SBAT grub,4 that SONiC's GRUB still ships",
+    "created_at": "2026-07-16T00:57:50Z",
+    "closed_at": "2026-09-02T19:47:59Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nNo \u2014 this is generic to any SONiC image built with Secure Boot support (`SECURE_UPGRADE_MODE=dev` or `prod`). It is not tied to a specific vendor/ASIC.\n\n### Importance/Severity\n\nHigh. Newly built Secure Boot images fail to boot with Secure Boot enabled, and because the failure is recorded in UEFI NVRAM it also blocks *any subsequently installed* image that ships the same GRUB \u2014 i.e. it breaks the upgrade/recovery path, not just the one image.\n\n### Description\n\n`build_debian.sh` installs `shim-unsigned` from the Debian archive **without pinning a version**:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/build_debian.sh#L724-L726\n```sh\n    # debian secure boot dependencies\n    sudo LANG=C DEBIAN_FRONTEND=noninteractive chroot $FILESYSTEM_ROOT apt-get -y install      \\\n        shim-unsigned\n```\n\nDebian trixie now serves **`shim-unsigned 16.1-2~deb13u1`**, which bumped its embedded SBAT revocation level to require **`grub,5`**. From the Debian `shim` changelog (`shim (16.1-2)`, Steve McIntyre, Fri, 03 Apr 2026 \u2014 https://metadata.ftp-master.debian.org/changelogs/main/s/shim/shim_16.1-2~deb13u1_changelog):\n\n> Bump SBAT revocation level to 2025021800 aka\n> `\"shim,4\\ngrub,5\\n\"`\n> after discussion with shim reviewers team. Let's block the older\n> GRUB binaries which we know are problematic.\n\nThe previous shim (`shim (16.1-1)`, Mon, 23 Mar 2026) only required `grub,4`:\n\n> Bump SBAT revocation level to 2024040900 aka\n> `\"shim,4\\ngrub,4\\ngrub.peimage,2\\n\"`\n\nHowever, the GRUB that SONiC builds (Debian `grub2` `2.06-13+deb13u1`, pinned in `rules/grub2.mk`) still declares **SBAT generation 4** (`grub,4`). Per the Debian `grub2` changelog (`grub2 (2.06-13+deb13u1)`, \"Bump SBAT to grub,4\", Julian Andres Klode, Mon, 02 Oct 2023), grub2 in trixie has never advanced past generation 4.\n\nAt boot, `shim 16.1-2` writes its embedded revocation level into the `SbatLevelRT` UEFI variable (a one-way ratchet in NVRAM), then refuses to load `grubx64.efi` because the binary's `grub,4` is below the required `grub,5`. Since `SbatLevelRT` persists in NVRAM, every later image that also ships a `grub,4` binary is blocked too. The only way out is to disable Secure Boot and clear/lower the variable.\n\nRoot cause: **shim (revocation policy) and grub (SBAT generation) are sourced independently, and shim is unpinned**, so a Debian shim update silently started revoking the grub that SONiC ships.\n\n### Steps to reproduce the issue\n\n1. Build a SONiC image with Secure Boot enabled (`SECURE_UPGRADE_MODE=dev` or `prod`) from a build environment whose Debian trixie mirror currently serves `shim-unsigned 16.1-2~deb13u1`.\n2. Install the image on a machine with UEFI Secure Boot **enabled**.\n3. Reboot.\n\n### Describe the results you received (actual behavior)\n\nThe device fails the Secure Boot check and does not boot. Inspecting the installed EFI binaries and the SBAT NVRAM state (device name sanitized to `sonic`):\n\n```\n# grep -a 'grub,' /boot/efi/EFI/SONiC-OS/grubx64.efi\ngrub,4,Free Software Foundation,grub,2.06,https://www.gnu.org/software/grub/\n\n# cat /sys/firmware/efi/efivars/SbatLevelRT-605dab50-e046-4300-abb6-3dd810dd8b23 | grep -a ','\nsbat,1,2025021800\nshim,4\ngrub,5\n```\n\nThe grub binary is `grub,4`; the NVRAM `SbatLevelRT` (written by the new shim) requires `grub,5` \u2192 grub is revoked and refused. Disabling Secure Boot lets the device boot. Once in the \"grub,5 in NVRAM\" state, installing any other `grub,4` image also fails to boot until the variable is cleared.\n\n### Describe the results you expected (expected behavior)\n\nSecure Boot images should boot with Secure Boot enabled. The shim revocation policy embedded in the image must not revoke the GRUB that the same image ships \u2014 i.e. the shim version and the grub SBAT generation must be kept consistent.\n\n### Relevant log output\n\n```\nsbat,1,2025021800   # shim 16.1-2 embedded revocation level (requires grub,5)\nshim,4\ngrub,5              # <-- required minimum, ratcheted into SbatLevelRT NVRAM\n```\nvs. the shipped GRUB binary:\n```\ngrub,4              # <-- SONiC's grubx64.efi (Debian grub2 2.06-13, SBAT gen 4) \u2014 below required, revoked\n```\n\n### Additional notes / suggested fix\n\nOptions, roughly in order of robustness:\n\n1. **Advance GRUB to SBAT generation 5** \u2014 update `src/grub2` to a grub2 that includes the 2024 CVE patches and declares `grub,5` in `src/grub2/grub2/debian/sbat.debian.csv.in`, so the shipped grub satisfies the new shim policy. This is the correct long-term fix.\n2. **Pin `shim-unsigned` to a version whose revocation level matches the shipped grub** (e.g. `15.8-1`/`16.1-1`, which require only `grub,4`) until (1) lands. Note: the Debian trixie archive only serves the *current* shim version, so an old version must come from `snapshot.debian.org` or an internal mirror.\n3. Add CI that fails the build if the shim's embedded revocation level is higher than the shipped grub's SBAT generation, to catch this class of mismatch automatically.\n\nVerified from the Debian mirror that trixie currently serves only `shim-unsigned 16.1-2~deb13u1`; older versions are available only via `snapshot.debian.org`."
+  },
+  "resolution": {
+    "pr_number": 28739,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28739",
+    "title": "[Secure Boot]: Remove locally compiled Debian 12 grub, use stock Trixie grub",
+    "merged_at": "2026-09-02T19:47:57Z",
+    "description": "#### Why I did it\n\nSONiC locally compiles grub `2.06-13+deb13u1` (the Debian 12 / Bookworm 2.06 source) for Trixie\nimages instead of using the stock Debian 13 grub (#23340). That workaround has now become a boot\nblocker.\n\nDebian's `shim-unsigned 16.1-2~deb13u1` bumped its SBAT revocation level to require `grub,5`. The\nlocally compiled 2.06 grub only declares `grub,4`, so shim refuses to load it and Secure Boot\nimages fail to boot. Because shim writes its revocation level into the `SbatLevelRT` UEFI variable\n(a one-way NVRAM ratchet), this also blocks every subsequently installed image shipping the same\ngrub \u2014 breaking the upgrade and recovery path, not just the one image.\n\nThe stock Trixie grub `2.12-9` already declares `grub,5`, so returning to it resolves the problem.\n\nFixes #28442.\n\nAdditionally, the amd64 host-image version lock pinned `grub-common` / `grub2-common` to\n`2.06-13+deb13u1` \u2014 a locally built version that does not exist in the Trixie apt archive \u2014 which\nmakes the grub install unsatisfiable once it is apt-installed with deb version control enabled.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**: N/A\n\n#### How I did it\n\n- Removed the `src/grub2/` local build recipe (Makefile, patches, `.gitignore`)\n- Deleted `rules/grub2.mk` and `rules/grub2.dep`\n- Removed the grub2 build dependencies from `sonic-slave-trixie/Dockerfile.j2`\n- Dropped the local-deb (`--allow-downgrades`) grub install steps from `build_debian.sh`; grub is\n  again apt-installed from the Debian 13 archive\n- Removed the `$(GRUB2_COMMON)` RFS/installer target dependencies from `slave.mk`\n- Bumped the amd64 lock to the stock Trixie `2.12-9+deb13u2` (already used by the arm64/armhf locks)\n\nReverts #23340 and #25400.\n\n#### How to verify it\n\nBuild a Trixie image and confirm:\n\n1. No grub2 local-compile step runs during the build.\n2. The installed grub is `2.12-9+deb13u2` from the Debian archive (`dpkg -l grub2-common`).\n3. On a Secure Boot UEFI device the image boots, and the SBAT level is `grub,5`:\n   ```\n   cat /sys/firmware/efi/efivars/SbatLevelRT-605dab50-e046-4300-abb6-3dd810dd8b23 | grep -a ,\n   ```\n\n#### How to boot into ONIE (UEFI systems)\n\nTrixie grub cannot chain-load an older ONIE (#24249), so ONIE has to be entered directly rather\nthan through the ONIE entry of the SONiC grub menu:\n\n1. At the SONiC grub menu press `ESC` (or `c`) to fall back to the grub shell.\n2. Type `exit` \u2014 this leaves the SONiC grub and boots the ONIE grub directly.\n3. Choose the desired ONIE option (Install / Rescue / \u2026).\n\nTo boot into ONIE on the next reboot from a running SONiC:\n\n```\nsudo efibootmgr -n 0000\n```\n\nThis sets the UEFI firmware's `BootNext` variable and applies to the next boot only; later reboots\ngo back to SONiC.\n\nNote: `grub-editenv /host/grub/grubenv set next_entry=ONIE` must **not** be used \u2014 it still loads\nthe SONiC grub first and therefore hits the same chainload issue.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [x] 202605\n\nReason: the locally compiled grub is present on 202605 as well, so the same Secure Boot failure\napplies there.\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] Tested on master and 202605\n\n#### Description for the changelog\n\n[build]: Remove locally compiled Debian 12 grub, use stock Trixie grub\n\n#### Known limitation: #24249 is still open\n\nThis change does not address #24249 \u2014 chain-loading ONIE from the Trixie grub still fails, and the\nsame behaviour is expected with Debian 14's grub 2.14, so staying on an older grub is not a viable\nlong-term option. A proper fix needs a newer ONIE, but the ONIE project\n(https://github.com/opencomputeproject/onie) has had no changes since a long time to update grub/kernel, and upgrading ONIE across already deployed switches is impractical. Until that is resolved, use the UEFI ONIE boot\nprocedure described above as the workaround.",
+    "files": [
+      {
+        "path": "build_debian.sh",
+        "additions": 6,
+        "deletions": 15
+      },
+      {
+        "path": "rules/grub2.dep",
+        "additions": 0,
+        "deletions": 8
+      },
+      {
+        "path": "rules/grub2.mk",
+        "additions": 0,
+        "deletions": 37
+      },
+      {
+        "path": "slave.mk",
+        "additions": 2,
+        "deletions": 3
+      },
+      {
+        "path": "sonic-slave-trixie/Dockerfile.j2",
+        "additions": 0,
+        "deletions": 13
+      },
+      {
+        "path": "src/grub2/.gitignore",
+        "additions": 0,
+        "deletions": 5
+      },
+      {
+        "path": "src/grub2/Makefile",
+        "additions": 0,
+        "deletions": 49
+      },
+      {
+        "path": "src/grub2/patch/adjust-build-rules-for-debian.patch",
+        "additions": 0,
+        "deletions": 71
+      },
+      {
+        "path": "src/grub2/patch/large-uid-skip-cpio-ustar.patch",
+        "additions": 0,
+        "deletions": 16
+      },
+      {
+        "path": "src/grub2/patch/series",
+        "additions": 0,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

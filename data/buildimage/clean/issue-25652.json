@@ -1,0 +1,68 @@
+{
+  "id": "buildimage-25652",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25652,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25652",
+    "title": "Bug: Race condition in PHYSICAL_ENTITY_INFO table cleanup during daemon shutdown",
+    "created_at": "2026-02-24T20:16:41Z",
+    "closed_at": "2026-04-29T16:55:53Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nCurrently, `sensormond` and `thermalctld` delete **all entries** in the `PHYSICAL_ENTITY_INFO` table of `STATE_DB` when their class objects are garbage collected during shutdown. This creates race conditions where one daemon's data can be inadvertently deleted by another daemon.\n\nMeanwhile, `psud` does **not** delete its entries from `PHYSICAL_ENTITY_INFO` at all during shutdown, which was masked with `thermalctld`/`sensormond` deleting all entries from the table.\n\n### Steps to Reproduce\n\n1. Modify `PSU_INFO_UPDATE_PERIOD_SECS` from 3 seconds to 100 seconds (this is to have larger window to illustrate that even with periodically updating `PSU_INFO`, race condition can still happen)\n2. Restart `thermalctld` daemon\n3. When `thermalctld` stops, it deletes all `PHYSICAL_ENTITY_INFO` entries (including PSU entries owned by `psud`)\n4. During the 100-second window before `psud` re-populates its data, SNMP queries will fail to retrieve PSU entity information.\n\nYou would see an error with below signature:\n\n```\nERROR: MIBUpdater.start() caught an unexpected exception during update_data()\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.11/dist-packages/ax_interface/mib.py\", line 51, in start\n    self.reinit_data()\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 347, in reinit_data\n    raise Exception(exceptions)\nException: [ValueError(\"invalid literal for int() with base 10: ''\")]\nERROR: invalid literal for int() with base 10: ''\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 332, in reinit_data\n    updater.reinit_data()\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 703, in reinit_data\n    self._update_entity_cache(name)\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 893, in _update_entity_cache\n    psu_position = int(psu_position)\n    ^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: ''\n```\n\n### Actual Behavior and Expected Behavior\n\nExpected Behavior:\n\n1. We should not be seeing exceptions/errors in the syslog when we shutdown any daemons.\n2. Shutting down one daemon shouldn't affect the data populated by other daemons.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 770,
+    "repository": "sonic-net/sonic-platform-daemons",
+    "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/770",
+    "title": "Delete only 'PHYSICAL_ENTITY_INFO' entries that daemon has added",
+    "merged_at": "2026-04-29T16:55:51Z",
+    "description": "#### Description\n\nIn the current design, daemons like psud, sensormond, and thermalctld delete all entries in the `PHYSICAL_ENTITY_INFO` table of `STATE_DB` when their classes are being garbage collected.\n\nThis creates race conditions where one daemon might try to access its own data in the `PHYSICAL_ENTITY_INFO` table that another daemon has deleted.\n\nFor example, during system shutdown, if `thermalctld` daemon stops first, its class objects get garbage collected and all entries in the `PHYSICAL_ENTITY_INFO` table are deleted. If `psud` is still running and periodically updating its own data, SNMP queries between the deletion and re-population will fail to retrieve PSU entity information.\n\nThis patch fixes the issue by limiting what each daemon deletes to only the entries it\nhas added to the `PHYSICAL_ENTITY_INFO` table:\n- `psud`: Deletes only PSU entries\n- `thermalctld`: Deletes only fan, drawer, and temperature entries\n- `sensormond`: Deletes only voltage and current entries\n\nAdditionally, defensive `.get()` checks are added before deletion to prevent KeyError exceptions if entries have already been removed by other processes.\n\nThis fixes https://github.com/sonic-net/sonic-buildimage/issues/25652\n\n#### How Has This Been Tested?\n\n1. Ran the snmp sonic-mgmt test suite.\n2. Ran a stress test which reboots the dut containing these changes over 100 times and didn't observe  https://github.com/sonic-net/sonic-buildimage/issues/25652.\n3. Also added corresponding unit tests for this new design and ran those tests.",
+    "files": [
+      {
+        "path": "sonic-psud/scripts/psud",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "sonic-psud/tests/test_DaemonPsud.py",
+        "additions": 34,
+        "deletions": 0
+      },
+      {
+        "path": "sonic-sensormond/scripts/sensormond",
+        "additions": 16,
+        "deletions": 4
+      },
+      {
+        "path": "sonic-sensormond/tests/test_sensormond.py",
+        "additions": 20,
+        "deletions": 2
+      },
+      {
+        "path": "sonic-thermalctld/scripts/thermalctld",
+        "additions": 9,
+        "deletions": 8
+      },
+      {
+        "path": "sonic-thermalctld/tests/test_thermalctld.py",
+        "additions": 59,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

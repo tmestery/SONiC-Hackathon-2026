@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-28162",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28162,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28162",
+    "title": "Bug: [HA] hamgrd logs deserialization errors for HA state delete messages without last_updated_time",
+    "created_at": "2026-06-30T05:41:35Z",
+    "closed_at": "2026-07-10T16:41:29Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nDuring `test_ha_repairing_dpu[standby]`, log analyzer detects hamgrd errors after HA/DPU state cleanup. hamgrd receives `DASH_HA_SCOPE_STATE_TABLE` and `DASH_HA_SET_STATE_TABLE` messages with operation: Del and empty field_values, but the handler still tries to deserialize them as full state payloads requiring last_updated_time.\n\nThis produces ERROR logs even though the pytest test function passed. The issue is in generic HA state delete handling, not platform-specific behavior.\n\n### Steps to Reproduce\n\npython3 -m pytest ha/test_ha_repairing_dpu.py -k \"standby\"\n\n### Actual Behavior and Expected Behavior\n\nActual: hamgrd logs deserialization errors when handling HA state table delete messages with empty field values.\n\nExpected: hamgrd should handle Del operations as deletes and should not require last_updated_time or deserialize the message as a full HA state update.\n\n### Relevant log output\n\n```shell\n2026 Jun 29 <IPV6>.095420 sonic ERR dash-hadpu0#hamgrd: 2026-06-29T13:49:06.095411Z ERROR handle_message{actor=\"ha-scope/vdpu1_0:haset0_0\" key=\"DASH_HA_SCOPE_STATE_TABLE\"}: 166: Failed to deserialize DASH_HA_SCOPE_STATE from field values: missing field `last_updated_time`\n2026 Jun 29 <IPV6>.105335 sonic ERR dash-hadpu0#hamgrd: 2026-06-29T13:49:06.105327Z ERROR handle_message{actor=\"ha-set/haset0_0\" key=\"DASH_HA_SET_STATE_TABLE\"}: 163: Failed to deserialize DASH_HA_SET_STATE from field values: missing field `last_updated_time`\n2026 Jun 29 <IPV6>.266332 sonic ERR dash-hadpu1#hamgrd: 2026-06-29T13:49:47.266322Z ERROR handle_message{actor=\"ha-scope/vdpu1_1:haset0_0\" key=\"DASH_HA_SCOPE_STATE_TABLE\"}: 166: Failed to deserialize DASH_HA_SCOPE_STATE from field values: missing field `last_updated_time`\n\nRecorder evidence shows these were delete operations with empty fields:\n\nhamgrd-dpu0.rec.gz: handle an actor message ... DPU_STATE_DB|DASH_HA_SCOPE_STATE_TABLE: ActorMessage { key: \"DASH_HA_SCOPE_STATE_TABLE\", data: Object {\"field_values\": Object {}, \"key\": String(\"haset0_0\"), \"operation\": String(\"Del\")} }\nhamgrd-dpu0.rec.gz: handle an actor message ... DPU_STATE_DB|DASH_HA_SET_STATE_TABLE: ActorMessage { key: \"DASH_HA_SET_STATE_TABLE\", data: Object {\"field_values\": Object {}, \"key\": String(\"haset0_0\"), \"operation\": String(\"Del\")} }\nhamgrd-dpu1.rec.gz: handle an actor message ... DPU_STATE_DB|DASH_HA_SCOPE_STATE_TABLE: ActorMessage { key: \"DASH_HA_SCOPE_STATE_TABLE\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nmaster\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 206,
+    "repository": "sonic-net/sonic-dash-ha",
+    "url": "https://github.com/sonic-net/sonic-dash-ha/pull/206",
+    "title": "hamgrd: ignore DPU HA set/scope state deletion messages",
+    "merged_at": "2026-07-10T16:41:28Z",
+    "description": "## Description of PR\n`get_dpu_ha_set_state` and `get_dpu_ha_scope_state` previously deserialized every incoming `DASH_HA_SET_STATE` / `DASH_HA_SCOPE_STATE` message regardless of the DB operation. A `Del` message carries empty field values, so it could be misinterpreted as an (empty) state update rather than being ignored.\n\nThis PR adds an explicit `KeyOperation::Del` check to both accessors so deletion notifications are logged at debug level and skipped (returning `None`), which causes the callers to ignore them.\n\n## Type of change\n- [x] Bug fix\nFix https://github.com/sonic-net/sonic-buildimage/issues/28162\n\n## Approach\n**How it works:** Both accessor functions now inspect `kfv.operation` after deserializing the `KeyOpFieldValues`. When the operation is `KeyOperation::Del`, they return `None` early instead of attempting to deserialize the (empty) field values.\n\n**How it was verified:** `cargo test -p hamgrd` \u2014 all 41 unit tests pass, including the ha_set and ha_scope NPU/DPU suites.",
+    "files": [
+      {
+        "path": "crates/hamgrd/src/actors/ha_scope/base.rs",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "crates/hamgrd/src/actors/ha_set.rs",
+        "additions": 5,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

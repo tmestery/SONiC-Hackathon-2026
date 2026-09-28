@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-5097",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5097,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5097",
+    "title": "build failure at kdump-tools stage while build target/sonic-broadcom.bin",
+    "created_at": "2020-08-04T19:11:04Z",
+    "closed_at": "2025-05-30T00:40:33Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "build",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "github commit hash: 70bf65302dfeb5d94f331af01db5487a228ff3b2\n\n**Steps to reproduce the issue:**\n1. export NOJESSIE=1\n2. make init\n3. make configure PLATFORM=broadcom\n4. make target/sonic-broadcom.bin\n\n**Describe the results you received:**\n\n**Describe the results you expected:**\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\nerror log:\n\n    ```\n sudo DEBIAN_FRONTEND=noninteractive dpkg --root=./fsroot -i target/debs/buster/kdump-tools_1.6.1-1_all.deb\nSelecting previously unselected package kdump-tools.\n(Reading database ... 33140 files and directories currently installed.)\nPreparing to unpack .../kdump-tools_1.6.1-1_all.deb ...\nUnpacking kdump-tools (1:1.6.1-1) ...\nSetting up kdump-tools (1:1.6.1-1) ...\n\nConfiguration file '/etc/default/grub.d/kdump-tools..ppc64el', does not exist on system.\nInstalling new config file as you requested.\n\nConfiguration file '/etc/default/grub.d/kdump-tools.default', does not exist on system.\nInstalling new config file as you requested.\n\nConfiguration file '/etc/default/kdump-tools', does not exist on system.\nInstalling new config file as you requested.\n\nConfiguration file '/etc/init.d/kdump-tools', does not exist on system.\nInstalling new config file as you requested.\n\nConfiguration file '/etc/init/kdump-tools.conf', does not exist on system.\nInstalling new config file as you requested.\n\nConfiguration file '/etc/kernel/postinst.d/kdump-tools', does not exist on system.\nInstalling new config file as you requested.\n\nConfiguration file '/etc/kernel/postrm.d/kdump-tools', does not exist on system.\nInstalling new config file as you requested.\nCannot change symbolic links when kdump is loaded ... failed!\ndpkg: error processing package kdump-tools (--install):\n installed kdump-tools package post-installation script subprocess returned error exit status 1\nProcessing triggers for systemd (241-7~deb10u4) ...\nErrors were encountered while processing:\n kdump-tools\n+ sudo LANG=C DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true chroot ./fsroot apt-get -q --no-install-suggests --no-install-recommends --force-no install\nE: Command line option --force-no is not understood in combination with the other options\n+ clean_sys\n+ sudo chroot ./fsroot umount /sys/fs/cgroup/blkio /sys/fs/cgroup/cpu /sys/fs/cgroup/cpu,cpuacct /sys/fs/cgroup/cpuacct /sys/fs/cgroup/cpuset /sys/fs/cgroup/devices /sys/fs/cgroup/freezer /sys/fs/cgroup/hugetlb /sys/fs/cgroup/memory /sys/fs/cgroup/net_cls /sys/fs/cgroup/net_cls,net_prio /sys/fs/cgroup/net_prio /sys/fs/cgroup/perf_event /sys/fs/cgroup/pids /sys/fs/cgroup/systemd /sys/fs/cgroup /sys\numount: /sys/fs/cgroup/cpu: no mount point specified.\numount: /sys/fs/cgroup/cpu,cpuacct: no mount point specified.\numount: /sys/fs/cgroup/cpuacct: no mount point specified.\numount: /sys/fs/cgroup/net_cls: no mount point specified.\numount: /sys/fs/cgroup/net_cls,net_prio: no mount point specified.\numount: /sys/fs/cgroup/net_prio: no mount point specified.\numount: /sys/fs/cgroup/systemd: no mount point specified.\n+ true\n+ true\n+ sudo LANG=C chroot ./fsroot umount /proc\numount: /proc: target is busy.\n+ true\n+ true\n[  FAIL LOG END  ] [ target/sonic-broadcom.bin ]\nmake: *** [slave.mk:804: target/sonic-broadcom.bin] Error 1\n\n    ```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```"
+  },
+  "resolution": {
+    "pr_number": 22553,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/22553",
+    "title": "[build] Fix kdump build failure (Fixes 5097 17023)",
+    "merged_at": "2025-05-30T00:40:32Z",
+    "description": "#### Why I did it\n\nThe build fails if kdump is enabled on the build host, even though the relevant build step is performed in a dockerized chroot.\n\n```\n+ sudo LANG=C chroot ./fsroot-cisco-8000 kdump-config symlinks 5.10.0-23-2-amd64\nCannot change symbolic links when kdump is loaded ... failed!\n```\n\nFixes #5097, Fixes #17023\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nkdump installation checks if kdump is already running and aborts if so. This is good in most cases, but it's not relevant when installing into a chroot inside a docker container. This adds a basic patch to disable this check during build.\n\nNote that the kdump status of the build host is imported into the docker build container via the sysfs file system:\n\n```\n$ ls -id /sys/kernel/kexec_crash_loaded && cat /sys/kernel/kexec_crash_loaded\n7824 /sys/kernel/kexec_crash_loaded\n0\n\n$ docker run --rm debian bash -c \"ls -id /sys/kernel/kexec_crash_loaded && cat /sys/kernel/kexec_crash_loaded\"\n7824 /sys/kernel/kexec_crash_loaded\n0\n```\n\nThe inodes and file content are identical inside and outside of the container.\n\n#### How to verify it\n\n1. Enable kdump on the build host\n2. Confirm baseline build fails with the \"Cannot change symbolic links when kdump is loaded\" error\n3. Apply this change and build succeeds\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [x] 202405\n- [x] 202411\n- [x] 202505\n\n#### Tested branch (Please provide the tested image version)\n\nmaster (29752056ef87ace404d073901cba6179ab074a12)\n\n#### Description for the changelog\n\n[build] fix build failure on kdump-enabled hosts\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/kdump-tools/patch/0004-disable-kdump-load-check.patch",
+        "additions": 16,
+        "deletions": 0
+      },
+      {
+        "path": "src/kdump-tools/patch/series",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

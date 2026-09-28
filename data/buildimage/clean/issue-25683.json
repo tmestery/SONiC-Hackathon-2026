@@ -1,0 +1,118 @@
+{
+  "id": "buildimage-25683",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25683,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25683",
+    "title": "Bug:[202511/Trixie] pmon container init fails when IMAGE_VERSION is unset (container_startup.py gets empty -v)",
+    "created_at": "2026-02-26T01:41:36Z",
+    "closed_at": "2026-03-07T11:56:25Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nOn 202511/Trixie, the pmon container\u2019s docker_init.sh (from docker-platform-monitor/docker_init.j2) always calls container_startup.py with -v ${IMAGE_VERSION}. When IMAGE_VERSION is not set, this expands to a bare -v and argparse aborts (expected one argument), causing PMON startup/health checks to fail. Setting a default version (e.g., ${IMAGE_VERSION:-0.0.0}) prevents the crash and allows PMON to start normally.\n\n### Steps to Reproduce\n\nBoot a SONiC 202511 / Trixie image on a DUT.\n\nEnsure IMAGE_VERSION is not set in the pmon container init environment (this happens by default in the failing cases).\n\nRestart PMON (or trigger any action that restarts it), for example:\n\nsudo systemctl restart pmon.service\n(alternatively: run config load_minigraph -y, which often restarts containers as part of config reload)\n\nObserve pmon startup failure logs:\n\ncontainer_startup.py: error: argument -v/--version: expected one argument\n\nfollowed by pmon being marked unhealthy / critical service check reporting pmon: False.\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\nOn 202511/Trixie, pmon startup can fail because docker_init.sh invokes container_startup.py with -v ${IMAGE_VERSION} and when IMAGE_VERSION is unset it expands to a bare -v, causing argparse to error (expected one argument). This leads to PMON failing to initialize properly and health/critical-service checks reporting pmon as down/unhealthy.\n\nExpected Behavior:\npmon should start reliably even when IMAGE_VERSION is not set; container_startup.py should receive a valid version string (or a safe default) and proceed without argument parsing errors, keeping PMON healthy and critical-service checks passing.\n\n### Relevant log output\n\n```shell\nusage: container_startup.py [-h] -f FEATURE -o {local,kube} -v VERSION\ncontainer_startup.py: error: argument -v/--version: expected one argument\nsonic-platform package not installed, attempting to install...\nError: Unable to locate /usr/share/sonic/platform/sonic_platform-1.0-py2-none-any.whl\n\nStatus of critical services: {'pmon': False, ...}\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n202511 after Trixie\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25907,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25907",
+    "title": "Fix IMAGE_VERSION unset in final stage of multi-stage Docker builds",
+    "merged_at": "2026-03-07T11:56:24Z",
+    "description": "### Description of PR\n\nSummary:\nFix IMAGE_VERSION being empty in all multi-stage Docker container builds.\n\nIn Docker multi-stage builds, `ARG` values **do not carry over between stages** \u2014 each `FROM` resets the ARG scope. All 15 container Dockerfiles that use `rsync_from_builder_stage()` declare `ARG image_version` in the builder stage but not in the final stage. The `ENV IMAGE_VERSION=$image_version` in the final stage therefore resolves to an empty string.\n\nWhen `container_startup.py` is invoked with `-v ${IMAGE_VERSION}` and `IMAGE_VERSION` is empty, argparse fails with:\n```\ncontainer_startup.py: error: argument -v/--version: expected one argument\n```\n\nThis causes the container init to abort, leading to container health check failures.\n\n**Root cause:** Missing `ARG image_version` in the final build stage of multi-stage Dockerfiles.\n\n**Fix:** Add `ARG image_version` after the final `FROM $BASE` in all 15 affected Dockerfile.j2 files:\n- docker-bmp-watchdog\n- docker-dhcp-relay\n- docker-dhcp-server\n- docker-eventd\n- docker-gnmi-sidecar\n- docker-lldp\n- docker-platform-monitor (pmon)\n- docker-router-advertiser\n- docker-snmp\n- docker-sonic-bmp\n- docker-sonic-gnmi\n- docker-sonic-otel\n- docker-sonic-telemetry\n- docker-telemetry-sidecar\n- docker-telemetry-watchdog\n\nFixes #25683\n\nSupersedes #25684 (which only added a `:-0.0.0` default to pmon's docker_init.j2 \u2014 a symptom-level fix for one container)\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New feature\n- [ ] Test case (new/improvement)\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\nContainer init scripts fail when `IMAGE_VERSION` is unset because `container_startup.py -v` receives no argument.\n\n#### How did you do it?\nAdded `ARG image_version` in the final build stage of each affected Dockerfile.j2, right after `FROM $BASE`. This ensures the Docker build-arg `image_version` is available when `ENV IMAGE_VERSION=$image_version` is evaluated in the final stage.\n\n#### How did you verify/test it?\nVerified that the Dockerfile pattern matches the Docker multi-stage build ARG scoping rules per [Docker documentation](https://docs.docker.com/reference/dockerfile/#understand-how-arg-and-from-interact).\n\nExample \u2014 before (broken):\n```dockerfile\nFROM $BASE AS base\nARG image_version            # scoped to 'base' stage only\nENV IMAGE_VERSION=$image_version  # works here\n...\nFROM $BASE                   # new stage \u2014 ARGs reset\n{{ rsync_from_builder_stage() }}\nENV IMAGE_VERSION=$image_version  # $image_version is EMPTY\n```\n\nAfter (fixed):\n```dockerfile\nFROM $BASE AS base\nARG image_version\nENV IMAGE_VERSION=$image_version\n...\nFROM $BASE\nARG image_version            # re-declared in final stage\n{{ rsync_from_builder_stage() }}\nENV IMAGE_VERSION=$image_version  # now resolves correctly\n```\n\n#### Any platform specific information?\nNo \u2014 affects all platforms.\n\n#### Supported testbed topology if it's a new test case?\nN/A",
+    "files": [
+      {
+        "path": "dockers/docker-bmp-watchdog/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-dhcp-server/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-eventd/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-gnmi-sidecar/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-lldp/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-platform-monitor/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-restapi-sidecar/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-router-advertiser/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-snmp/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-sonic-bmp/Dockerfile.j2",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-sonic-gnmi/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-sonic-otel/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-sonic-telemetry/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-telemetry-sidecar/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-telemetry-watchdog/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

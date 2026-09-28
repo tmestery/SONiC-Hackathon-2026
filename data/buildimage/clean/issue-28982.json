@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-28982",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28982,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28982",
+    "title": "[BMC] pmon container syslog not routed to host \u2014 missing rsyslog template directives",
+    "created_at": "2026-08-12T17:43:55Z",
+    "closed_at": "2026-08-14T00:56:57Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "# [BMC] pmon container: bmcctld logs partially duplicated to local overlay instead of host-only\n\n## Description\n\nThe pmon container's rsyslog routes most daemon logs to the host correctly via omrelp (`<IP>:2514`). However, **bmcctld-specific messages** are partially lost \u2014 most are written only to the container's local `/var/log/syslog` (Docker overlay) and do not reach the host.\n\n## Observed Behavior\n\nAfter ~27 hours on `SONiC.20260810.05`:\n\n| Location | pmon total | bmcctld only |\n|----------|-----------|-------------|\n| Host `/var/log/syslog` | 113 lines | **8 lines** |\n| Container `/var/log/syslog` | 79 lines | **79 lines** (all bmcctld) |\n\n- Other pmon daemons (`supervisord`, `platform_api_server`) route to host correctly \u2705\n- bmcctld messages mostly stay local \u2014 only ~10% reach the host \u274c\n\nThe container local syslog contains **only** bmcctld messages, suggesting bmcctld's logging path differs from other pmon daemons.\n\n## Impact\n\nUnder normal load this is minor (7.5KB locally). But when bmcctld enters the `sel.select()` spam loop (sonic-net/sonic-platform-daemons#872), the local-only writes accumulate to **6.4GB in 3 weeks**, filling the 9.6G eMMC and blocking image upgrades.\n\n## Possible Root Cause\n\nbmcctld uses a syslog wrapper (`bmcctld.syslog[pid]`) rather than logging through supervisord's stdout capture like other pmon daemons. This may hit a different rsyslog rule path.\n\nAdditionally, pmon's `rsyslog.conf` is missing `$ActionFileDefaultTemplate` and `$template SONiCFileFormat` directives that other containers (gnmi, lldp) include, which may affect how messages are filtered for local vs relay writes.\n\n## Suggested Investigation\n\n1. Compare bmcctld's logging mechanism vs other pmon daemons (syslog socket vs stdout)\n2. Check if the missing rsyslog template directives affect local write suppression\n3. Align pmon's Docker build rsyslog template (`dockers/docker-platform-monitor/`) with gnmi/lldp\n\n## Environment\n\n- Platform: `arm64-nexthop_b27-r0` (Komodo, NH-B27)\n- Image: `SONiC.20260810.05`\n- Related: sonic-net/sonic-platform-daemons#872 (bmcctld syslog spam)"
+  },
+  "resolution": {
+    "pr_number": 875,
+    "repository": "sonic-net/sonic-platform-daemons",
+    "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/875",
+    "title": "bmcctld: stop teeing routine logs to /var/log/syslog",
+    "merged_at": "2026-08-14T00:56:56Z",
+    "description": "### Why i did it?\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/28982\nFixes: https://github.com/sonic-net/sonic-platform-daemons/issues/872\n\n> - bmcctld FileHandler currently has no log rotation mechanism, making it the only unrotated writer to syslog within PMON. The write volume is low, but the log is effectively bounded only by the event rate.\n> - EventLogger tees every log call to DEFAULT_LOG_FILE = \"/var/log/syslog\" using a plain logging.FileHandler, without any maxBytes or backupCount. This path lives in PMON\u2019s writable overlay, so the host\u2019s logrotate cannot manage it, and PMON does not have a cron-based rotation mechanism. As a result, it is the only file in the container without any form of rotation. Since the file is append-only and persists across reboots, it can grow monotonically over the lifetime of the device.\n\n### How i did it ?\n\n> remove the tee to /var/log/syslog rather than adding a RotatingFileHandler. EventLogger already invokes the base class before touching the file on every logging method, so the messages are already handled through the normal logging path, which would avoid maintaining a separate unrotated file\n\n### How to verify?\n```\ndocker exec pmon ls -la /var/log/syslog\n```\n\n#### Description\n\n#### Motivation and Context\n\n#### How Has This Been Tested?\n\n#### Additional Information (Optional)",
+    "files": [
+      {
+        "path": "sonic-bmcctld/scripts/bmcctld",
+        "additions": 27,
+        "deletions": 15
+      },
+      {
+        "path": "sonic-bmcctld/tests/test_bmcctld.py",
+        "additions": 37,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

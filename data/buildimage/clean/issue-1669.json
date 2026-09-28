@@ -1,0 +1,88 @@
+{
+  "id": "buildimage-1669",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 1669,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/1669",
+    "title": "docker dhcp build failed.",
+    "created_at": "2018-05-02T02:50:54Z",
+    "closed_at": "2018-05-02T18:46:22Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "question",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\ndocker-dhcp-relay build failed.\n\n**Steps to reproduce the issue:**\n1. make target/sonic-broadcom.bin\n\n**Describe the results you received:**\ndocker image build failed.\n\n**Describe the results you expected:**\n\ndocker image build successfully.\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\n    **Output of `show version`:**\n\n```\nbranch 201803, commit id 8572f84ea0f6054f1c0440511db6501d6f465cfd\n ```\n\n    **Attach debug file `sudo generate_dump`:**\n\n```\nFetched 19.5 MB in 4s (4643 kB/s)\nReading package lists...\n ---> caaea7089f2d\nRemoving intermediate container 733d5b53e400\nStep 4/12 : COPY debs/isc-dhcp-common_4.3.3-6_amd64.deb debs/\n ---> c04c819133ba\nRemoving intermediate container 53842895daae\nStep 5/12 : COPY debs/isc-dhcp-relay_4.3.3-6_amd64.deb debs/\n ---> 013b381c2ffa\nRemoving intermediate container 8c684f9c9e07\nStep 6/12 : RUN dpkg_apt() { [ -f $1 ] && { dpkg -i $1 || apt-get -y install -f; } || return 1; }; dpkg_apt debs/isc-dhcp-common_4.3.3-6_amd64.deb\n ---> Running in d3e4f7a09ac2\n(Reading database ... 14581 files and directories currently installed.)\nPreparing to unpack .../isc-dhcp-common_4.3.3-6_amd64.deb ...\nUnpacking isc-dhcp-common (4.3.3-6) over (4.3.1-6+deb8u3) ...\nSetting up isc-dhcp-common (4.3.3-6) ...\n ---> 86452f7b49f4\nRemoving intermediate container d3e4f7a09ac2\nStep 7/12 : RUN dpkg_apt() { [ -f $1 ] && { dpkg -i $1 || apt-get -y install -f; } || return 1; }; dpkg_apt debs/isc-dhcp-relay_4.3.3-6_amd64.deb\n ---> Running in a90fc03b05ca\nSelecting previously unselected package isc-dhcp-relay.\n(Reading database ... 14581 files and directories currently installed.)\nPreparing to unpack .../isc-dhcp-relay_4.3.3-6_amd64.deb ...\nUnpacking isc-dhcp-relay (4.3.3-6) ...\nSetting up isc-dhcp-relay (4.3.3-6) ...\nGenerating /etc/default/isc-dhcp-relay...\ninvoke-rc.d: policy-rc.d denied execution of start.\nProcessing triggers for systemd (215-17+deb8u7) ...\n ---> d874498b6bf3\nRemoving intermediate container a90fc03b05ca\nStep 8/12 : RUN apt-get clean -y; apt-get autoclean -y; apt-get autoremove -y\n ---> Running in beede5550618\nReading package lists...\nBuilding dependency tree...\nReading state information...\nReading package lists...\nBuilding dependency tree...\nReading state information...\nYou might want to run 'apt-get -f install' to correct these.\nThe following packages have unmet dependencies:\n isc-dhcp-client : Depends: isc-dhcp-common (= 4.3.1-6+deb8u3) but 4.3.3-6 is installed\nE: Unmet dependencies. Try using -f.\nThe command '/bin/sh -c apt-get clean -y; apt-get autoclean -y; apt-get autoremove -y' returned a non-zero code: 100\n[  FAIL LOG END  ] [ target/docker-dhcp-relay.gz ]\nslave.mk:377: recipe for target 'target/docker-dhcp-relay.gz' failed\nmake: *** [target/docker-dhcp-relay.gz] Error 1\nmake: *** Waiting for unfinished jobs....\nMakefile:82: recipe for target 'target/sonic-broadcom.bin' failed\nmake: *** [target/sonic-broadcom.bin] Error 2\n```"
+  },
+  "resolution": {
+    "pr_number": 1666,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/1666",
+    "title": "[dockers] Prevent apt-get from installing suggested and recommended packages by default",
+    "merged_at": "2018-05-02T18:46:22Z",
+    "description": "**- What I did**\n\nOn April 25, the Debian Jessie base image we download from the Docker repository was updated. This update caused a change in package dependencies, which caused a conflict in the DHCP relay docker. A fix was checked in via PR https://github.com/Azure/sonic-buildimage/pull/1659. However, this fix is more of a workaround, because previously, isc-dhcp-client was not installed in any Docker container, and now it is being installed in all Docker containers unnecessarily.\n\nThe root cause of this issue was a change in some \"suggested\" and \"recommended\" packages which caused the following chain reaction:\n\nWe install perl in docker-base. Apt-get now lists netbase as a \"recommended\" package of perl; netbase lists ifupdown as a \"recommended\" package; ifupdown lists isc-dhcp-client as a \"recommended\" package.\n\nThus, we were now installing netbase, ifupdown and isc-dhcp-client (and other unnecessary packages) in the docker-base image. Our apt-get configuration was installing recommended packages by default, which caused the installation of these unnecessary packages. This PR configures apt-get to *not* install \"recommended\" or \"suggested\" packages by default. All necessary packages should be installed explicitly. This PR not only fixes the isc-dhcp-client conflict, but should also help keep the image lean.\n\nOnce this PR is merged, we can revert PR https://github.com/Azure/sonic-buildimage/pull/1659.\n\nAfter making this change, I also needed to adjust the installation of dependencies in docker-fpm-quagga, docker-snmp-sv2 and docker-sonic-vs. In doing so, I also aligned the respective Dockerfile.j2 templates with the cleaner format I have been using recently.\n\nResolves https://github.com/Azure/sonic-buildimage/issues/1669",
+    "files": [
+      {
+        "path": "dockers/docker-base/Dockerfile.j2",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-base/no_install_recommend_suggest",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "dockers/docker-database/Dockerfile.j2",
+        "additions": 23,
+        "deletions": 23
+      },
+      {
+        "path": "dockers/docker-fpm-quagga/Dockerfile.j2",
+        "additions": 18,
+        "deletions": 13
+      },
+      {
+        "path": "dockers/docker-snmp-sv2/Dockerfile.j2",
+        "additions": 48,
+        "deletions": 36
+      },
+      {
+        "path": "platform/p4/docker-sonic-p4.mk",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "platform/vs/docker-sonic-vs.mk",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "platform/vs/docker-sonic-vs/Dockerfile.j2",
+        "additions": 14,
+        "deletions": 11
+      },
+      {
+        "path": "rules/docker-database.mk",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "rules/docker-snmp-sv2.mk",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

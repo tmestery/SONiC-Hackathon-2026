@@ -1,0 +1,95 @@
+{
+  "id": "buildimage-24892",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24892,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24892",
+    "title": "Bug: [Smartswitch]: NPU critical services crash when restarting DPU database service",
+    "created_at": "2025-12-18T14:28:51Z",
+    "closed_at": "2026-03-01T01:23:56Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nOn the NPU, run `systemctl restart database@dpu0`. All ciritcal containers including swss go down due to incorrect systemd dependencies. This is probably because smartswitch used a lot of design elements from multi-asic.\n\n```\n[Unit]\nDescription=switch state service\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nRequires=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nAfter=<EMAIL>\n\nRequires=config-setup.service\nAfter=config-setup.service\nBindsTo=sonic.target\nAfter=sonic.target\nStartLimitIntervalSec=1200\n\nStartLimitBurst=3\n\n[Service]\nEnvironment=\"NUM_DPU=8\"\nEnvironment=\"IS_DPU_DEVICE=false\"\nUser=root\nEnvironment=sonic_asic_platform=cisco-8000\nExecStartPre=/usr/local/bin/swss.sh start\nExecStart=/usr/local/bin/swss.sh wait\nExecStop=/usr/local/bin/swss.sh stop\nRestartSec=30\n\n[Install]\nWantedBy=sonic.target\n```\n\nTested on Cisco smartswitch, but should be generic.\n\n### Steps to Reproduce\n\n```\nsystemctl restart database@dpu0\n```\n\n### Actual Behavior and Expected Behavior\n\nExpected behavior: NPU services should stay up\nActual behavior: All NPU critical services including swss go down.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25178,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25178",
+    "title": "Fix for issue #24892  Bug: [Smartswitch]: NPU critical services crash when restarting DPU database service",
+    "merged_at": "2026-03-01T01:23:55Z",
+    "description": "Description\nFixes #24892\nNPU critical services crash when restarting DPU database service\n\n#### Why I did it\nNPU critical services crash when restarting DPU database service\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nGated multi-instance dependency rewriting in systemd-sonic-generator on num_asics > 1 and updated ssg tests so SmartSwitch NPU uses database.service instead of <EMAIL>.\n\n#### How to verify it\nOn the NPU, run systemctl restart database@dpu0. All ciritcal containers including swss should not restart.\n\n#### Which release branch to backport (provide reason below if selected)\n- [ ] 202506\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n202506\n\n#### Description for the changelog\nFix SmartSwitch NPU boot dependencies by avoiding unnecessary <EMAIL> requirements and only expanding multi-instance database units on true multi-ASIC platforms.\n\n#### UT Results\n```\nroot@sonic:/home/admin# for u in swss syncd bgp lldp gbsyncd macsec teamd bmp dash-ha; do\n>     echo \"===== $u.service =====\"\n>     systemctl show \"$u.service\" -p Requires -p After | tr ' ' '\\n' | grep 'database' || echo \"  no database deps?!\"\n> done\n===== swss.service =====\ndatabase.service\ndatabase.service\n===== syncd.service =====\ndatabase.service\ndatabase.service\n===== bgp.service =====\nRequires=database.service\ndatabase.service\n===== lldp.service =====\ndatabase.service\ndatabase.service\n===== gbsyncd.service =====\ndatabase.service\ndatabase.service\n===== macsec.service =====\n  no database deps?!\n===== teamd.service =====\n  no database deps?!\n===== bmp.service =====\nRequires=database.service\ndatabase.service\n===== dash-ha.service =====\n  no database deps?!\nroot@sonic:/home/admin#\nroot@sonic:/home/admin#\nroot@sonic:/home/admin# docker ps -a\nCONTAINER ID   IMAGE                                COMMAND                  CREATED       STATUS       PORTS     NAMES\n5b284ac82553   docker-snmp:latest                   \"/usr/bin/docker-snm\u2026\"   2 hours ago   Up 2 hours             snmp\n0e133767f061   docker-platform-monitor:latest       \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours             pmon\ne1a2441b88de   docker-sonic-mgmt-framework:latest   \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours             mgmt-framework\n8dcaa4c8d8c3   docker-lldp:latest                   \"/usr/bin/docker-lld\u2026\"   2 hours ago   Up 2 hours             lldp\nd7b433528a23   docker-sonic-gnmi:latest             \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours             gnmi\n37f3d6ce30fd   docker-dhcp-server:latest            \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours             dhcp_server\n56967ca6c42f   docker-dhcp-relay:latest             \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours             dhcp_relay\n1ea7469d25d9   docker-eventd:latest                 \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours             eventd\n4c38dc947c96   docker-fpm-frr:latest                \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours             bgp\nc3a5f510f4e9   docker-router-advertiser:latest      \"/usr/bin/docker-ini\u2026\"   2 hours ago   Up 2 hours             radv\nb0aef8b799f7   docker-syncd-cisco:latest            \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours             syncd\n09e0bbbe14a0   docker-teamd:latest                  \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours             teamd\nf3423bf9b73e   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   2 hours ago   Up 2 hours             swss\ne813b1f9fd5a   docker-sysmgr:latest                 \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours             sysmgr\nc26b92e8a630   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu6\n9b24032b1d54   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu5\nce95f647d883   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu7\n74c88bae31bf   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu1\na01b1e5c40e0   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu2\n204b5c72ff9e   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu4\nf53d01e86758   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu3\ncd38e3b7eea4   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             databasedpu0\na20d1724b3e1   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             database\n582d2c8c9393   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours             database-chassis\nroot@sonic:/home/admin# systemctl restart <EMAIL>\n\nroot@sonic:/home/admin# docker ps -a\nCONTAINER ID   IMAGE                                COMMAND                  CREATED       STATUS         PORTS     NAMES\n5b284ac82553   docker-snmp:latest                   \"/usr/bin/docker-snm\u2026\"   2 hours ago   Up 2 hours               snmp\n0e133767f061   docker-platform-monitor:latest       \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours               pmon\ne1a2441b88de   docker-sonic-mgmt-framework:latest   \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours               mgmt-framework\n8dcaa4c8d8c3   docker-lldp:latest                   \"/usr/bin/docker-lld\u2026\"   2 hours ago   Up 2 hours               lldp\nd7b433528a23   docker-sonic-gnmi:latest             \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours               gnmi\n37f3d6ce30fd   docker-dhcp-server:latest            \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours               dhcp_server\n56967ca6c42f   docker-dhcp-relay:latest             \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours               dhcp_relay\n1ea7469d25d9   docker-eventd:latest                 \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours               eventd\n4c38dc947c96   docker-fpm-frr:latest                \"/usr/bin/docker_ini\u2026\"   2 hours ago   Up 2 hours               bgp\nc3a5f510f4e9   docker-router-advertiser:latest      \"/usr/bin/docker-ini\u2026\"   2 hours ago   Up 2 hours               radv\nb0aef8b799f7   docker-syncd-cisco:latest            \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours               syncd\n09e0bbbe14a0   docker-teamd:latest                  \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours               teamd\nf3423bf9b73e   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   2 hours ago   Up 2 hours               swss\ne813b1f9fd5a   docker-sysmgr:latest                 \"/usr/local/bin/supe\u2026\"   2 hours ago   Up 2 hours               sysmgr\nc26b92e8a630   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               databasedpu6\n9b24032b1d54   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               databasedpu5\nce95f647d883   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               databasedpu7\n74c88bae31bf   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               databasedpu1\na01b1e5c40e0   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               databasedpu2\n204b5c72ff9e   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               databasedpu4\nf53d01e86758   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 7 seconds             databasedpu3\ncd38e3b7eea4   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               databasedpu0\na20d1724b3e1   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               database\n582d2c8c9393   docker-database:latest               \"/usr/local/bin/dock\u2026\"   2 hours ago   Up 2 hours               database-chassis\n```",
+    "files": [
+      {
+        "path": "files/build_templates/per_namespace/bgp.service.j2",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "files/build_templates/per_namespace/bmp.service.j2",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "files/build_templates/per_namespace/gbsyncd.service.j2",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "files/build_templates/per_namespace/lldp.service.j2",
+        "additions": 5,
+        "deletions": 4
+      },
+      {
+        "path": "files/build_templates/per_namespace/macsec.service.j2",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "files/build_templates/per_namespace/swss.service.j2",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "files/build_templates/per_namespace/syncd.service.j2",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "files/build_templates/per_namespace/teamd.service.j2",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/sonic-cfggen",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "src/systemd-sonic-generator/ssg-test.cc",
+        "additions": 10,
+        "deletions": 4
+      },
+      {
+        "path": "src/systemd-sonic-generator/systemd-sonic-generator.cpp",
+        "additions": 1,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

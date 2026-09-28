@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-5216",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 5216,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/5216",
+    "title": "[fast-reboot] FDB entries are not restored on fast-reboot",
+    "created_at": "2020-08-19T09:21:26Z",
+    "closed_at": "2020-10-13T16:43:41Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "201911"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\nFDB entries are not restored on fast-reboot. This issues causes traffic to flood for a long period of time till all FDB entries are re-learned. The original fast-reboot design is to save FDB entries to a file and add them on HW in fast-boot ASAP, instead of waiting for learning.\n\n**Steps to reproduce the issue:**\n1. ansible-playbook test_sonic.yml -i inventory --limit $sw-t0 -e testbed_name=$sw-t0 -e testbed_type=t0 -e testcase_name=fast-reboot\n2. Open /tmp/fast-reboot.log in PTF container\n3. Observe flooding after data plane comes back\n\n**Describe the results you received:**\n\nFlooding for a long period of time after fast-reboot when data plane comes back.\n\n**Describe the results you expected:**\n\nThere should be no flooding when switch is fast-rebooted, FDB entries known prior to reboot have to be restored in the HW ASAP instead of waiting for learning to happen.\n\n**Additional information you deem important (e.g. issue happens only occasionally):**\n\nThe issue is most probably caused by *filter_fdb_entries.py* added in https://github.com/Azure/sonic-utilities/pull/890, a simple reproduction without running full fast-reboot flow:\n```\nadmin@arc-switch1025:~$ show arp\nAddress       MacAddress         Iface            Vlan\n------------  -----------------  ---------------  ------\n<IP>     <IPV6>  PortChannel0001  -\n<IP>     <IPV6>  PortChannel0002  -\n<IP>     <IPV6>  PortChannel0003  -\n<IP>     <IPV6>  PortChannel0004  -\n<IP>   <IPV6>  eth0             -\n<IP>  <IPV6>  eth0             -\n<IP>   <IPV6>  Ethernet20       1000\nTotal number of entries 7\nadmin@arc-switch1025:~$ show mac\n  No.    Vlan  MacAddress         Port        Type\n-----  ------  -----------------  ----------  -------\n    1    1000  <IPV6>  Ethernet20  Dynamic\nTotal number of entries 1\nadmin@arc-switch1025:~$/usr/bin/fast-reboot-dump.py -t .\nadmin@arc-switch1025:~$ cat fdb.json\n[\n  {\n    \"FDB_TABLE:Vlan1000:E4-1D-2D-CA-C7-05\": {\n      \"type\": \"dynamic\",\n      \"port\": \"Ethernet20\"\n    },\n    \"OP\": \"SET\"\n  }\n]admin@arc-switch1025:~$/usr/bin/filter_fdb_entries.py -f ./fdb.json -a ./arp.json -c /etc/sonic/config_db.json\nadmin@arc-switch1025:~$ cat fdb.json\n```\n\n    **Output of `show version`:**\n\n```\nSONiC Software Version: SONiC.201911.172-1abf7be7\nDistribution: Debian 9.13\nKernel: 4.9.0-11-2-amd64\nBuild commit: 1abf7be7\nBuild date: Tue Aug 18 <IPV6> UTC 2020\nBuilt by: johnar@jenkins-worker-8\n\nPlatform: x86_64-mlnx_msn2700-r0\nHwSKU: ACS-MSN2700\nASIC: mellanox\nSerial Number: MT1822K07815\nUptime: <IPV6> up 17:21,  1 user,  load average: 0.13, 0.12, 0.10\n\nDocker images:\nREPOSITORY                    TAG                   IMAGE ID            SIZE\ndocker-syncd-mlnx             201911.172-1abf7be7   f1e750afd5fc        392MB\ndocker-syncd-mlnx             latest                f1e750afd5fc        392MB\ndocker-sonic-telemetry        201911.172-1abf7be7   7ba22719d1f6        353MB\ndocker-sonic-telemetry        latest                7ba22719d1f6        353MB\ndocker-router-advertiser      201911.172-1abf7be7   d6af74e64a7d        289MB\ndocker-router-advertiser      latest                d6af74e64a7d        289MB\ndocker-sonic-mgmt-framework   201911.172-1abf7be7   70dd81d12201        429MB\ndocker-sonic-mgmt-framework   latest                70dd81d12201        429MB\ndocker-platform-monitor       201911.172-1abf7be7   25bb9a6362ca        659MB\ndocker-platform-monitor       latest                25bb9a6362ca        659MB\ndocker-fpm-frr                201911.172-1abf7be7   127bc955a4f9        334MB\ndocker-fpm-frr                latest                127bc955a4f9        334MB\ndocker-sflow                  201911.172-1abf7be7   9c8697cd760a        314MB\ndocker-sflow                  latest                9c8697cd760a        314MB\ndocker-lldp-sv2               201911.172-1abf7be7   ea53736695ce        311MB\ndocker-lldp-sv2               latest                ea53736695ce        311MB\ndocker-dhcp-relay             201911.172-1abf7be7   04d8fc8cc983        299MB\ndocker-dhcp-relay             latest                04d8fc8cc983        299MB\ndocker-database               201911.172-1abf7be7   ae9a447b86a6        289MB\ndocker-database               latest                ae9a447b86a6        289MB\ndocker-teamd                  201911.172-1abf7be7   fd29716b8b6d        313MB\ndocker-teamd                  latest                fd29716b8b6d        313MB\ndocker-snmp-sv2               201911.172-1abf7be7   06e569191f99        347MB\ndocker-snmp-sv2               latest                06e569191f99        347MB\ndocker-orchagent              201911.172-1abf7be7   6ffa04ee3ed4        332MB\ndocker-orchagent              latest                6ffa04ee3ed4        332MB\ndocker-nat                    201911.172-1abf7be7   4bbbc474ec7d        315MB\ndocker-nat                    latest                4bbbc474ec7d        315MB\n\n```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```\n\n[arp.json.txt](https://github.com/Azure/sonic-buildimage/files/5103660/arp.json.txt)\n[fdb.json.txt](https://github.com/Azure/sonic-buildimage/files/5103661/fdb.json.txt)\n[config_db.json.txt](https://github.com/Azure/sonic-buildimage/files/5103663/config_db.json.txt)"
+  },
+  "resolution": {
+    "pr_number": 1059,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/1059",
+    "title": "[filter-fdb] Fix Filter FDB With IPv6 Present in Config DB",
+    "merged_at": "2020-08-25T23:50:46Z",
+    "description": "Filter FDB was wiping out IPv4 entries when both IPv4 and IPv6\nare associated with VLan interface. The reason is IPv6 network\nwas overwriting IPv4 network. This pr add support to filter\nboth IPv4 and IPv6 addresses\n\nFixes: Azure/sonic-buildimage#5216\nCloses: Azure/sonic-buildimage#5216\n\nsigned-off-by: Tamer Ahmed <<EMAIL>>\n\n**- What I did**\nAdded support for IPv6\n\n**- How I did it**\nNew code that addresses both IPv4 and IPv6 networks\n\n**- How to verify it**\nUnit test cases updated to have IPv6 along IPv4 addresses\n\n**- Previous command output (if the output of a command-line utility has changed)**\nN/A\n**- New command output (if the output of a command-line utility has changed)**\nN/A",
+    "files": [
+      {
+        "path": "fdbutil/filter_fdb_entries.py",
+        "additions": 11,
+        "deletions": 8
+      },
+      {
+        "path": "tests/filter_fdb_input/config_db.json",
+        "additions": 3,
+        "deletions": 1
+      },
+      {
+        "path": "tests/filter_fdb_input/expected_fdb.json",
+        "additions": 8,
+        "deletions": 1
+      },
+      {
+        "path": "tests/filter_fdb_input/test_vectors.py",
+        "additions": 9,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

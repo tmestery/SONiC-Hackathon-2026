@@ -1,0 +1,68 @@
+{
+  "id": "buildimage-19715",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 19715,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/19715",
+    "title": "Ethernet RIF counters being reported as ifInErrors in SNMP ",
+    "created_at": "2024-07-26T16:00:10Z",
+    "closed_at": "2024-08-12T05:52:57Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "nvidia",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nifInErrors for Ethernet interfaces are expected to have L2 CRC errors. With a change that went into SNMP, the RIF counters are being aggregated into ifInErrors/ifOutErrors, this is misleading while monitoring the link for CRC errors.\n\nThis is becuase there was a change added in SONiC SNMP to support VLAN and RIF counters.\n\nAs a part of this change, the ifInErrors(<IP>.<IP>.1.14) and ifOutErrors(<IP>.<IP>.1.20) OIDs will start seeing sum of L2 and L3 (RIF) counters for each interface.\n\n[Restored snmp vlan support per RFC1213 and added the missing support for RFC2863 by raphaelt-nvidia \u00b7 Pull Request #218 \u00b7 sonic-net/sonic-snmpagent (github.com)](https://github.com/sonic-net/sonic-snmpagent/pull/218)\n\nhttps://github.com/sonic-net/sonic-snmpagent/blame/a281f9ab771adaa438f01fd5394d7a73ed6bc1d6/src/sonic_ax_impl/mibs/ietf/rfc1213.py#L361\n\n#### Steps to reproduce the issue:\nIssue seen in 202205 image onwards.\nBoot up image on platform with RIF counter support with Ethernet RIF interface.\nFrom CLI below, can see that there are are no L2 errors on Ethernet112 but there are RIF errors:\n```\nshow int counters\n      IFACE    STATE    RX_OK     RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR    TX_OK     TX_BPS    TX_UTIL    TX_ERR    TX_DRP    TX_OVR\n-----------  -------  -------  ---------  ---------  --------  --------  --------  -------  ---------  ---------  --------  --------  --------\n..\nEthernet112        U      839  34.17 B/s      0.00%         0         0         0      631  12.97 B/s      0.00%         0         0         0\n..\n\nshow int counter rif\n         IFACE    RX_OK     RX_BPS    RX_PPS    RX_ERR    TX_OK    TX_BPS    TX_PPS    TX_ERR\n--------------  -------  ---------  --------  --------  -------  --------  --------  --------\n   Ethernet112      658  12.11 B/s    0.13/s        16        0  0.00 B/s    0.00/s         0\nPortChannel102      511   1.93 B/s    0.03/s        17        0  0.00 B/s    0.00/s         0\nPortChannel103      514   2.35 B/s    0.03/s        17        0  0.00 B/s    0.00/s         0\nPortChannel104      508   2.35 B/s    0.03/s        17        0  0.00 B/s    0.00/s         0\n      Vlan1000      837   0.93 B/s    0.02/s       220        0  0.00 B/s    0.00/s         0\n\n docker exec -it snmp snmpwalk -v2c -c <comm> <IP> <IP>.<IP>.1.14\niso.<IP>.<IP>.14.1 = Counter32: 0\n..\niso.<IP>.<IP>.14.113 = Counter32: 16 --- Ethernet112\n..\niso.<IP>.<IP>.14.1102 = Counter32: 17\niso.<IP>.<IP>.14.1103 = Counter32: 17\niso.<IP>.<IP>.14.1104 = Counter32: 17\niso.<IP>.<IP>.14.3000 = Counter32: 220\niso.<IP>.<IP>.14.10000 = Counter32: 0\n\n      ```\n\n#### Describe the results you received:\n\n#### Describe the results you expected:\nRIF counters should not be part of ifInErrors/ifOutErrors in SNMP.\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 325,
+    "repository": "sonic-net/sonic-snmpagent",
+    "url": "https://github.com/sonic-net/sonic-snmpagent/pull/325",
+    "title": "Aggregate L3 errors with L2 discards for interfaces with RIF",
+    "merged_at": "2024-08-12T05:52:56Z",
+    "description": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/19715\n\n**- What I did**\n\nToday we sum L2 and L3 errors on RX/TX in ifInErrors/ifOutErrors counters that are part of RFC1213 MIB.\nIt appears that the monitoring system is using ifInErrors as a way to detect CRC errors on physical interfaces.\n\nThe RFC vaguely defines ifInErrors as:\n\n```\n ifInErrors OBJECT-TYPE\n              SYNTAX  Counter\n              ACCESS  read-only\n              STATUS  mandatory\n              DESCRIPTION\n                      \"The number of inbound packets that contained\n                      errors preventing them from being deliverable to a\n                      higher-layer protocol.\"\n```\n\ninstead, aggregate errors on L3 as part of ifInDiscard and ifOutDiscard.\n\n**- How I did it**\n\nRemoved aggregation logic and updated UT.\n\n**- How to verify it**\n\nManual snmpwalk on interfaces - trigger L3 error - e.g. packet with dst map != router mac, check counter by snmpwalk.\n\nGenerate RIF RX errors:\n\n```\nadmin@sonic:~$ show interface counters rif\n    IFACE    RX_OK    RX_BPS    RX_PPS    RX_ERR    TX_OK    TX_BPS    TX_PPS    TX_ERR\n---------  -------  --------  --------  --------  -------  --------  --------  --------\nEthernet0        0  0.00 B/s    0.00/s       100        0  0.00 B/s    0.00/s         0\n  Vlan100        1  0.00 B/s    0.00/s         0        0  0.00 B/s    0.00/s         0\n```\n\nBefore this change (14 - error, 13 - discard):\n```\nadmin@sonic:~$ docker exec -it snmp snmpwalk -v2c -c public localhost <IP>.<IP>.1.14.1\niso.<IP>.<IP>.14.1 = Counter32: 100\nadmin@sonic:~$ docker exec -it snmp snmpwalk -v2c -c public localhost <IP>.<IP>.1.13.1\niso.<IP>.<IP>.13.1 = Counter32: 0\n```\n\nAfter this change:\n```\nadmin@sonic:~$ docker exec -it snmp snmpwalk -v2c -c public localhost <IP>.<IP>.1.14.1\niso.<IP>.<IP>.14.1 = Counter32: 0\nadmin@sonic:~$ docker exec -it snmp snmpwalk -v2c -c public localhost <IP>.<IP>.1.13.1\niso.<IP>.<IP>.13.1 = Counter32: 100\n```\n\n**- Description for the changelog**",
+    "files": [
+      {
+        "path": "src/sonic_ax_impl/mibs/__init__.py",
+        "additions": 6,
+        "deletions": 6
+      },
+      {
+        "path": "tests/mock_tables/asic0/counters_db.json",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/mock_tables/asic1/counters_db.json",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/mock_tables/counters_db.json",
+        "additions": 6,
+        "deletions": 6
+      },
+      {
+        "path": "tests/namespace/test_interfaces.py",
+        "additions": 125,
+        "deletions": 19
+      },
+      {
+        "path": "tests/test_interfaces.py",
+        "additions": 135,
+        "deletions": 27
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

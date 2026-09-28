@@ -1,0 +1,52 @@
+{
+  "id": "buildimage-28175",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28175,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28175",
+    "title": "Bug: [smartswitch] gnoi-shutdown-daemon intermittently fails gNOI Reboot with connection refused during DPU shutdown",
+    "created_at": "2026-06-30T21:35:18Z",
+    "closed_at": "2026-08-06T21:53:46Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [
+      "202605"
+    ],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nIntermittent failure when shutting down all DPUs via `config chassis shutdown DPUx`.\nSome DPUs fail to send the gNOI Reboot HALT command.\nThere's a previous fix trying to solve this issue: https://github.com/sonic-net/sonic-host-services/pull/364\nThe log shows the error message still shows after the fix was merged.\n\n### Steps to Reproduce\n\n1. On SmartSwitch with N DPUs, run `config chassis shutdown DPU0` ... `DPU(N-1)` (or equivalent bulk shutdown)\n2. Observe `gnoi-shutdown-daemon` logs on NPU\n\n### Actual Behavior and Expected Behavior\n\n## Expected behavior\nAll DPUs receive gNOI Reboot HALT and shut down gracefully.\n\n## Actual behavior\nSome DPUs fail with connection refused to gNOI port.\n\n### Relevant log output\n\n```shell\ndebug message:\nDPU1: Reboot command failed (rc=2, target=:50052): panic: rpc error: code = Unavailable desc = connection error: desc = \"transport: Error while dialing: dial tcp :50052: connect: connection refused\" ...\n\nsyslog:\nNOTICE gnoi-shutdown-daemon[20022]: DPU1: Admin shutdown detected, initiating gNOI HALT\nNOTICE gnoi-shutdown-daemon[20022]: DPU1: Starting gNOI shutdown sequence\nNOTICE gnoi-shutdown-daemon[20022]: DPU1: PCI detach complete, proceeding for halting services via gNOI\nERR gnoi-shutdown-daemon[20022]: DPU1: Reboot command failed\nERR gnoi-shutdown-daemon[20022]: DPU1: Failed to send Reboot command\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n- gNOI server confirmed running on DPUs; gnmi_port aligned in CONFIG_DB\n- `gnoi_client` panics on dial failure (reboot.go:21)"
+  },
+  "resolution": {
+    "pr_number": 408,
+    "repository": "sonic-net/sonic-host-services",
+    "url": "https://github.com/sonic-net/sonic-host-services/pull/408",
+    "title": "gnoi-shutdown: use per-thread DB connections to avoid crossed DPU reads",
+    "merged_at": "2026-07-24T19:47:05Z",
+    "description": "### What I did\nFixes:https://github.com/sonic-net/sonic-buildimage/issues/28175\n`gnoi-shutdown-daemon` spawns one worker thread per DPU on shutdown, but all threads shared a single CONFIG_DB/STATE_DB redis connection created once in `main()`. A redis `DBConnector` is a single, non-thread-safe socket, so when multiple DPUs shut down in parallel their `hget`/`Table` reads interleave on the wire and replies get matched to the wrong request \u2014 producing **crossed IP/port values between DPUs**.\n\nThis gave gnoi_client a bad target like `<IP>:<IP>` (dpu0's IP as host, dpu1's IP in the port slot), causing:\n\n```\nERR gnoi-shutdown-daemon: DPU1: Reboot command failed (rc=2, target=<IP>:<IP>):\npanic: rpc error: ... dial tcp: lookup tcp/<IP>: unknown port\n```\n\n### Fix\nGive each per-DPU worker thread its own CONFIG_DB/STATE_DB connection so reads can never cross:\n- `handle_and_cleanup()` opens fresh `db_connect(\"CONFIG_DB\")` / `db_connect(\"STATE_DB\")` per thread and passes them into `_handle_transition()`.\n- `_handle_transition()` / `_wait_for_gnoi_halt_in_progress()` take optional per-thread connections, falling back to the shared ones for direct/unit-test callers (backward compatible).\n\n### Testing\n- `py_compile` clean.\n- Smoke-tested both paths: per-thread connections are the ones actually used (correct `<IP>:50052`), and fallback-to-shared preserves existing unit-test behavior.",
+    "files": [
+      {
+        "path": "scripts/gnoi_shutdown_daemon.py",
+        "additions": 23,
+        "deletions": 7
+      },
+      {
+        "path": "tests/gnoi_shutdown_daemon_test.py",
+        "additions": 66,
+        "deletions": 9
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

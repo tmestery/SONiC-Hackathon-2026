@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-18431",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 18431,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/18431",
+    "title": "[multi-asic][202305]: 'config reload -l <>' option  loads incorrect config",
+    "created_at": "2024-03-22T00:35:50Z",
+    "closed_at": "2024-05-23T16:59:24Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nOn multi-asic system, I see that when we run config reload with -l, it creates additional ports with alias as interface names.\n\nroot@sfd-vt2-lc0:/home/cisco# show int st -d all -n asic0\n      Interface                Lanes    Speed    MTU    FEC         Alias             Vlan    Oper    Admin    Type    Asym PFC\n---------------  -------------------  -------  -----  -----  ------------  ---------------  ------  -------  ------  ----------\n     Eth0/0/0/0                  N/A     400G   9100    N/A           N/A           routed     N/A       up     N/A         off\n     Eth0/0/0/1                  N/A     400G   9100    N/A           N/A           routed     N/A       up     N/A         off\n     Eth0/0/0/2                  N/A     400G   9100    N/A           N/A           routed     N/A       up     N/A         off\n     Eth0/0/0/3                  N/A     400G   9100    N/A           N/A           routed     N/A       up     N/A         off\n     Eth0/0/0/4                  N/A     400G   9100    N/A           N/A           routed     N/A       up     N/A         off\n     Eth0/0/0/5                  N/A     400G   9100    N/A           N/A           routed     N/A       up     N/A         off\n     Eth0/0/0/6                  N/A     400G   9100    N/A           N/A           routed     N/A       up     N/A         off\n\nThis affects the sonic-mgmt recovery and other test cases which use config reload with  running_golden_config option.\n\nRoot Cause:\nsonic-cfggen misses handling for namespace at couple of locations. Due to which when port config is fetched, it returns data from global config and not the namespace.\n\nThe function calls at https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-config-engine/sonic-cfggen#L361C1-L364C84\n\nget_path_to_port_config_file\nget_port_config\n\nneeds to be fixed to handle namespace\n\nit should be\n```\n        if args.port_config is None:\n            args.port_config = device_info.get_path_to_port_config_file(hwsku, **asic_id**)\n        load_namespace_config(asic_name)\n        (ports, _, _) = get_port_config(hwsku, platform, args.port_config, hwsku_config_file=args.hwsku_config, asic_name=asic_name)\n```\n#### Steps to reproduce the issue:\n1. Run 'config reload -l'\n2.\n3.\n\n#### Describe the results you received:\nAdditional ports were created with 'alias' as interface names.\n\n#### Describe the results you expected:\nDuplicate port entries with alias names should not be created\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 18452,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/18452",
+    "title": "[multi-asic] Use asic_id/asic_name for APIs to get port config data",
+    "merged_at": "2024-05-23T16:59:23Z",
+    "description": "Signed-off-by: Anand Mehra <EMAIL>\n\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/18431\n\n#### Why I did it\nsonic-cfggen misses handling for namespace at couple of locations. Due to this, when port config is fetched, it returns data from global config and not the namespace.\n\nThe function calls for\nget_path_to_port_config_file\nget_port_config\n\nneeds to be fixed to handle namespace for multi-asic.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n1.Pass asic_id as argument when calling get_path_to_port_config_file()\nFor single asic, asic_id is None and the function returns the correct port_config.ini file path.\nFor multi-asic, using asic_id provides the correct file path for the asic.\n\n2. Pass asic_name as argument when calling get_port_config()\n\n#### How to verify it\nsonic-cfggen -H --print -n -k\nThis command should return the correct port config for the namespace.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [ ] 202205\n- [] 202211\n- [x] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-config-engine/sonic-cfggen",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_multinpu_cfggen.py",
+        "additions": 24,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

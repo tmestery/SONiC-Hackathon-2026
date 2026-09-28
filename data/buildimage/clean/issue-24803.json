@@ -1,0 +1,93 @@
+{
+  "id": "buildimage-24803",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 24803,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/24803",
+    "title": "Bug: [Chassis]: ERR syncd0#syncd: :- threadFunction: time span WD exceeded 30673 ms for create:SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000\\n\"",
+    "created_at": "2025-12-10T21:09:47Z",
+    "closed_at": "2026-03-24T17:53:33Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn All chassis platforms, during swss/syncd init, a bunch of Watchdog exceeded error syslogs are generated.\nAlthough this seems harmless, as the init goes through succesfully. This Error messages are unwaranted and causes confusion.\n\nERR syncd0#syncd: :- threadFunction: time span WD exceeded 30937 ms for create:SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000\n\nThere was timeout adjustments done in SWSS for Chassis platforms:\nhttps://github.com/sonic-net/sonic-swss/blob/b88a5c20efb9296af946d49436d8487affe2dec1/orchagent/main.cpp#L693-L717\n\nNeed similar adjustments in syncd/sairedis as well?\n\n### Steps to Reproduce\n\nrestart SWSS\n\n### Actual Behavior and Expected Behavior\n\nActual Behvaior:\ntime span WD error syslogs are generated upon swss restarts\n\nExpected Behavior:\nLonger init time is expected, and hence this syslog should not be seen(or should be info not error).\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC202405\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 1751,
+    "repository": "sonic-net/sonic-sairedis",
+    "url": "https://github.com/sonic-net/sonic-sairedis/pull/1751",
+    "title": "syncd: Add -W flag for platform specific watchdog timeout during initialization",
+    "merged_at": "2026-03-24T17:53:31Z",
+    "description": "#### Why I did it\n\nFix https://github.com/sonic-net/sonic-buildimage/issues/24803\n\nOn chassis platforms (VOQ, fabric, chassis-packet, DPU), syncd generates false-alarm \"WD exceeded\" errors during initialization. The default 30-second watchdog timeout is too short for these platforms.\n\nInitially, I proposed statically extending the timeout, but as pointed out in the reviews, a permanent extension effectively neutralizes the watchdog's ability to detect hung operations during steady-state operation. We need a way to tolerate slow initialization without compromising ongoing system monitoring.\n\n#### How I did it\nAdded a two-timeout setup: a longer timeout for the initialization phase, which automatically drops back to the standard timeout once init is done.\n\n1. Added optional `-W` for the init timeout (similar to the existing `-w` flag introduced in #1243).\n2. `syncd` starts using the `-W` timeout. Once `APPLY_VIEW` succeeds, `syncd` automatically switches the watchdog back to the `-w` timeout.\n3. For normal switches, if `-W` isn't provided, it defaults to value of `-w` for backward compatibility. However, default `-W` value is extended for chassis platforms:\n   - voq/chassis-packet/dpu: 150s (5x default)\n   - fabric: 300s (10x default)\n\n#### Why not the swss way (C++ DB read)\n\nContext: There was timeout adjustments done in SWSS for Chassis platforms, they just read from CONFIG_DB:\n[orchagent/main.cpp#L693-L717](https://github.com/sonic-net/sonic-swss/blob/b88a5c20efb9296af946d49436d8487affe2dec1/orchagent/main.cpp#L693-L717)\n\nHowever, syncd is configured via its `-w` command-line option in this repo. Reading CONFIG_DB in C++ at syncd startup would add a new DB dependency and ordering risk, while the value is already available in this script via sonic-cfggen. This keeps the watchdog setting with the component that consumes it and aligns with existing syncd init patterns.\n\nAlso, the `nvidia-bluefield` platform is already using this approach here to change their timeout: [syncd/scripts/syncd_init_common.sh#L552](https://github.com/sonic-net/sonic-sairedis/blob/50c5626c89566bf5ca54d0ab767b272c8742dee5/syncd/scripts/syncd_init_common.sh#L552).\n\n#### How to verify it\n\nDeploy on a chassis platform (VOQ/fabric) and verify no false \"WD exceeded\" errors during syncd initialization.\n\n#### Description for the changelog\n\nImplement dual-timeout watchdog in syncd to prevent false-alarms during chassis initialization",
+    "files": [
+      {
+        "path": "syncd/CommandLineOptions.cpp",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/CommandLineOptions.h",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/CommandLineOptionsParser.cpp",
+        "additions": 21,
+        "deletions": 3
+      },
+      {
+        "path": "syncd/Syncd.cpp",
+        "additions": 44,
+        "deletions": 1
+      },
+      {
+        "path": "syncd/Syncd.h",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/TimerWatchdog.cpp",
+        "additions": 32,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/TimerWatchdog.h",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "syncd/scripts/syncd_init_common.sh",
+        "additions": 27,
+        "deletions": 0
+      },
+      {
+        "path": "unittest/syncd/Makefile.am",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "unittest/syncd/TestCommandLineOptions.cpp",
+        "additions": 41,
+        "deletions": 2
+      },
+      {
+        "path": "unittest/syncd/TestTimerWatchdog.cpp",
+        "additions": 34,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

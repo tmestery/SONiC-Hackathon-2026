@@ -1,0 +1,58 @@
+{
+  "id": "buildimage-26246",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26246,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26246",
+    "title": "Bug: countersyncd: Netlink receive buffer overflows with very large HFT counter set",
+    "created_at": "2026-03-18T17:11:12Z",
+    "closed_at": "2026-04-23T18:54:36Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nUnder high HFT load with a very large number of counters (e.g. full queue counters, as in test_hft_full_queue_counters), countersyncd can hit ENOBUFS (\u201cNo buffer space available\u201d) on the netlink socket.\n\nThe kernel reports that the netlink socket\u2019s receive buffer is full (\u201cNo buffer space available\u201d), so the overflow is at the kernel \u2192 userspace boundary: data is arriving faster than the process is reading it.\n\nSo the kernel is telling us its netlink receive buffer is full and it had to drop data. The problem is before our processing: we are not draining the socket often enough.\n\nThe code waits a fixed interval (e.g. 10 ms) before each socket readiness check, then does one read. So we only try to drain the kernel buffer at most once per interval. If HFT samples are sent every 10 ms. With a very large number of counters, each 10 ms burst is large. If we only read once per 10 ms, the kernel can get the next burst before we\u2019ve read the previous one, so its buffer fills and we see the \u201cbuffer full\u201d error. Because comm stats show downstream is keeping up, the only remaining explanation is that we\u2019re not draining the kernel buffer often enough for this data rate and burst size.\n\nI have created a debug version with reduced interval of 5ms - which has caused this issue to disappear under the same load\n\n### Steps to Reproduce\n\n1. Configure SONiC with HFT enabled and a profile that creates a very large number of counters (e.g. full queue counters, as covered by test_hft_full_queue_counters on a switch with 512 ports, and 8 QUEUES defined per port), with 10 ms sample interval.\n2. Start countersyncd with:\n    countersyncd -e --stats-interval 10\n3. Run under steady traffic so HFT samples are sent every 10 ms with the full counter set.\n4. Observe logs for ENOBUFS.\n\n### Actual Behavior and Expected Behavior\n\n**Expected behavior**\nNo ENOBUFS when running with a very large number of HFT counters (e.g. full queue counters as in test_hft_full_queue_counters), as long as the poll interval is appropriate for the data rate.\n\n**Actual behavior**\nWith a very large number of counters, logs repeatedly show:\n\n`[WARN] Netlink receive buffer full (ENOBUFS). Consider increasing buffer size or processing messages faster. Error: Os { code: 105, kind: Uncategorized, message: \"No buffer space available\" }\n`\nSome HFT samples are dropped; stats can be incomplete or lag during bursts.\nWith a smaller number of counters, the same setup typically does not show ENOBUFS.\n\n### Relevant log output\n\n```shell\nWith 10 ms poll interval (reproduces the bug):\n\n[crates/countersyncd/src/actor/data_netlink.rs:892] [WARN] Netlink receive buffer full (ENOBUFS). Consider increasing buffer size or processing messages faster. Error: Os { code: 105, kind: Uncategorized, message: \"No buffer space available\" }[2026-03-18 <IPV6>.408] [crates/countersyncd/src/actor/data_netlink.rs:892] [WARN] Netlink receive buffer full (ENOBUFS). ...[2026-03-18 <IPV6>.508] [crates/countersyncd/src/actor/data_netlink.rs:892] [WARN] Netlink receive buffer full (ENOBUFS). ...\n\nComm stats (data path itself is not backlogged; bottleneck is kernel\u2192userspace):\n\n[crates/countersyncd/src/utilities/mod.rs:140] [INFO] Comm stats [data_netlink.ipfix_records]: count=47754, avg_len=0.00, peak_len=0, min_len=0, last_len=0, rms_len=0.00, nonzero_count=0, capacity=1024, avg_util=0.00, peak_util=0.00\n[crates/countersyncd/src/utilities/mod.rs:140] [INFO] Comm stats [ipfix.stats_reporter]: count=95507, avg_len=0.50, peak_len=3, min_len=0, last_len=1, rms_len=0.71, nonzero_count=47741, capacity=1024, avg_util=0.00, peak_util=0.00\n[crates/countersyncd/src/utilities/mod.rs:140] [INFO] Comm stats [control_netlink.data_netlink_cmd]: count=10, avg_len=0.00, peak_len=0, min_len=0, last_len=0, rms_len=0.00, nonzero_count=0, capacity=10, avg_util=0.00, peak_util=0.00\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4380,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4380",
+    "title": "[countersyncd]: Make it possible to configure the poll intervals",
+    "merged_at": "2026-04-23T18:54:35Z",
+    "description": "**What I did**\n- Made the socket readiness poll interval configurable via --socket-readiness-timeout-ms (default 5 ms; was fixed at 10 ms). The data_netlink actor uses this value when waiting before checking the netlink socket.\n- Made the netlink socket receive buffer configurable via --netlink-rcvbuf (default 4 MB; 0 = OS default). Set SO_RCVBUF on the data netlink socket at connect/reconnect and log requested vs actual size.\n- Made the comm stats log interval configurable via --comm-stats-interval (default 600 s) so queue-depth stats can be emitted more often when debugging.\n\n**Why I did it**\nTo make sure we can empty the buffer before the next samples of counters is received.\nAnd to fix https://github.com/sonic-net/sonic-buildimage/issues/26246\n\n**How I verified it**\nConfigure HFT with a large amount of counters and ports and verified the amount of messages received per second.\nUse the test test_hft_full_queue_counters to validate such secnario.\n\n**Details if related**",
+    "files": [
+      {
+        "path": "crates/countersyncd/src/actor/data_netlink.rs",
+        "additions": 68,
+        "deletions": 20
+      },
+      {
+        "path": "crates/countersyncd/src/actor/netlink_utils.rs",
+        "additions": 36,
+        "deletions": 1
+      },
+      {
+        "path": "crates/countersyncd/src/main.rs",
+        "additions": 94,
+        "deletions": 2
+      },
+      {
+        "path": "crates/countersyncd/src/utilities/mod.rs",
+        "additions": 13,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

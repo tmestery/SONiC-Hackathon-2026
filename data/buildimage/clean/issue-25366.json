@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-25366",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25366,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25366",
+    "title": "Bug:Setting ring_thread_enabled to true in DEVICE_METADATA causes orchagent to fail during startup.",
+    "created_at": "2026-02-05T18:26:43Z",
+    "closed_at": "2026-02-23T23:40:30Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nSetting ring_thread_enabled to true in DEVICE_METADATA causes orchagent to fail during startup. The failure is due to an invalid command-line invocation, where the -R option is passed without a required argument.\n\nSet the following in config_db.json:\n\"ring_thread_enabled\": \"true\"\n\nRestart swss or reboot the device:\nsudo systemctl restart swss\nObserve that orchagent does not start.\n\n/usr/bin/orchagent -d /var/log/swss -b 1024 -s \\\n  -m <IPV6> -q tcp://<IP> -R &\nObserved Behavior\norchagent exits immediately with the following error:\n\n/usr/bin/orchagent: option requires an argument -- 'R'\nThis indicates that the -R option is being passed without a required value.\n\n### Steps to Reproduce\n\nSet the following in config_db.json:\n\"ring_thread_enabled\": \"true\"\n\nRestart swss or reboot the device:\nsudo systemctl restart swss\nObserve that orchagent does not start.\n\n### Actual Behavior and Expected Behavior\n\nWhen ring_thread_enabled=true, orchagent should:\n\nStart successfully, or\n\nValidate required parameters and fall back safely if missing.\n\n-R must not be passed without its mandatory argument.\n\n### Relevant log output\n\n```shell\n/usr/bin/orchagent -d /var/log/swss -b 1024 -s -m <IPV6> -q tcp://<IP> -R &\n[1] 276\nroot@ixr-x1b-2:/# /usr/bin/orchagent: option requires an argument -- 'R'\n\n[1]+  Exit 1                  /usr/bin/orchagent -d /var/log/swss -b 1024 -s -m <IPV6> -q tcp://<IP> -R\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC Software Version: SONiC.nokia-master.0-dirty-20260202.102116\nSONiC OS Version: 13\nDistribution: Debian 13.3\nKernel: 6.12.41+deb13-sonic-arm64\nBuild commit: cfc90a838\nBuild date: Mon Feb  2 <IPV6> UTC 2026\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4207,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4207",
+    "title": "[orchagent] Fix getopt string for -R option (ring_thread_enabled regression)",
+    "merged_at": "2026-02-23T23:40:29Z",
+    "description": "**What I did**\nFixed a typo in the getopt option string in `orchagent/main.cpp` where the `-R` option was incorrectly defined as requiring a mandatory argument (`R:`) instead of being a simple flag (`R`).\n\nThe fix changes line 403 from:\n```cpp\nwhile ((opt = getopt(argc, argv, \"b:m:r:f:j:d:i:hsz:k:q:c:t:v:I:R:D:M\")) != -1)\n```\nto:\n```cpp\nwhile ((opt = getopt(argc, argv, \"b:m:r:f:j:d:i:hsz:k:q:c:t:v:I:RD:M\")) != -1)\n```\n\n**Why I did it**\n\nWhen ring_thread_enabled is set to true in DEVICE_METADATA, orchagent fails to start with the error:\n`/usr/bin/orchagent: option requires an argument -- 'R'`\n\nThis bug was introduced in PR #3814 (specifically, commit 5de59222) when the -D option was added.\n\nThe getopt string was changed from `I:R` to `I:R:D:` instead of the correct `I:RD:`.\n\nThis accidentally added a colon after R, making it require a mandatory argument.\n\n**How I verified it**\n\nI did a code review and verified that the -R case handler does not use `optarg` and simply sets `gRingMode = true`. Also, I have checked the git history and traced the bug introduction to PR #3814 and confirmed the original implementation in PR #3242 was correct.\n\nCheck the code lines here:\n\nOriginal PR link:\nhttps://github.com/sonic-net/sonic-swss/pull/3242/changes#diff-3cba33a216c0ea2b942dc03b2638fa27a40a8b6eb81abf9f83f13e1ee7831ac4R360\n\nBug Link:\nhttps://github.com/sonic-net/sonic-swss/pull/3814/changes#diff-3cba33a216c0ea2b942dc03b2638fa27a40a8b6eb81abf9f83f13e1ee7831ac4R373\n\n**Details if related**\n\nFixes: sonic-net/sonic-buildimage#25366",
+    "files": [
+      {
+        "path": "orchagent/main.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/test_zmq.py",
+        "additions": 17,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

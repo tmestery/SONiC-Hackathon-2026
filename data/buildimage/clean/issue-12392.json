@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-12392",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 12392,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/12392",
+    "title": "[logrotate] error in logs \"Failed to start Rotate log files\"",
+    "created_at": "2022-10-13T16:31:07Z",
+    "closed_at": "2022-12-08T22:13:13Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202205"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nError in logs happen: \"Failed to start Rotate log files\"\n\n#### Steps to reproduce the issue:\nIt reproduces only in case when time is 12:00AM and logrotation started\n\nThere are two triggers for logrotate - One is the default debian logrotate timer which runs daily at 12:00 AM. The second one is the logrotate by cron job which SONiC has created and runs every 10 mins.\n\nThe SONiC cron job has a logic to kill any logrotate that is running. https://github.com/sonic-net/sonic-buildimage/pull/2942\n\n```\n# Attempt to rotate system logs once every 10 minutes.\n# First kill any logrotate process(es) if they are still running, as they're most likely hung\n*/10 * * * * root /usr/bin/pkill -9 logrotate > /dev/null 2>&1; /usr/sbin/logrotate /etc/logrotate.conf > /dev/null 2>&1\n ```\n\nThe cron job in this case was aligned  in such a way in runs at <IPV6> which is 1 sec after the default timer triggers a logrotate. Since the cron finds a logrotate already running it kills it which results in the log\n\n```\nOct  5 <IPV6>.938784 r-tigon-21 INFO systemd[1]: Starting Rotate log files...\nOct  5 <IPV6>.247788 r-tigon-21 WARNING systemd[1]: logrotate.service: Main process exited, code=killed, status=9/KILL\nOct  5 <IPV6>.248858 r-tigon-21 WARNING systemd[1]: logrotate.service: Failed with result 'signal'.\nOct  5 <IPV6>.249684 r-tigon-21 ERR systemd[1]: Failed to start Rotate log files.\n ```\n\nFrom cron log:\n```\nOct  5 <IPV6>.226074 r-tigon-21 INFO CRON[541643]: (root) CMD (/usr/bin/pkill -9 logrotate > /dev/null 2>&1; /usr/sbin/logrotate /etc/logrotate.conf > /dev/null 2>&1)\n ```\n\nThis is non functional since the logrotate from cron will eventually accomplish the task.\n\nHowever given there is already a cron running in SONiC the default daily logrotate can be disabled\n\n#### Describe the results you received:\nGot error in logs\n```\nOct  5 <IPV6>.249684 r-tigon-21 ERR systemd[1]: Failed to start Rotate log files.\n```\n\n#### Describe the results you expected:\nNo error in logs\n\n#### Output of `show version`:\n\n```\nSONiC.202205_rc.17-12870dde8_Internal\n```\n#### Output of `show techsupport`:\n\n```\nCan not attach sysdump due to max limit of file 25Mb,\nIf someone want - can ask me and I will send this file in private message.\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 12921,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/12921",
+    "title": "Replace logrotate cron file with (adapted) systemd timer file",
+    "merged_at": "2022-12-08T22:13:12Z",
+    "description": "Signed-off-by: Saikrishna Arcot <<EMAIL>>\n\n#### Why I did it\n\nDebian is shipping a systemd timer unit for logrotate, but we're also packaging in a cron job, which means both of them will run, potentially at the same time. Remove our cron file, and add an override to the shipped timer file to have it be run every 10 minutes.\n\nFixes #12392.\n\n#### How I did it\n\n#### How to verify it\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [x] 202205\n- [x] 202211\n\n#### Description for the changelog\n\n#### Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/build_templates/sonic_debian_extension.j2",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "files/image_config/cron.d/logrotate",
+        "additions": 0,
+        "deletions": 3
+      },
+      {
+        "path": "files/image_config/logrotate/timerOverride.conf",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

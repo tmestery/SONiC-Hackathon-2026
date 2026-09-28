@@ -1,0 +1,50 @@
+{
+  "id": "buildimage-7180",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 7180,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/7180",
+    "title": "SONiC docker containers show as \"Exited\" after config-reload",
+    "created_at": "2021-03-29T21:17:02Z",
+    "closed_at": "2021-07-13T10:40:18Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202012"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nOccasionally on `config reload` we have observed that the docker containers fail to properly restart and show as \"Exited\" when `docker ps` is run.\n\nI have debugged this and the containers that fail to start all depend on the systemd service `interfaces-config.service` which has a start job that is hanging when this bug appears. This start job has an indefinite timeout so the entire system hangs indefinitely waiting on it to start.\n\nI determined that the start job is hanging where it executes an `ifupdown` command which then executes `systemctl try-restart ntp.service`. When you execute `systemctl list-jobs` you can see that a \"nop\" job has been inserted into the queue because the ntp service is not running. However it seems to get stuck in the queue and never execute.\n\nExecution trace of the locked up interfaces-config.service start job.\n```\n           \u251c\u250011300 /bin/bash /usr/bin/interfaces-config.sh\n           \u251c\u250011301 /usr/bin/python /usr/sbin/ifdown --force eth0\n           \u251c\u250011547 /sbin/dhclient -r -pf /run/dhclient.eth0.pid -lf /var/lib/dhcp/dhclient.eth0.leases eth0\n           \u251c\u250011670 /bin/sh /sbin/dhclient-script\n           \u251c\u250011682 /bin/sh /usr/sbin/invoke-rc.d ntp try-restart\n           \u2514\u250011704 systemctl try-restart ntp.service\n```\n\nSystemd jobs showing the held up ntp nop job.\n```\nroot@r-lionfish-07:/var/log# sudo systemctl list-jobs\n JOB UNIT                       TYPE  STATE\n1875 ntp.service                nop   waiting\n2147 snmp.service               start waiting\n1997 telemetry.service          start waiting\n1753 syncd.service              start waiting\n1749 dhcp_relay.service         start waiting\n```\n\nI found the following systemd issue which I believe this to be an instance of:\nhttps://github.com/systemd/systemd/pull/13124\n\nI confirmed that the systemd version that we are running: `241` was released before this bug was reported and fixed. Additionally the infrequent nature of the systemd bug explains why we rarely see this occur in sonic in practice.\n\nI would recommend upgrading the version of systemd used by sonic to resolve this issue.\n\nAttached below is the `show inventory` output\n[sonic_dump_r-lionfish-07_20210329_195525.tar.gz](https://github.com/Azure/sonic-buildimage/files/6224612/sonic_dump_r-lionfish-07_20210329_195525.tar.gz)\n\n#### Steps to reproduce the issue:\n1. Run the sonig-mgmt test platform_tests/test_reload_config.py\n\n#### Describe the results you received:\nThe test fails because many of the docker containers are shown as \"exited\" with only `bgp` and `database` containers running.\n\n#### Describe the results you expected:\nAll containers back up and running, test passes successfully.\n\n#### Output of `show version`:\n```\nSONiC Software Version: SONiC.SONIC.202012.53-aee4892c_Internal\nDistribution: Debian 10.8\nKernel: 4.19.0-12-2-amd64\nBuild commit: aee4892c\nBuild date: Thu Mar 25 <IPV6> UTC 2021\nBuilt by: sw-r2d2-bot@r-build-sonic-ci03\n\nPlatform: x86_64-mlnx_msn3420-r0\nHwSKU: ACS-MSN3420\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT2012X01822\nUptime: <IPV6> up 1 day, 19:40,  1 user,  load average: 2.31, 1.45, 1.05\n\nDocker images:\nREPOSITORY                    TAG                                 IMAGE ID            SIZE\ndocker-teamd                  SONIC.202012.53-aee4892c_Internal   1d73bce4fcd8        412MB\ndocker-teamd                  latest                              1d73bce4fcd8        412MB\ndocker-nat                    SONIC.202012.53-aee4892c_Internal   4b70ff56ef58        415MB\ndocker-nat                    latest                              4b70ff56ef58        415MB\ndocker-orchagent              SONIC.202012.53-aee4892c_Internal   b3ab4b23959b        431MB\ndocker-orchagent              latest                              b3ab4b23959b        431MB\ndocker-fpm-frr                SONIC.202012.53-aee4892c_Internal   8eedb2cefa34        431MB\ndocker-fpm-frr                latest                              8eedb2cefa34        431MB\ndocker-sflow                  SONIC.202012.53-aee4892c_Internal   f73678a4a5e4        413MB\ndocker-sflow                  latest                              f73678a4a5e4        413MB\ndocker-wjh                    202012.202012.0-e663b63             bbf69da66de2        441MB\ndocker-wjh                    latest                              bbf69da66de2        441MB\ndocker-platform-monitor       SONIC.202012.53-aee4892c_Internal   9431a24cce94        693MB\ndocker-platform-monitor       latest                              9431a24cce94        693MB\ndocker-syncd-mlnx             SONIC.202012.53-aee4892c_Internal   b435d0fb66dc        666MB\ndocker-syncd-mlnx             latest                              b435d0fb66dc        666MB\ndocker-snmp                   SONIC.202012.53-aee4892c_Internal   1186f8a7345a        442MB\ndocker-snmp                   latest                              1186f8a7345a        442MB\ndocker-sonic-mgmt-framework   SONIC.202012.53-aee4892c_Internal   f82c902ebc99        620MB\ndocker-sonic-mgmt-framework   latest                              f82c902ebc99        620MB\ndocker-router-advertiser      SONIC.202012.53-aee4892c_Internal   58926fcdf5f6        401MB\ndocker-router-advertiser      latest                              58926fcdf5f6        401MB\ndocker-lldp                   SONIC.202012.53-aee4892c_Internal   175e6dcfe231        441MB\ndocker-lldp                   latest                              175e6dcfe231        441MB\ndocker-database               SONIC.202012.53-aee4892c_Internal   586be7012094        401MB\ndocker-database               latest                              586be7012094        401MB\ndocker-sonic-telemetry        SONIC.202012.53-aee4892c_Internal   4232634fe32d        491MB\ndocker-sonic-telemetry        latest                              4232634fe32d        491MB\ndocker-dhcp-relay             SONIC.202012.53-aee4892c_Internal   06444d9dd53a        405MB\ndocker-dhcp-relay             latest                              06444d9dd53a        405MB\n```"
+  },
+  "resolution": {
+    "pr_number": 7228,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/7228",
+    "title": "[debian] install systemd version 247 from buster-backports",
+    "merged_at": "2021-04-08T05:00:28Z",
+    "description": "Signed-off-by: Stepan Blyschak <<EMAIL>>\n\n#### Why I did it\n\nUpdate systemd to v247 in order to pick the fix for \"core: coldplug possible nop_job\" https://github.com/systemd/systemd/pull/13124\n\n#### How I did it\n\nInstall systemd, systemd-sysv from buster-backports. Pass \"systemd.unified_cgroup_hierarchy=0\" as kernel argument to force systemd to not use unified cgroup hierarchy, otherwise dockerd won't start https://github.com/moby/moby/issues/16238.\nAlso, chown $FILSYSTEM_ROOT for root, otherwise apt systemd installation complains, see similar https://unix.stackexchange.com/questions/593529/can-not-configure-systemd-inside-a-chrooted-environment\n\n#### How to verify it\n\nInstall on the switch, perform basic sanity tests/\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [x] 202012\n\n#### Description for the changelog\n\nUpdate systemd to v247\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "build_debian.sh",
+        "additions": 5,
+        "deletions": 2
+      },
+      {
+        "path": "installer/x86_64/install.sh",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

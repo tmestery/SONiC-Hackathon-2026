@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-8306",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8306,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8306",
+    "title": "\"show vlan config\" command display wrong member information",
+    "created_at": "2021-08-02T11:56:58Z",
+    "closed_at": "2021-11-19T02:03:12Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\n\"show vlan config\" may display wrong information about vlan members after generating vlan members configuration from minigraph and removing vlan members.\n\nthe problem is related to a change in the vlan schema that was changed on this PR:\nhttps://github.com/Azure/sonic-utilities/pull/1038\n\nIn the new schema, we no longer use the \u201cmembers\u201d field on the VLAN table:\n```\n    \"VLAN\": {\n        \"Vlan1000\": {\n           \u2026..\n           \"members\": [\n                \"Ethernet8\",\n                \"Ethernet16\",\n                \"Ethernet24\",\n                \"Ethernet32\"\n            ],\n           \"vlanid\": \"1000\"\n       }\n```\n\nAnd the member info is taken only from vlan members tables:\n   ```\n \"VLAN_MEMBER\": {\n        \"Vlan1000|Ethernet8\": {\n            \"tagging_mode\": \"untagged\"\n        },\n        \"Vlan1000|Ethernet16\": {\n            \"tagging_mode\": \"untagged\"\n        },\n        \u2026\u2026\n```\n\nWe can see that on the new implementation we don\u2019t add the new members to the \u201cmembers\u201d field on the VLAN table.\n\nIn the load_minigraph script we still generate this \u201cmembers\u201d field on the VLAN table and when we remove member from a vlan it will remove the VLAN_MEMBER table only, the \u201cmembers\u201d field on the VLAN table is not changing and the member that was removed is still there.\n\nOn this scenario when we run show command we see members exist on this vlan although it was removed..\nWe see this problematic situation because the show command is still using this \u201cmembers\u201d field when it displays the vlan member information. The \u201cmembers\u201d field info from the VLAN table is added to the VLAN_MEMBER tables info and together it displayed.\n\n#### Steps to reproduce the issue:\n1. load minigraph file with vlan members configuration\n2. remove the vlan member\n3. \"show vlan config\" will still display the removed vlan member\n\nExample to vlan member configuration on the minigraph xml file:\n```\n...\n      <VlanInterfaces>\n        <VlanInterface>\n          <Name>Vlan1000</Name>\n      <AttachTo>etp2;etp3;etp4;etp5;etp6;etp7;etp8;etp9;etp10;etp11;etp12;etp13;etp14;etp15;etp16;etp17;etp18;etp19;etp20;etp21;etp22;etp23;etp24;etp25</AttachTo>\n          <NoDhcpRelay>False</NoDhcpRelay>\n          <StaticDHCPRelay><IP>/0</StaticDHCPRelay>\n          <Type i:nil=\"true\"/>\n          <DhcpRelays><IP>;<IP>;<IP>;<IP></DhcpRelays>\n          <VlanID>1000</VlanID>\n          <Tag>1000</Tag>\n          <Subnets><IP>/21</Subnets>\n        </VlanInterface>\n      </VlanInterfaces>\n...\n```\nExample for removal member command:\n`sudo config vlan member del 1000 Ethernet8`\n\n#### Describe the results you received:\n```\nadmin@r-leopard-01:~$ show vlan config\nName        VID  Member       Mode\n--------  -----  -----------  --------\nVlan1000   1000  Ethernet8    ?\nVlan1000   1000  Ethernet16   untagged\nVlan1000   1000  Ethernet24   untagged\nVlan1000   1000  Ethernet32   untagged\nVlan1000   1000  Ethernet40   untagged\nVlan1000   1000  Ethernet48   untagged\nVlan1000   1000  Ethernet56   untagged\n...\n```\n\n#### Describe the results you expected:\n```\nadmin@r-leopard-01:~$ show vlan config\nName        VID  Member       Mode\n--------  -----  -----------  --------\nVlan1000   1000  Ethernet16   untagged\nVlan1000   1000  Ethernet24   untagged\nVlan1000   1000  Ethernet32   untagged\nVlan1000   1000  Ethernet40   untagged\nVlan1000   1000  Ethernet48   untagged\nVlan1000   1000  Ethernet56   untagged\n...\n```\n\n#### Output of `show version`:\n\n```\nroot@r-leopard-01:/home/admin# show version\n\nSONiC Software Version: SONiC.202012.139-5651977f6_Internal\nDistribution: Debian 10.10\nKernel: 4.19.0-12-2-amd64\nBuild commit: 5651977f6\nBuild date: Fri Jul 30 <IPV6> UTC 2021\nBuilt by: sw-r2d2-bot@r-build-sonic-ci02-244\n\nPlatform: x86_64-mlnx_msn4700-r0\nHwSKU: ACS-MSN4700\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT2022X08595\nUptime: <IPV6> up  6:05,  2 users,  load average: 0.99, 0.76, 0.73\n\ndocker-snmp                   202012.139-5651977f6_Internal   34fc889a4fa5        443MB\ndocker-snmp                   latest                          34fc889a4fa5        443MB\ndocker-teamd                  202012.139-5651977f6_Internal   5704cb77f7a4        412MB\ndocker-teamd                  latest                          5704cb77f7a4        412MB\ndocker-router-advertiser      202012.139-5651977f6_Internal   31e9971905fc        401MB\ndocker-router-advertiser      latest                          31e9971905fc        401MB\ndocker-platform-monitor       202012.139-5651977f6_Internal   38ccaf5ba3d8        722MB\ndocker-platform-monitor       latest                          38ccaf5ba3d8        722MB\ndocker-lldp                   202012.139-5651977f6_Internal   848812823ed4        441MB\ndocker-lldp                   latest                          848812823ed4        441MB\ndocker-dhcp-relay             202012.139-5651977f6_Internal   210634cc0157        408MB\ndocker-dhcp-relay             latest                          210634cc0157        408MB\ndocker-database               202012.139-5651977f6_Internal   08ff987b833e        401MB\ndocker-database               latest                          08ff987b833e        401MB\ndocker-orchagent              202012.139-5651977f6_Internal   66f04e8a0b14        430MB\ndocker-orchagent              latest                          66f04e8a0b14        430MB\ndocker-nat                    202012.139-5651977f6_Internal   a80e2a4ba1ea        415MB\ndocker-nat                    latest                          a80e2a4ba1ea        415MB\ndocker-sonic-telemetry        202012.139-5651977f6_Internal   ee61da4e3b31        491MB\ndocker-sonic-telemetry        latest                          ee61da4e3b31        491MB\ndocker-sonic-mgmt-framework   202012.139-5651977f6_Internal   54a7d05d10cb        621MB\ndocker-sonic-mgmt-framework   latest                          54a7d05d10cb        621MB\ndocker-fpm-frr                202012.139-5651977f6_Internal   e456b89b413d        430MB\ndocker-fpm-frr                latest                          e456b89b413d        430MB\ndocker-sflow                  202012.139-5651977f6_Internal   f2ebb9f36217        413MB\ndocker-sflow                  latest                          f2ebb9f36217        413MB\ndocker-sonic-restapi          202012.139-5651977f6_Internal   9c0974ce2fa5        352MB\ndocker-sonic-restapi          latest\n```\n#### Output of `show techsupport`:\n\n[sonic_dump_r-leopard-01_20210714_123802 (1).tar.gz](https://github.com/Azure/sonic-buildimage/files/6916569/sonic_dump_r-leopard-01_20210714_123802.1.tar.gz)\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 9237,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/9237",
+    "title": "[minigraph] No longer generate the \u201cmembers\u201d field on the VLAN table in ConfigDB",
+    "merged_at": "2021-11-19T02:03:12Z",
+    "description": "#### Why I did it\nThis field is deprecated.\nFixes https://github.com/Azure/sonic-buildimage/issues/8306\nFixes https://github.com/Azure/sonic-buildimage/issues/9121\n\n#### How I did it\n\n#### How to verify it\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n\n#### Description for the changelog\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-config-engine/minigraph.py",
+        "additions": 4,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_cfggen.py",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_minigraph_case.py",
+        "additions": 0,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

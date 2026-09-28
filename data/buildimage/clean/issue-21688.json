@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-21688",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21688,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21688",
+    "title": "warm/fast-reboot fails on latest master due to error in PortsOrch::bake(): Invalid port table",
+    "created_at": "2025-02-10T11:29:40Z",
+    "closed_at": "2025-02-18T18:45:46Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\nWarm or fast reboot fails with the following error log:\n\n```\n2025 Feb 10 <IPV6>.111055 sonic NOTICE swss#orchagent: :- bake: foundPortConfigDone = 1\n2025 Feb 10 <IPV6>.111080 sonic NOTICE swss#orchagent: :- bake: foundPortInitDone = 1\n2025 Feb 10 <IPV6>.111395 sonic NOTICE swss#orchagent: :- bake: m_portTable->getKeys 263\n2025 Feb 10 <IPV6>.111403 sonic NOTICE swss#orchagent: :- bake: portCount = 257, m_portCount = 0\n2025 Feb 10 <IPV6>.111403 sonic ERR swss#orchagent: :- bake: Invalid port table: portCount, expecting 257, got 261\n```\n\nPORT_TABLE contains PortChannel oper_status entries which are not expected by portsorch:\n\n```\nadmin@sonic:~$ redis-cli -n 0 keys 'PORT_TABLE:Port*'\n1) \"PORT_TABLE:PortChannel103\"\n2) \"PORT_TABLE:PortChannel102\"\n3) \"PORT_TABLE:PortConfigDone\"\n4) \"PORT_TABLE:PortInitDone\"\n5) \"PORT_TABLE:PortChannel101\"\n6) \"PORT_TABLE:PortChannel104\"\n```\n\n```\nadmin@r-moose-01:~$ redis-cli -n 0 hgetall 'PORT_TABLE:PortChannel103'\n1) \"oper_status\"\n2) \"up\"\n```\n\n**Reproduction**\n\n1. Build latest master sonic-buildimage and update sonic-swss to latest master\n2. Load T0 config with PortChannels\n3. Do warm or fast-reboot\n4. Observe error in the log\n\n**RCA**\n\nLikelly caused by PR https://github.com/sonic-net/sonic-swss/pull/3383 which moves ```updateDbPortOperStatus()``` to run for all port types:\n\n```diff\n+    updateDbPortOperStatus(port, status);\n+\n     if (port.m_type == Port::PHY)\n     {\n-        updateDbPortOperStatus(port, status);\n```\n\nhttps://github.com/sonic-net/sonic-swss/pull/3383/files?diff=unified&w=0#diff-bb736c6a11da68afacf95d761fb52a3c11726cdd72c967d4803b8c9b1a6dcb69R8271"
+  },
+  "resolution": {
+    "pr_number": 3505,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/3505",
+    "title": "portsorch: don't call updateDbPortOperStatus on all port types",
+    "merged_at": "2025-02-18T18:45:45Z",
+    "description": "**What I did**\n\nOnly call `updateDbPortOperStatus()` on PHY and TUNNEL ports.\n\n**Why I did it**\n\nPORT_TABLE contains PortChannel oper_status entries which are not expected by portsorch which leads to warm/fastreboot failures like:\n```\n2025 Feb 10 <IPV6>.111055 sonic NOTICE swss#orchagent: :- bake: foundPortConfigDone = 1\n2025 Feb 10 <IPV6>.111080 sonic NOTICE swss#orchagent: :- bake: foundPortInitDone = 1\n2025 Feb 10 <IPV6>.111395 sonic NOTICE swss#orchagent: :- bake: m_portTable->getKeys 263\n2025 Feb 10 <IPV6>.111403 sonic NOTICE swss#orchagent: :- bake: portCount = 257, m_portCount = 0\n2025 Feb 10 <IPV6>.111403 sonic ERR swss#orchagent: :- bake: Invalid port table: portCount, expecting 257, got 261\n```\n\nRegression caused by #3383\n\n**How I verified it**\n\nAsked @stepanblyschak to verify who reported issue.\n\n**Details if related**\nFixes https://github.com/sonic-net/sonic-buildimage/issues/21688\n\nSigned-off-by: Brad House (@bradh352)",
+    "files": [
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "tests/test_portchannel.py",
+        "additions": 6,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "id": "buildimage-26845",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 26845,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/26845",
+    "title": "Bug: [dhcp_server] Tixie upgrade broke IP Assignment on SmartSwitch",
+    "created_at": "2026-04-16T20:50:47Z",
+    "closed_at": "2026-04-24T19:58:52Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT",
+      "Trixie"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter trixie upgrade of dhcp_server https://github.com/sonic-net/sonic-buildimage/pull/26393 , kea-dhcpv4 process is not starting\n\nSummary:\nKea 2.6 is stricter than older versions: it only allows logs under /var/log/kea, the control-socket directory /run/kea with mode 750, and lease files under /var/lib/kea\u2014so previous /tmp paths and loose dirs break startup, and a second kea-dhcp4 hits the control-socket lock.\n\n### Steps to Reproduce\n\nStart dhcp_server on the latest master image\n```\n2026-04-16 <IPV6>.534 INFO  [kea-dhcp4.dhcp4/263.140453805782976] DHCP4_STARTING Kea DHCPv4 server version 2.6.3 (stable) starting\n2026-04-16 <IPV6>.535 INFO  [kea-dhcp4.commands/263.140453805782976] COMMAND_RECEIVED Received command 'config-set'\n2026-04-16 <IPV6>.535 WARN  [kea-dhcp4.commands/263.140453805782976] COMMAND_PROCESS_ERROR2 Error while processing command: invalid path in `output`: invalid path specified: '/var/log', supported path is '/var/log/kea' (/etc/kea/kea-dhcp4.conf:63:21)\n2026-04-16 <IPV6>.535 ERROR [kea-dhcp4.dhcp4/263.140453805782976] DHCP4_CONFIG_LOAD_FAIL configuration error using file: /etc/kea/kea-dhcp4.conf, reason: Error during command processing: invalid path in `output`: invalid path specified: '/var/log', supported path is '/var/log/kea' (/etc/kea/kea-dhcp4.conf:63:21)\n2026-04-16 <IPV6>.535 ERROR [kea-dhcp4.dhcp4/263.140453805782976] DHCP4_INIT_FAIL failed to initialize Kea server: configuration error using file '/etc/kea/kea-dhcp4.conf': Error during command processing: invalid path in `output`: invalid path specified: '/var/log', supported path is '/var/log/kea' (/etc/kea/kea-dhcp4.conf:63:21)\n\n2026-04-16 <IPV6>.128 INFO  [kea-dhcp4.dhcp4/584.140640750311360] DHCP4_STARTING Kea DHCPv4 server version 2.6.3 (stable) starting\n2026-04-16 <IPV6>.129 INFO  [kea-dhcp4.commands/584.140640750311360] COMMAND_RECEIVED Received command 'config-set'\n2026-04-16 <IPV6>.131 ERROR [kea-dhcp4.dhcp4/584.140640750311360] DHCP4_INIT_FAIL failed to initialize Kea server: configuration error using file '/etc/kea/kea-dhcp4.conf': 'socket-name' is invalid: socket path:/run/kea does not exist or does not have permssions = 750\n\n2026-04-16 <IPV6>.638 INFO  [kea-dhcp4.dhcp4/645.140203744352192] DHCP4_STARTING Kea DHCPv4 server version 2.6.3 (stable) starting\n2026-04-16 <IPV6>.640 INFO  [kea-dhcp4.commands/645.140203744352192] COMMAND_RECEIVED Received command 'config-set'\n2026-04-16 <IPV6>.652 ERROR [kea-dhcp4.dhcp4/645.140203744352192] DHCP4_INIT_FAIL failed to initialize Kea server: configuration error using file '/etc/kea/kea-dhcp4.conf': Unable to open database: invalid path specified: '/tmp', supported path is '/var/lib/kea'\n2026-04-16 <IPV6>.652 INFO  [kea-dhcp4.run-script-hooks/645.140203744352192] RUN_SCRIPT_UNLOAD Run Script hooks library has been unloaded\n2026-04-16 <IPV6>.652 INFO  [kea-dhcp4.hooks/645.140203744352192] HOOKS_LIBRARY_CLOSED hooks library /usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_run_script.so successfully closed\n```\n\n### Actual Behavior and Expected Behavior\n\nkea-dhcpv4 should start correctly and ip address assignment should work correctly\nPotential Patch that can fix the problem but needs more validation\n\n```\ndiff --git a/dockers/docker-dhcp-server/Dockerfile.j2 b/dockers/docker-dhcp-server/Dockerfile.j2\nindex 5b34413602..f027d86bb4 100755\n--- a/dockers/docker-dhcp-server/Dockerfile.j2\n+++ b/dockers/docker-dhcp-server/Dockerfile.j2\n@@ -16,7 +16,7 @@ RUN apt-get update &&       \\\n         build-essential     \\\n         kea-dhcp4-server\n\n-RUN mkdir -p /var/run/kea\n+RUN mkdir -p /run/kea /var/log/kea /var/lib/kea && chmod 750 /run/kea\n\n RUN pip3 install psutil\n\ndiff --git a/dockers/docker-dhcp-server/docker_init.sh b/dockers/docker-dhcp-server/docker_init.sh\nindex 9d7e1e397f..a949bdf6c9 100755\n--- a/dockers/docker-dhcp-server/docker_init.sh\n+++ b/dockers/docker-dhcp-server/docker_init.sh\n@@ -3,8 +3,9 @@\n\n # Generate supervisord config file\n mkdir -p /etc/supervisor/conf.d/\n-# Generate kea folder\n-mkdir -p /etc/kea/\n+# Kea 2.6+: logs under /var/log/kea; control socket dir must be mode 750\n+mkdir -p /etc/kea/ /run/kea /var/log/kea /var/lib/kea\n+chmod 750 /run/kea\n udp_server_ip=$(ip -j -4 addr list lo scope host | jq -r -M '.[0].addr_info[0].local')\n hostname=$(hostname)\n\ndiff --git a/dockers/docker-dhcp-server/kea-dhcp4-init.conf b/dockers/docker-dhcp-server/kea-dhcp4-init.conf\nindex a2c680380e..c822e0301e 100644\n--- a/dockers/docker-dhcp-server/kea-dhcp4-init.conf\n+++ b/dockers/docker-dhcp-server/kea-dhcp4-init.conf\n@@ -10,7 +10,7 @@\n         \"lease-database\": {\n             \"type\": \"memfile\",\n             \"persist\": true,\n-            \"name\": \"/tmp/kea-lease.csv\",\n+            \"name\": \"/var/lib/kea/kea-lease.csv\",\n             \"lfc-interval\": 3600\n         },\n         \"subnet4\": [],\n@@ -19,7 +19,7 @@\n                 \"name\": \"kea-dhcp4\",\n                 \"output_options\": [\n                     {\n-                        \"output\": \"/tmp/kea-dhcp.log\",\n+                        \"output\": \"/var/log/kea/kea-dhcp4.log\",\n                         \"pattern\": \"%-5p %m\\n\"\n                     }\n                 ],\ndiff --git a/dockers/docker-dhcp-server/kea-dhcp4.conf.j2 b/dockers/docker-dhcp-server/kea-dhcp4.conf.j2\nindex 7fe90d86f1..3c284f8360 100644\n--- a/dockers/docker-dhcp-server/kea-dhcp4.conf.j2\n+++ b/dockers/docker-dhcp-server/kea-dhcp4.conf.j2\n@@ -94,7 +94,7 @@\n                 \"name\": \"kea-dhcp4\",\n                 \"output_options\": [\n                     {\n-                        \"output\": \"/var/log/kea-dhcp.log\",\n+                        \"output\": \"/var/log/kea/kea-dhcp4.log\",\n                         \"pattern\": \"%-5p %m\\n\"\n                     }\n                 ],\ndiff --git a/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_cfggen.py b/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_cfggen.py\nindex fad5128f14..4813dc01b5 100755\n--- a/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_cfggen.py\n+++ b/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_cfggen.py\n@@ -23,7 +23,7 @@ PORT_MODE_CHECKER = [\"DhcpServerTableCfgChangeEventChecker\", \"DhcpPortTableEvent\n SMART_SWITCH_CHECKER = [\"DpusTableEventChecker\", \"MidPlaneTableEventChecker\"]\n LEASE_UPDATE_SCRIPT_PATH = \"/etc/kea/lease_update.sh\"\n DEFAULT_LEASE_TIME = 900\n-DEFAULT_LEASE_PATH = \"/tmp/kea-lease.csv\"\n+DEFAULT_LEASE_PATH = \"/var/lib/kea/kea-lease.csv\"\n KEA_DHCP4_CONF_TEMPLATE_PATH = \"/usr/share/sonic/templates/kea-dhcp4.conf.j2\"\n SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))\n DHCP_OPTION_FILE = f\"{SCRIPT_DIR}/dhcp_option.csv\"\ndiff --git a/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_lease.py b/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_lease.py\nindex e2e95fb7b5..d2b1c452bc 100644\n--- a/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_lease.py\n+++ b/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_lease.py\n@@ -8,7 +8,7 @@ from datetime import datetime\n from dhcp_utilities.common.utils import is_smart_switch\n\n DHCP_SERVER_IPV4_LEASE = \"DHCP_SERVER_IPV4_LEASE\"\n-KEA_LEASE_FILE_PATH = \"/tmp/kea-lease.csv\"\n+KEA_LEASE_FILE_PATH = \"/var/lib/kea/kea-lease.csv\"\n DEFAULE_LEASE_UPDATE_INTERVAL = 2  # unit: sec\n\ndiff --git a/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcpservd.py b/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcpservd.py\nindex e259e985ef..caf13e953f 100644\n--- a/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcpservd.py\n+++ b/src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcpservd.py\n@@ -16,7 +16,7 @@ from swsscommon import swsscommon\n\n KEA_DHCP4_CONFIG = \"/etc/kea/kea-dhcp4.conf\"\n KEA_DHCP4_PROC_NAME = \"kea-dhcp4\"\n-KEA_LEASE_FILE_PATH = \"/tmp/kea-lease.csv\"\n+KEA_LEASE_FILE_PATH = \"/var/lib/kea/kea-lease.csv\"\n DHCPSERVD_READY_FLAG = \"/tmp/dhcpservd_ready\"\n REDIS_SOCK_PATH = \"/var/run/redis/redis.sock\"\n DHCP_SERVER_IPV4_SERVER_IP = \"DHCP_SERVER_IPV4_SERVER_IP\"\ndiff --git a/src/sonic-dhcp-utilities/tests/conftest.py b/src/sonic-dhcp-utilities/tests/conftest.py\nindex 2b3076d5ac..938caac6a2 100644\n--- a/src/sonic-dhcp-utilities/tests/conftest.py\n+++ b/src/sonic-dhcp-utilities/tests/conftest.py\n@@ -40,5 +40,5 @@ def mock_parse_port_map_alias(scope=\"function\"):\n                       new_callable=PropertyMock), \\\n          patch.object(DhcpServCfgGenerator, \"lease_update_script_path\", return_value=\"/etc/kea/lease_update.sh\",\n                       new_callable=PropertyMock), \\\n-         patch.object(DhcpServCfgGenerator, \"lease_path\", return_value=\"/tmp/kea-lease.csv\", new_callable=PropertyMock):\n+         patch.object(DhcpServCfgGenerator, \"lease_path\", return_value=\"/var/lib/kea/kea-lease.csv\", new_callable=PropertyMock):\n         yield mock_map\ndiff --git a/src/sonic-dhcp-utilities/tests/test_data/kea-dhcp4.conf.j2 b/src/sonic-dhcp-utilities/tests/test_data/kea-dhcp4.conf.j2\nindex 7fe90d86f1..3c284f8360 100644\n--- a/src/sonic-dhcp-utilities/tests/test_data/kea-dhcp4.conf.j2\n+++ b/src/sonic-dhcp-utilities/tests/test_data/kea-dhcp4.conf.j2\n@@ -94,7 +94,7 @@\n                 \"name\": \"kea-dhcp4\",\n                 \"output_options\": [\n                     {\n-                        \"output\": \"/var/log/kea-dhcp.log\",\n+                        \"output\": \"/var/log/kea/kea-dhcp4.log\",\n                         \"pattern\": \"%-5p %m\\n\"\n                     }\n                 ],\ndiff --git a/src/sonic-dhcp-utilities/tests/test_dhcp_cfggen.py b/src/sonic-dhcp-utilities/tests/test_dhcp_cfggen.py\nindex a2e68454f1..f5b6d0f05a 100644\n--- a/src/sonic-dhcp-utilities/tests/test_dhcp_cfggen.py\n+++ b/src/sonic-dhcp-utilities/tests/test_dhcp_cfggen.py\n@@ -37,7 +37,7 @@ expected_dhcp_config = {\n         \"lease-database\": {\n             \"type\": \"memfile\",\n             \"persist\": True,\n-            \"name\": \"/tmp/kea-lease.csv\",\n+            \"name\": \"/var/lib/kea/kea-lease.csv\",\n             \"lfc-interval\": 3600\n         },\n         \"subnet4\": [\n@@ -97,7 +97,7 @@ expected_dhcp_config = {\n                 \"name\": \"kea-dhcp4\",\n                 \"output_options\": [\n                     {\n-                        \"output\": \"/var/log/kea-dhcp.log\",\n+                        \"output\": \"/var/log/kea/kea-dhcp4.log\",\n                         \"pattern\": \"%-5p %m\\n\"\n                     }\n                 ],\n@@ -151,7 +151,7 @@ expected_dhcp_config_without_port_config = {\n         \"lease-database\": {\n             \"type\": \"memfile\",\n             \"persist\": True,\n-            \"name\": \"/tmp/kea-lease.csv\",\n+            \"name\": \"/var/lib/kea/kea-lease.csv\",\n             \"lfc-interval\": 3600\n         },\n         \"subnet4\": [\n@@ -161,7 +161,7 @@ expected_dhcp_config_without_port_config = {\n                 \"name\": \"kea-dhcp4\",\n                 \"output_options\": [\n                     {\n-                        \"output\": \"/var/log/kea-dhcp.log\",\n+                        \"output\": \"/var/log/kea/kea-dhcp4.log\",\n                         \"pattern\": \"%-5p %m\\n\"\n                     }\n                 ],\n@@ -270,7 +270,7 @@ expected_render_obj = {\n         {\"name\": \"sonic-host:etp11\", \"condition\": \"substring(relay4[1].hex, -16, 16) == 'sonic-host:etp11'\"}\n     ],\n     \"lease_update_script_path\": \"/etc/kea/lease_update.sh\",\n-    \"lease_path\": \"/tmp/kea-lease.csv\",\n+    \"lease_path\": \"/var/lib/kea/kea-lease.csv\",\n     \"customized_options\": {\n         \"option223\": {\n             \"id\": \"223\",\ndiff --git a/src/sonic-dhcp-utilities/tests/test_smart_switch.py b/src/sonic-dhcp-utilities/tests/test_smart_switch.py\nindex e3c627347a..2b0a54e892 100644\n--- a/src/sonic-dhcp-utilities/tests/test_smart_switch.py\n+++ b/src/sonic-dhcp-utilities/tests/test_smart_switch.py\n@@ -31,7 +31,7 @@ expected_kea_config = {\n         \"lease-database\": {\n             \"type\": \"memfile\",\n             \"persist\": True,\n-            \"name\": \"/tmp/kea-lease.csv\",\n+            \"name\": \"/var/lib/kea/kea-lease.csv\",\n             \"lfc-interval\": 3600\n         },\n         \"subnet4\": [\n@@ -76,7 +76,7 @@ expected_kea_config = {\n                 \"name\": \"kea-dhcp4\",\n                 \"output_options\": [\n                     {\n-                        \"output\": \"/var/log/kea-dhcp.log\",\n+                        \"output\": \"/var/log/kea/kea-dhcp4.log\",\n                         \"pattern\": \"%-5p %m\\n\"\n                     }\n                 ],\n\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26878,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26878",
+    "title": "Fix kea-dhcp4 startup failure after trixie upgrade",
+    "merged_at": "2026-04-24T19:58:51Z",
+    "description": "#### Why I did it\n\nFixes #26845\n\nAfter the trixie upgrade, kea-dhcp4 (version 2.6.3) fails to start in the dhcp_server container. Kea 2.6 enforces strict path validation that was not present in earlier versions:\n\n- Log output path must be under `/var/log/kea/` (not `/var/log/`)\n- Lease file path must be under `/var/lib/kea/` (not `/tmp/`)\n- Control socket must be under `/run/kea/` with mode 750\n\nWithout this fix, kea-dhcp4 exits with:\n```\nDHCP4_CONFIG_LOAD_FAIL: invalid path specified: '/var/log', supported path is '/var/log/kea'\nDHCP4_INIT_FAIL: failed to initialize Kea server\n```\n\n##### Work item tracking\n- Microsoft ADO:\n\n#### How I did it\n\n1. **Created required directories** with correct permissions in both `Dockerfile.j2` (build time) and `docker_init.sh` (runtime):\n   - `/run/kea` (mode 750)\n   - `/var/log/kea`\n   - `/var/lib/kea`\n\n2. **Updated all path references** across config files, templates, and Python code:\n   - Log: `/var/log/kea-dhcp.log` \u2192 `/var/log/kea/kea-dhcp4.log`\n   - Lease: `/tmp/kea-lease.csv` \u2192 `/var/lib/kea/kea-lease.csv`\n   - Socket: `/var/run/kea/kea4-ctrl-socket` \u2192 `/run/kea/kea4-ctrl-socket`\n\n3. **Updated unit tests** (`test_dhcp_cfggen.py`, `test_smart_switch.py`, `conftest.py`) to match new paths.\n\n**Files changed (11):**\n- `dockers/docker-dhcp-server/Dockerfile.j2`\n- `dockers/docker-dhcp-server/docker_init.sh`\n- `dockers/docker-dhcp-server/kea-dhcp4-init.conf`\n- `dockers/docker-dhcp-server/kea-dhcp4.conf.j2`\n- `src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_cfggen.py`\n- `src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_lease.py`\n- `src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcpservd.py`\n- `src/sonic-dhcp-utilities/tests/conftest.py`\n- `src/sonic-dhcp-utilities/tests/test_data/kea-dhcp4.conf.j2`\n- `src/sonic-dhcp-utilities/tests/test_dhcp_cfggen.py`\n- `src/sonic-dhcp-utilities/tests/test_smart_switch.py`\n\n#### How to verify it\n\n**Manual verification on KVM testbed (VS image):**\n\n1. **Reproduced the failure** \u2014 reverted paths to old values inside the container, started kea-dhcp4:\n   ```\n   DHCP4_CONFIG_LOAD_FAIL: invalid path in `output`: invalid path specified:\n     '/var/log', supported path is '/var/log/kea'\n   DHCP4_INIT_FAIL: failed to initialize Kea server\n   ```\n\n2. **Verified the fix** \u2014 with corrected paths, kea-dhcp4 starts successfully:\n   ```\n   DHCP4_CONFIG_COMPLETE: DHCPv4 server has completed configuration: added IPv4 subnets: 1\n   DHCP4_STARTED: Kea DHCPv4 server version 2.6.3 started\n   ```\n\n3. **End-to-end DHCP handshake** \u2014 sent DHCP Discover from PTF container via scapy:\n   - Kea received DHCPDISCOVER, offered IP `<IP>`\n   - Kea received DHCPREQUEST, sent DHCPACK\n   - Lease persisted to `/var/lib/kea/kea-lease.csv`\n   - Control socket functional at `/run/kea/kea4-ctrl-socket`\n   - All directories created with correct permissions\n\n4. **Kea status via control socket** confirmed healthy operation:\n   ```json\n   {\"result\": 0, \"arguments\": {\"pid\": 38, \"uptime\": 1212, \"sockets\": {\"status\": \"ready\"}}}\n   ```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch\n\n- [x] master (VS image built from `9a40754bd`, manual KVM testbed verification)\n\n#### Description for the changelog\n\nFix kea-dhcp4 startup failure in dhcp_server container after trixie upgrade by updating log, lease, and socket paths to comply with Kea 2.6 strict path validation.",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-server/Dockerfile.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-dhcp-server/docker_init.sh",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-dhcp-server/kea-dhcp4-init.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "dockers/docker-dhcp-server/kea-dhcp4.conf.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_cfggen.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcp_lease.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-dhcp-utilities/dhcp_utilities/dhcpservd/dhcpservd.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-dhcp-utilities/tests/conftest.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-dhcp-utilities/tests/test_data/kea-dhcp4.conf.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-dhcp-utilities/tests/test_dhcp_cfggen.py",
+        "additions": 5,
+        "deletions": 5
+      },
+      {
+        "path": "src/sonic-dhcp-utilities/tests/test_smart_switch.py",
+        "additions": 2,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "id": "buildimage-16990",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 16990,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/16990",
+    "title": "[chassis]: determine/process-reboot-cause services fail to start if database service fails in first run during boot",
+    "created_at": "2023-10-24T18:59:54Z",
+    "closed_at": "2023-11-21T20:49:47Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "cisco",
+    "target_releases": [],
+    "topics": [
+      "Chassis"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n1. This is observed on a Chassis system when a new image is installed on Supervisor only while LC boots with image previously installed.\n\nDuring the first boot after sonic-installer, Supervisor boot goes through lazy install which takes a few mins more than the normal boot due to multiple debian package installations and platform service enablement.\n\nAs LCs also reboot as part of supervisor reboot and LCs are no going through the Lazy install, LCs boot faster and reach database start point. database service does a sonic-db-cli PING in systemd pre check before activating the service. As Supervisor is still in boot, the chassis_redis server sometimes take a little more time to start before LC could reach it.\n\nOn LC, as database service wait for redis chassis server, systemd hits 90 sec default timeout and kills the service which gets restarted after 30 sec. By that time as redis chassis service is available, databse and all other dependent services like bgp, swss, syncd etc also starts.\n\ndetermine-reboot-cause and process-reboot-cause services are also dependent on database service. When database service fails in first attempt, that marks depedency failure for these services. These services are not setup as restartable, so these do not get restarted when database service restarts and retries redis chassis server.\nThis causes 'show reboot-cause history' display empty on the LC.\n\n2. If database service restarts on Chassis or pizza box, reboot-cause history also gets deleted from db. As process-reboot-cause and determine-reboot-cause services do not restart, it cause 'show reboot-cause- history' output to be empty post database restart.\n\nThis github issue is to analyze and find a solution for declaring a better dependency for these services to be able to restart and run when the dependency is resolved.\n\n#### Steps to reproduce the issue:\n1.\n2.\n4.\n\n#### Describe the results you received:\n\n#### Describe the results you expected:\n\n#### Output of `show version`:\nIssue seen with 202205  8e945fb2117e1cbef0b8a28732871afec36fe57b\nbut should be same on master and other branches as the service Unit files are same.\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 132,
+    "repository": "sonic-net/sonic-host-services",
+    "url": "https://github.com/sonic-net/sonic-host-services/pull/132",
+    "title": "Fixed determine/process reboot-cause service dependency (#17406)",
+    "merged_at": "2024-06-28T00:14:41Z",
+    "description": "Signed-off-by: anamehra <<EMAIL>>\n\n#### Why I did it\nFixes https://github.com/sonic-net/sonic-buildimage/issues/16990  for 202405 branch\n\nCherry-picked PR https://github.com/sonic-net/sonic-buildimage/pull/17406 due to conflict.\n\n1. determine-reboot-cause  and process-reboot-cause service does not start If the database service fails to restart in the first attempt. Even if the Database service succeeds in the next attempt, these reboot-cause services do not start.\n\n2. The process-reboot-cause service also does not restart if the docker or database service restarts, which leads to an empty reboot-cause history\n\n3. deploy-mg from sonic-mgmt also triggers the docker service restart. The restart of the docker service caused the issue stated in 2 above. The docker restart also triggers determine-reboot-cause to restart which creates an additional reboot-cause file in history and modifies the last reboot-cause.\n\nThis PR fixes these issues by making both processes start again when dependency meets after dependency failure, making both processes restart when the database service restarts, and preventing duplicate processing of the last reboot reason.\n\n##### Work item tracking\n- Microsoft ADO **25892856**\n\n#### How I did it\n1. Modified systemd unit files to make determine-reboot-cause and process-reboot-cause services restartable when the database service restarts.\n2. On the restart, the determine-reboot-cause service should not recreate a new reboot-cause entry in the database. Added check for first start or restart to skip entry for restart case.\n\n#### How to verify it\nOn single asic pizza box:\n1.  Installed the image and check reboot-cause history\n2. restart database service and verify that determine-reboot-cause and process-reboot-cause services also restart. Verify that reboot-cause shows correct data and no new entry is created for restart.\n\nOn Chassis:\n1.  Installed the image and check reboot-cause history\n2. restart the database service and verify that determine-reboot-cause and process-reboot-cause services also restart. Verify that reboot-cause shows correct data and no new entry is created for restart.\n5. Reboot LC. On Supervicor, stop database-chassis service.\n     Let database service on LC fail the first time. determine-reboot-cause and process-reboot-cause  would fail to start due to dependency failure\n     start database-chassis on Supervisor. Database service on LC should now start successfully.\n     Verify determine-reboot-cause and process-reboot-cause  also starts\n     Verify show reboot-cause history output",
+    "files": [
+      {
+        "path": "data/debian/sonic-host-services-data.determine-reboot-cause.service",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "data/debian/sonic-host-services-data.process-reboot-cause.service",
+        "additions": 9,
+        "deletions": 1
+      },
+      {
+        "path": "data/debian/sonic-host-services-data.process-reboot-cause.timer",
+        "additions": 0,
+        "deletions": 9
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 86,
+      "repository": "sonic-net/sonic-host-services",
+      "url": "https://github.com/sonic-net/sonic-host-services/pull/86",
+      "title": "Add support to make determine/process reboot-cause services restartable",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

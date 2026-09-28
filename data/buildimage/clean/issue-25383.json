@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-25383",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25383,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25383",
+    "title": "Bug: Docker socket activation incorrectly configured in sonic",
+    "created_at": "2026-02-07T00:36:51Z",
+    "closed_at": "2026-02-14T07:01:44Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThe following change made 7 years ago to sonic\n\nhttps://github.com/sonic-net/sonic-buildimage/pull/2417/changes#diff-9260b9ec21d3b4e6c963aec3df057525b89c388b7daa30b931414a4fe721f824\n\n```\n-- /usr/bin/dockerd -H fd://\n++ /usr/bin/dockerd -H unix://\n```\n\nSocket activation has systemd listen on /run/docker.sock early in boot. When a client connects (like Ansible running docker ps), systemd starts Docker and is supposed to hand that same socket connection over to dockerd.\n\nThe handoff fails because the Docker service override (https://github.com/sonic-net/sonic-buildimage/blob/master/files/docker/docker.service.conf) starts the daemon with dockerd -H unix://, which makes Docker create a new Unix socket instead of inheriting the one systemd was listening on. The client remains connected to the original socket, so the request hangs. This happens when the docker client connects before the docker service is started as part of the normal boot order. [Here's](https://github.com/moby/moby/pull/3105) the recommend way to start using -H fd://) as per docker community.\n\n### Steps to Reproduce\n\n1. Reboot sonic\n2. During the startup before the docker service starts communicate with docker socket using say 'docker ps'\n3. The command hangs.\n4. After the docker service starts we can communicate with it as usual using docker commands. But the original communication is still hung as the socket which was listening by systemd on behalf of docker wasn't handed over to the docker daemon once it started\n\n### Actual Behavior and Expected Behavior\n\nExpected behaviour: docker commands before docker service starts should still be responded once through socket activation by docker daemon\n\nActual behaviour: docker commands before docker service starts are not responded as they never reach docker daemon when it starts\n\n```\n<IPV6>             docker.socket started listening\nFeb  1 <IPV6> sonic systemd[1]: Listening on docker.socket - Docker Socket for the API.\n\n<IPV6>             Ansible SSH session initiated docker ps command\nFeb  1 <IPV6> sonic python3[2674]: ansible-command Invoked with _raw_params=docker ps --filter status=running --format \\{\\{.Names\\}\\} ...\n\n<IPV6>             docker.service started syslog\nFeb  1 <IPV6> sonic systemd[1]: Starting docker.service - Docker Application Container Engine...\n\n<IPV6>             Docker daemon completed initialization (\"API listen on /var/run/docker.sock\")\nFeb  1 <IPV6> sonic dockerd[2994]: time=\"2026-02-01T07:30:28.945144092+02:00\" level=info msg=\"API listen on /var/run/docker.sock\"\nFeb  1 <IPV6> sonic systemd[1]: Started docker.service - Docker Application Container Engine.\n\n<IPV6>             healthd successfully executed docker ps\nFeb  1 <IPV6> sonic healthd[3269]: system_health#dict_keys(['Services', 'Hardware', 'Process', 'System'])\n\n08:23:xx              Ansible SSH session finally closed (~53 min later)\nFeb  1 <IPV6> sonic sshd[2670]: pam_unix(sshd:session): session opened for user admin\nFeb  1 08:23:xx sonic sshd[2670]: pam_unix(sshd:session): session closed for user admin\n```"
+  },
+  "resolution": {
+    "pr_number": 25398,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25398",
+    "title": "[docker] Fix Docker commands hanging before docker.service starts",
+    "merged_at": "2026-02-14T07:01:42Z",
+    "description": "#### Why I did it\nFix Docker socket activation broken since PR #2417 (January 2019). Docker commands executed before docker.service starts hang indefinitely because -H unix:// breaks systemd socket activation.\n\n**Fixes #25383**\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nChanged `-H unix://` to `-H fd://` in  `files/docker/docker.service.conf`. Added documentation comments explaining why this flag is required to prevent future regression.\n\n#### How to verify it\n\nVerified on VS image:\n- docker.socket is active and triggers docker.service\n- dockerd runs with -H fd:// flag\n- Socket activation works correctly\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [x] 202305\n- [x] 202311\n- [x] 202405\n- [x] 202411\n- [x] 202505\n- [x] 202511\n\n**Reason:** This is a bug fix that has existed since January 2019. All active release branches are affected and should receive this fix.\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] master : `fix_docker-socket-activation-25383.0-b01504e6c` (sonic-vs.img.gz)\n\n#### Description for the changelog\n\nFix Docker socket activation hang by using -H fd:// instead of -H unix:// in docker.service.conf\n\n#### Link to config_db schema for YANG module changes\n\nN/A\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n![michael-sum-LEpfefQf4rU-unsplash](https://github.com/user-attachments/assets/a4f71f80-b11c-49f4-a562-26d63b89fdbe)",
+    "files": [
+      {
+        "path": "files/docker/docker.service.conf",
+        "additions": 11,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

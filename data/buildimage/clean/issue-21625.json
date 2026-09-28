@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-21625",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21625,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21625",
+    "title": "`kdump` initial config not translated to the `USE_KDUMP` kernel flag",
+    "created_at": "2025-02-04T23:42:14Z",
+    "closed_at": "2025-03-05T06:28:59Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "the `config kdump [enable|disable]` command will set the `KDUMP|config` in CONFIG_DB.\n```\n> sonic-db-cli CONFIG_DB hgetall \"KDUMP|config\"\n{'enabled': 'true', 'memory': '0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M', 'num_dumps': '3'}\n```\n\nChanges to this config are handled by `KdumpCfg` in `hostcfgd`:\nhttps://github.com/sonic-net/sonic-host-services/blob/202405/scripts/hostcfgd#L1943\n\nChanging the `enabled` flag in `KDUMP|config` will result in the `sonic-kdump-config [--enable|--disable]` script to be called:\nhttps://github.com/sonic-net/sonic-host-services/blob/202405/scripts/hostcfgd#L1152-L1155\n\nThat script will in turn set the `USE_KDUMP=[0|1]` in `/etc/default/kdump-tools` depending on whether or not it's enabled:\nhttps://github.com/sonic-net/sonic-utilities/blob/202405/scripts/sonic-kdump-config#L320\n\nChanging this config requires a system reboot.\n\nThis behavior works as expected in a running system.\nHowever, on boot-up the entry in `KDUMP|config` won't be propagated to the `USE_KDUMP` kernel flag.\n\n**Problematic scenario:**\n1. config_db.json has `'enabled': 'false'`\n2. /etc/default/kdump-tools has `USE_KDUMP=1`\n3. Reboot\n\n**Steps to Reproduce:**\n1. config_db.json has `'enabled': 'false'`\n```\nroot@nfc406-7:~# config kdump disable\nKDUMP configuration changes may require a reboot to take effect.\nSave SONiC configuration using 'config save' before issuing the reboot command.\n\nroot@nfc406-7:~# sonic-db-cli CONFIG_DB hgetall \"KDUMP|config\"\n{'enabled': 'false', 'memory': '0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M', 'num_dumps': '3'}\n\nroot@nfc406-7:~# config save -y\nRunning command: /usr/local/bin/sonic-cfggen -d --print-data > /etc/sonic/config_db.json\n\nroot@nfc406-7:~# grep \"USE_KDUMP\" /etc/default/kdump-tools\n# USE_KDUMP - controls kdump will be configured\nUSE_KDUMP=0\n\nroot@nfc406-7:~# show kdump config\nKdump administrative mode: Disabled\nKdump operational mode: Not Ready\nKdump memory reservation: 0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M\nMaximum number of Kdump files: 3\n```\n\n2. Set `USE_KDUMP=1` (set but don't save)\n```\nroot@nfc406-7:~# config kdump enable\nKDUMP configuration changes may require a reboot to take effect.\nSave SONiC configuration using 'config save' before issuing the reboot command.\n\nroot@nfc406-7:~# grep \"USE_KDUMP\" /etc/default/kdump-tools\n# USE_KDUMP - controls kdump will be configured\nUSE_KDUMP=1\n\nroot@nfc406-7:~# show kdump config\nKdump administrative mode: Enabled\nKdump operational mode: Ready after reboot\nKdump memory reservation: 0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M\nMaximum number of Kdump files: 3\n```\n\n3. Reboot\n```\nroot@nfc406-7:~# reboot\n```\n\nResult: `KDUMP|config` says it's disabled but the `USE_KDUMP=1` kernel flag says it's enabled\n```\nroot@nfc406-7:~# sonic-db-cli CONFIG_DB hgetall \"KDUMP|config\"\n{'enabled': 'false', 'memory': '0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M', 'num_dumps': '3'}\n\nroot@nfc406-7:~# grep \"USE_KDUMP\" /etc/default/kdump-tools\n# USE_KDUMP - controls kdump will be configured\nUSE_KDUMP=1\n\nroot@nfc406-7:~# show kdump config\nKdump administrative mode: Disabled\nKdump operational mode: Ready\nKdump memory reservation: 0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M\nMaximum number of Kdump files: 3\n```\n\nFallout: The startup config (config_db.json) requested the KDUMP feature be disabled but it's still enabled and rebooting the switch won't help, you'll need to re-run the `config kdump disable` on a running switch to re-sync the config_db and kernel flags\n\nNote: The same thing can occur with the opposite config (CONFIG_DB: enabled=True, USE_KDUMP=0)\n\n**Analysis:**\nLooking at the `load` functions of the classes in `hostcfgd` it looks like it's typically used to call the handler function for the initial CONFIG_DB processing.\nI'm not sure why in the case of `KdumpCfg` we only setup the `KDUMP|config` in CONFIG_DB if it's not already present:\n```\n    def load(self, kdump_table):\n        \"\"\"\n        Set the KDUMP table in CFG DB to kdump_defaults if not set by the user\n        \"\"\"\n        syslog.syslog(syslog.LOG_INFO, \"KdumpCfg init ...\")\n        kdump_conf = kdump_table.get(\"config\", {})\n        for row in self.kdump_defaults:\n            value = self.kdump_defaults.get(row)\n            if not kdump_conf.get(row):\n                self.config_db.mod_entry(\"KDUMP\", \"config\", {row : value})\n```\nhttps://github.com/sonic-net/sonic-host-services/blob/202405/scripts/hostcfgd#L1130-L1139"
+  },
+  "resolution": {
+    "pr_number": 223,
+    "repository": "sonic-net/sonic-host-services",
+    "url": "https://github.com/sonic-net/sonic-host-services/pull/223",
+    "title": "Process KDUMP attributes in CFG_DB on init",
+    "merged_at": "2025-03-05T06:28:58Z",
+    "description": "Fixes: https://github.com/sonic-net/sonic-buildimage/issues/21625\n\nConfirmed that with this change I see the values in config_db.json propagated to the kernel arguments on init.\n\nE.G.\n- Write KDUMP|config enabled=\"true\" in config_db.json\n- Reboot box\n- I now see the expected operational output `Ready after reboot`\n```\nroot@nfc406-7:~# sonic-db-cli CONFIG_DB hgetall \"KDUMP|config\"\n{'enabled': 'true', 'memory': '0M-2G:256M,2G-4G:320M,4G-8G:384M,8G-:448M', 'num_dumps': '3'}\n\nroot@nfc406-7:~# show kdump config\nKdump administrative mode: Enabled\nKdump operational mode: Ready after reboot\n```\n\n- If I do one more reboot it now becomes `ready`\n```\nroot@nfc406-7:~# show kdump config\nKdump administrative mode: Enabled\nKdump operational mode: Ready\n```",
+    "files": [
+      {
+        "path": "scripts/hostcfgd",
+        "additions": 5,
+        "deletions": 4
+      },
+      {
+        "path": "tests/hostcfgd/hostcfgd_test.py",
+        "additions": 23,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

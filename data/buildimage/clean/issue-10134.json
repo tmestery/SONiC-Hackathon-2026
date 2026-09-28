@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-10134",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 10134,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/10134",
+    "title": "swss service in active state even though swss docker has exited",
+    "created_at": "2022-03-02T21:12:32Z",
+    "closed_at": "2022-09-06T16:26:55Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "Observed Issue:\nIn Multi-asic environment have seen it's possible (especially during bootup) is OA gets error out (fox example: no response from syncd in case of ASIC missing) swss service do not transition from wait to stop state even though docker itself has got exited. These cause swss service remain to be active and syncd and teamd docker to be running.\n\nExpected behaviour:\nIdeally `docker-wait-any` script running in `wait()` call of swss script should be able to detect docker going down and systemctl should move the service from `wait` phase to `stop` phase.  Root cause looks like it's possible (timing issue) if docker gets exited too early then `docker-wait-any` can sleep continuously here https://github.com/Azure/sonic-buildimage/pull/5628/files#diff-1172d3e4fc4e138bee494d1a7ae1eb1cd432f335bd646cca2e70e878a19465a7R49 since docker is not in running state.\nChecking Docker running state and adding sleep was done as part PR: https://github.com/Azure/sonic-buildimage/pull/5628\n\nLogs:\n\n```\n1.\tSwss5 docker is not running (syncd5 and teamd5 is running) but systemctl service is still up for swss@5:\n\nabdosi@xxxx:~$ docker ps | grep swss\n3ee9c4017ee0        docker-orchagent:latest           \"/usr/bin/docker-ini\u2026\"   36 hours ago        Up 36 hours                             swss1\n6493d6d7f5c8        docker-orchagent:latest           \"/usr/bin/docker-ini\u2026\"   36 hours ago        Up 36 hours                             swss4\n0ed7b7986c03        docker-orchagent:latest           \"/usr/bin/docker-ini\u2026\"   36 hours ago        Up 36 hours                             swss0\nfb2f95bde191        docker-orchagent:latest           \"/usr/bin/docker-ini\u2026\"   36 hours ago        Up 36 hours                             swss2\n1cfec5ffc96e        docker-orchagent:latest           \"/usr/bin/docker-ini\u2026\"   36 hours ago        Up 36 hours                             swss3\n\nabdosi@xxxx:~$ sudo systemctl status swss@5\n\u25cf <EMAIL> - switch state service\n   Loaded: loaded (/usr/lib/systemd/system/swss@.service; disabled; vendor preset: enabled)\n   Active: active (running) since Sat 2022-02-26 <IPV6> UTC; 1 day 9h ago\n  Process: 13836 ExecStop=/usr/local/bin/swss.sh stop 5 (code=exited, status=0/SUCCESS)\n  Process: 14482 ExecStartPre=/usr/local/bin/swss.sh start 5 (code=exited, status=0/SUCCESS)\nMain PID: 14756 (swss.sh)\n    Tasks: 5 (limit: 4915)\n   CGroup: /system.slice/system-swss.slice/<EMAIL>\n           \u251c\u250014756 /bin/bash /usr/local/bin/swss.sh wait 5\n           \u2514\u250016457 python /usr/bin/docker-wait-any -s swss5 -d syncd5 teamd5\n\nWarning: Journal has been rotated since unit was started. Log output is incomplete or unavailable\n\n3.\tEven though swss@5 service wait is running docker-wait-any it is not able to detect swss5 docker not running\n\nabdosi@xxxx:~$ docker wait swss5\n0\n\n```"
+  },
+  "resolution": {
+    "pr_number": 11595,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/11595",
+    "title": "[docker-wait-any] immediately start to wait ",
+    "merged_at": "2022-09-06T16:26:54Z",
+    "description": "It could happen that a container has already crashed but docker-wait-any\nwill wait forever till it starts. It should, however, immediately exit\nto make the serivce restart.\n\nSigned-off-by: Stepan Blyschak <<EMAIL>>\n\n#### Why I did it\n\nIt is observed in some circumstances that the auto-restart mechanism does not work. Specifically for ```swss.service```, ```orchagent``` had crashed before ```docker-wait-any``` started in ```swss.sh```. This led ```docker-wait-any``` wait forever for ```swss``` to be in ```\"Running\"``` state and it results in:\n\n```\nCONTAINER ID   IMAGE                                COMMAND                  CREATED        STATUS                    PORTS     NAMES\n1abef1ecebff   bcbca2b74df6                         \"/usr/local/bin/supe\u2026\"   22 hours ago   Up 22 hours                         what-just-happened\n3c924d405cd5   docker-lldp:latest                   \"/usr/bin/docker-lld\u2026\"   22 hours ago   Up 22 hours                         lldp\neb2b12a98c13   docker-router-advertiser:latest      \"/usr/bin/docker-ini\u2026\"   22 hours ago   Up 22 hours                         radv\nd6aac4a46974   docker-sonic-mgmt-framework:latest   \"/usr/local/bin/supe\u2026\"   22 hours ago   Up 22 hours                         mgmt-framework\nd880fd07aab9   docker-platform-monitor:latest       \"/usr/bin/docker_ini\u2026\"   22 hours ago   Up 22 hours                         pmon\n75f9e22d4fdd   docker-snmp:latest                   \"/usr/local/bin/supe\u2026\"   22 hours ago   Up 22 hours                         snmp\n76d570a4bd1c   docker-sonic-telemetry:latest        \"/usr/local/bin/supe\u2026\"   22 hours ago   Up 22 hours                         telemetry\nee49f50344b3   docker-syncd-mlnx:latest             \"/usr/local/bin/supe\u2026\"   22 hours ago   Up 22 hours                         syncd\n1f0b0bab3687   docker-teamd:latest                  \"/usr/local/bin/supe\u2026\"   22 hours ago   Up 22 hours                         teamd\n917aeeaf9722   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   22 hours ago   Exited (0) 22 hours ago             swss\n81a4d3e820e8   docker-fpm-frr:latest                \"/usr/bin/docker_ini\u2026\"   22 hours ago   Up 22 hours                         bgp\nf6eee8be282c   docker-database:latest               \"/usr/local/bin/dock\u2026\"   22 hours ago   Up 22 hours                         database\n```\n\nThe check for ```\"Running\"``` state is not needed because for cold boot case we do ```start_peer_and_dependent_services``` and for warm boot case the loop will retry to wait for container if this container is doing warm boot:\nhttps://github.com/stepanblyschak/sonic-buildimage/blob/d01a91a569c9d545b30e8f81994b02d0c2513971/files/image_config/misc/docker-wait-any#L56\n\n#### How I did it\n\nRemoved the check for ```\"Running\"```.\n\n#### How to verify it\n\nKill swss before ```docker-wait-any``` is reached and verify auto restart will restart swss serivce.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [x] 201911\n- [x] 202006\n- [x] 202012\n- [x] 202106\n- [x] 202111\n- [x] 202205\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/image_config/misc/docker-wait-any",
+        "additions": 2,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

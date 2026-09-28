@@ -1,0 +1,74 @@
+{
+  "id": "buildimage-11431",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 11431,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/11431",
+    "title": "[DHCP_RELAY] [IPv6] [202012] Failed to bind socket to link local ipv6 address",
+    "created_at": "2022-07-13T02:08:51Z",
+    "closed_at": "2022-10-12T08:46:22Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202012",
+      "202205"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nWhen started, dhcp6relay tries to bind the socket to ipv6 link local address.\nHowever, in rare scenarios, there might be a race condition b/w the IPv6 device in the kernel becoming oper up and binding the socket to the iface\nIf the former doesn't happen before the latter the socket bind fails.\nThere is a retry mechanism in the dhcp6relay which tries for 6 times before giving up but it doesn't seem to be sufficient\n\n#### Steps to reproduce the issue:\n\nI couldn't repro in manually but is seen during the po/test_po_update.py test and on 202012 image\n\n```py.test  pc/test_po_update.py --inventory=\"../ansible/inventory,../ansible/veos\" --host-pattern r-tigris-04 --module-path ../ansible/library/ --testbed r-tigris-04-t0-64 --testbed_file ../ansible/testbed.csv --allow_recover  --assert plain --log-cli-level debug --show-capture=no -ra --showlocals --topology t0,any,util --skip_sanity```\n\n#### Describe the results you received:\n\n```\nJul 12 <IPV6>.497934 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #1 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.499708 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #2 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.647696 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #3 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.727958 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #4 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.896864 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #5 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.730663 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #6 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.730744 r-tigris-04 ERR dhcp_relay#dhcp6relay: bind: Failed to bind socket to link local ipv6 address on interface Vlan1000 after 6 retries with Success\n```\n\n#### Describe the results you expected:\n\nError log should not be seen and dhcp6relay should wait until the iface is ready\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Analysis:\n```\nJul 12 <IPV6>.971640 r-tigris-04 NOTICE root: Started swss service...\nJul 12 <IPV6>.995802 r-tigris-04 NOTICE root: Starting syncd service...\nJul 12 <IPV6>.417270 r-tigris-04 NOTICE root: Starting Firmware update procedure\nJul 12 <IPV6>.196599 r-tigris-04 NOTICE root: Firmware update procedure ended\nJul 12 <IPV6>.724675 r-tigris-04 INFO kernel: [   30.370004] IPv6: ADDRCONF(NETDEV_UP): Vlan1000: link is not ready\nJul 12 <IPV6>.751675 r-tigris-04 .INFO systemd[1]: Started syncd service\nJul 12 <IPV6>.755073 r-tigris-04 INFO systemd[1]: Starting DHCP relay container...\nJul 12 <IPV6>.982029 r-tigris-04 INFO dhcp_relay#/supervisord: start Waiting until interface Vlan1000 is ready...\nJul 12 <IPV6>.073738 r-tigris-04 INFO dhcp_relay#/supervisord: start Interface Vlan1000 is ready!\n\nJul 12 <IPV6>.497934 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #1 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.499708 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #2 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.647696 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #3 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.727958 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #4 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.896864 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #5 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.097094 r-tigris-04 NOTICE swss#orchagent: :- addVlan: Create an empty VLAN Vlan1000 vid:1000\nJul 12 <IPV6>.102353 r-tigris-04 NOTICE swss#orchagent: :- addVlanMember: Add member Ethernet108 to VLAN Vlan1000 vid:1000 pid100000000132a\n.....\n......\nJul 12 <IPV6>.315249 r-tigris-04 NOTICE swss#orchagent: :- addVlanMember: Add member Ethernet96 to VLAN Vlan1000 vid:1000 pid10000000012a6\nJul 12 <IPV6>.730663 r-tigris-04 WARNING dhcp_relay#dhcp6relay: Retry #6 to bind to sockets on interface Vlan1000\nJul 12 <IPV6>.730744 r-tigris-04 ERR dhcp_relay#dhcp6relay: bind: Failed to bind socket to link local ipv6 address on interface Vlan1000 after 6 retries with Success\nJul 12 <IPV6>.072675 r-tigris-04 INFO kernel: [  152.759749] IPv6: ADDRCONF(NETDEV_CHANGE): Vlan1000: link becomes ready\n```\n\nFirstly, i don't completely understand reason in the delay for the link local address to appear on Vlan1000 netdev. BTW, this is assigned/controlled by kernel. Not managed by SONiC.\n\nNow given that this happens (although very rarely), dhcp6relay should be robust enough to handle this. just doing \"six\" retries is not a good solution.\n\nAnother interesting observation here is that the diff between retry 5 and 6, the time diff should've been 5 sec but it's almost 40 sec. It's likely because of getifaddr call being extremely slow sometimes. There are a few instances elsewhere reported on the slowness of this system call\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\n\n[syslog.gz](https://github.com/Azure/sonic-buildimage/files/9113903/syslog.gz)"
+  },
+  "resolution": {
+    "pr_number": 12273,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/12273",
+    "title": "[DHCP_RELAY] Updated wait_for_intf.sh to wait for ipv6 global and link local addr",
+    "merged_at": "2022-10-12T08:46:21Z",
+    "description": "Signed-off-by: Vivek Reddy Karri <<EMAIL>>\n\n#### Why I did it\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/11431\n\n#### How I did it\ndhcp6relay binds to ipv6 addresses configured on these vlan interfaces\nThus check if they are ready before launching dhcp6relay\n\n#### How to verify it\n\n- Unit Tests\n- Tested on a live device\n\n```\nroot@r-lionfish-16:/home/admin# redis-cli -n 4 hgetall \"DHCP_RELAY|Vlan10\"\n1) \"dhcpv6_servers@\"\n2) \"fc01:2000::1\"\nroot@r-lionfish-16:/home/admin# redis-cli -n 4 hgetall \"VLAN|Vlan10\"\n1) \"vlanid\"\n2) \"10\"\n3) \"dhcpv6_servers@\"\n4) \"fc02:2000::1\"\nroot@r-lionfish-16:/home/admin# ip addr show Vlan10\n137: Vlan10@Bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc noqueue state UP group default qlen 1000\n    link/ether <IPV6> brd <IPV6>\n    inet6 fc02:2000::2/24 scope global\n       valid_lft forever preferred_lft forever\n    inet6 fe80::<IPV6>/64 scope link\n       valid_lft forever preferred_lft forever\nroot@r-lionfish-16:/home/admin# systemctl restart dhcp_relay\n```\n\n**Syslog:**\n```\nOct  4 <IPV6>.255907 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,255 INFO spawned: 'start' with pid 18\nOct  4 <IPV6>.256812 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,256 INFO success: start entered RUNNING state, process has stayed up for > than 0 seconds (startsecs)\nOct  4 <IPV6>.269321 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,268 INFO exited: dhcpmon-Vlan10 (exit status 0; not expected)\nOct  4 <IPV6>.504875 r-lionfish-16 INFO dhcp_relay#supervisord: start Waiting until interface Vlan10 is ready...\nOct  4 <IPV6>.509125 r-lionfish-16 INFO dhcp_relay#supervisord: start Interface Vlan10 is ready!\nOct  4 <IPV6>.509125 r-lionfish-16 INFO dhcp_relay#supervisord: start Waiting until interface Vlan10 has a link-local ipv6 address configured....\nOct  4 <IPV6>.512623 r-lionfish-16 INFO dhcp_relay#supervisord: start Link-Local address is configured on Vlan10\n```\n\n```\nroot@r-lionfish-16:/home/admin# docker exec -it dhcp_relay cat /usr/bin/wait_for_intf.sh\n#!/usr/bin/env bash\n.............................\n\nfunction check_for_ipv6_link_local\n{\n    IFACE_NAME=$1\n    echo \"Waiting until interface ${IFACE_NAME} has a link-local ipv6 address configured....\"\n\n    # Status of link local address is not populated in STATE_DB\n    while true; do\n        HAS_LL=$(ip -6 addr show ${IFACE_NAME} scope link 2> /dev/null)\n        RC=$?\n        if [[ ${RC} == \"0\" ]] && [[ ! -z ${HAS_LL} ]]; then\n            break\n        fi\n\n        sleep 1\n    done\n\n    echo \"Link-Local address is configured on ${IFACE_NAME}\"\n}\n\n# dhcp6relay binds to ipv6 addresses configured on these vlan ifaces\n# Thus check if they are ready before launching dhcp6relay\nwait_until_iface_ready Vlan10 fc02:2000::2/24\ncheck_for_ipv6_link_local Vlan10\n..........\n```\n\n**Negative Test:  Remove link local address on Vlan iface and add it back**\n```\nroot@r-lionfish-16:/home/admin# ip addr del fe80::<IPV6>/64 dev Vlan10\nroot@r-lionfish-16:/home/admin# ip addr show Vlan10\n137: Vlan10@Bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc noqueue state UP group default qlen 1000\n    link/ether <IPV6> brd <IPV6>\n    inet6 fc02:2000::2/24 scope global\n       valid_lft forever preferred_lft forever\nroot@r-lionfish-16:/home/admin# systemctl restart dhcp_relay\n\nroot@r-lionfish-16:/home/admin# show logging -f | grep dhcp_relay\nOct  4 <IPV6>.661081 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,659 INFO spawned: 'start' with pid 20\nOct  4 <IPV6>.661081 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,660 INFO success: start entered RUNNING state, process has stayed up for > than 0 seconds (startsecs)\nOct  4 <IPV6>.662736 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,662 INFO exited: dhcpmon-Vlan10 (exit status 0; not expected)\nOct  4 <IPV6>.895207 r-lionfish-16 INFO dhcp_relay#supervisord: start Waiting until interface Vlan10 is ready...\nOct  4 <IPV6>.899206 r-lionfish-16 INFO dhcp_relay#supervisord: start Interface Vlan10 is ready!\nOct  4 <IPV6>.899535 r-lionfish-16 INFO dhcp_relay#supervisord: start Waiting until interface Vlan10 has a link-local ipv6 address configured....\n\nroot@r-lionfish-16:/home/admin# docker exec -it dhcp_relay supervisorctl status\ndependent-startup                RUNNING   pid 12, uptime <IPV6>\n\nroot@r-lionfish-16:/home/admin# ip addr add fe80::<IPV6>/64 dev Vlan10 scope link\nroot@r-lionfish-16:/home/admin#\nOct  4 <IPV6>.641777 r-lionfish-16 INFO dhcp_relay#supervisord: start Link-Local address is configured on Vlan10\nOct  4 <IPV6>.644881 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,644 INFO exited: start (exit status 0; expected)\nOct  4 <IPV6>.674002 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,672 INFO spawned: 'dhcp6relay' with pid 539\nOct  4 <IPV6>.683344 r-lionfish-16 DEBUG dhcp_relay#dhcp6relay: key: Vlan10, Operation: SET, f: dhcpv6_servers, v: fc01:2000::1\nOct  4 <IPV6>.693668 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,692 INFO success: dhcp6relay entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)\nOct  4 <IPV6>.763750 r-lionfish-16 INFO dhcp_relay#supervisord 2022-10-04 <IPV6>,762 INFO exited: dependent-startup (exit status 0; expected)\n\nroot@r-lionfish-16:/home/admin# docker exec -it dhcp_relay supervisorctl status\ndependent-startup                EXITED    Oct 04 12:54 AM\ndhcp-relay:dhcp6relay            RUNNING   pid 539, uptime <IPV6>\n........\nstart                            EXITED    Oct 04 12:54 AM\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [x] 202012\n- [ ] 202106\n- [ ] 202111\n- [x] 202205\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-relay/wait_for_intf.sh.j2",
+        "additions": 26,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/dhcp-relay-sample.json",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/wait_for_intf.sh",
+        "additions": 22,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/wait_for_intf.sh",
+        "additions": 22,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/test_j2files.py",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 10712,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/10712",
+      "title": "[dhcp6relay] Add retry mechanism for binding socket to interface ipv6 addresses",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

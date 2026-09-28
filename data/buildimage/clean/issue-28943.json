@@ -1,0 +1,51 @@
+{
+  "id": "buildimage-28943",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28943,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28943",
+    "title": "Bug: chrony is redundantly restarted by monit during `config reload`, conflicting with the sonic.target restart",
+    "created_at": "2026-08-10T21:17:55Z",
+    "closed_at": "2026-09-03T14:12:52Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n`chrony.service` is bound to `sonic.target` \u2014 see files/image_config/chrony/override.conf:\n\n    [Unit]\n    BindsTo=sonic.target\n    After=sonic.target\n    [Install]\n    WantedBy=sonic.target\n\nSo a `config reload -y -f` already stops chrony with the target teardown and restarts it with the target bring-up. chrony's lifecycle during reload is owned by systemd/sonic.target.\n\nPR #28284 (\"Make sure Chrony is monitored via monit\") added `check process chrony` to monit with a `start program = systemctl start chrony.service`. As a result, during config reload monit **also** tries to manage chrony:\n\n- chrony goes down as part of the `sonic.target` teardown (BindsTo), and\n- on its next 60s poll monit sees chrony \"not running\" and runs a redundant, blocking\n  `systemctl start chrony.service` recovery \u2014 for a service that sonic.target is already\n  restarting.\n\nThis redundant monit action is harmful in two ways, both ob\n\n1. If monit's recovery fires while the target is still tear: `Transaction for chrony.service/start is destructive (\u2026'stop' job queued\u2026)` and monit logs`'chrony' failed to start (exit status 4)`.\n\n2. If it fires while the target is coming back up, the `systemctl start chrony` is slow (~20s, because systemd is saturated by the reload's container-restart storm) and it **blocks monit's single worker**. config reload's own `monit monitor routeCheck` then queues behind it and exceeds its 10s wait, producing:`ERR config: Monit monitor action for 'routeCheck' did not complete within 10 seconds`.\n\nmonit should not be restarting chrony during config reload at all - config reload should own it\n\n### Steps to Reproduce\n\nImage must have chrony in monit (#28284). Verify: `sudo monit status chrony` returns a status.\n\n**1. Slow chrony's start to guarantee monit's recovery blocks past the routeCheck wait  (simulates the reload storm's systemd saturation):**\n       sudo mkdir -p /etc/systemd/system/chrony.service.d\n       printf '[Service]\\nExecStartPre=/bin/sleep 25\\n' | \\\n         sudo tee /etc/systemd/system/chrony.service.d/slowstart.conf\n       sudo systemctl daemon-reload\n\n**2. Make monit poll frequently so it catches chrony down during the reload:**\n       sudo sed -i 's/^set daemon .*/set daemon 5/' /etc/monit/monitrc\n       sudo monit reload\n\n**3. Trigger:**\n       sudo config reload -y -f\n\n**4. Observe (separate session):**\n       tail -f /var/log/syslog | grep -E \"chrony|routeCheck|did not complete\"\n\nYou will see monit run a redundant `systemctl start chrony` and, depending on timing, either the \"destructive transaction\" chrony failure or the routeCheck 10s-wait timeout.\n\n**Natural repro:** loop `sudo config reload -y -f`; reproduces at a low rate, higher under load.\n\n### Actual Behavior and Expected Behavior\n\n**Actual:** During config reload, monit independently tries to restart chrony (a service sonic.target is already restarting). This redundant action either fails with a \"destructive transaction\" error during teardown, or blocks monit's single worker ~20s during bring-up, which makes config reload's routeCheck monit-wait time out and log an ERROR.\n\n**Expected:** During config reload, chrony is restarted only by sonic.target. monit should not run a redundant chrony recovery mid-reload, and config reload should complete without ERR-level monit/chrony/routeCheck noise.\n\n**Suggested fix:** In config reload (sonic-utilities `config/main.py`), unmonitor chrony across the reload window and re-monitor it after the restart\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 29267,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/29267",
+    "title": "Don't have monit try to restart chrony on its own",
+    "merged_at": "2026-09-03T14:12:51Z",
+    "description": "Fixes: #28943\n\n#### Why I did it\n\nThis prevents a potential for multiple restarts of chrony to happen on its own, as well as monit bringing up all of SONiC by starting chrony (due to the defined service dependencies).\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nRemove commands for monit to start chrony on its own.\n\n#### How to verify it\n\nStopped chrony and `sonic.target`, waited a while, and verified that SONiC containers did not start up, and verified that `sudo monit status` showed that chrony was not running.\n\n```\nProcess 'chrony'\n  status                       Does not exist\n  monitoring status            Monitored\n  monitoring mode              active\n  on reboot                    start\n  data collected               Tue, 01 Sep 2026 <IPV6>\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type:\n\n#### Tested branch\n\n- [ ] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/image_config/monit/conf.d/sonic-host",
+        "additions": 0,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 4769,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4769",
+      "title": "config: Suspend chrony monitoring during reload",
+      "merged": false
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

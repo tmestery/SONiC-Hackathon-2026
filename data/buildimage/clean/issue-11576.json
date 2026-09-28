@@ -1,0 +1,51 @@
+{
+  "id": "buildimage-11576",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 11576,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/11576",
+    "title": "[Generic Config Updater] apply-patch ignore-path path is not working",
+    "created_at": "2022-07-28T17:53:12Z",
+    "closed_at": "2022-08-09T01:38:09Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT",
+      "Generic Config Update (GCU)"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nWhen using apply-patch to update the DB there is an hidden option 'ignore-path' that should be used to ignore validation for config specified by given path.\n\nThe validation on apply-path does not ignore the tables given with this flag.\n\n#### Steps to reproduce the issue:\n1. Verify using dynamic buffer.\n2. Create a patch to shutdown a port:\n```\nadmin@r-tigon-21:~$ cat test_down\n[\n        {\n            \"op\": \"replace\",\n            \"path\": \"/PORT/Ethernet0/admin_status\",\n            \"value\": \"down\"\n        }\n]\n```\n3. Verify the interface status is up:\n```\nadmin@r-tigon-21:~$ show interface status Ethernet0\n  Interface    Lanes    Speed    MTU    FEC    Alias            Vlan    Oper    Admin             Type    Asym PFC\n-----------  -------  -------  -----  -----  -------  --------------  ------  -------  ---------------  ----------\n  Ethernet0      0,1      50G   9100    N/A    etp1a  PortChannel102      up       up  QSFP28 or later         off\n```\n4. Apply the patch\n\n#### Describe the results you received:\n```\nadmin@r-tigon-21:~$ sudo config apply-patch -i /BUFFER_PG test_down\nPatch Applier: Patch application starting.\nPatch Applier: Patch: [{\"op\": \"replace\", \"path\": \"/PORT/Ethernet0/admin_status\", \"value\": \"down\"}]\nPatch Applier: Getting current config db.\nPatch Applier: Simulating the target full config after applying the patch.\nPatch Applier: Validating target config does not have empty tables, since they do not show up in ConfigDb.\nPatch Applier: Sorting patch updates.\nPatch Applier: The patch was sorted into 1 change:\nPatch Applier:   * [{\"op\": \"replace\", \"path\": \"/PORT/Ethernet0/admin_status\", \"value\": \"down\"}]\nPatch Applier: Applying 1 change in order:\nPatch Applier:   * [{\"op\": \"replace\", \"path\": \"/PORT/Ethernet0/admin_status\", \"value\": \"down\"}]\nPatch Applier: Verifying patch updates are reflected on ConfigDB.\nFailed to apply patch\nUsage: config apply-patch [OPTIONS] PATCH_FILE_PATH\nTry \"config apply-patch -h\" for help.\n```\nLogs show:\n\n> Jun  7 <IPV6>.028286 r-tigon-21 ERR config: Change Applier: run_data vs expected_data: {'BUFFER_PG': {'Ethernet0|3': {'profile'\n> Jun  7 <IPV6>.028426 r-tigon-21 ERR config: Change Applier: Failed to apply Json change\n>\n\n#### Describe the results you expected:\nShould pass.\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\nThe BUFFER_PG table does change when shutting down a port:\n> root@r-tigon-21:/home/admin# config interface startup Ethernet0\n> root@r-tigon-21:/home/admin# redis-cli -n 4 keys \"BUFFER_PG|Ethernet0*\"\n> 1) \"BUFFER_PG|Ethernet0|0\"\n> 2) \"BUFFER_PG|Ethernet0|3-4\"\n> root@r-tigon-21:/home/admin# config interface shutdown Ethernet0\n> root@r-tigon-21:/home/admin# redis-cli -n 4 keys \"BUFFER_PG|Ethernet0*\"\n> 1) \"BUFFER_PG|Ethernet0|0\"\n\nBut it seems that the -i flag doesn't work and doesn't ignore tables giving to it.\nAfter update is done on src/sonic-utilities/generic_config_updater/change_applier.py in function  apply(self, change)\n\nThere is a validation:\nhttps://github.com/Azure/sonic-utilities/blob/ac2f55306e9f5f0f9fad60f814bcc777f685d2b4/generic_config_updater/change_applier.py#L145\n```\n            if upd_data != run_data:\n                self._report_mismatch(run_data, upd_data)\n                ret = -1\n```\n\nWhich take the new db and compare it to the expected db, there is no mention of what we gave it on the ignore flag, which results in a the error."
+  },
+  "resolution": {
+    "pr_number": 2295,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/2295",
+    "title": "Fix GCU bug when backend service modifying config",
+    "merged_at": "2022-08-09T01:38:08Z",
+    "description": "Modifying PORT `admin_status` will result in backend service changing the running config. e.g. buffermgrd will modify `BUFFER_PG|EthernetXX|3-4` when one of the EthernetXX in `PORT` table admin down.\nThis PR is to skip comparison of config that is possiblly being modified by backend service\n\n#### What I did\nFixes https://github.com/sonic-net/sonic-buildimage/issues/11576\n#### How I did it\nAdd a workaround to only compare config without backend service impact.\n#### How to verify it\nManual test on specific platform and check operation success.\n#### Previous command output (if the output of a command-line utility has changed)\n\n#### New command output (if the output of a command-line utility has changed)",
+    "files": [
+      {
+        "path": "generic_config_updater/change_applier.py",
+        "additions": 12,
+        "deletions": 0
+      },
+      {
+        "path": "generic_config_updater/generic_updater.py",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

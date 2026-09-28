@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-29245",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 29245,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/29245",
+    "title": "redfish: supervisor-proc-exit-listener cannot read CONFIG_DB in bridge-mode container (autorestart broken)",
+    "created_at": "2026-08-29T05:03:24Z",
+    "closed_at": "2026-08-31T15:41:15Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Description\n\nThe `supervisor-proc-exit-listener` inside the `redfish` container cannot read CONFIG_DB, so it never propagates critical-process exits into container teardown. `feature autorestart` for redfish is effectively broken.\n\n### Root cause\n\n`redfish` is the only SONiC container that runs with `--net=bridge` instead of `--net=host` (see [`files/build_templates/docker_image_ctl.j2#L699-L704`](https://github.com/sonic-net/sonic-buildimage/blob/master/files/build_templates/docker_image_ctl.j2#L699-L704)):\n\n```jinja\n{%- if docker_container_name == \"redfish\" %}\n    NET=\"bridge\"\n{%- else %}\n    NET=\"host\"\n{%- endif %}\n```\n\nBridge mode is used so that `-p <IP>:443:18080` can remap the external HTTPS port (bmcweb listens on :18080 inside the container).\n\nConsequence: inside the redfish container, `<IP>:6379` does not reach the host redis. `ConfigDBConnector().connect()` fails with:\n\n```\nRuntimeError: Unable to connect to redis - Connection refused\n```\n\nThe listener in [`dockers/docker-sonic-redfish/supervisord.conf`](https://github.com/sonic-net/sonic-buildimage/blob/master/dockers/docker-sonic-redfish/supervisord.conf) is:\n\n```\ncommand=/usr/local/bin/supervisor-proc-exit-listener --container-name redfish\n```\n\nWithout `-s/--use-unix-socket-path`, it uses TCP-mode `ConfigDBConnector`, which cannot reach redis in bridge-mode netns. When a critical process (e.g. `sonic-dbus-bridge`) exits:\n\n1. Listener receives `PROCESS_STATE_EXITED`.\n2. `get_autorestart_state()` \u2192 `connect()` raises \u2192 caught \u2192 returns `\"\"`.\n3. `\"\" != \"enabled\"` \u2192 listener does **not** send `SIGTERM` to supervisord.\n4. Supervisord's own `autorestart=true` respawns the critical process in place.\n5. Container never stops. `sonic-mgmt` `autorestart/test_container_autorestart.py::test_containers_autorestart[...-redfish]` fails with \"Failed to stop container 'redfish'\".\n\nThe other 25 SONiC containers using this listener are unaffected: they run on `--net=host`, so `<IP>:6379` resolves to the host redis instance.\n\n### Environment\n\n- Platform: SONiC BMC on Chipmunk (aspeed-arm64)\n- Image: `sonic-aspeed-arm64-20260810.06.bin`\n- Reproducible on `sonic-net/sonic-buildimage` master (config unchanged since PR #26003).\n\n### Reproduction\n\n```bash\n# on the DUT, all-defaults deploy-mg config\nsudo config feature autorestart redfish enabled\n\n# confirm listener can't reach redis\ndocker exec redfish python3 -c 'from swsscommon import swsscommon; c=swsscommon.ConfigDBConnector(); c.connect()'\n# -> RuntimeError: Unable to connect to redis - Connection refused\n\n# kill a critical process\ndocker exec redfish kill -9 $(docker exec redfish supervisorctl pid sonic-dbus-bridge)\n\n# expected: container tears down within a few seconds\n# actual: supervisord respawns the process; container stays up indefinitely\n```\n\n### Proposed fix\n\nAdd `--use-unix-socket-path` to the listener command in `dockers/docker-sonic-redfish/supervisord.conf`. The redfish container already bind-mounts `/var/run/redis:/var/run/redis:rw`, so `redis.sock` is available.\n\n```diff\n-command=/usr/local/bin/supervisor-proc-exit-listener --container-name redfish\n+command=/usr/local/bin/supervisor-proc-exit-listener --container-name redfish --use-unix-socket-path\n```\n\n### Validation\n\nApplied the one-line fix on a running Chipmunk BMC DUT:\n\n- Before: `docker exec redfish kill -9 <dbus-bridge pid>` \u2192 supervisord respawned in place; container up 2h+.\n- After: `docker exec redfish kill -9 <dbus-bridge pid>` \u2192 container exited within 30s (`systemd[1]: redfish.service: Deactivated successfully`); systemd restarted the service; new container came up clean.\n\nPR to follow."
+  },
+  "resolution": {
+    "pr_number": 29246,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/29246",
+    "title": "[redfish]: use unix socket for supervisor-proc-exit-listener CONFIG_DB access",
+    "merged_at": "2026-08-31T15:41:13Z",
+    "description": "**What I did**\n\nAdd `--use-unix-socket-path` to `supervisor-proc-exit-listener` in `dockers/docker-sonic-redfish/supervisord.conf`.\n\n**Why I did it**\n\nFixes #29245.\n\nThe `redfish` container is the only SONiC container that runs with `--net=bridge` (see [`files/build_templates/docker_image_ctl.j2#L699-L704`](https://github.com/sonic-net/sonic-buildimage/blob/master/files/build_templates/docker_image_ctl.j2#L699-L704)), because it uses `-p <IP>:443:18080` to remap the external HTTPS port.\n\nAs a consequence, `<IP>:6379` inside the container does not reach the host redis. `ConfigDBConnector().connect()` (TCP mode) fails with `RuntimeError: Unable to connect to redis - Connection refused`. `supervisor-proc-exit-listener`'s `get_autorestart_state()` catches that and returns `\"\"`. Since `\"\" != \"enabled\"`, the listener never sends `SIGTERM` to supervisord when a critical process exits, so container teardown never happens, so container-level autorestart is effectively broken for redfish.\n\nEvery other SONiC container using this listener runs on `--net=host` and reaches redis over TCP, so they are unaffected. The `redfish` container already bind-mounts `/var/run/redis:/var/run/redis:rw`, so the unix socket is available; switching the listener to unix-socket mode is a one-line, redfish-only change.\n\n**How I verified it**\n\nApplied the equivalent change on a live SONiC BMC DUT (Chipmunk, `sonic-aspeed-arm64-20260810.06`):\n\n- Before: `docker exec redfish kill -9 <sonic-dbus-bridge pid>` \u2192 supervisord respawns in place, container stays up indefinitely.\n- After: same kill \u2192 container exits within 30s (`systemd[1]: redfish.service: Deactivated successfully`); systemd restarts the service; new container comes up clean and healthy. `autorestart/test_container_autorestart.py::test_containers_autorestart[...-redfish]` now behaves as designed.\n\n**Which release branches to backport (provide reason below if selected)**\n\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n**Description for the changelog**\n\n`[redfish]: use unix socket for supervisor-proc-exit-listener CONFIG_DB access`",
+    "files": [
+      {
+        "path": "dockers/docker-sonic-redfish/supervisord.conf",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

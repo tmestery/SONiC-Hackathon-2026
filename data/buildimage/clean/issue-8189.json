@@ -1,0 +1,57 @@
+{
+  "id": "buildimage-8189",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 8189,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/8189",
+    "title": "[mirroring] Missing per-vendor validation of mirror session queue parameter",
+    "created_at": "2021-07-15T15:41:27Z",
+    "closed_at": "2021-10-18T15:36:56Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202106"
+    ],
+    "topics": [
+      "port mirroring"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nIt is possible to configure a value for queue in a mirror session that is outside the range supported by the switch vendor.  The flow is that MirrorOrch::createEntry calls activateSession which calls status = sai_mirror_api->create_mirror_session.  If it fails, e.g. due to invalid queue, activateSession calls handleSaiCreateStatus, which in any failure case initiates exiting orchagent.\n\nI think the solution involves orchagent comparing the user-supplied value of queue with SAI_SWITCH_ATTR_QOS_MAX_NUMBER_OF_TRAFFIC_CLASSES as part of its earlier validations, and not attempting to create the session if this validation fails.\n\n#### Steps to reproduce the issue:\n\n1. config mirror_session erspan add ms6 <IP> <IP> 63 250 \"\" 15 Ethernet136 tx\n\n#### Describe the results you received:\n\nERR syncd#SDK: [SPAN.ERR] SWITCH_PRIO 15 is   outside valid range 0-14.\nERR   syncd#SDK: [SPAN.ERR] __span_add failed, err: Parameter Error.\nERR   syncd#SDK: [SAI_MIRROR.ERR] mlnx_sai_mirror.c[2647]-   mlnx_create_mirror_session: Error creating mirror session\nERR   syncd#SDK: :- sendApiResponse: api SAI_COMMON_API_CREATE failed in syncd   mode: SAI_STATUS_INVALID_PARAMETER\nERR   syncd#SDK: :- processQuadEvent: attr: SAI_MIRROR_SESSION_ATTR_TC: 15\nERR   swss#orchagent: :- create: create status: SAI_STATUS_INVALID_PARAMETER\nERR   swss#orchagent: :- activateSession: Failed to activate mirroring session ms6\nERR   swss#orchagent: :- handleSaiCreateStatus: Encountered failure in create   operation, exiting orchagent, SAI API: SAI_API_MIRROR, status:   SAI_STATUS_INVALID_PARAMETER\n\n#### Describe the results you expected:\n\nA single error in log from orchagent only, no exiting the process.\n\n#### Output of `show version`:\n\nSONiC Software Version: SONiC.202106.0-ebc962c22\nDistribution: Debian 10.10\nKernel: 4.19.0-12-2-amd64\nBuild commit: ebc962c\nBuild date: Thu Jun 24 <IPV6> UTC 2021\nBuilt by: raphaelt@r-build-sonic05\n\nPlatform: x86_64-mlnx_msn2410-r0\nHwSKU: ACS-MSN2410\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT1921X01546\nUptime: <IPV6> up 2:44, 2 users, load average: 1.58, 1.65, 1.65\n\nDocker images:\nREPOSITORY TAG IMAGE ID SIZE\ndocker-syncd-mlnx 202106.0-ebc962c22 d00568dad081 961MB\ndocker-syncd-mlnx latest d00568dad081 961MB\ndocker-snmp 202106.0-ebc962c22 69263d7ff0ca 454MB\ndocker-snmp latest 69263d7ff0ca 454MB\ndocker-dhcp-relay 202106.0-ebc962c22 12bd15bd2785 420MB\ndocker-dhcp-relay latest 12bd15bd2785 420MB\ndocker-teamd 202106.0-ebc962c22 92f76cb0c626 424MB\ndocker-teamd latest 92f76cb0c626 424MB\ndocker-nat 202106.0-ebc962c22 36858e717963 427MB\ndocker-nat latest 36858e717963 427MB\ndocker-router-advertiser 202106.0-ebc962c22 34fc1983f5d3 413MB\ndocker-router-advertiser latest 34fc1983f5d3 413MB\ndocker-platform-monitor 202106.0-ebc962c22 74dd0063f256 738MB\ndocker-platform-monitor latest 74dd0063f256 738MB\ndocker-lldp 202106.0-ebc962c22 ce9a9e42fecd 453MB\ndocker-lldp latest ce9a9e42fecd 453MB\ndocker-macsec 202106.0-ebc962c22 89d2ebe2ddaa 427MB\ndocker-macsec latest 89d2ebe2ddaa 427MB\ndocker-database 202106.0-ebc962c22 32ce5d38e191 413MB\ndocker-database latest 32ce5d38e191 413MB\ndocker-orchagent 202106.0-ebc962c22 c6254d27f85d 442MB\ndocker-orchagent latest c6254d27f85d 442MB\ndocker-sonic-telemetry 202106.0-ebc962c22 bd04168564d8 501MB\ndocker-sonic-telemetry latest bd04168564d8 501MB\ndocker-sonic-mgmt-framework 202106.0-ebc962c22 a5ec5adee9cd 570MB\ndocker-sonic-mgmt-framework latest a5ec5adee9cd 570MB\ndocker-fpm-frr 202106.0-ebc962c22 5436d8f7e983 442MB\ndocker-fpm-frr latest 5436d8f7e983 442MB\ndocker-sflow 202106.0-ebc962c22 0d353410dcb2 425MB\ndocker-sflow latest 0d353410dcb2 425MB\n\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 1957,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/1957",
+    "title": "Orchagent validates mirror session queue parameter against maximum value from SAI",
+    "merged_at": "2021-10-18T15:36:56Z",
+    "description": "Signed-off-by: Raphael Tryster <EMAIL>\n\n**What I did**\n\nOn initialization, orchagent queries SAI for the maximum value of the queue parameter in mirroring sessions.  When the user configures a session, if the value requested by the user is invalid, it writes an error in the log and does not pass the request to SAI/SDK.\n\n**Why I did it**\n\nFixes https://github.com/Azure/sonic-buildimage/issues/8189[mirroring] Missing per-vendor validation of mirror session queue parameter. Without this change, orchagent passes the invalid data to SAI/SDK which returns failure, causing orchagent to exit, effectively a system crash.\n\n**How I verified it**\n\nManual and unit test: Create 3 mirror sessions with queue = 0, maximum valid value, lowest invalid value. First two cases, sessions are created. For last case, session not created in state DB and error in log.\n\n**Details if related**",
+    "files": [
+      {
+        "path": "orchagent/mirrororch.cpp",
+        "additions": 27,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/mirrororch.h",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "tests/test_mirror_port_span.py",
+        "additions": 48,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

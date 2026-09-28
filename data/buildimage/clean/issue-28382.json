@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-28382",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28382,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28382",
+    "title": "Bug::UEFI verification for VM failed",
+    "created_at": "2026-07-12T18:28:42Z",
+    "closed_at": "2026-07-13T15:37:26Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n### Describe the bug\n\nAfter #27928, installing an **unsigned** (`SECURE_UPGRADE_MODE=no_sign`) SONiC image in **UEFI** mode **from ONIE** no longer creates an EFI NVRAM boot entry for SONiC. The firmware then falls back to booting ONIE, so the machine never boots the freshly installed SONiC.\n\nFor the UEFI VS image added in #27080, this makes the build's UEFI boot verification (`check_install.py`) time out \u2014 i.e. a **blocking build failure** on the default (unsigned)VS UEFI build.\n\n### Root cause\n\nIn `installer/default_platform.conf`, `demo_install_uefi_grub()` does:\n\n```sh\ngrub-install --no-nvram ...          # deliberately no NVRAM entry, and no --removable fallback\nif [ \"$install_env\" = \"sonic\" ]; then\n    efibootmgr --quiet --create ...  # the ONLY code that registers the SONiC UEFI boot entry\nfi\n```\n\n#27928 (commit `e57ada5e3`) wrapped the previously **unconditional** `efibootmgr --create` in `if [ \"$install_env\" = \"sonic\" ]`. When installing from ONIE (`install_env=onie`):\n\n- `grub-install --no-nvram` writes no NVRAM entry, and without `--removable` there is no `\\EFI\\BOOT\\BOOTX64.EFI` fallback either;\n- the `efibootmgr --create` block is skipped;\n- nothing else creates an entry (ONIE does not create a boot entry for the NOS \u2014 that is the NOS installer's job).\n\nResult: no SONiC `BootXXXX` entry exists, so the firmware boots the only remaining entry \u2014 ONIE's `\\EFI\\onie\\shimx64.efi` \u2014 landing in ONIE.\n\n**Signed** images are unaffected: they take `demo_install_uefi_shim()`, which still creates the entry unconditionally.\ngrub-install --no-nvram ...          # deliberately no NVRAM entry, and no --removable fallback\nif [ \"$install_env\" = \"sonic\" ]; then\n    efibootmgr --quiet --create ...  # the ONLY code that registers the SONiC UEFI boot entry\nfi\n```\n\n### Steps to Reproduce\n\n### Steps to reproduce\n\nBuild the default (unsigned) UEFI VS image on current master:\n\n```\nmake configure PLATFORM=vs\nmake target/sonic-vs.img.gz     # runs `generate_kvm_image 1 UEFI`\n```\n\nThe UEFI verify boot lands in ONIE and `check_install.py` times out.\n\nSo the UEFI-from-ONIE verify was last exercised before the gate existed; the two changes were never run together in CI.\n\n### Additional evidence (reproduced locally)\n\nBuilding the UEFI KVM image with the gate present, the verify boot loads `Boot0004 \"ONIE\" \u2026 \\EFI\\onie\\shimx64.efi` and times out. With `efibootmgr --create` also allowed for `install_env=onie`, the install creates `Boot0005 \"SONiC-OS\" \u2026 \\EFI\\SONiC-OS\\grubx64.efi`, and the verify boot reaches `sonic login:` and the build succeeds. Same tree, same OVMF firmware \u2014 the only difference is the `install_env` gate.\n\n### Actual Behavior and Expected Behavior\n\n### Expected behavior\n\nAn unsigned UEFI image installed from ONIE should register an EFI boot entry and boot SONiC, as it did before #27928.\n\n### Why CI did not catch it\n\n- #27928 (the gate) merged 2026-07-09.\n- #27080 (which added `generate_kvm_image 1 UEFI` + the OVMF verify for the unsigned VS image) last ran Azure CI on 2026-07-06 and merged 2026-07-11 on approval, with no CI re-run after 2026-07-09.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 28383,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28383",
+    "title": "Fix UEFI boot entry not created for images installed from ONIE (regression from #27928)",
+    "merged_at": "2026-07-13T15:37:24Z",
+    "description": "#### Why I did it\n\nFixes #28382.\n\nAfter #27928, installing an **unsigned** (`SECURE_UPGRADE_MODE=no_sign`) SONiC image in **UEFI** mode **from ONIE** no longer creates an EFI NVRAM boot entry for SONiC, so the firmware falls back to booting ONIE and never boots the freshly installed SONiC. For the UEFI VS image added in #27080 this makes the build's UEFI boot verification (`check_install.py`) time out.\n\nRoot cause: in `installer/default_platform.conf`, `demo_install_uefi_grub()` runs `grub-install --no-nvram` (no NVRAM entry, and no `--removable` fallback), and #27928 (commit `e57ada5e3`) wrapped the previously **unconditional** `efibootmgr --create` \u2014 the only code that registers the SONiC UEFI boot entry \u2014 in `if [ \"$install_env\" = \"sonic\" ]`. When installing from ONIE (`install_env=onie`) that block is skipped and nothing else creates an entry, so the only remaining entry (ONIE's `\\EFI\\onie\\shimx64.efi`) is booted. Signed images are unaffected because they use `demo_install_uefi_shim()`, which still creates the entry unconditionally.\n\n#### How I did it\n\nAllow the `efibootmgr --create` boot entry to be created for the `onie` install environment as well. Only `build` (a chroot with no EFI NVRAM) must be excluded, so the guard becomes `if [ \"$install_env\" = \"sonic\" ] || [ \"$install_env\" = \"onie\" ]`.\n\n#### How to verify it\n\nBuild the default (unsigned) UEFI VS image, which runs `generate_kvm_image 1 UEFI`:\n\n```\nmake configure PLATFORM=vs\nmake target/sonic-vs.img.gz\n```\n\n- **Before:** the UEFI verify boot loads `Boot0004 \"ONIE\" \u2026 \\EFI\\onie\\shimx64.efi` and `check_install.py` times out.\n- **After:** the install creates `Boot0005 \"SONiC-OS\" \u2026 \\EFI\\SONiC-OS\\grubx64.efi`, the verify boot reaches `sonic login:`, and the build succeeds.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "installer/default_platform.conf",
+        "additions": 5,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

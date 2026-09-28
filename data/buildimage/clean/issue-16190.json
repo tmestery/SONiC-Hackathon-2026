@@ -1,0 +1,56 @@
+{
+  "id": "buildimage-16190",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 16190,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/16190",
+    "title": "[Yang] Incorrect definition of `IN_PORTS` and `OUT_PORTS` in sonic-acl.yang",
+    "created_at": "2023-08-17T13:33:06Z",
+    "closed_at": "2023-08-22T18:26:06Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [
+      "202205",
+      "202305"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nThe type of `IN_PORTS` and `OUT_PORTS` at [sonic-acl.yang.j2#L131](https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-yang-models/yang-templates/sonic-acl.yang.j2#L131) is incorrect.\n\nAccording to [Everflow-test-plan](https://github.com/sonic-net/SONiC/blob/master/doc/acl/Everflow-test-plan.md?plain=1#L1013), it should be a string, not `uint16`. The string format should be a list of SONiC interface name separated by comma, like `\"Ethernet3,Ethernet4\".\n\nAccording to [Sonic-mclag-hld](https://github.com/sonic-net/SONiC/blob/master/doc/mclag/Sonic-mclag-hld.md?plain=1#L447), `OUT_PORTS` should be a string of the same format.\n\nThis bug causes GCU cannot add/update data-plane ACL rules with `IN_PORTS` and `OUT_PORTS`.\n\n#### Steps to reproduce the issue:\n1. Setup custom ACL table type on DUT.\n    a. Write below content to file `acl_table_types.json` on DUT:\n    ```json\n    {\n        \"ACL_TABLE_TYPE\": {\n            \"BMCDATAV6\": {\n                \"MATCHES\": \"SRC_IPV6,DST_IPV6,ETHER_TYPE,IP_TYPE,IP_PROTOCOL,IN_PORTS,L4_SRC_PORT,L4_DST_PORT,L4_SRC_PORT_RANGE,L4_DST_PORT_RANGE\",\n                \"ACTIONS\": \"PACKET_ACTION,COUNTER\",\n                \"BIND_POINTS\": \"PORT\"\n            }\n        }\n    }\n    ```\n    b. Add custom ACL table type to config_db: `sonic-cfggen -j acl_table_types.json -w`\n2. Create ACL table on DUT: `sudo config acl add table SAMPLE_ACL_TABLE BMCDATAV6 -p Ethernet1,Ethernet2 -s ingress`.\n3. Add first ACL rule to config_db via `acl-loader`:\n    a. Write below content to file `acl_rules.json` on DUT:\n    ```json\n    {\n        \"acl\": {\n            \"acl-sets\": {\n                \"acl-set\": {\n                    \"SAMPLE_ACL_TABLE\": {\n                        \"acl-entries\": {\n                            \"acl-entry\": {\n                                \"RULE_1\": {\n                                    \"actions\": {\n                                        \"config\": {\n                                            \"forwarding-action\": \"DROP\"\n                                        }\n                                    },\n                                    \"config\": {\n                                        \"sequence-id\": 1\n                                    },\n                                    \"input_interface\": {\n                                        \"interface_ref\": {\n                                            \"config\": {\n                                                \"interface\": \"Ethernet1\"\n                                            }\n                                        }\n                                    }\n                                }\n                            }\n                        }\n                    }\n                }\n            }\n        }\n    }\n    ```\n    b. Use `acl-loader` to load above ACL rule: `acl-loader update full --table_name SAMPLE_ACL_TABLE acl_rules.json`.\n4. Add second ACL rule to config_db via GCU:\n    a. Write below content to file `patch.json` on DUT:\n    ```json\n    [\n        {\n            \"op\": \"add\",\n            \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\",\n            \"value\": {\n                \"PACKET_ACTION\": \"FORWARD\",\n                \"PRIORITY\": \"7000\",\n                \"IN_PORTS\": \"Ethernet2\"\n            }\n        }\n    ]\n    ```\n    b. Use GCU to apply above patch: `sudo config apply-patch patch.json`\n\n#### Describe the results you received:\n\nAt step 4.b, I got below error on DUT:\n\n```\n$ sudo config apply-patch patch.json\nPatch Applier: Patch application starting.\nPatch Applier: Patch: [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\nPatch Applier: Getting current config db.\nPatch Applier: Simulating the target full config after applying the patch.\nPatch Applier: Validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: Validating target config does not have empty tables, since they do not show up in ConfigDb.\nPatch Applier: Sorting patch updates.\nFailed to apply patch\nUsage: config apply-patch [OPTIONS] PATCH_FILE_PATH\nTry \"config apply-patch -h\" for help.\n\nError: Given patch will produce invalid config. Error: Data Loading Failed\nAll Keys are not parsed in ACL_RULE\ndict_keys(['SAMPLE_ACL_TABLE|RULE_1', 'SAMPLE_ACL_TABLE|RULE_3000'])\nexceptionList:[\"invalid literal for int() with base 10: 'E'\", \"invalid literal for int() with base 10: 'E'\"]\n```\n\nFrom the error message we can see both the first ACL rule (already exist in config_db) and the second ACL rule (in GCU patch) cannot pass Yang validation. They failed on key `IN_PORTS`, which should be a string, but incorrectly defined as `uint16` in Yang model.\n\n#### Describe the results you expected:\n\nExpect step 4.b can apply the second ACL rule on DUT successfully.\n\n#### Output of `show version`:\n\nCan repro this issue on 202205.\n\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 16220,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/16220",
+    "title": "[YANG SONIC-ACL] Fix Yang definition of IN_PORTS and OUT_PORTS",
+    "merged_at": "2023-08-22T18:26:05Z",
+    "description": "#### Why I did it\n\nFix #16190 .\n\n##### Work item tracking\n- Microsoft ADO **(number only)**: 24905710\n\n#### How I did it\n\nUpdate Yang definition of `IN_PORTS` and `OUT_PORTS` to string.\nSince we cannot split the string with comma (`,`) and validate each substring is a valid SONiC port name. The only restriction for them is must be a `string`.\n\n#### How to verify it\n\n1. Verified by building `sonic_yang_models-1.0-py3-none-any.whl`. While building the target package, unit tests were run and passed.\n2. Build a SONiC image based on 202205 branch and installed on physical DUT. Re try the steps in #16190 and can see below success response:\n\n```\n$ sudo config apply-patch patch.json\nPatch Applier: Patch application starting.\nPatch Applier: Patch: [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\nPatch Applier: Getting current config db.\nPatch Applier: Simulating the target full config after applying the patch.\nPatch Applier: Validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: Validating target config does not have empty tables, since they do not show up in ConfigDb.\nPatch Applier: Sorting patch updates.\nPatch Applier: The patch was sorted into 1 change:\nPatch Applier:   * [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\nPatch Applier: Applying 1 change in order:\nPatch Applier:   * [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\nPatch Applier: Verifying patch updates are reflected on ConfigDB.\nPatch Applier: Patch application completed.\nPatch applied successfully.\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [ ] 201911\n- [ ] 202006\n- [ ] 202012\n- [ ] 202106\n- [ ] 202111\n- [x] 202205\n- [x] 202211\n- [x] 202305\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests/acl.json",
+        "additions": 6,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests_config/acl.json",
+        "additions": 108,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/yang-templates/sonic-acl.yang.j2",
+        "additions": 6,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

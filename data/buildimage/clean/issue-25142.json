@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-25142",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25142,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25142",
+    "title": "Bug: PMON missing access to necessary devices for platform monitoring post privilege removal",
+    "created_at": "2026-01-20T23:05:19Z",
+    "closed_at": "2026-08-27T18:01:06Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "pmon"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nPMON container no longer has access to the full set of device nodes under /dev/, which is breaking PMON services that need to, for example, open I2C device files (e.g., /dev/i2c-*). This appears to be a side effect of removing --privileged (https://github.com/sonic-net/sonic-buildimage/commit/a13685f3081dfd6c11f1995917a9390de352c8fd) , since that previously granted broad device access; without it, the container only sees whatever devices are explicitly passed through. Some vendors have worked around this by adding targeted --device mappings, but that approach doesn\u2019t cover the full set of I2C devices (or other /dev nodes PMON may need) and becomes fragile as platforms vary and device nodes change.\n\nThis change has been addressed piece-meal by multiple vendors across multiple device types, but still lacks the necessary extensive coverage:\nhttps://github.com/sonic-net/sonic-buildimage/commit/bd0e6c34476377efecf61f18834a8a613da273c4\nhttps://github.com/sonic-net/sonic-buildimage/commit/736606a288fcf29da4a3f5a3a3404ce028e7172b\nhttps://github.com/sonic-net/sonic-buildimage/commit/259ed3b182de1826c596cf8f272d1ae9b75fb0c6\nhttps://github.com/sonic-net/sonic-buildimage/commit/b251c0d2bb5d02993d3d5e1983a6c7d50e58412d\n\n### Steps to Reproduce\n\nAny direct `i2c` access (excluding i2c-0 which was explicitly added and through sysfs) will fail. Example is on Cisco platforms, we attempt to retrieve a status word from PSUs via `i2cget` which will fail because the PMON container cannot access targeted pmbus for the PSU.\n\n### Actual Behavior and Expected Behavior\n\nHere is an example of what /dev/ used to look like beforehand (inclusive of all /dev/ contents on the host):\n```\nroot@sonic:/# ls /dev/\nautofs\t\t gpiochip3  i2c-17  i2c-3   i2c-42  i2c-55  i2c-68  i2c-80  i2c-93\t    loop5   mtd3ro   nvme0n1p1\tsda\t     tam     tty18  tty30  tty43  tty56    ttyS1   ttyS9     uio8\t  vcsa4        vhost-vsock\nbsg\t\t gpiochip4  i2c-18  i2c-30  i2c-43  i2c-56  i2c-69  i2c-81  input\t    loop6   mtd4     nvme0n1p2\tsda1\t     tpm0    tty19  tty31  tty44  tty57    ttyS10  ubi0      urandom\t  vcsa5        watchdog\nbtrfs-control\t gpiochip5  i2c-19  i2c-31  i2c-44  i2c-57  i2c-7   i2c-82  intel_th0\t    loop7   mtd4ro   nvme0n1p3\tsda2\t     tpmrm0  tty2   tty32  tty45  tty58    ttyS11  ubi0_0    userfaultfd  vcsa6        watchdog0\nbus\t\t hpet\t    i2c-2   i2c-32  i2c-45  i2c-58  i2c-70  i2c-83  intel_th1\t    mapper  mtd5     nvram\tsg0\t     tty     tty20  tty33  tty46  tty59    ttyS12  ubi_ctrl  vcs\t  vcsu\t       watchdog1\nconsole\t\t hwrng\t    i2c-20  i2c-33  i2c-46  i2c-59  i2c-71  i2c-84  isst_interface  mei0    mtd5ro   port\tshm\t     tty0    tty21  tty34  tty47  tty6\t   ttyS13  uhid      vcs1\t  vcsu1        watchdog2\ncore\t\t i2c-0\t    i2c-21  i2c-34  i2c-47  i2c-6   i2c-72  i2c-85  kmsg\t    mem     mtd6     ppp\tsnapshot     tty1    tty22  tty35  tty48  tty60    ttyS14  uinput    vcs2\t  vcsu2        zero\ncpu_dma_latency  i2c-1\t    i2c-22  i2c-35  i2c-48  i2c-60  i2c-73  i2c-86  kvm\t\t    mqueue  mtd6ro   pps0\tsnd\t     tty10   tty23  tty36  tty49  tty61    ttyS15  uio0      vcs3\t  vcsu3\ncuse\t\t i2c-10     i2c-23  i2c-36  i2c-49  i2c-61  i2c-74  i2c-87  log\t\t    mtd0    mtd7     psaux\tspidevc10.1  tty11   tty24  tty37  tty5   tty62    ttyS2   uio1      vcs4\t  vcsu4\nfd\t\t i2c-11     i2c-24  i2c-37  i2c-5   i2c-62  i2c-75  i2c-88  loop-control    mtd0ro  mtd7ro   ptmx\tspidevc11.1  tty12   tty25  tty38  tty50  tty63    ttyS3   uio2      vcs5\t  vcsu5\nfull\t\t i2c-12     i2c-25  i2c-38  i2c-50  i2c-63  i2c-76  i2c-89  loop0\t    mtd1    net      ptp0\tspidevc12.1  tty13   tty26  tty39  tty51  tty7\t   ttyS4   uio3      vcs6\t  vcsu6\nfuse\t\t i2c-13     i2c-26  i2c-39  i2c-51  i2c-64  i2c-77  i2c-9   loop1\t    mtd1ro  ng0n1    pts\tspidevc13.1  tty14   tty27  tty4   tty52  tty8\t   ttyS5   uio4      vcsa\t  vfio\ngpiochip0\t i2c-14     i2c-27  i2c-4   i2c-52  i2c-65  i2c-78  i2c-90  loop2\t    mtd2    null     random\tstderr\t     tty15   tty28  tty40  tty53  tty9\t   ttyS6   uio5      vcsa1\t  vga_arbiter\ngpiochip1\t i2c-15     i2c-28  i2c-40  i2c-53  i2c-66  i2c-79  i2c-91  loop3\t    mtd2ro  nvme0    rfkill\tstdin\t     tty16   tty29  tty41  tty54  ttyACM0  ttyS7   uio6      vcsa2\t  vhci\ngpiochip2\t i2c-16     i2c-29  i2c-41  i2c-54  i2c-67  i2c-8   i2c-92  loop4\t    mtd3    nvme0n1  rtc0\tstdout\t     tty17   tty3   tty42  tty55  ttyS0    ttyS8   uio7      vcsa3\t  vhost-net\n```\n\nThis is the /dev/ contents PMON can access after this change:\n```\nroot@sonic:/# ls /dev/\nconsole    fd/        i2c-0      mqueue/    ptmx       random     shm/       stdin      tty        watchdog   watchdog1  zero\ncore       full       log        null       pts/       sda        stderr     stdout     urandom    watchdog0  watchdog2\n```\n\n### Relevant log output\n\n```shell\n2026 Jan 20 <IPV6>.180421 sonic INFO pmon#supervisord: message repeated 3 times: [ psud Error: Could not open file `/dev/i2c-102' or `/dev/i2c/102': No such file or directory]\n2026 Jan 20 <IPV6>.180421 sonic INFO pmon#supervisord: psud Error: Could not open file `/dev/i2c-103' or `/dev/i2c/103': No such file or directory\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27852,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27852",
+    "title": "pmon: tolerate /dev reordering and bus hot-plug",
+    "merged_at": "2026-08-27T18:01:05Z",
+    "description": "#### Why I did it\n\nAimed at #25142\n\npmon runs against a fixed --device list captured at 'docker create', which breaks in two ways: a block-device partition (e.g. sda1) named in kernel probe order can disappear after a disk reorder and fail 'docker start', and a bus node that appears after create (i2c/cpld/fpga/ipmi/uio/spidev/gpiochip/mtd) is denied and invisible to the container.\n\n#### How I did it\n\nPass reorder-invariant whole disks, pre-authorize the hot-plug device classes, and keep the container's /dev in sync at runtime. The change is strictly narrower than --privileged.\n\nfiles/build_templates/docker_image_ctl.j2\n  - get_pmon_device_mounts(): skip block-device partitions and pass the reorder-invariant whole disk instead.\n  - get_pmon_device_cgroup_rules() (new): emit 'c <major>:* rwm' for each hot-pluggable bus class so a sibling created after 'docker create' (e.g. an i2c bus behind a mux on optic insert) is already permitted.\n  - start(): pass those rules as --device-cgroup-rule on docker create.\n  - postStartAction(): call pmon-dev-bridge.sh resync to converge /dev.\n\nfiles/image_config/pmon/pmon-dev-bridge.sh (new)\n  - Helper that mirrors allowed character bus nodes into the running pmon container(s): 'resync' converges every allowed node on start; 'event add|remove' handles a single udev hot-plug event via mknod/rm.\n\nfiles/image_config/udev/rules.d/99-pmon-dev-bridge.rules (new)\n  - udev rule forwarding add/remove uevents to pmon-dev-bridge.sh so the container's device view tracks hot-plug after creation.\n\nfiles/build_templates/sonic_debian_extension.j2\n  - Install pmon-dev-bridge.sh to /usr/local/bin (mode 755) at image build time.\n\n#### How to verify it\n\nAll checks are read-only except the dynamic-bridge demonstration, which is **container-only\nand fully reversible** \u2014 the host `/dev` is never modified. Run on a device built from /\nflashed with this fix.\n\nResults: [pmon-how-to-verify-it.md](https://github.com/user-attachments/files/28871000/pmon-how-to-verify-it.md).\n\n[PMON-HOTPLUG-TEST-REPORT.md](https://github.com/user-attachments/files/29029346/PMON-HOTPLUG-TEST-REPORT.md)\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [x] 202605\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] masterI20260609135544_asrinivasan\n- [x] SONiC.hpe_202605.0-dirty-20260721.170244 - logs: [pmon-start-issue-logs-202605.txt](https://github.com/user-attachments/files/30248975/pmon-start-issue-logs-202605.txt),\n[pmon-cgroup-all-char-logs-202605.txt](https://github.com/user-attachments/files/30300120/pmon-cgroup-all-char-logs-202605.txt) and\n[pmon-cgroup-scoped-logs-202605.txt](https://github.com/user-attachments/files/30765895/pmon-cgroup-scoped-logs-202605.txt)\n\n#### Description for the changelog\npmon: tolerate /dev reordering and bus hot-plug (fixes #25142)",
+    "files": [
+      {
+        "path": "files/build_templates/docker_image_ctl.j2",
+        "additions": 35,
+        "deletions": 3
+      },
+      {
+        "path": "files/build_templates/sonic_debian_extension.j2",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "files/image_config/pmon/pmon-dev-bridge.sh",
+        "additions": 78,
+        "deletions": 0
+      },
+      {
+        "path": "files/image_config/udev/rules.d/99-pmon-dev-bridge.rules",
+        "additions": 17,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

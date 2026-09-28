@@ -1,0 +1,53 @@
+{
+  "id": "buildimage-28030",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28030,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28030",
+    "title": "[Issue] docker-netfilter-ready.sh check insufficient - Docker fails on first boot due to missing xt_addrtype module",
+    "created_at": "2026-06-23T01:31:44Z",
+    "closed_at": "2026-06-29T18:31:17Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\nAfter the netfilter readiness fix (PR #27341, backported as PR #27477 and PR #27675), Docker still fails on first boot after sonic-to-sonic upgrade on SmartSwitch platforms (Cisco 8102-28FH-DPU). The `docker-netfilter-ready.sh` `ExecStartPre` script declares ip6tables ready, but Docker fails because the `xt_addrtype` kernel module is not yet loaded.\n\nThe result is the same as the original issue: `interfaces-config.service` permanently fails, management IP is never applied to eth0, and the device is unreachable.\n\n## Steps to reproduce the issue\n\n1. Perform a sonic-to-sonic upgrade on a Cisco 8102-28FH-DPU (SmartSwitch platform)\n2. Reboot the device (first boot after upgrade)\n3. Observe that `interfaces-config.service` remains `inactive (dead)` and management IP is not applied\n\n## Describe the results you received\n\nDocker fails on its first start attempt because `xt_addrtype` kernel module is not loaded when `docker-netfilter-ready.sh` declares readiness:\n\n```\nJun 10 <IPV6> sonic dockerd[1981]: time=\"2026-06-10T03:56:03.765518931Z\" level=warning\n  msg=\"ip6tables is enabled, but cannot set up ip6tables chains\"\n  error=\"failed to add jump rules to ipv6 NAT table: failed to append jump rules to\n  nat-PREROUTING: (iptables failed: ip6tables --wait -t nat -A PREROUTING -m addrtype\n  --dst-type LOCAL -j DOCKER: Warning: Extension addrtype is not supported, missing\n  kernel module?\\nip6tables v1.8.11 (nf_tables): Couldn't load match `addrtype':\n  No such file or directory\\n (exit status 2))\"\n```\n\nService states after boot:\n```\ndocker.service          - active (running) since <IPV6> (recovered on retry)\ninterfaces-config.service - inactive (dead) since <IPV6> (NEVER recovered)\n```\n\nConfig is correct in DB but not applied to eth0:\n```\nshow runningconfiguration all | grep -A5 \"MGMT_INTERFACE\"\n    \"MGMT_INTERFACE\": {\n        \"eth0|<IP>/24\": { ... }\n\nsudo ifconfig eth0 -> no IPv4 address\n```\n\n## Describe the results you expected\n\nDocker should start successfully on first attempt. `interfaces-config.service` should activate and apply management IP to eth0.\n\n## Additional information you deem important\n\n### Root Cause\n\nThe current `docker-netfilter-ready.sh` only checks:\n```bash\nip6tables -w 1 -n -t filter -L\nip6tables -w 1 -n -t nat -L\n```\n\nThese `-L` (list) commands pass without the `xt_addrtype` module. However, Docker creates rules using the `addrtype` match extension:\n```\nip6tables -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER\n```\n\nThis requires `xt_addrtype` to be loaded. The readiness check passes, Docker starts, and then fails because the module isn't available yet.\n\nAdditionally, the script exits 0 on failure (after 30 attempts), so Docker would start even if ip6tables never became ready.\n\n### Boot Timeline\n\n```\n<IPV6>  docker-netfilter-ready.sh checks ip6tables -L -> passes (xt_addrtype not tested)\n<IPV6>  Docker starts, tries ip6tables -m addrtype -> FAILS (xt_addrtype not loaded)\n<IPV6>  Docker exits status=1\n<IPV6>  interfaces-config.service -> \"Dependency failed\" (cascade)\n<IPV6>  Docker retry #2\n<IPV6>  Docker eventually succeeds (xt_addrtype now loaded by other activity)\n          interfaces-config.service remains inactive (dead) - NEVER recovers\n```\n\n### Proposed Fix\n\n1. Pre-load `xt_addrtype` module before checking readiness\n2. Add `addrtype` match to the readiness check to exercise the same code path Docker uses\n\n```bash\n#!/bin/sh\nuptime_seconds=$(awk '{printf \"%d\", $1}' /proc/uptime)\nif [ \"$uptime_seconds\" -gt 120 ] 2>/dev/null; then\n    exit 0\nfi\n\n# Pre-load the xt_addrtype module - Docker needs the addrtype match\n# for its IPv6 NAT PREROUTING rules on the docker0 bridge.\nmodprobe xt_addrtype 2>/dev/null || true\n\nMAX_ATTEMPTS=30\nCALL_TIMEOUT=5\n\nfor i in $(seq 1 $MAX_ATTEMPTS); do\n    if timeout $CALL_TIMEOUT ip6tables -w 1 -n -t filter -L >/dev/null 2>&1 && \\\n       timeout $CALL_TIMEOUT ip6tables -w 1 -n -t nat -L >/dev/null 2>&1 && \\\n       timeout $CALL_TIMEOUT ip6tables -w 1 -t nat -C PREROUTING -m addrtype --dst-type LOCAL -j RETURN >/dev/null 2>&1; then\n        logger \"docker-netfilter-ready: ip6tables ready after ${i} attempt(s)\"\n        exit 0\n    fi\n    sleep 1\ndone\n\nlogger \"docker-netfilter-ready: ip6tables not ready after $MAX_ATTEMPTS attempts\"\necho \"Docker netfilter/ip6tables path is not ready\" >&2\nexit 0\n```\n\nKey changes:\n- `modprobe xt_addrtype` to ensure the kernel module is loaded before Docker starts\n- Added `-m addrtype --dst-type LOCAL` check to verify the actual match extension Docker needs is functional\n- Kept `exit 0` on failure so Docker still attempts to start rather than being blocked entirely\n\n### Impact\n\nWithout this fix, every first boot after sonic-to-sonic upgrade on affected platforms loses management IP. Manual recovery required:\n```bash\nsudo systemctl start interfaces-config\n```\n\n### Platform\n\n- Cisco 8102-28FH-DPU (SmartSwitch)\n- SONiC version with PR #27341 / #27675 applied\n\n## Related Issues/PRs\n\n- #25398 - Changed `-H unix://` to `-H fd://` enabling socket activation (original regression)\n- #27341 - Added `docker-netfilter-ready.sh` ExecStartPre (insufficient check)\n- #27675 - 202511 backport of #27654\n- #25383 - Original socket activation bug\n- #26152 - sonic-installer failure due to `-H fd://`"
+  },
+  "resolution": {
+    "pr_number": 27863,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27863",
+    "title": "Docker: Prevent first-boot platform startup failures by disabling IPv6 iptables management",
+    "merged_at": "2026-06-24T18:36:19Z",
+    "description": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/28030\n\nThe Trixie image uses Docker 28.5.2, while the previous Bookworm environment used Docker 24.0.2. Docker 27+ changed IPv6 bridge/iptables behavior. As a result, dockerd now attempts IPv6 iptables programming during startup. On SmartSwitch first boot this can happen before the kernel netfilter path is fully ready, causing docker.service failure and cascading config/interface failures.\n\nAdd --ip6tables=false to restore the pre-upgrade behavior where Docker does not program IPv6 iptables rules.\n\n#### Why I did it\nDocker 28 (introduced during the Trixie upgrade) enables additional IPv6 iptables programming during daemon startup. On SmartSwitch first boot this can race with early platform/kernel initialization and cause docker.service startup failure.\n\n#### How I did it\nAdded:\n\n--ip6tables=false\n\nto Docker daemon startup options in:\n\n/etc/systemd/system/docker.service.d/docker.service.conf\n\nThis disables Docker IPv6 iptables rule programming during daemon startup.\n\n#### How to verify it\nDo sonic-to-sonic upgrade using sonic-installer install (.34 image)\nreboot\n\nBefore change:\n\ndocker.service failed during first boot,\ninterfaces-config.service failed\neth0 management IP missing.\n\nAfter change:\n\ndocker.service started successfully,\ninterfaces-config.service completed successfully,\nmanagement eth0 configuration applied correctly.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [x] 202605\n\n#### Tested branch (Please provide the tested image version)\n202511\n\n#### Description of change\nAdd --ip6tables=false to Docker daemon startup options to restore the pre-upgrade behavior where Docker does not program IPv6 iptables rules during startup.",
+    "files": [
+      {
+        "path": "build_debian.sh",
+        "additions": 0,
+        "deletions": 2
+      },
+      {
+        "path": "files/docker/docker-netfilter-ready.sh",
+        "additions": 0,
+        "deletions": 30
+      },
+      {
+        "path": "files/docker/docker.service.conf",
+        "additions": 1,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

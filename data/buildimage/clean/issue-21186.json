@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-21186",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21186,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21186",
+    "title": "[bgpmon]Sometimes when services shutdown, bgpmon throws errors",
+    "created_at": "2024-12-16T17:52:53Z",
+    "closed_at": "2026-05-07T22:25:45Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "MSFT"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nIssue happens because bgpmon polls frr via vtysh every [15 seconds](https://github.com/sonic-net/sonic-buildimage/blame/46fee353eb8bde153dc6948d2c3dbb345fc77635/src/sonic-bgpcfgd/bgpmon/bgpmon.py#L202) and when we stop bgp container, this may coincide with the polling scenario throwing the error below because if failure of vtysh command.\n\n```\n2024 Dec 13 <IPV6>.102902 r-leopard-01 INFO systemd[1]: Stopping bgp.service - BGP container...\n2024 Dec 13 <IPV6>.109647 r-leopard-01 NOTICE admin: Stopping bgp service...\n2024 Dec 13 <IPV6>.131782 r-leopard-01 NOTICE admin: Warm boot flag: bgp true.\n2024 Dec 13 <IPV6>.136652 r-leopard-01 NOTICE admin: Fast boot flag: bgp false.\n2024 Dec 13 <IPV6>.141507 r-leopard-01 NOTICE admin: Kill zebra first\n2024 Dec 13 <IPV6>.229403 r-leopard-01 INFO bgp#supervisord: fpmsyncd Connection lost, reconnecting...\n2024 Dec 13 <IPV6>.229768 r-leopard-01 INFO bgp#supervisord: fpmsyncd Waiting for fpm-client connection...\n2024 Dec 13 <IPV6>.229822 r-leopard-01 INFO bgp#supervisord 2024-12-13 <IPV6>,229 WARN exited: zebra (terminated by SIGKILL; not expected)\n2024 Dec 13 <IPV6>.321929 r-leopard-01 INFO bgp#supervisord 2024-12-13 <IPV6>,321 WARN exited: bgpd (terminated by SIGKILL; not expected)\n2024 Dec 13 <IPV6>.629097 r-leopard-01 DEBUG container: container_stop: BEGIN\n2024 Dec 13 <IPV6>.629702 r-leopard-01 DEBUG container: read_data: config:True feature:bgp fields:[('set_owner', 'local'), ('no_fallback_to_local', False), ('state', 'disabled')] val:['local', False, 'enabled']\n2024 Dec 13 <IPV6>.630209 r-leopard-01 DEBUG container: read_data: config:False feature:bgp fields:[('current_owner', 'none'), ('remote_state', 'none'), ('container_id', '')] val:['none', 'none', '']\n2024 Dec 13 <IPV6>.630838 r-leopard-01 DEBUG container: container_stop: bgp: set_owner:local current_owner:none remote_state:none docker_id:bgp\n2024 Dec 13 <IPV6>.689567 r-leopard-01 NOTICE swss#portsyncd: :- onMsg: nlmsg type:16 key:Ethernet0 admin:1 oper:1 addr:<IPV6> ifindex:124 master:107 type:sx_netdev\n2024 Dec 13 <IPV6>.689996 r-leopard-01 NOTICE swss#portsyncd: :- onMsg: Publish Ethernet0(ok:up) to state db\n2024 Dec 13 <IPV6>.692589 r-leopard-01 INFO kernel: [ 1231.968483] device Ethernet0 entered promiscuous mode\n2024 Dec 13 <IPV6>.716492 r-leopard-01 ERR bgp#bgpmon: *ERROR* Failed with rc:1 when execute: ['vtysh', '-c', 'show bgp summary json']\n```\n\nBetter approach will be to stop bgpmon before stopping FRR daemons.\n\n#### Steps to reproduce the issue:\n1.\n2.\n3.\n\n#### Describe the results you received:\n\n#### Describe the results you expected:\n\n#### Output of `show version`:\n\n```\n(paste your output here)\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 26740,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/26740",
+    "title": "Fix bgpmon vtysh error during warm/fast boot BGP container shutdown",
+    "merged_at": "2026-05-07T22:25:44Z",
+    "description": "#### Why I did it\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/21186\n\nDuring warm/fast boot, `bgp.sh stop()` kills `zebra` and `bgpd` inside the BGP\ncontainer before the container itself stops. However, `bgpmon` has\n`autorestart=true` in supervisord and stays alive, polling FRR via\n`vtysh -c 'show bgp summary json'` every 15 seconds. If a poll fires in the\nshort window between the `pkill` calls and the container fully stopping,\n`vtysh` fails because the FRR daemons are already gone, producing a misleading\nsyslog error: `ERR bgp#bgpmon: ERROR Failed with rc:1 when execute: ['vtysh', '-c', 'show bgp summary json']`\n\nThis race is benign (the container is on its way down) but it pollutes logs\nand gets flagged as an error.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n**Approach considered and rejected: stop bgpmon before killing FRR**\nAdding `supervisorctl stop bgpmon || true` in `bgp.sh stop()` ahead of the\n`pkill` commands eliminates the race, but it adds roughly 200\u2013400 ms to BGP\nwarm restart because of the extra Unix-socket round-trip to supervisord.\n`pkill -9 bgpmon` is not an option either, since supervisord is configured to\nauto-restart it (see #5460).\n\n**Approach taken: downgrade the log level when FRR daemons are not running**\nIn `src/sonic-bgpcfgd/bgpmon/bgpmon.py`, when the `vtysh` call fails, check\nwhether `bgpd` and `zebra` are actually running via `pgrep`:\n- If either daemon is not running, the container is almost certainly shutting\n  down \u2014 log a `WARNING` with extra context (`rc`, command, truncated vtysh\n  output) instead of an `ERROR`.\n- If both daemons are running, keep the existing `ERROR` so genuine failures\n  are still surfaced.\n\nThis removes the noisy error from the warm/fast-boot shutdown window without\nadding any reboot overhead.\n\nAlso fixed a stale `debug` message in `files/scripts/bgp.sh`\n(`\"Kill zebra first\"` \u2192 `\"Kill zebra and bgpd\"`), since both daemons are\nkilled at that step.\n\nAdded unit tests in `src/sonic-bgpcfgd/tests/test_bgpmon.py` covering:\n- both `bgpd` and `zebra` down \u2192 `WARNING`\n- both running \u2192 `ERROR` (original behavior)\n- only `bgpd` down \u2192 `WARNING`\n- only `zebra` down \u2192 `WARNING`\n- `WARNING` message includes truncated `vtysh` output\n\n#### How to verify it\n1. Trigger a warm or fast reboot (or `systemctl restart bgp`) on a SONiC device.\n2. Run `show logging | grep bgpmon` and confirm there is no\n   `*ERROR* Failed with rc:1 when execute: ['vtysh', ...]` during the BGP\n   container shutdown window. A single `WARNING` with\n   `bgpd or zebra not running \u2014 container may be shutting down` is expected\n   instead.\n3. Under normal operation (both `bgpd` and `zebra` running), genuine `vtysh`\n   failures continue to log at `ERR`.\n4. Run unit tests: `pytest src/sonic-bgpcfgd/tests/test_bgpmon.py`.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\nbgpmon: log `vtysh` failures as `WARNING` (instead of `ERROR`) when `bgpd` or\n`zebra` is not running, to suppress the noisy shutdown-window error during BGP\ncontainer warm/fast boot.\n\n#### Link to config_db schema for YANG module changes\nN/A\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "files/scripts/bgp.sh",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-bgpcfgd/bgpmon/bgpmon.py",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-bgpcfgd/tests/test_bgpmon.py",
+        "additions": 76,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

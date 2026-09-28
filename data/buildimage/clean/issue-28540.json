@@ -1,0 +1,45 @@
+{
+  "id": "buildimage-28540",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28540,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28540",
+    "title": "Bug: [SmartSwitch] DPU gNMI/gNOI service binds to loopback only after sonic-gnmi#712, breaking NPU proxy connectivity",
+    "created_at": "2026-07-21T12:31:41Z",
+    "closed_at": "2026-08-19T18:16:17Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "## Is it platform specific\n\ngeneric\n\n## Importance or Severity\n\nCritical\n\n## Description of the bug\n\nAfter [sonic-gnmi#712](https://github.com/sonic-net/sonic-gnmi/pull/712) was merged, the gNMI/gNOI telemetry service on each DPU in a SmartSwitch now binds exclusively to `<IP>:50052` (loopback), making every DPU unreachable from the NPU's internal gNOI proxy.\n\n**Root cause:** In `gnmi-native.sh`, when no `CERTS` or `X509` entry exists in ConfigDB (which is the DPU's default state), the script falls into the `else` branch and hardcodes:\n\n```bash\nTELEMETRY_ARGS+=\" --noTLS --bind_address <IP>\"\n```\n\nPR #712 added a strict enforcement in `telemetry.go` (`setupFlags`): when `--noTLS` is set, `--bind_address` must be a loopback address (`net.IP.IsLoopback()`). Since `gnmi-native.sh` already supplies `<IP>`, the service starts \u2014 but listens only on loopback.\n\nThe NPU's `DPUProxy` (`pkg/interceptors/dpuproxy/proxy.go`) dials each DPU directly at `169.254.200.x:{50052,8080}` over the SmartSwitch midplane fabric using insecure gRPC. With the DPU now bound to `<IP>` only, all those dials fail with `connection refused`.\n\nNote: setting `bind_address` in the DPU's `GNMI|gnmi` ConfigDB entry would not help \u2014 the script never reads it, and even if it were passed to the binary, `169.254.x.x` would fail the `IsLoopback()` check and prevent the service from starting entirely.\n\n## Steps to Reproduce\n\n1. Deploy a SmartSwitch platform running a SONiC image built after sonic-gnmi#712, with no TLS certs configured on the DPUs.\n2. From the NPU, verify DPU gNOI connectivity:\n\n```bash\ngnoi_client -target <IP>:50052 -module System -rpc Time\n```\n\n3. Repeat for `<IP>`, `<IP>`, `<IP>`. All fail with `connection refused`.\n4. On any DPU, confirm the service is listening only on loopback:\n\n```bash\nss -tlnp | grep 50052\n# LISTEN  0  128  <IP>:50052  <IP>:*\n```\n\n## Actual Behavior and Expected Behavior\n\n**Actual:** The DPU telemetry service starts with `--noTLS --bind_address <IP>`, binding only to loopback. The NPU's `DPUProxy` cannot reach `169.254.200.x:50052` or `169.254.200.x:8080`, causing all DPU gNOI operations (reboot, time, file) to fail. 100% reproduction rate.\n\n**Expected:** The DPU gNMI/gNOI service should be reachable from the NPU over the `169.254.200.x` midplane fabric. This network is internal and isolated \u2014 not exposed externally.\n\n## Relevant log output\n\n```\nERROR:\n  Code: Internal\n  Message: failed to connect to DPU2: failed to connect to DPU2 on any port [50052 8080]:\n  last error: rpc error: code = Unavailable desc = connection error:\n  desc = \"transport: Error while dialing: dial tcp <IP>:8080: connect: connection refused\"\n```\n\nOn the DPU (`ss -tlnp | grep 50052`):\n```\nLISTEN  0  128  <IP>:50052  <IP>:*  users:((\"telemetry\",pid=...,fd=...))\n```\n\n## Output of `show version`, `show techsupport`\n\n```\nSONiC.master-<commit>\n```\n\n## Attach files (if any)\n\nN/A"
+  },
+  "resolution": {
+    "pr_number": 28930,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28930",
+    "title": "[gNMI] Encrypt certificate-free DPU fallback",
+    "merged_at": "2026-08-19T18:16:16Z",
+    "description": "## Why\n\nSmartSwitch DPUs need TLS-encrypted native gNMI on the isolated midplane when no usable server certificate/key pair is configured. Other platforms must retain their existing launch behavior.\n\nFixes #28540. Source-pointer integration is separate in #28931.\n\nMicrosoft ADO (number only): 39179389\n\n## What\n\n- Detect a SmartSwitch DPU when `DEVICE_METADATA|localhost` has `type=SmartSwitchDPU` or `switch_type=dpu`.\n- On a DPU only, use ephemeral self-signed TLS when no usable server certificate/key pair is configured.\n- Add `--allow_no_client_auth` for that DPU fallback so DPUProxy can connect without a client certificate.\n- Preserve configured-certificate, explicit application-authentication, and UDS-only native gNMI behavior.\n- Preserve non-DPU transport selection, including the existing plaintext loopback fallback.\n- Quote JSON/filter input and normalize top-level JSON `null` to empty so a missing `certs` object does not hide a valid legacy `x509` configuration.\n\n### Examples\n\n| Device metadata | Certificate configuration | Result |\n| --- | --- | --- |\n| `type=SmartSwitchDPU` | none | `--insecure --allow_no_client_auth` |\n| `switch_type=dpu` | `server_crt=null`, key configured | ignore the incomplete pair and use the same DPU ephemeral-TLS fallback |\n| DPU | complete certificate/key and CA | preserve configured TLS/mTLS arguments |\n| non-DPU | none | preserve `--noTLS --bind_address <IP>` |\n| non-DPU | `certs=null`, complete legacy `x509` | use the configured `x509` certificate/key instead of treating `\"null\"` as a `certs` object |\n\n## Validation\n\n- `bash -n dockers/docker-sonic-gnmi/gnmi-native.sh` passed.\n- A container matrix passed both DPU metadata forms, no certificates, partial/null certificates, configured certificates, legacy `x509` fallback, explicit password authentication, and UDS-only mode.\n- The same matrix compared no-cert, partial-cert, and configured-cert non-DPU arguments with master commit `d7ad3d29d`; all matched.\n- On an integrated physical DPU0 image, five of five direct TLS `System.Time` calls and one metadata-routed DPUProxy `System.Time` call passed.\n\n## Scope Boundary\n\n- This PR changes only `dockers/docker-sonic-gnmi/gnmi-native.sh`.\n- `docker-sonic-telemetry/telemetry.sh` is unchanged. The DPU TLS fallback is the only intentional transport-mode change; general parsing corrections also prevent top-level JSON `null` from being treated as configured data.\n- Source-pointer updates are tracked separately.\n- The physical image also contained the source changes referenced by #28931; physical evidence validates the integrated DPU TLS path, not this one-file diff in isolation.",
+    "files": [
+      {
+        "path": "dockers/docker-sonic-gnmi/gnmi-native.sh",
+        "additions": 30,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

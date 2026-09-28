@@ -1,0 +1,108 @@
+{
+  "id": "buildimage-6931",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 6931,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/6931",
+    "title": "dhcp_relay does not support empty dhcp_servers",
+    "created_at": "2021-03-01T21:05:47Z",
+    "closed_at": "2021-03-05T04:43:09Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\nIn the DUT, there are 2 Vlans, and both of them have some dhcp_servers. I tried to change config to make one Vlan has no dhcp_servers.\n\n#### Steps to reproduce the issue:\n\n```\n$ cat /tmp/dhcp.json\n{\n    \"VLAN\": {\n        \"Vlan101\": {\n            \"dhcp_servers\": [\n            ]\n        }\n    }\n}\n$ sudo sonic-cfggen -j /tmp/dhcp.json --write-to-db\n$ sudo service dhcp_relay restart\n```\n\nThen I notice the container dhcp_servers started and exited quickly.\n\nSeems the supervisor configuration inside container is invalid\n```\n[supervisord]\nlogfile_maxbytes=1MB\nlogfile_backups=2\nnodaemon=true\n\n[eventlistener:dependent-startup]\ncommand=python -m supervisord_dependent_startup\nautostart=true\nautorestart=unexpected\nstartretries=0\nexitcodes=0,3\nevents=PROCESS_STATE\nbuffer_size=50\n\n[eventlistener:supervisor-proc-exit-listener]\ncommand=/usr/bin/supervisor-proc-exit-listener --container-name dhcp_relay\nevents=PROCESS_STATE_EXITED\nautostart=true\nautorestart=unexpected\n\n[program:rsyslogd]\ncommand=/usr/sbin/rsyslogd -n -iNONE\npriority=1\nautostart=false\nautorestart=false\nstdout_logfile=syslog\nstderr_logfile=syslog\ndependent_startup=true\n\n[program:start]\ncommand=/usr/bin/start.sh\npriority=2\nautostart=false\nautorestart=false\nstartsecs=0\nstdout_logfile=syslog\nstderr_logfile=syslog\ndependent_startup=true\ndependent_startup_wait_for=rsyslogd:running\n\n[group:isc-dhcp-relay]\nprograms=isc-dhcp-relay-Vlan102,isc-dhcp-relay-Vlan101\n\n[program:isc-dhcp-relay-Vlan102]\ncommand=/usr/sbin/dhcrelay -d -m discard -a %%h:%%p %%P --name-alias-map-file /tmp/port-name-alias-map.txt -id Vlan102 -iu Vlan101 -iu PortChannel0006 -iu PortChannel0005 -iu PortChannel0004 -iu PortChannel0008 -iu PortChannel0001 -iu PortChannel0002 -iu PortChannel0007 -iu PortChannel0003 <IP> <IP> <IP> <IP>\npriority=3\nautostart=false\nautorestart=false\nstdout_logfile=syslog\nstderr_logfile=syslog\ndependent_startup=true\ndependent_startup_wait_for=start:exited\n\n[group:dhcpmon]\nprograms=dhcpmon-Vlan102,dhcpmon-Vlan101\n\n[program:dhcpmon-Vlan102]\ncommand=/usr/sbin/dhcpmon -id Vlan102 -iu Vlan101 -iu PortChannel0006 -iu PortChannel0005 -iu PortChannel0004 -iu PortChannel0008 -iu PortChannel0001 -iu PortChannel0002 -iu PortChannel0007 -iu PortChannel0003 -im eth0\npriority=4\nautostart=false\nautorestart=false\nstdout_logfile=syslog\nstderr_logfile=syslog\ndependent_startup=true\ndependent_startup_wait_for=isc-dhcp-relay-Vlan102:running\n```\n\n#### Describe the results you received:\n`docker logs dhcp_relay` has some error message:\n```\n/usr/lib/python2.7/dist-packages/supervisor/options.py:298: UserWarning: Supervisord is running as root and it is searching for its configuration file in default locations (including its current working directory); you probably want to specify a \"-c\" argument specifying an absolute path to a configuration file for improved security.\n  'Supervisord is running as root and it is searching '\nError: [group:isc-dhcp-relay] names unknown program isc-dhcp-relay-Vlan101\nFor help, use /usr/bin/supervisord -h\n\n```\n\n#### Describe the results you expected:\nNo crash of dhcp_relay container\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: SONiC.201911.311-5822b42f\nDistribution: Debian 9.13\nKernel: 4.9.0-14-2-amd64\nBuild commit: 5822b42f\nBuild date: Wed Feb 24 <IPV6> UTC 2021\nBuilt by: johnar@jenkins-worker-4\n\nPlatform: x86_64-mlnx_msn2700-r0\nHwSKU: Mellanox-SN2700-D40C8S8\nASIC: mellanox\nSerial Number: MT2020T04286\nUptime: <IPV6> up 5 days,  1:39,  1 user,  load average: 4.32, 4.23, 4.03\n\nDocker images:\nREPOSITORY                    TAG                   IMAGE ID            SIZE\ndocker-syncd-mlnx             201911.311-5822b42f   54f7268e7652        399MB\ndocker-syncd-mlnx             latest                54f7268e7652        399MB\ndocker-sonic-telemetry        201911.311-5822b42f   8698dcc1405d        353MB\ndocker-sonic-telemetry        latest                8698dcc1405d        353MB\ndocker-router-advertiser      201911.311-5822b42f   9265577724f5        290MB\ndocker-router-advertiser      latest                9265577724f5        290MB\ndocker-platform-monitor       201911.311-5822b42f   0cf695411385        666MB\ndocker-platform-monitor       latest                0cf695411385        666MB\ndocker-fpm-frr                201911.311-5822b42f   beb3ecbf06eb        335MB\ndocker-fpm-frr                latest                beb3ecbf06eb        335MB\ndocker-lldp-sv2               201911.311-5822b42f   ca61446375c9        312MB\ndocker-lldp-sv2               latest                ca61446375c9        312MB\ndocker-dhcp-relay             201911.311-5822b42f   f076b57d0874        300MB\ndocker-dhcp-relay             latest                f076b57d0874        300MB\ndocker-database               201911.311-5822b42f   78a00cc01893        290MB\ndocker-database               latest                78a00cc01893        290MB\ndocker-teamd                  201911.311-5822b42f   4afc425fb813        315MB\ndocker-teamd                  latest                4afc425fb813        315MB\ndocker-sonic-mgmt-framework   201911.311-5822b42f   94623763f58c        428MB\ndocker-sonic-mgmt-framework   latest                94623763f58c        428MB\ndocker-snmp-sv2               201911.311-5822b42f   bb32dd397d24        351MB\ndocker-snmp-sv2               latest                bb32dd397d24        351MB\ndocker-orchagent              201911.311-5822b42f   09bf1827f3bb        333MB\ndocker-orchagent              latest                09bf1827f3bb        333MB\ndocker-sflow                  201911.311-5822b42f   9cbbc5ee0fec        315MB\ndocker-sflow                  latest                9cbbc5ee0fec        315MB\ndocker-nat                    201911.311-5822b42f   9c83780e1eb7        317MB\ndocker-nat                    latest                9c83780e1eb7        317MB\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):"
+  },
+  "resolution": {
+    "pr_number": 6961,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/6961",
+    "title": "Start DHCP Relay When Helpers IPs Are Available",
+    "merged_at": "2021-03-05T04:43:08Z",
+    "description": "#### Why I did it\n\nIt is possible to have DHCP relay configuration with no servers/\nhelpers which result in DHCP container to crash. This PR fixes this\nissue by not starting DHCP relay for vlans with no DHCP helpers.\n\nsigned-of-by: Tamer Ahmed <<EMAIL>>\n\nresolves: #6931\ncloses: #6931\n#### How I did it\nDo not add program group for dhcp relay with not dhcp helpers\n\n#### How to verify it\nUnit test\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 201811\n- [x] 201911\n- [ ] 202006\n- [x] 202012\n\n#### Description for the changelog\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-relay/docker-dhcp-relay.supervisord.conf.j2",
+        "additions": 5,
+        "deletions": 5
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/bgpd_frr.conf",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/bgpd_quagga.conf",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/docker-dhcp-relay.supervisord.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/frr.conf",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/ipinip.json",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py2/wait_for_intf.sh",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/bgpd_frr.conf",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/bgpd_quagga.conf",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/docker-dhcp-relay.supervisord.conf",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/frr.conf",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/ipinip.json",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-config-engine/tests/sample_output/py3/wait_for_intf.sh",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-config-engine/tests/t0-sample-graph.xml",
+        "additions": 19,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

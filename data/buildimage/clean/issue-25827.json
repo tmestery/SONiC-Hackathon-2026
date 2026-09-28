@@ -1,0 +1,70 @@
+{
+  "id": "buildimage-25827",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 25827,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/25827",
+    "title": "[sonic-vpp][Control Plane][t1-lag] ssh - Enable control plane testing on VPP KVM testbed",
+    "created_at": "2026-03-02T10:01:27Z",
+    "closed_at": "2026-06-29T03:18:34Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "vpp",
+    "target_releases": [],
+    "topics": [
+      "P4"
+    ]
+  },
+  "failure": {
+    "body": "> :robot: *Created by DevAce, Jianquan's AI Agent, on his behalf.*\n\n## Description\n\nEnable ssh control plane testing on the SONiC-VPP KVM testbed.\n\n## Test Module Coverage\n\n| Feature | sonic-vpp | vpp | Status | Notes |\n|---------|:---:|:---:|--------|-------|\n| `ssh` | --- | --- | Control plane | --- |\n\n## Priority\n\n**P4** --- Not data plane related. For tests already passing on VPP KVM testbed, add them to the VPP test suite. Otherwise lower priority as VS can handle sanity.\n\n## Acceptance Criteria\n\n- [ ] ssh test module passes on VPP KVM testbed"
+  },
+  "resolution": {
+    "pr_number": 25279,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25279",
+    "title": "tests: fix SSH tests for VPP platform and enable in CI pipeline",
+    "merged_at": "2026-06-29T03:18:33Z",
+    "description": "### Description of PR\n\nSummary:\nFix 2 SSH tests (test_ssh_default_password, test_ssh_stress) to pass on the VPP KVM t1-lag testbed and add all 4 SSH tests to the VPP CI pipeline.\n\nFixes sonic-net/sonic-buildimage#25827\n\n### Type of change\n\n- [X] Bug fix\n- [X] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\n### Approach\n\n#### What is the motivation for this PR?\n\nWhen running SSH tests on the VPP KVM t1-lag testbed, test_ssh_default_password and test_ssh_stress fail because TACACS is configured in PAM (`/etc/pam.d/common-auth-sonic`) with `auth_err=die`, which kills the PAM chain before `pam_unix` can authenticate locally. Additionally, test_ssh_stress uses hardcoded credentials that don't match the DUT. These issues are not VPP-specific, but the fixes improve robustness for both environments.\n\n#### How did you do it?\n\n**Actual test failures fixed:**\n\n1. **test_ssh_default_password** \u2014 Added `disable_tacacs_for_test` autouse fixture that backs up the PAM file, comments out TACACS lines, resets password to match `DEFAULT_SSH_CONNECT_PARAMS`, and in teardown resets the password to `password` and restores the PAM file from backup. The fixture is conditional \u2014 only modifies PAM if `pam_tacplus` lines are active (no-op otherwise). This follows the same pattern as `test_ssh_limit.py` which also disables TACACS before testing local auth (line 129-130). TACACS authentication is separately tested by the dedicated `tests/tacacs/` suite (test_rw_user, test_ro_user, test_authorization, etc.).\n\n2. **test_ssh_stress** \u2014 Hardcoded admin/password credentials don't match the DUT. Replaced with DEFAULT_SSH_CONNECT_PARAMS lookup via get_image_type() in both start_SSH_connection() and work() functions and all call sites. Added TACACS disable/restore via AAA config and password management to the setup_teardown fixture (restores password first, then re-enables TACACS, to avoid Ansible reconnect issues). Added device_type(\"vpp\") mark.\n\n**CI pipeline:**\n\n3. Added all 4 SSH tests (`test_ssh_ciphers`, `test_ssh_default_password`, `test_ssh_limit`, `test_ssh_stress`) to the `t1-lag-vpp:` section of `pr_test_scripts.yaml`.\n\n **Note:** The PAM/TACACS fixture is conditional \u2014 only modifies PAM if TACACS is actively configured. TACACS SSH authentication coverage is not reduced \u2014 it is comprehensively tested in `tests/tacacs/`.\n\n#### How did you verify/test it?\n\nRan all 4 SSH test files (`test_ssh_ciphers.py`, `test_ssh_default_password.py`, `test_ssh_limit.py`, `test_ssh_stress.py`) on both VPP and VS testbeds using pytest from the sonic-mgmt container:\n\n```bash\ncd /mnt/sonic/github.com/sonic-mgmt/tests\nbash run_tests.sh\n  -n vms-kvm-vpp-t1-lag\n  -d vlab-vpp-01\n  -c \"ssh/test_ssh_default_password.py ssh/test_ssh_limit.py ssh/test_ssh_stress.py ssh/test_ssh_ciphers.py\"\n  -f ../ansible/vtestbed.yaml\n  -i ../ansible/veos_vtb\n  -t any\n  -e \"--skip_sanity --disable_loganalyzer --neighbor_type=eos\"\n  -u\n```\n\n **VPP testbed** (vms-kvm-vpp-t1-lag, DUT: vlab-vpp-01):\n - 45 tests: 32 passed, 13 xfailed, 0 failures, 0 errors\n - test_ssh_default_password: PASSED\n - test_ssh_limit: PASSED\n - test_ssh_stress: PASSED\n - test_ssh_ciphers: all variants passed/xfailed as expected\n\n**VS testbed** (vms-kvm-t1-lag, DUT: vlab-03):\n- test_ssh_default_password: PASSED\n- test_ssh_limit: PASSED\n- test_ssh_stress: PASSED (framework teardown ERROR from pre-existing `shell_cmds` module path issue \u2014 not caused by this PR)\n- test_ssh_ciphers: PASSED (8 passed + xfailed/xpassed variants)\n\n#### Any platform specific information?\n\nPassword management uses `DEFAULT_SSH_CONNECT_PARAMS` which is platform-agnostic (returns credentials based on image type).\n\n#### Supported testbed topology if it's a new test case?\n\nNot a new test case \u2014 these are existing tests being fixed and enabled for VPP. Topology: t1-lag (VPP and VS).\n\n### Documentation\n\nNo documentation changes required.\n\nSigned-off-by: Aaron Bernardino <<EMAIL>>",
+    "files": [
+      {
+        "path": ".azure-pipelines/pr_test_scripts.yaml",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 4,
+        "deletions": 3
+      },
+      {
+        "path": "tests/ssh/test_ssh_ciphers.py",
+        "additions": 7,
+        "deletions": 3
+      },
+      {
+        "path": "tests/ssh/test_ssh_default_password.py",
+        "additions": 38,
+        "deletions": 0
+      },
+      {
+        "path": "tests/ssh/test_ssh_limit.py",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "tests/ssh/test_ssh_stress.py",
+        "additions": 41,
+        "deletions": 9
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

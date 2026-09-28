@@ -1,0 +1,56 @@
+{
+  "id": "buildimage-27835",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 27835,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/27835",
+    "title": "Bug:Flush entry type all should be queried and used only when supported",
+    "created_at": "2026-06-11T21:00:38Z",
+    "closed_at": "2026-07-06T17:51:34Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "MSFT",
+      "routing"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nRecent changes to suppport EVPN MH https://github.com/sonic-net/sonic-swss/pull/4615 introduced the concept of flush all types of entries\nhttps://github.com/sonic-net/sonic-swss/blob/e63e670c1bf2b7b24280b81b3302f5b29a79f476/orchagent/fdborch.cpp#L1517. This is called during updateVlanMember del scenario as well as removeBrdigePort\n\nhttps://github.com/sonic-net/sonic-swss/blob/e63e670c1bf2b7b24280b81b3302f5b29a79f476/orchagent/fdborch.cpp#L1753\n\nhttps://github.com/sonic-net/sonic-swss/blob/e63e670c1bf2b7b24280b81b3302f5b29a79f476/orchagent/portsorch.cpp#L7463\n\nThis creates an issue when vendor SAI doesn't support it.\n```\n2026 Jun 11 <IPV6>.272621 sonic ERR swss#orchagent: :- flushAllFDBEntries: Flushing all FDB failed. rv:-131070\n2026 Jun 11 <IPV6>.273852 sonic ERR syncd#SDK: [SAI_UTILS.ERR] client_pid=22, ./src/mlnx_sai_utils.c[1334]- sai_atribute_value_type_enum_validate: Failed to validate SAI_FDB_FLUSH_ATTR_ENTRY_TYPE value - enum value SAI_FDB_FLUSH_ENTRY_TYPE_ALL is not supported\n2026 Jun 11 <IPV6>.273857 sonic ERR syncd#SDK: [SAI_UTILS.ERR] client_pid=22, ./src/mlnx_sai_utils.c[1907]- check_attribs_on_create_without_oid: Failed attributes check\n2026 Jun 11 <IPV6>.274062 sonic ERR swss#orchagent: :- flushAllFDBEntries: Flushing all FDB failed. rv:-131071\n2026 Jun 11 <IPV6>.274072 sonic ERR swss#orchagent: :- meta_generic_validation_remove: object 0x3a0000000005ea reference count is 4, can't remove\n2026 Jun 11 <IPV6>.274074 sonic ERR swss#orchagent: :- removeBridgePort: Failed to remove bridge port PortChannel0001 from default 1Q bridge, rv:-17\n2026 Jun 11 <IPV6>.253965 sonic ERR syncd#SDK: [SAI_UTILS.ERR] client_pid=22, ./src/mlnx_sai_utils.c[1334]- sai_atribute_value_type_enum_validate: Failed to validate SAI_FDB_FLUSH_ATTR_ENTRY_TYPE value - enum value SAI_FDB_FLUSH_ENTRY_TYPE_ALL is not supported\n2026 Jun 11 <IPV6>.253994 sonic ERR syncd#SDK: [SAI_UTILS.ERR] client_pid=22, ./src/mlnx_sai_utils.c[1907]- check_attribs_on_create_without_oid: Failed attributes check\n```\n\nIt is not correct to flush static entries as well as these are user configured entries and meant to be persistent irrespective of other changes.\n\nRequest to revert this change.\n\n### Steps to Reproduce\n\nCreate and remove vlan member should result in these logs in vendor SAI doesn't support flush all\n\n### Actual Behavior and Expected Behavior\n\nNo errors. Flush by default should flush only dynamic entries.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4734,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4734",
+    "title": "[fdborch]: Revert FDB flush-all to dynamic-only flush",
+    "merged_at": "2026-07-06T17:51:33Z",
+    "description": "PR #4615 (EVPN-MH) changed the VLAN member removal and bridge port removal paths to call flushAllFDBEntries(), which issues a SAI flush with SAI_FDB_FLUSH_ENTRY_TYPE_ALL. This flushes static (user configured) FDB entries and fails on vendor SAIs that do not support the ALL entry type, causing bridge port removal to fail.\n\nRestore the previous behavior by calling flushFDBEntries() (dynamic entries only) from updateVlanMember() and removeBridgePort(), and update the corresponding mock test expectation.\n\nFixes sonic-net/sonic-buildimage#27835\n\n## Description\n\n#### What I did\nReverted the VLAN member removal and bridge port removal paths to use\n`flushFDBEntries()` (dynamic entries only) instead of `flushAllFDBEntries()`,\nwhich was introduced by PR #4615 (EVPN-MH integration).\n\n`flushAllFDBEntries()` issues a SAI flush with\n`SAI_FDB_FLUSH_ATTR_ENTRY_TYPE = SAI_FDB_FLUSH_ENTRY_TYPE_ALL`. This has two\nproblems:\n\n1. It flushes static (user-configured) FDB entries, which are meant to be\n   persistent and should not be removed on VLAN/VLAN-member changes.\n2. It fails on vendor SAIs that do not support the `ALL` entry type, e.g.:\n\n   ```\n   ERR swss#orchagent: :- flushAllFDBEntries: Flushing all FDB failed. rv:-131070\n   ERR syncd#SDK: ... enum value SAI_FDB_FLUSH_ENTRY_TYPE_ALL is not supported\n   ERR swss#orchagent: :- removeBridgePort: Failed to remove bridge port\n   PortChannel0001 from default 1Q bridge, rv:-17\n   ```\n\n#### Why I did it\nFixes sonic-net/sonic-buildimage#27835. Default flush behavior should only\nflush dynamic entries, as it did before the EVPN-MH change.\n\n#### How I verified it\nUpdated the `FlushLocalRemoteMACsOnVlanDelete` mock test to expect\n`SAI_FDB_FLUSH_ENTRY_TYPE_DYNAMIC`. Existing `flushAllFDBEntries` unit tests\nremain (function is retained; only the two production call sites are reverted).\n\n#### Details if related\n- `orchagent/fdborch.cpp`: `updateVlanMember()` -> `flushFDBEntries()`\n- `orchagent/portsorch.cpp`: `removeBridgePort()` -> `flushFDBEntries()`\n- `tests/mock_tests/fdborch/fdborch_vxlan_ut.cpp`: expectation updated",
+    "files": [
+      {
+        "path": "orchagent/fdborch.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 2,
+        "deletions": 3
+      },
+      {
+        "path": "tests/mock_tests/fdborch/fdborch_vxlan_ut.cpp",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "buildimage-21183",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21183,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21183",
+    "title": "Applying ACL rule causes BGP neighbor to go down",
+    "created_at": "2024-12-16T04:32:03Z",
+    "closed_at": "2025-01-31T23:32:47Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "broadcom",
+    "target_releases": [
+      "202405"
+    ],
+    "topics": [
+      "Chassis"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\nWe noticed that applying a specific ACL rules causes one specific BGP neighbor to go down (fc00::a) during ACL tests (specifically those with \"IPV6\" and \"INGRESS\" parameters). Removing it brings it back up.\n\n```\nadmin@sonic:~$ show acl rule\n...\nDATA_INGRESS_IPV6_TEST  RULE_15       9985        DROP      DST_IPV6: 20c0:a800::9/128      {'asic0': 'Active', 'asic1': 'Active'}\n                                                           IP_TYPE: IPV6ANY\n...\n\nadmin@sonic:~$ show ipv6 bgp sum\n...\n\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down    State/PfxRcd    NeighborName\n-----------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\n...\nfc00::a        4  65200        278         52         0      0       0  <IPV6>   Connect         ARISTA03T3\n\nadmin@sonic:~$ show ipv6 interface\nInterface       Master    IPv6 address/mask                            Admin/Oper    BGP Neighbor    Neighbor IP\n--------------  --------  -------------------------------------------  ------------  --------------  -------------\n...\nEthernet64                fc00::9/126                                  up/up         ARISTA03T3      fc00::a\n```\n\n#### Steps to reproduce the issue:\n1. Run any ACL tests with ipv6+ingress parameters e.g. `acl/test_acl.py::TestBasicAcl::test_ingress_unmatched_blocked[ipv6-ingress-downlink->uplink-default-no_vlan]` with breakpoint after ACL rules are applied\n2. After rule 15 is added, once BGP updates (~3mins), neighbor fc00::a will go down\n3. Removing the rule will bring it immediately back up\n\nNOTE: BGP neighbor fc00::a will always go down when the rule is applied during ipv6+ingress test runs, however, only tests that fail is `acl/test_acl.py::TestAclWithReboot...[ipv6-ingress...]` as there are explicit BGP neighbor up checks.\n\n#### Describe the results you received:\nACL rule 15 causes BGP neighbor fc00::a to go down when they are seeminly unrelated.\n\n#### Describe the results you expected:\nBGP neighbor fc00::a should stay up.\n\n#### Output of `show version`:\n```\nSONiC Software Version: SONiC.20240510.16\nBRCM SAI ver: [<IP>], OCP SAI ver: [1.14.0], SDK ver: [sdk-6.5.30-SP4]\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\n\nRules applied can be found at `sonic-mgmt-int/tests/acl/templates/acltb_v6_test_rules.j2`\n```\n{\n    \"acl\": {\n        \"acl-sets\": {\n            \"acl-set\": {\n                \"{{ acl_table_name }}\": {\n                    \"acl-entries\": {\n                        \"acl-entry\": {\n                            ...\n                            \"15\": {\n                                \"actions\": {\n                                    \"config\": {\n                                        \"forwarding-action\": \"DROP\"\n                                    }\n                                },\n                                \"config\": {\n                                    \"sequence-id\": 15\n                                },\n                                \"ip\": {\n                                    \"config\": {\n                                        \"destination-ip-address\": \"20c0:a800::9/128\"\n                                    }\n                                }\n                            },\n                            ...\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n\n```"
+  },
+  "resolution": {
+    "pr_number": 16727,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/16727",
+    "title": "Prevent T2 BGP neighbors going down during ACL tests",
+    "merged_at": "2025-01-31T23:32:45Z",
+    "description": "### Description of PR\n\nSummary:\nFixes https://github.com/sonic-net/sonic-buildimage/issues/21183\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n\n### Approach\n#### What is the motivation for this PR?\nPrevent T2 BGP neighbors going down during ACL tests\n#### How did you do it?\nPrevent last 64 bits of a DROP rule IP from being the same as a BGP neighbor\n#### How did you verify/test it?\nRun on T2 devices\nT1 regression test: https://elastictest.org/scheduler/testplan/679c3507f5a74203a8e1b10b\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation",
+    "files": [
+      {
+        "path": "tests/acl/templates/acltb_v6_test_rules.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/acl/templates/acltb_v6_test_rules_part_2.j2",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/acl/test_acl.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

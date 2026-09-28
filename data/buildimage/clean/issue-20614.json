@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-20614",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 20614,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/20614",
+    "title": "  make target/python-wheels/bookworm/sonic_config_engine-1.0-py3-none-any.whl fails on master for marvell amd64",
+    "created_at": "2024-10-25T06:57:10Z",
+    "closed_at": "2026-02-27T22:48:52Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n The following tests fail while trying to build on master for marvell amd64:\n\n```\nFAILED tests/test_cfggen.py::TestCfgGen::test_minigraph_packet_chassis_acl_local_host - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-m', '/sonic/src/sonic-config-engine/tests/sample-chassis-packet-lc-graph.xml', '--print-data']' returned non-zero exit status 1.\nFAILED tests/test_chassis_cfggen.py::TestVoqChassisSup::test_device_metadata - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-m', '/sonic/src/sonic-config-engine/tests/chassis_data/voq_chassis_data/voq_chassis_sup.xml', '-p', '', '--var-json', 'DEVICE_METADATA']' returned non-zero exit status 1.\nFAILED tests/test_chassis_cfggen.py::TestVoqChassisSup::test_mgmt_port - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-m', '/sonic/src/sonic-config-engine/tests/chassis_data/voq_chassis_data/voq_chassis_sup.xml', '-p', '', '--var-json', 'MGMT_PORT']' returned non-zero exit status 1.\nFAILED tests/test_chassis_cfggen.py::TestVoqChassisSup::test_ntp - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-m', '/sonic/src/sonic-config-engine/tests/chassis_data/voq_chassis_data/voq_chassis_sup.xml', '-p', '', '--var-json', 'NTP_SERVER']' returned non-zero exit status 1.\nFAILED tests/test_chassis_cfggen.py::TestVoqChassisSup::test_print_data - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-m', '/sonic/src/sonic-config-engine/tests/chassis_data/voq_chassis_data/voq_chassis_sup.xml', '-p', '', '--print-data']' returned non-zero exit status 1.\nFAILED tests/test_chassis_cfggen.py::TestVoqChassisSup::test_tacacs - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-m', '/sonic/src/sonic-config-engine/tests/chassis_data/voq_chassis_data/voq_chassis_sup.xml', '-p', '', '--var-json', 'TACPLUS_SERVER']' returned non-zero exit status 1.\nFAILED tests/test_j2files.py::TestJ2Files::test_buffers_dell6100_render_template - AssertionError: --- /sonic/src/sonic-config-engine/tests/sample_output/py3/buffers-dell6100.json\t2024-10-22 <IPV6>.660381371 +0000\nFAILED tests/test_multinpu_cfggen.py::TestMultiNpuCfgGen::test_hwsku_option_port_list_configdb - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-k', 'multi-npu-asic', '-n', 'asic0', '-v', 'PORT.keys()|list']' returned non-zero exit status 1.\nFAILED tests/test_multinpu_cfggen.py::TestMultiNpuCfgGen::test_hwsku_option_port_list_port_config_ini - subprocess.CalledProcessError: Command '['python3', '/sonic/src/sonic-config-engine/tests/../sonic-cfggen', '-k', 'multi-npu-asic', '-n', 'asic0', '-v', 'PORT.keys()|list']' returned non-zero exit status 1.\n================== 9 failed, 297 passed in 244.24s (<IPV6>) ===================\n\n```\nMost of these tests fail with OSError(\"Failed to locate platform directory\"). I believe this might be related to #18180, since trying to silence the tests gave me the same results as the OP in that issue\n\n#### Steps to reproduce the issue:\n1. make init\n2. make configure BLDENV=bookworm DOCKER_BUILDKIT=0 PLATFORM=marvell\n3. make target/python-wheels/bookworm/sonic_config_engine-1.0-py3-none-any.whl SONIC_BUILD_JOBS=15 NOBUSTER=1 NOBULLSEYE=1 BLDENV=bookworm PLATFORM=marvell\n\n#### Describe the results you received:\nBuild failure\n\n#### Describe the results you expected:\nBuild to succeed\n\n#### Output of `show version`:\nNA\n#### Output of `show techsupport`:\nNA\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\n[output_make.txt](https://github.com/user-attachments/files/17517449/output_make.txt)"
+  },
+  "resolution": {
+    "pr_number": 25412,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/25412",
+    "title": "[cfggen] Guard get_path_to_platform_dir calls in asic_sensors and smartswitch configs",
+    "merged_at": "2026-02-27T22:48:51Z",
+    "description": "#### Why I did it\n\nFixes #20614.\n\n`asic_sensors_config.py` and `smartswitch_config.py` call `device_info.get_path_to_platform_dir()` without handling the `OSError` raised when no platform directory exists. This causes `test_minigraph_packet_chassis_acl_local_host` (and several related tests) to fail during the `sonic_config_engine` wheel build, breaking the entire image build.\n\nMultiple users have reported this across different platforms (Marvell AMD64, VS ARM64, VS x86_64) \u2014 see #20614.\n\n#### Root Cause Analysis\n\nThe failure chain:\n\n1. `test_minigraph_packet_chassis_acl_local_host` sets `CFGGEN_UNIT_TESTING = \"\"` (clearing it to avoid stale mock port data from previous tests that would break yang validation)\n2. `run_script()` \u2192 `YangWrapper.validate()` spawns a **subprocess**: `sonic-cfggen -m <graph> --print-data`\n3. The subprocess inherits `CFGGEN_UNIT_TESTING=\"\"`. Since it is not `\"2\"`, `mock_tables.dbconnector` is **not** loaded\n4. `sonic-cfggen` \u2192 `main()` \u2192 calls `get_asic_sensors_config()`\n5. `get_asic_sensors_config()` checks `CFGGEN_UNIT_TESTING == \"2\"` \u2192 false, takes the `else` branch\n6. Calls `device_info.get_path_to_platform_dir()` **directly with no guard**\n7. Inside the build container: no `PLATFORM` env var, no `/host/machine.conf`, no `/usr/share/sonic/platform` directory \u2192 **`OSError(\"Failed to locate platform directory\")`**\n\n```\nTraceback:\n  sonic-cfggen:404  main()        \u2192 parse_xml(minigraph, platform, ...)\n  minigraph.py:2064 parse_xml()   \u2192 get_port_config(hwsku=hwsku, ...)\n  portconfig.py:193               \u2192 device_info.get_path_to_port_config_file(hwsku, asic_id)\n  device_info.py:443              \u2192 get_path_to_platform_dir()\n  device_info.py:264              \u2192 raise OSError(\"Failed to locate platform directory\")\n```\n\nThe same pattern exists in `smartswitch_config.py`. Additionally, `smartswitch_config.py` has a secondary bug: when `CFGGEN_UNIT_TESTING == \"2\"` but the hwsku does not match either known test value (`SSwitch-32x1000Gb` or `SS-DPU-1x400Gb`), `json_file` is never assigned, causing an `UnboundLocalError`.\n\n#### How I did it\n\n- **`asic_sensors_config.py`**: Wrap the `get_path_to_platform_dir()` call in a `try/except OSError` block. When no platform directory exists, return an empty config dict (no ASIC sensor data is available, which is the correct behavior for non-device environments).\n\n- **`smartswitch_config.py`**: Same `try/except OSError` guard, plus add an `else` clause for unrecognized hwsku values during unit testing to return empty config instead of hitting `UnboundLocalError`.\n\nThis is consistent with the existing pattern in `device_info.get_path_to_port_config_file()`, which safely checks `get_platform()` before attempting to locate the platform directory:\n\n```python\nplatform = get_platform()\nif not platform:\n    return None\n```\n\n#### How to verify it\n\n**Reproduce the failure (before fix):**\n\n```bash\nmake init\nmake configure PLATFORM=vs\nmake target/python-wheels/bookworm/sonic_config_engine-1.0-py3-none-any.whl\n```\n\nLook for:\n```\nFAILED tests/test_cfggen.py::TestCfgGen::test_minigraph_packet_chassis_acl_local_host\n  OSError: Failed to locate platform directory\n```\n\n**After fix:** The above build step should pass with 0 test failures.\n\nThe fix is also safe on real devices: when a platform directory exists, `get_path_to_platform_dir()` succeeds and behavior is unchanged. The `try/except` only catches the `OSError` for environments where no platform is configured.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [x] 202411\n- [x] 202405\n- [x] 202311\n\nReason: This bug affects all builds in non-device environments (CI, developer workstations). Multiple users have reported it across platforms and architectures.\n\n#### Description for the changelog\n\nGuard `get_path_to_platform_dir()` calls in `asic_sensors_config.py` and `smartswitch_config.py` to handle missing platform directories gracefully, fixing build failures in non-device environments.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83e\udd94",
+    "files": [
+      {
+        "path": "src/sonic-config-engine/asic_sensors_config.py",
+        "additions": 5,
+        "deletions": 2
+      },
+      {
+        "path": "src/sonic-config-engine/smartswitch_config.py",
+        "additions": 6,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

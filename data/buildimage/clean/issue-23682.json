@@ -1,0 +1,43 @@
+{
+  "id": "buildimage-23682",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 23682,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/23682",
+    "title": "Bug: PDDF CPLDMUX driver can hit a double free if the CPLDMUX fails to be created",
+    "created_at": "2025-08-12T13:37:14Z",
+    "closed_at": "2025-10-24T00:46:06Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen creating a CPLDMUX device using PDDF, in the case that the driver could not be instantiated (for example due to the I2C device not being present in the system) the driver will free some allocated memory. However it then calls platform_device_put() on a structure which now has a dangling pointer to the memory just free'd. This will result in a kernel panic when the pointer is free'd for the second time:\n```\nfree_data:\n    /* Free the allocated memory for platform and channel data */\n    cpldmux_platform_data = plat_dev->dev.platform_data; // <----- Grab the pointer from the plat_dev struct\n    if (cpldmux_platform_data)\n    {\n        printk(KERN_ERR \"%s: Unable to register a cpldmux device. Freeing the platform data\\n\", __FUNCTION__);\n        kfree(cpldmux_platform_data); // <----- Free the data\n    }\n\n    /* Put the platform device structure */\n    platform_device_put(plat_dev); // <----- put the plat_dev struct which contains the dangling pointer.\n```\n\n### Steps to Reproduce\n\nInstantiate a CPLDMUX device without the necessary hardware being present in the device.\n\n### Actual Behavior and Expected Behavior\n\nActual behavior: Kernel panic due to double free\nExpected behavior: Device is failed to be created but no kernel panic\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 23683,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/23683",
+    "title": "PDDF CPLDMUX: Fix double free in cleanup case",
+    "merged_at": "2025-10-24T00:46:05Z",
+    "description": "If we free this chunk of memory but don't set it to NULL, platform_device_put will try to free it later and panic the kernel.\n\nBy setting it to NULL, the other code won't free it.\n\n#### Why I did it\n\nIf we don't set this field to NULL, platform_dev_put() will free the dangling pointer which has already been free'd. This will result in a kernel panic.\n\nFixes #23682\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nSet the pointer field in the struct to NULL after free'ing it.\n\n#### How to verify it\n\nRun on a system with missing CPLDMUX hardware and observe no kernel panic.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202205\n- [ ] 202211\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ]\n- [ ]\n\n#### Description for the changelog\n\n#### Link to config_db schema for YANG module changes\n\n#### A picture of a cute animal (not mandatory but encouraged)",
+    "files": [
+      {
+        "path": "platform/pddf/i2c/modules/cpldmux/pddf_cpldmux_module.c",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

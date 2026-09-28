@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-28407",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 28407,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/28407",
+    "title": "Default OTEL detailed exporter logging overwhelms rsyslog under HFT",
+    "created_at": "2026-07-14T09:58:29Z",
+    "closed_at": "2026-08-04T19:25:00Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202511",
+      "202605"
+    ],
+    "topics": [
+      "telemetry"
+    ]
+  },
+  "failure": {
+    "body": "#### Description\n\nThe default SONiC OTEL collector configuration explicitly sets the debug exporter to `verbosity: detailed`. OpenTelemetry documents `basic` as the default and describes `detailed` as outputting every field of every telemetry record, typically across multiple lines.\n\nThe configuration is copied by `files/build_templates/sonic_debian_extension.j2` to `/etc/sonic/otel_config.yml`, then loaded directly by `docker-sonic-otel`. With HFT at a 10 ms polling interval, this default generated more than 100 MB of `otel.log` in one test module and saturated host rsyslog. The DUT reported repeated rate-limit drops, including 46,462 lost messages in a single five-second window, and LogAnalyzer markers were dropped.\n\nRelated evidence:\n\n- sonic-buildimage PR #23666 introduced `verbosity: detailed` with the original OTEL container.\n- sonic-mgmt PR #23764 already works around the image default by changing `detailed` to `basic` during HFT tests.\n- Elastictest plan: https://elastictest.org/scheduler/testplan/6a55b5880b7e95197e91debe\n- Related test-safety issue: sonic-net/sonic-mgmt#26149\n\n#### Steps to reproduce the issue:\n1. Install an image with `INCLUDE_SYSTEM_OTEL=y` and enable the `otel` feature.\n2. Configure HFT with a 10 ms poll interval and thousands of counters.\n3. Observe `/var/log/otel.log*` and host rsyslog rate-limit messages.\n\n#### Describe the results you received:\n\nThe debug exporter emits the full representation of each telemetry record. Logs grow rapidly and host rsyslog drops messages, including test LogAnalyzer markers.\n\n#### Describe the results you expected:\n\nThe default image configuration should use the no-op exporter and produce no telemetry payload logs. The original debug exporter configuration should remain commented as an explicit troubleshooting option for operators who need full payload dumps.\n\n#### Output of `show version`:\n\n```\nSONiC Software Version: SONiC.20251110.38\nDistribution: Debian 13.5\nKernel: 6.12.41+deb13-sonic-amd64\nPlatform: x86_64-nvidia_sn5640-r0\nHwSKU: Mellanox-SN5640-C512S2\nASIC: mellanox\n```\n\n#### Additional information you deem important:\n\nThe default remains `detailed` on `master`, `202511`, and `202605`."
+  },
+  "resolution": {
+    "pr_number": 28408,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/28408",
+    "title": "[otel] Disable debug exporter in default pipeline",
+    "merged_at": "2026-08-04T19:24:59Z",
+    "description": "#### Why I did it\n\nFixes #28407.\n\nThe default SONiC OTEL configuration explicitly sets the debug exporter to `verbosity: detailed`. OpenTelemetry documents `basic` as the default; `detailed` writes all fields for every telemetry record, usually across multiple lines.\n\nDuring HFT validation with a 10 ms polling interval, this produced a 101 MB `otel.log.1` in one test module and overwhelmed host rsyslog. The DUT repeatedly reported rate-limit drops, including 46,462 lost messages in one five-second window, which caused LogAnalyzer markers to be dropped.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**: N/A\n\n#### How I did it\n\nDisable the debug exporter in the default configuration and route the existing metrics, logs, and traces pipelines to the built-in no-op exporter. The Collector requires every configured pipeline to have at least one exporter, so simply removing the debug exporter would make the default configuration invalid.\n\nThe original `debug` exporter with `verbosity: detailed` and its pipeline references remain commented in the YAML as an explicit troubleshooting option. Operators can uncomment them in deployment-specific `/etc/sonic/otel_config.yml` when full payload output is needed.\n\nThe HFT end-to-end test is unaffected: it overwrites `/etc/sonic/otel_config.yml` with its dedicated InfluxDB exporter configuration and validates data by querying InfluxDB, not by reading debug exporter output.\n\n#### How to verify it\n\n- Parsed `files/image_config/otel/otel_config.yml` with PyYAML and verified the active exporter is `nop` while `debug/detailed` remains commented.\n- Confirmed `sonic_debian_extension.j2` copies this file to `/etc/sonic/otel_config.yml` and `docker-sonic-otel/otel.sh` loads that path directly.\n- Confirmed the affected `docker-sonic-otel:latest` image contains both `debug` and `nop` exporter components.\n- Validated the candidate YAML with the affected DUT's actual `otelcol-contrib validate` command.\n- Confirmed the HFT end-to-end test installs a separate InfluxDB exporter configuration and does not assert on debug exporter output.\n- Failure evidence: https://elastictest.org/scheduler/testplan/6a55b5880b7e95197e91debe\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n\nReason: both release branches ship the same `verbosity: detailed` default and are affected by HFT log amplification.\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] 20251110.38 - validated the failure mechanism and the existing runtime `basic` mitigation on Mellanox-SN5640-C512S2\n- [ ] master image build pending CI\n\n#### Description for the changelog\n\nDisable the OTEL debug exporter by default to prevent telemetry log amplification.\n\n#### Link to config_db schema for YANG module changes\n\nN/A - no YANG or Config DB schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\nN/A",
+    "files": [
+      {
+        "path": "files/image_config/otel/otel_config.yml",
+        "additions": 8,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

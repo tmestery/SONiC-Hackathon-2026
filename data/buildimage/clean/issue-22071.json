@@ -1,0 +1,48 @@
+{
+  "id": "buildimage-22071",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 22071,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/22071",
+    "title": "[CMIS] Quick port toggle is sometimes causing port to be in oper down state",
+    "created_at": "2025-03-18T18:23:18Z",
+    "closed_at": "2025-03-27T16:27:37Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "Issue can be reproduced with module T-OH8CNT-NMT on MSN5600 platform. It's not related to module or the platform either but a software problem\n\n**Steps to repro:**\n- Split the port to 2x400 or 4x200 or 8x100 mode and perform a config reload\n- Disable autoneg after the ports are in up state\n- With around 1/10 probability we should see some of the port to be in down state\n\n**Triage:**\n\nAuto neg configuration on faster CPU will lead to a port toggle as explained in point 2 here https://github.com/sonic-net/sonic-buildimage/issues/21959#issuecomment-2724492189\n\nOper down will lead to DpTxOFF on the module and within 0.02 sec there is a DpTxON request to Xcvrd. DPState of the module is not moved from DataPathActivated -> DataPathInitialized after giving DpTxOFF within this time.\n\nXcvrd will skip sending powerOn signal if the DP State is DataPathActivated (assuming the module is already ON and need not be initialized). Ideally IMO, Xcvrd should be aware that the port state is changed and issue DpTxON\n\nAs it can be seen in the below example, after applying power OFF at 36.298, SONIC sends PowerOn Signal and xcvrd reads DPState at 36.492 i.e. within 0.02 secs. However state is still DataPathActivated which leads to xcvrd thinking the module is already on\n\n```\nsyslog.gz:2025 Mar 14 <IPV6>.298333 sonic NOTICE pmon#xcvrd[67]: CMIS: Ethernet470 Forcing Tx laser OFF\nsyslog.gz:2025 Mar 14 <IPV6>.472251 sonic WARNING pmon#xcvrd[67]: $$$ Ethernet470 handle_port_update_event() : op=SET DB:STATE_DB Table:PORT_TABLE fvp {'host_tx_ready': 'true', 'state': 'ok', 'netdev_oper_status': 'down', 'admin_status': 'up', 'mtu': '9100', 'supported_speeds': '100000,50000,25000,10000', 'supported_fecs': 'none,rs,fc,auto', 'NPU_SI_SETTINGS_SYNC_STATUS': 'NPU_SI_SETTINGS_NOTIFIED'}\nsyslog.gz:2025 Mar 14 <IPV6>.474382 sonic WARNING pmon#xcvrd[67]: *** ('Ethernet470', 'STATE_DB', 'PORT_TABLE') handle_port_update_event() fvp {'host_tx_ready': 'true', 'index': '-1', 'port_name': 'Ethernet470', 'asic_id': 0, 'op': 'SET'}\nsyslog.gz:2025 Mar 14 <IPV6>.492704 sonic NOTICE pmon#xcvrd[67]: CMIS: Ethernet470: 100G, lanemask=0x40, CMIS state=INSERTED, Module state=ModuleReady, DP state={'DP1State': 'DataPathTxTurnOn', 'DP2State': 'DataPathActivated', 'DP3State': 'DataPathTxTurnOn', 'DP4State': 'DataPathTxTurnOn', 'DP5State': 'DataPathActivated', 'DP6State': 'DataPathInitialized', 'DP7State': 'DataPathActivated', 'DP8State': 'DataPathActivated'}, appl 1 host_lane_count 1 retries=0\nsyslog.gz:2025 Mar 14 <IPV6>.591341 sonic NOTICE pmon#xcvrd[67]: CMIS: Ethernet470: no CMIS application update required...READY\n```\n\n**Final State:**\n```\nEthernet464                              464     100G   9100    N/A   lmc59a  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet465                              465     100G   9100    N/A   lmc59b  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet466                              466     100G   9100    N/A   lmc59c  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet467                              467     100G   9100    N/A   lmc59d  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet468                              468     100G   9100    N/A   lmc59e  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet469                              469     100G   9100    N/A   lmc59f  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet470                              470     100G   9100    N/A   lmc59g  routed    down       up  OSFP 8X Pluggable Transceiver         N/A\n```"
+  },
+  "resolution": {
+    "pr_number": 602,
+    "repository": "sonic-net/sonic-platform-daemons",
+    "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/602",
+    "title": "[xcvrd] Add wait based on MaxDurationDPTxTurnOff after disabling Tx",
+    "merged_at": "2025-03-27T16:27:36Z",
+    "description": "#### Description\n\nXCVRD needs to wait for the MaxDurationDPTxTurnOff time after disabling Tx via the following API call:\nhttps://github.com/sonic-net/sonic-platform-daemons/blob/f581c06cd8adeb4b82816ee0fc38fd07b3f9e692/sonic-xcvrd/xcvrd/xcvrd.py#L1468\nThis waiting period is essential to allow the module to transition to the DataPathInitialized state after disabling Tx. Failing to wait for the DataPathInitialized state may cause the module to behave unexpectedly, especially if Tx is disabled during CMIS initialization.\n\n#### Motivation and Context\n\nOne possible way to run into port permanently having Tx disabled is during boot-up\nIn one case, following steps led to the Tx being disabled permanently on a module during switch boot-up\n\n- OA sets host_tx_ready to False (<IPV6>.670346)\n- CMIS SM transitions to DP_TXON state (<IPV6>.844797)\n- xcvrd updates port_dict with host_tx_ready as False (<IPV6>.876416)\n- OA sets host_tx_ready to True (<IPV6>.922804)\n- xcvrd hasn't updated port_dict yet and it disables the Tx now (<IPV6>.103428)\n- xcvrd updates port_dict with host_tx_ready as True (<IPV6>.128350)\n- xcvrd upon performing CMIS initialization finds that the port is already CMIS READY (<IPV6>.468976)\n    - 264ms ago, 'DP6State': 'DataPathTxTurnOn' (<IPV6>.204792)\n\nFix\n1. Added `DP_PRE_INIT_CHECK` state to allow the CMIS state machine to wait for the module to handle the Tx disabled event. The wait time for the module to handle the Tx disabled event can be read through the MaxDurationDPTxTurnOff register.\n2. The CMIS state machine does not wait for MaxDurationDPTxTurnOn after enabling Tx, as some modules do not honor this time, which can cause the link to remain down for those modules.\n3. Added the `update_cmis_state_expiration_time` function to update the expiration time based on the current time. Previously, the CMIS SM was reading the current time and then performing multiple accesses to the EEPROM, adding unaccounted time to the expiration time. A buffer time of 2ms is now added to the expiration time.\nhttps://github.com/sonic-net/sonic-platform-daemons/blob/ba47670352b1778ad3732d27c646e9a1f4b9c49b/sonic-xcvrd/xcvrd/xcvrd.py#L1199\n4. Added the `is_timer_expired` function to calculate the expiration time by comparing real-time rather than using the time stored in the `now` variable.\n\n#### How Has This Been Tested?\n\nDR8 CMIS module test\n1. Issue shut and no shut on a port\n2. Reset port followed by shut and no shut on all subports\n4. shutdown port followed by sfputil reset followed no shutdown on 1 subport\n5. Change host_tx_ready to false followed by true while port is undergoing CMIS initialization\n6. Reboot the device\n7. xcvrd restart\n\n400ZR module test\n1. shut and no shut on a port\n2. Reset port followed by shut and no shut\n4. Reboot the device\n\n#### Additional Information (Optional)\nFixes https://github.com/sonic-net/sonic-buildimage/issues/22071",
+    "files": [
+      {
+        "path": "sonic-xcvrd/tests/test_xcvrd.py",
+        "additions": 107,
+        "deletions": 3
+      },
+      {
+        "path": "sonic-xcvrd/xcvrd/xcvrd.py",
+        "additions": 68,
+        "deletions": 10
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "id": "buildimage-21721",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 21721,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/21721",
+    "title": "TSC command doesn't work on the Smart Switch",
+    "created_at": "2025-02-13T00:57:46Z",
+    "closed_at": "2025-05-14T04:01:31Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "**Steps to reproduce**\n\nCan be manually reproduced:\n\n```\nadmin@sonic:~$ sudo TSC\nThis commmand is only supported Chassis\n```\n\nPR https://github.com/sonic-net/sonic-buildimage/pull/19729 introduced an env variable SMARTSWITCH which is exported in by new script /usr/bin/platform_utils.\n\nOnly with the file existing and the SMARTSWITCH is true, the TSA/TSB/TSC can work on a smartswitch properly, otherwise it will be considered as a chassis with linecards:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/dockers/docker-fpm-frr/base_image_files/TSC#L14\n\n```\n#!/bin/bash\n\n# Source the platform_utils script\nsource \"$(dirname \"$0\")/platform_utils\" > /dev/null 2>&1\n\n${SMARTSWITCH:=false}\n\n# Restrict command to sudo users\nif [ \"$EUID\" -ne 0 ] ; then\n  echo \"Root priveleges are needed for this operation\"\n  exit 1\nfi\n\nif [ -f /etc/sonic/chassisdb.conf ] && [ \"$SMARTSWITCH\" = false ] ; then\n  if [[ $1 == \"no-stats\" ]]; then\n    rexec all -c \"sudo TSC no-stats\"\n  else\n    rexec all -c \"sudo TSC\"\n  fi\n  exit 0\nfi\n\n/usr/bin/TS TSC\n[[ $1 != \"no-stats\" ]] && portstat -p 5\n\nif [[ \"$(sonic-cfggen -d -v DEVICE_METADATA.localhost.subtype | tr '[:upper:]' '[:lower:]')\" == *\"dualtor\"* ]]\nthen\n  echo\n  show mux status\nfi\n```\n\nBut the platform_utils is not there:\n\n```\nadmin@sonic:/$ ls /usr/bin/platform_utils\nls: cannot access '/usr/bin/platform_utils': No such file or directory\n\nadmin@sonic:/$ whereis platform_utils\nplatform_utils:\n```\n\n`sonic-buildimage/rules/docker-fpm-frr.mk` should be updated to include `/usr/bin/platform_utils`\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/rules/docker-fpm-frr.mk\n\n**Observed behavior**\n\nTest failed:\n\nFailed: TSC return unexpected state ERROR\n\n**Expected behavior**\n\nTest should pass on smart switch."
+  },
+  "resolution": {
+    "pr_number": 22518,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/22518",
+    "title": "Including platform_utils in make and removing default initialization of $SMARTSWITCH in TSA, TSB, TSC",
+    "merged_at": "2025-05-14T04:01:30Z",
+    "description": "Including platform_utils in make and removing default initialization of $SMARTSWITCH in TSA, TSB, TSC\n\nFixes #21721\n\n#### Why I did it\nForgot to add platform_utils into make when I made the commit. Due to this TSC command doesn't work on the Smart Switch\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nIncluded platform_utils in rules/docker-fpm-frr.mk\nRemoved default initialization of $SMARTSWITCH in TSA, TSB, TSC\n\n#### How to verify it\nRun \"sudo TSC\"  and it should output\nsudo TSC\nSystem Mode: No external neighbors\nThe rates are calculated within 5 seconds period\n####\nThe command should not output\nadmin@sonic:~$ sudo TSC\nThis commmand is only supported Chassis\n\n#### Which release branch to backport (provide reason below if selected)\n- [x] 202405\n- [x] 202411",
+    "files": [
+      {
+        "path": "dockers/docker-fpm-frr/base_image_files/TSA",
+        "additions": 0,
+        "deletions": 2
+      },
+      {
+        "path": "dockers/docker-fpm-frr/base_image_files/TSB",
+        "additions": 0,
+        "deletions": 2
+      },
+      {
+        "path": "dockers/docker-fpm-frr/base_image_files/TSC",
+        "additions": 0,
+        "deletions": 2
+      },
+      {
+        "path": "rules/docker-fpm-frr.mk",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

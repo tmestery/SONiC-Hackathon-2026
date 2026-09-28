@@ -1,0 +1,55 @@
+{
+  "id": "buildimage-20214",
+  "schema_version": "1.0",
+  "source": "sonic-buildimage",
+  "issue": {
+    "number": 20214,
+    "url": "https://github.com/sonic-net/sonic-buildimage/issues/20214",
+    "title": "[T2] Continuous neighorch INFO logs emitted in orchagent",
+    "created_at": "2024-09-10T21:23:21Z",
+    "closed_at": "2025-06-04T20:27:37Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Chassis"
+    ]
+  },
+  "failure": {
+    "body": "Seen on `202405`.\n\nIf we turn on INFO log level in orchagent:\n`swssloglevel -n 0 -l INFO -c orchagent`\n`swssloglevel -n 1 -l INFO -c orchagent`\n\nWe see these logs continuously emitted:\n```\n2024 Sep  4 <IPV6>.166952 cmp214-5 INFO swss1#orchagent: :- doLagMemberTask: Failed to locate LAG cmp214-5|asic1|PortChannel106\n2024 Sep  4 <IPV6>.166952 cmp214-5 INFO swss1#orchagent: :- doTask: Port eth1 doesn't exist\n2024 Sep  4 <IPV6>.166968 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet-IB1 doesn't exist\n2024 Sep  4 <IPV6>.166996 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet-IB1 doesn't exist\n2024 Sep  4 <IPV6>.166996 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet224 doesn't exist\n2024 Sep  4 <IPV6>.167009 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet224 doesn't exist\n2024 Sep  4 <IPV6>.167022 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|PortChannel106 doesn't exist\n2024 Sep  4 <IPV6>.217314 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|PortChannel106 doesn't exist\n2024 Sep  4 <IPV6>.217354 cmp214-5 INFO swss1#orchagent: :- doLagMemberTask: Failed to locate LAG cmp214-5|asic1|PortChannel106\n2024 Sep  4 <IPV6>.217386 cmp214-5 INFO swss1#orchagent: :- doLagMemberTask: Failed to locate LAG cmp214-5|asic1|PortChannel106\n```\n\n`neighorch.cpp` checks that the given port exists in `portsorch`:\n```\n1718             if (!gPortsOrch->getPort(alias, p))\n1719             {\n1720                 SWSS_LOG_INFO(\"Port %s doesn't exist\", alias.c_str());\n1721                 it++;\n1722                 continue;\n1723             }\n```\n\n`portsorch->getPort` just checks that the given port name exists in `m_portList`:\n```\n1357 bool PortsOrch::getPort(string alias, Port &p)\n1358 {\n1359     SWSS_LOG_ENTER();\n1360\n1361     if (m_portList.find(alias) == m_portList.end())\n1362     {\n1363         return false;\n1364     }\n1365     else\n1366     {\n1367         p = m_portList[alias];\n1368         return true;\n1369     }\n1370 }\n```\n\nI added tracing into `portsorch` at every place that `m_portList` is modified and I saw that ports local to the orchagent instance aren't added with the `<LC>|<asic>|` prefix in the name.\nFor example focusing on `cmp214-5|asic0|Ethernet72`.\nThis port belongs to swss0 and we see it only added as `Ethernet72`:\n```\n2024 Sep  5 <IPV6>.960825 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\n2024 Sep  5 <IPV6>.999234 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\n2024 Sep  5 <IPV6>.029978 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\n2024 Sep  5 <IPV6>.147242 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\n```\nWhile a remote swss instance (swss1) sees it added as `cmp214-5|asic0|Ethernet72`\n```\n2024 Sep  5 <IPV6>.100809 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\n2024 Sep  5 <IPV6>.460190 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\n2024 Sep  5 <IPV6>.094595 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\n2024 Sep  5 <IPV6>.682463 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\n```\n\nHence why only `swss0` emits this error:\n```\n2024 Sep  5 <IPV6>.335690 cmp214-5 INFO swss0#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic0|Ethernet72 doesn't exist\n2024 Sep  5 <IPV6>.335690 cmp214-5 INFO swss0#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic0|Ethernet72 doesn't exist\n```\n\nSo the issue is one of the following:\n-We should be adding the system port name with the prefix `<LC>|<asic>|` to `m_portList` in `portsorch` for local ports\nOR\n-We should translate the system port name to strip the prefix `<LC>|<asic>|` before querying `m_portList` in `portsorch` for local ports."
+  },
+  "resolution": {
+    "pr_number": 3553,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/3553",
+    "title": "Skip \"port doesn't exist\" SWSS_LOG_INFO messages for local ports",
+    "merged_at": "2025-06-04T20:27:36Z",
+    "description": "**What I did**\nModified the `portsorch.cpp` and `neighorch.cpp` to verify if a port shares the hostname with the local host. If so, we do not emit SWSS_INFO_LOG messages and these ports are eventually get erased from the consumer list.\n\n**Why I did it**\nCurrently, we store local ports and remote ports using different convention in m_portList. Remote ports follow: <dut name>|<asic>|<interface> format and local ports are saved as <interface>. Hence when <dut name>|<asic>|<interface> format is used to 'get' a local port it returns false. This generates a number of \"port not found\" info messages in the syslog.\n\n**How I verified it**\nTesting:\n- [x] Verified syntax by compiling the orchagent\n- [x] Tested on a multi-asic LC by running T2 tests and identified no failures related to the change.\n- [x] Verified the logs no longer appear in syslog when loglevel is set to INFO\n\n**Details if related**\nFixes https://github.com/sonic-net/sonic-buildimage/issues/20214",
+    "files": [
+      {
+        "path": "orchagent/neighorch.cpp",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 10,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/portsorch_ut.cpp",
+        "additions": 54,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}
