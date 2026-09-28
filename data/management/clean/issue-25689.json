@@ -1,0 +1,43 @@
+{
+  "id": "management-25689",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25689,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25689",
+    "title": "Bug: wait_until enhancement in test_acl_outer_vlan is redundant and causes test failure",
+    "created_at": "2026-06-26T04:58:40Z",
+    "closed_at": "2026-07-09T14:02:00Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nPR #22978 replaced time.sleep(timeout) with wait_until(timeout, 2, 0, _check_acl_counter) in get_acl_counter(), introducing two bugs:\n\nBug 1: timeout=0 causes unconditional test failure\nThe first counter read calls get_acl_counter(..., timeout=0) to snapshot the counter value before sending traffic \u2014 no waiting is needed. The original time.sleep(0) returned immediately, which was correct. However, wait_until(0, 2, 0, _check_acl_counter) returns False with a zero timeout, triggering pytest.fail unconditionally.\n\nBug 2: wait_until checks the wrong condition, resulting in stale counter reads\nThe original time.sleep(timeout) inside get_acl_counter() waited a fixed duration for orchagent to flush updated counters to the aclshow output. The replacement _check_acl_counter only verifies that the ACL rule exists in aclshow -a output \u2014 it does not check whether the counter value has actually been updated. Since the rule is already present before any traffic is sent, wait_until succeeds immediately on the second call without waiting for the counter to refresh. This causes count_after to read the same stale value as count_before, leading to false test failures.\n\nRoot cause\nThe purpose of the timeout in get_acl_counter() is to allow time for orchagent to update the counters, not to poll for the aclshow -a command to succeed. The command is expected to work \u2014 if it doesn't, the test should fail. Replacing a wait-for-update sleep with a poll-for-command-output check misunderstands the intent.\n\n### Steps to Reproduce\n\nRun acl/test_acl_outer_vlan.py\n\n### Actual Behavior and Expected Behavior\n\nThe test should pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25690,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25690",
+    "title": "Revert \"[acl] Replace time.sleep with wait_until in test_acl_outer_vlan (#22978)\"",
+    "merged_at": "2026-07-09T14:01:58Z",
+    "description": "### Description of PR\n\nSummary:\nThis reverts commit d11d9a5d6154b1e7705ebb6b0dbc1be620f578bf\nwhich breaks get_acl_counter:\n1. timeout=0 on the first poll makes wait_until fail immediately instead\nof reading the counter without waiting.\n2. The second poll returns instantly because wait_until only checks rule\nexistence, not counter freshness \u2014 reading stale values and causing\nfalse failures.\n\nThe original time.sleep(timeout) works correctly \u2014 it gives orchagent\ntime to flush updated counters, which is the actual intent.\n\nFixes #25689\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request:\nFailure type:\n\n### Approach\n#### What is the motivation for this PR?\nFix a PR that causes regression\n\n#### How did you do it?\nRevert the PR\n\n#### How did you verify/test it?\nacl/test_acl_outer_vlan.py passed with revert\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/acl/test_acl_outer_vlan.py",
+        "additions": 4,
+        "deletions": 12
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

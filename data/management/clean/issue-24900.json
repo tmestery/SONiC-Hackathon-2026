@@ -1,0 +1,43 @@
+{
+  "id": "management-24900",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24900,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24900",
+    "title": "Bug: `test_counterpoll_watermark.py` fails sporadically due to COUNTERS_DB not being ready",
+    "created_at": "2026-05-27T16:53:11Z",
+    "closed_at": "2026-08-09T01:17:44Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen running `platform_tests/counterpoll/test_counterpoll_watermark.py` it can fail sporadically with:\n```\n            if raise_error_when_not_found:\n>               raise SonicDbKeyNotFound(\"No keys for %s found in sonic-db cmd: %s\" % (table, cmd))\nE               tests.common.helpers.sonic_db.SonicDbKeyNotFound: 'No keys for COUNTERS_PG_*_MAP found in sonic-db cmd:  COUNTERS_DB  keys COUNTERS_PG_*_MAP'\n```\n\nThis is because the interlock only checks for the presence of any key in `COUNTERS_DB` that matches `COUNTERS_*_*_MAP`\nE.G.\n```\n26/05/2026 <IPV6> sonic_db._run_and_check                  L0040 DEBUG  | SONIC-DB-CLI:  COUNTERS_DB  keys COUNTERS_*_*_MAP\n26/05/2026 <IPV6> utilities.wait_until                     L0162 DEBUG  | check_counters_populated is True, exit early with True\n...\n26/05/2026 <IPV6> sonic_db._run_and_check                  L0040 DEBUG  | SONIC-DB-CLI:  COUNTERS_DB  keys COUNTERS_PG_*_MAP\n26/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_PG_*_MAP\n```\n\nBut I polled this counter right after the interlock completed and I can see there are counters there but not ones that would match `COUNTERS_PG_*_MAP`\n```\n# sonic-db-cli COUNTERS_DB  keys COUNTERS_*_*_MAP\nCOUNTERS_PORT_NAME_MAP\nCOUNTERS_SYSTEM_PORT_NAME_MAP\nCOUNTERS_BUFFER_POOL_NAME_MAP\nCOUNTERS_LAG_NAME_MAP\nCOUNTERS_PORT_SERDES_ID_TO_PORT_ID_MAP\n\n# sonic-db-cli COUNTERS_DB  keys COUNTERS_PG_*_MAP\n\n```\n\nAfter the test failed I can now see the counters present that would've matched `COUNTERS_PG_*_MAP`:\n```\n# sonic-db-cli COUNTERS_DB  keys COUNTERS_*_*_MAP\nCOUNTERS_PG_INDEX_MAP\nCOUNTERS_PG_PORT_MAP\nCOUNTERS_PORT_SERDES_ID_TO_PORT_ID_MAP\nCOUNTERS_PG_NAME_MAP\nCOUNTERS_LAG_NAME_MAP\nCOUNTERS_PORT_NAME_MAP\nCOUNTERS_SYSTEM_PORT_NAME_MAP\nCOUNTERS_DEBUG_NAME_SWITCH_STAT_MAP\nCOUNTERS_BUFFER_POOL_NAME_MAP\n\n# sonic-db-cli COUNTERS_DB  keys COUNTERS_PG_*_MAP\nCOUNTERS_PG_INDEX_MAP\nCOUNTERS_PG_PORT_MAP\nCOUNTERS_PG_NAME_MAP\n```\n\nSo if the test waited longer it would've passed.\n\n### Steps to Reproduce\n\nRun `platform_tests/counterpoll/test_counterpoll_watermark.py` many times\n\n### Actual Behavior and Expected Behavior\n\n`platform_tests/counterpoll/test_counterpoll_watermark.py` should wait for the counters it's expecting to show up in `COUNTERS_DB` before continuing.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24901,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24901",
+    "title": "Improve `test_counterpoll_watermark.py` COUNTERS_DB interlock `check_counters_populated`",
+    "merged_at": "2026-08-09T01:17:43Z",
+    "description": "https://github.com/sonic-net/sonic-mgmt/issues/24900\n\n### Description of PR\nAs described in https://github.com/sonic-net/sonic-mgmt/issues/24900 the `test_counterpoll_watermark.py` just waits until it sees a key in `COUNTERS_DB` that matches `COUNTERS_*_*_MAP` before proceeding with checking all the counters.\nBut we can see that sometimes the first keys that show up in `COUNTERS_DB` will match `COUNTERS_*_*_MAP` but won't match `COUNTERS_<test_prefix>_*_MAP`.\n\nThis PR changes the interlock `check_counters_populated` to check for a minimum expected number of counters and uses the expected counter's prefix (E.G. `COUNTERS_PG_*_MAP`) in addition to the catch all `COUNTERS_*_*_MAP`\n\nWhen running the test we can see instances where this was required as we first see the `COUNTERS_*_*_MAP` poll succeed then we see multiple instances where the more specific prefix poll `COUNTERS_PG_*_MAP` fails for multiple polls before succeeding:\n```\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_*_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_*_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_*_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_*_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_*_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_PG_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_PG_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_PG_*_MAP\n27/05/2026 <IPV6> sonic_db._run_and_check                  L0044 ERROR  | No command response:  COUNTERS_DB  keys COUNTERS_PG_*_MAP\n```\n\nSummary:\nFixes #24900\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [] 202512\n- [x] 202605\n\n### Approach\n#### What is the motivation for this PR?\nReduce the flakiness of `test_counterpoll_watermark.py`\n\n#### How did you do it?\nImprove the interlock function `check_counters_populated`\n\n#### How did you verify/test it?\nRan the test 30 times without any failures (previously would see a failure after a few runs)\n\n#### Any platform specific information?\nN/A\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/platform_tests/counterpoll/test_counterpoll_watermark.py",
+        "additions": 12,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

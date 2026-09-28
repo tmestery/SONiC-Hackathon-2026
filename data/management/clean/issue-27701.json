@@ -1,0 +1,43 @@
+{
+  "id": "management-27701",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27701,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27701",
+    "title": "Bug: Flaky standalone tunnel route test due to arp_update interference",
+    "created_at": "2026-09-03T04:58:58Z",
+    "closed_at": "2026-09-22T12:36:09Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe `test_standalone_tunnel_route` test fails intermittently because the\nbackground `arp_update` process runs while the test is creating an unresolved\nIPv6 neighbor.\n\nIn the failed runs, orchagent creates the required tunnel route, removes it\nalmost immediately, and creates it again about five seconds later. The test\npackets are sent while the route is missing, so PTF does not receive the\nexpected tunneled packet.\n\nThe logs show that orchagent/MuxOrch removes the route. They do not show\n`arp_update` directly deleting the route.\n\n### Steps to Reproduce\n\n1. Run the following test on a Dual-ToR testbed:\n\n   `tests/dualtor/test_standalone_tunnel_route.py::test_standalone_tunnel_route`\n\n2. Run the test multiple times in a loop.\n3. Check the DUT syslog and PTF packet verification result.\n4. In a failed run, observe the following sequence:\n   - `arp_update` tries to reach the unresolved IPv6 neighbor.\n   - Orchagent creates the standalone tunnel route.\n   - Orchagent immediately removes the route.\n   - Orchagent creates the route again about five seconds later.\n   - PTF does not receive the expected tunneled packet.\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior\nThe standalone tunnel route is removed while the test packets are being sent.\nPTF fails with:\n`AssertionError: Did not receive expected packet on any of ports`\nBefore the fix, 2 out of 30 loop runs failed with the same log sequence.\n\n### Expected Behavior\nThe background `arp_update` process should not change the neighbor state while\nthis test is checking standalone tunnel routing.\nThe tunnel route should remain available while the test packets are sent, and\nPTF should receive the expected IP-in-IP packet.\n\n### Relevant log output\n\n```shell\n2026 Aug 27 <IPV6>.618913 gd272 WARNING swss#arp_update:\ncommand failed after 1 retries: ndisc6 on Vlan1000 to fc02:1000::1f4\n\n2026 Aug 27 <IPV6>.902103 gd272 NOTICE swss#orchagent:\ncreate_route: Created tunnel route to fc02:1000::1f4/128\n\n2026 Aug 27 <IPV6>.902531 gd272 NOTICE swss#orchagent:\nremoveStandaloneTunnelRoute: Removing standalone tunnel route for neighbor fc02:1000::1f4\n\n2026 Aug 27 <IPV6>.903399 gd272 NOTICE swss#orchagent:\nremove_route: Removed tunnel route to fc02:1000::1f4/128\n\n2026 Aug 27 <IPV6>.984435 gd272 NOTICE swss#orchagent:\ncreate_route: Created tunnel route to fc02:1000::1f4/128\n\n27/08/2026 <IPV6> tunnel_traffic_utils.__exit__:\nAssertionError: Did not receive expected packet on any of ports\n```\n\n### Output of `show version`\n\n```shell\nbranch.202605-ars.8512e7eb-buildimage.ad6f5b869a8cacb3cb7eefe7dc226bf6f85480ff-nightly-2026.08.25.14.40\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27703,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27703",
+    "title": "Fix intermittent standalone tunnel route test failure by pausing arp_update",
+    "merged_at": "2026-09-22T12:36:08Z",
+    "description": "### Description of PR\nThe `test_standalone_tunnel_route` test can fail when the background\n`arp_update` process runs while the test is creating an unresolved IPv6\nneighbor.\nIn failed runs, the required tunnel route is removed while the test packets\nare being sent. PTF then fails because it does not receive the expected\ntunneled packet.\nThis change pauses `arp_update` for the whole test and starts it again during\ncleanup.\n\nSummary:\nFixes https://github.com/sonic-net/sonic-mgmt/issues/27701\n\n### Type of change\n- [X] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [X] 202605\n\n### Tested branch\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [X] 202605\n- [ ] N/A\n\n### Approach\n#### What is the motivation for this PR?\nThe test needs full control of the neighbor state while it checks standalone\ntunnel routing.\nThe background `arp_update` process can interfere with this state and cause\nthe tunnel route to be removed while packets are being sent.\n\n#### How did you do it?\nThe `cleanup_neighbors` fixture now:\n1. Stops `arp_update`.\n2. Clears the ARP entries.\n3. Clears the NDP entries.\n4. Runs the test.\n5. Starts `arp_update` again in a `finally` block.\nUsing `finally` makes sure that `arp_update` is restarted even if the test\nfails.\nNo route-state waiting or synchronization was added.\n\n#### How did you verify/test it?\nThe test was run 30 times before and after the change.\n- Before the fix: 28 passed and 2 failed\n- After the fix: 30 passed and 0 failed\nThe two failures before the fix showed the same tunnel-route\ncreate, remove, and create-again sequence.\n\n#### Any platform specific information?\nThe failure was observed on a Broadcom Dual-ToR testbed. Other platforms were\nnot tested.\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\nNo documentation change is needed. This change only updates the test fixture.",
+    "files": [
+      {
+        "path": "tests/dualtor/test_standalone_tunnel_route.py",
+        "additions": 11,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

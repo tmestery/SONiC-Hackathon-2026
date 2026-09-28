@@ -1,0 +1,142 @@
+{
+  "number": 27452,
+  "title": "Bug:  test_dhcp_relay_default fails in verify_relayed_advertise \u2014 DUT cannot resolve client link-local after NDP cache is cleared by setup_downstream_relay_responder",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27452",
+  "createdAt": "2026-08-28T07:19:59Z",
+  "closedAt": "2026-09-14T12:28:00Z",
+  "author": "fzjalfred",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "fzjalfred"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter PR #23432 merged, test_dhcp_relay_default in test_dhcpv6_relay.py fails at the verify_relayed_advertise() step. The PTF client port does not receive the expected DHCPv6 Advertise packet from the DUT.\n\n\n\n### Steps to Reproduce\n\nRun test_dhcpv6_relay.py -k test_dhcp_relay_default\n\nThe test flow in test_dhcp_relay_default is:\n1. Call setup_downstream_relay_responder() \u2014 this configures PTF's arp_responder to answer NDP for the simulated downstream relay IP (fc02:ffff::1), and then calls sonic-clear ndp on the DUT.\n2. Run ptf_runner with dhcpv6_relay_test.DHCPTest.\n3. Inside DHCPTest.runTest(), the PTF client sends a DHCPv6 Solicit, the DUT relays it to the server, and the server (PTF) sends back an Advertise inside a Relay-Reply.\n4. The DUT needs to forward the Advertise back to the client's link-local address. However, since sonic-clear ndp was called in step 1, the DUT's NDP cache no longer has the client's link-local entry.\n5. The DUT sends a Neighbor Solicitation to resolve the client's link-local address, but PTF's arp_responder is only configured with the downstream relay IP (fc02:ffff::1) \u2014 it does not respond to NS for the client's link-local address.\n6. The DUT never gets a Neighbor Advertisement, so the Advertise packet is never forwarded to the client port.\n7. verify_relayed_advertise() \u2192 verify_packet() times out \u2192 test fails.\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior\nThe PTF client port does not receive the DHCPv6 Advertise packet. Instead, only NDP Neighbor Solicitation and MLD Report packets are observed on the client port. The DUT is trying to resolve the client's link-local address via NDP but never receives a Neighbor Advertisement reply, so the Advertise is never forwarded. The test fails with:\nAssertionError: Expected packet was not received on device 0, port 0.\n\nExpected Behavior\nThe DUT receives a DHCPv6 Advertise inside a Relay-Reply from the server, decapsulates it, and forwards the Advertise to the client's link-local address on the VLAN port. The PTF client port should receive the DHCPv6 Advertise packet, and verify_relayed_advertise() should pass.\n\n\n### Relevant log output\n\n```shell\nAssertionError: Expected packet was not received on device 0, port 0.\n========== EXPECTED ==========\nMask:\n\npacket status: OK\npacket:\n0000  0C 42 A1 1D 40 00 9C 05 91 E7 49 00 86 DD 60 00  .B..@.....I...`.\n0010  00 00 00 0C 11 40 FE 80 00 00 00 00 00 00 9E 05  .....@..........\n0020  91 FF FE E7 49 00 FE 80 00 00 00 00 00 00 0E 42  ....I..........B\n0030  A1 FF FE 1D 40 00 02 23 02 22 00 0C 66 09 02 00  ....@..#.\"..f...\n0040  30 39                                            09\n\npacket's mask:\n0000  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF F0  ................\n0010  00 00 FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\n0020  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\n0030  FF FF FF FF FF FF FF FF FF FF 00 00 00 00 FF FF  ................\n0040  FF FF                                            ..\n\n========== RECEIVED ==========\n5 total packets. Displaying most recent 3 packets:\n------------------------------\n0000  33 33 FF 1D 40 00 0C 42 A1 1D 40 00 86 DD 60 00  33..@..B..@...`.\n0010  00 00 00 20 3A FF 00 00 00 00 00 00 00 00 00 00  ... :...........\n0020  00 00 00 00 00 00 FF 02 00 00 00 00 00 00 00 00  ................\n0030  00 01 FF 1D 40 00 87 00 21 09 00 00 00 00 FE 80  ....@...!.......\n0040  00 00 00 00 00 00 0E 42 A1 FF FE 1D 40 00 0E 01  .......B....@...\n0050  FB 0A 7E C9 A4 C3                                ..~...\n------------------------------\n0000  33 33 FF 1D 40 00 9C 05 91 E7 49 00 86 DD 60 00  33..@.....I...`.\n0010  00 00 00 20 3A FF FE 80 00 00 00 00 00 00 9E 05  ... :...........\n0020  91 FF FE E7 49 00 FF 02 00 00 00 00 00 00 00 00  ....I...........\n0030  00 01 FF 1D 40 00 87 00 5F 45 00 00 00 00 FE 80  ....@..._E......\n0040  00 00 00 00 00 00 0E 42 A1 FF FE 1D 40 00 01 01  .......B....@...\n0050  9C 05 91 E7 49 00                                ....I.\n------------------------------\n0000  33 33 00 00 00 16 0C 42 A1 1D 40 00 86 DD 60 00  33.....B..@...`.\n0010  00 00 00 24 00 01 FE 80 00 00 00 00 00 00 0E 42  ...$...........B\n0020  A1 FF FE 1D 40 00 FF 02 00 00 00 00 00 00 00 00  ....@...........\n0030  00 00 00 00 00 16 3A 00 05 02 00 00 01 00 8F 00  ......:.........\n0040  42 8C 00 00 00 01 04 00 00 00 FF 02 00 00 00 00  B...............\n0050  00 00 00 00 00 01 FF 1D 40 00                    ........@.\n==============================\n\n\n----------------------------------------------------------------------\nRan 1 test in 2.112s\n\nFAILED (failures=1)\n```\n\n### Output of `show version`\n\n```shell\nSONiC Software Version: SONiC.202605_RC.87-caea1456e4_Internal\nSONiC OS Version: 13\nDistribution: Debian 13.5\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: d9815e9f51\nBuild date: Wed Aug 26 18:37:23 UTC 2026\n\nPlatform: x86_64-mlnx_msn4700-r0\nHwSKU: Mellanox-SN4700-O8V48\nASIC: mellanox\nASIC Count: 1\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27457,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27457",
+      "title": "Fix client ndp respond missing after responder reconfig",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-14T12:27:59Z",
+      "createdAt": "2026-08-28T08:21:58Z",
+      "author": "fzjalfred",
+      "body": "### Description of PR\r\nSummary:\r\n`test_dhcp_relay_default` (and other DHCPv6 relay tests) in `test_dhcpv6_relay.py` fail at `verify_relayed_advertise()` because the DUT cannot resolve the client's link-local address after `setup_downstream_relay_responder()` clears the NDP cache. The `setup_ptf_ip_responder()` helper (introduced by #23432) calls `sonic-clear ndp` on the DUT, which destroys all NDP entries including the client's link-local. When the DUT subsequently tries to forward the DHCPv6 Advertise back to the client, it sends a Neighbor Solicitation that PTF never answers (PTF's `arp_responder` is only configured for the downstream relay IP, not the client link-local), so the Advertise is never delivered and the test times out.\r\nThis PR adds a call to `ensure_client_reachability()` after `setup_ptf_ip_responder()` in `setup_downstream_relay_responder()`, which re-establishes the client's NDP entry on the DUT so it can resolve the client link-local address when relaying DHCPv6 Advertise/Reply packets.\r\nFixes #27452\r\n\r\n### Type of change\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): https://github.com/sonic-net/sonic-mgmt/issues/27452\r\nFailure type: day-one-issue\r\n\r\n### Tested branch\r\n- [x] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\nFor both master and 202605\r\n<img width=\"410\" height=\"193\" alt=\"image\" src=\"https://github.com/user-attachments/assets/0733a301-1942-4ab7-b6ea-e2a78dea3be7\" />\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nAfter PR #23432 merged, `test_dhcp_relay_default` in `test_dhcpv6_relay.py` fails at the `verify_relayed_advertise()` step. The root cause is that `setup_downstream_relay_responder()` calls `sonic-clear ndp` on the DUT, which clears all NDP entries including the DHCPv6 client's link-local address. When the DUT tries to forward the DHCPv6 Advertise back to the client, it cannot resolve the client's link-local address via NDP because PTF's `arp_responder` is only configured for the downstream relay IP, not the client's link-local.\r\n\r\n#### How did you do it?\r\nAdded a call to `ensure_client_reachability()` after `setup_ptf_ip_responder()` in `setup_downstream_relay_responder()`. This function sends a multicast ping (`ping6 ff02::1`) on the VLAN interface to re-discover all link-local neighbors, repopulating the DUT's NDP cache with the client's link-local address before the DHCPv6 test runs.\r\n#### How did you verify/test it?\r\nRan `test_dhcpv6_relay.py::test_dhcp_relay_default` and verified the test passes. The DUT now correctly resolves the client's link-local address and forwards DHCPv6 Advertise packets back to the client.\r\n\r\n#### Any platform specific information?\r\nAny\r\n#### Supported testbed topology if it's a new test case?\r\nt0\r\n### Documentation\r\nN/A\r\n",
+      "files": [
+        {
+          "path": "tests/dhcp_relay/test_dhcpv6_relay.py",
+          "additions": 8,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-28T08:22:08Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "fzjalfred",
+          "createdAt": "2026-08-28T09:05:19Z",
+          "body": "@Xichen96  Please confirm the issue and suggested fix."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-31T03:21:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-31T03:21:21Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-31T10:36:54Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-31T12:14:47Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-31T12:14:52Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T06:47:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T06:47:24Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-03T02:14:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-03T02:14:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T02:41:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-07T02:41:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-08T09:00:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-08T09:01:05Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Xichen96",
+          "createdAt": "2026-09-09T09:52:37Z",
+          "body": "The condition described here was already fixed by https://github.com/sonic-net/sonic-mgmt/pull/26881. The responder setup now clears only the simulated relay's neighbor entry, leaving the client's link-local entry untouched. This PR is therefore no longer needed for the reported NDP-clearing issue."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-11T06:03:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-11T06:04:11Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-11T08:59:47Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-11T09:00:05Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

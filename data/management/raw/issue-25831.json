@@ -1,0 +1,74 @@
+{
+  "number": 25831,
+  "title": "Bug: drop_packets/test_configurable_drop_counters.py failed because FDB verification uses hyphenated MAC format",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25831",
+  "createdAt": "2026-07-01T21:38:52Z",
+  "closedAt": "2026-07-06T10:55:11Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down`\nfailed during FDB programming verification.\n\nThe test creates a static FDB entry using a MAC address in hyphenated format,\nfor example:\n`72-06-00-01-00-40`\n\nThen apply_fdb_config() verifies the operation using:\n`show mac | grep -i 72-06-00-01-00-40 | wc -l`\nHowever, show mac displays MAC addresses in colon-separated format:\n`72:06:00:01:00:40`\n\nBecause the verification greps for the hyphenated form, the test does not find\nthe entry and fails with:\n`Failed: FDB SET operation for 72-06-00-01-00-40 was not applied`\n\n\n### Steps to Reproduce\n\nRun the configurable drop counters test on a dualtor testbed:\n\n```\nsudo ./run_tests.sh -n dtAA56 -m individual -p drop_packets \\\n      -r -t any,util,dualtor,t0 \\\n      -f ../ansible/testbed.yaml -u \\\n      -c \"drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down\"\n```\n\n### Actual Behavior and Expected Behavior\n\n **Actual behavior:**\n  The test fails while verifying that the FDB SET operation was applied:\n`  Failed: FDB SET operation for 72-06-00-01-00-40 was not applied`\n\n  **Expected behavior:**\n  Then the FDB verification should detect the programmed entry correctly.\n\n### Relevant log output\n\n```shell\nFailed: FDB SET operation for 72-06-00-01-00-40 was not applied\n```\n\n### Output of `show version`\n\n```shell\nos_version: branch.202605-ars.f2e092bc-buildimage.17a11c3c9aa389a1e836d56151305c1e33c26d62-nightly-2026.06.24.14.40\nplatform: x86_64-arista_7260cx3_64\nhwsku: Arista-7260CX3-C64\nasic: broadcom\n```\n\n### Attach files (if any)\n\n[test_configurable_drop_counters.log](https://github.com/user-attachments/files/29574003/test_configurable_drop_counters.log)\n[test_configurable_drop_counters.xml](https://github.com/user-attachments/files/29574004/test_configurable_drop_counters.xml)",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25833,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25833",
+      "title": "Fix FDB verification MAC format",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-06T10:55:10Z",
+      "createdAt": "2026-07-01T22:03:52Z",
+      "author": "pdam-arista",
+      "body": "\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #25831 \r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\nThe configurable drop counters test programs static FDB entries with hyphenated MAC addresses, but show mac displays MAC addresses in colon-separated format.\r\nThe verification path greps show mac using the original hyphenated MAC address, so it can miss an FDB entry that was applied successfully and fail with:\r\n\r\nFDB SET operation for <mac> was not applied\r\n\r\nNormalize the MAC address to the show mac format before checking the FDB entry.\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n- [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request:\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nAvoid a false failure in  drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down\r\ncaused by a MAC address format mismatch.\r\n\r\nThe test programs the FDB entry with a hyphenated MAC address, for example:\r\n\r\n`  72-06-00-01-00-40`\r\nBut show mac reports the entry using colon-separated format:\r\n\r\n  `72:06:00:01:00:40`\r\n\r\n#### How did you do it?\r\nConverted the MAC address from hyphen-separated format to colon-separated\r\n  format before grepping show mac.\r\n\r\n#### How did you verify/test it?\r\n\r\n##### Failure before the fix:\r\n\r\n  drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down[PORT_INGRESS_DROPS-L3_EGRESS_LINK_DOWN]\r\n  `Failed: FDB SET operation for 72-06-00-01-00-40 was not applied`\r\n\r\n Validation after the fix passed in repeated runs of:\r\n\r\n drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down[PORT_INGRESS_DROPS-L3_EGRESS_LINK_DOWN]\r\n\r\n\r\n#### Any platform specific information?\r\nNo\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nNo\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nN/A",
+      "files": [
+        {
+          "path": "tests/drop_packets/test_configurable_drop_counters.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-01T22:04:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-01T22:04:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-02T11:15:40Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-07-02T14:57:53Z",
+          "body": "Thank you @StormLiangMS "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-06T10:55:53Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/25917"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-07-06T10:56:17Z",
+          "body": "hi @pdam-arista I merged the PR, but could you check question from Lawrence? Is this a regression from image?"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-07-06T12:03:22Z",
+          "body": "Thanks @theasianpianist and @StormLiangMS. I checked the history and some\r\n  failure instances from our test servers.\r\n\r\nThis does not look like an image regression in FDB programming. The static FDB\r\ntest is old, and the `show mac` verification path existed before. PR #22597\r\nchanged the behavior on 2026-02-26 by making the FDB verification a hard\r\npytest_assert and by checking the FDB count for both SET and DEL operations.\r\n\r\nBefore that change, the SET path used `show mac | grep -i <mac>` but only logged\r\na warning if the wait did not succeed. After #22597, the same verification path\r\nfails the test with:\r\n    `FDB SET operation for <mac> was not applied`\r\n\r\n  The issue is that the test programs the FDB entry with a hyphenated MAC, while\r\n  `show mac` prints MACs in colon-separated format. So the verification can miss\r\n  an entry that was applied successfully.\r\n\r\n  I found the same failure signature in our logs on both master and 202605 runs,\r\n  so this looks like a deterministic test-side format mismatch that became visible\r\n  after the verification was made stricter, not an FDB programming regression. The\r\n  fix only normalizes the MAC for the `show mac` verification path\r\n\r\nAttaching the logs from Last month for 202605  and master\r\n\r\n **202605 Logs** \r\n[tst-esx-60_202605_2026-06-18_logs.log](https://github.com/user-attachments/files/29702071/tst-esx-60_202605_2026-06-18_logs.log)\r\n[tst-esx-60_202605_2026-06-18_logs.xml](https://github.com/user-attachments/files/29702076/tst-esx-60_202605_2026-06-18_logs.xml)\r\n[tst-esx-61_202605_2026-06-18_backup.log](https://github.com/user-attachments/files/29702079/tst-esx-61_202605_2026-06-18_backup.log)\r\n[tst-esx-61_202605_2026-06-18_backup.xml](https://github.com/user-attachments/files/29702082/tst-esx-61_202605_2026-06-18_backup.xml)\r\n[tst-esx-62_202605_2026-06-25_backup.log](https://github.com/user-attachments/files/29702084/tst-esx-62_202605_2026-06-25_backup.log)\r\n[tst-esx-62_202605_2026-06-25_backup.xml](https://github.com/user-attachments/files/29702089/tst-esx-62_202605_2026-06-25_backup.xml)\r\n\r\n**Master Logs** \r\n[tst-esx-63_master_2026-06-03_backup.log](https://github.com/user-attachments/files/29702291/tst-esx-63_master_2026-06-03_backup.log)\r\n[tst-esx-63_master_2026-06-03_backup.xml](https://github.com/user-attachments/files/29702297/tst-esx-63_master_2026-06-03_backup.xml)\r\n[tst-esx-63_master_2026-06-03_logs1.log](https://github.com/user-attachments/files/29702298/tst-esx-63_master_2026-06-03_logs1.log)\r\n[tst-esx-63_master_2026-06-03_logs1.xml](https://github.com/user-attachments/files/29702299/tst-esx-63_master_2026-06-03_logs1.xml)\r\n"
+        }
+      ]
+    }
+  ]
+}

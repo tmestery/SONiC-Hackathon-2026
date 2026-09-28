@@ -1,0 +1,47 @@
+{
+  "number": 1587,
+  "title": "Bgp multipath test failed because the routing entries required for the test haven't injected into VM in t1-lag",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/1587",
+  "createdAt": "2020-04-20T10:31:12Z",
+  "closedAt": "2020-05-21T16:23:20Z",
+  "author": "stephenxs",
+  "labels": [
+    "Bug :bug:",
+    "Testbed"
+  ],
+  "assignees": [
+    "wangxin"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\nBgp multipath test failed because the routing entries required for the test haven't injected into VM in t1-lag VMs simulating TOR.\r\n\r\n**Steps to reproduce the issue:**\r\n1. Deploy the testbed in t1-lag topo.\r\n2. Run bgp-multipath test.\r\n3.\r\n\r\n**Describe the results you received:**\r\nTest failed:\r\n```\r\nSaturday 18 April 2020  20:31:47 +0000 (0:00:00.647)       0:00:58.724 ******** \r\nUsing module file /root/mars/workspace/sonic-mgmt/ansible/library/bgp_route.py \r\nPipelining is enabled. \r\n<r-tigris-13> ESTABLISH SSH CONNECTION FOR USER: admin \r\n<r-tigris-13> SSH: EXEC sshpass -d12 ssh -o ControlMaster=auto -o ControlPersist=120s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o StrictHostKeyChecking=no -o 'User=\"admin\"' -o ConnectTimeout=30 -o ControlPath=/root/.ansible/cp/fe26bceb9b r-tigris-13 '/bin/sh -c '\"'\"'/usr/bin/python && sleep 0'\"'\"'' \r\n<r-tigris-13> (0, '\\n{\"invocation\": {\"module_args\": {\"direction\": null, \"prefix\": \"200.0.1.0/26\", \"neighbor\": null}}, \"ansible_facts\": {\"bgp_route\": {\"200.0.1.0/26\": {\"found\": false}}}}\\n', '') \r\nok: [r-tigris-13-t1-lag] => { \r\n    \"ansible_facts\": { \r\n        \"bgp_route\": { \r\n            \"200.0.1.0/26\": { \r\n                \"found\": false \r\n            } \r\n        } \r\n    }, \r\n    \"changed\": false, \r\n    \"invocation\": { \r\n        \"module_args\": { \r\n            \"direction\": null, \r\n            \"neighbor\": null, \r\n            \"prefix\": \"200.0.1.0/26\" \r\n        } \r\n    } \r\n} \r\n```\r\nThis is because the routing entry 200.0.1.0/26 hasn't been injected on VM simulating TORs.\r\nOn a test bed where the testcase passes, we see:\r\n```\r\nARISTA01T0#show ip route 200.0.1.0/26\r\n\r\nVRF name: default\r\nCodes: C - connected, S - static, K - kernel, \r\n       O - OSPF, IA - OSPF inter area, E1 - OSPF external type 1,\r\n       E2 - OSPF external type 2, N1 - OSPF NSSA external type 1,\r\n       N2 - OSPF NSSA external type2, B I - iBGP, B E - eBGP,\r\n       R - RIP, I L1 - ISIS level 1, I L2 - ISIS level 2,\r\n       A B - BGP Aggregate, A O - OSPF Summary,\r\n       NG - Nexthop Group Static Route, V - VXLAN Control Service\r\n\r\n S      200.0.1.0/26 [1/0] via 10.10.246.100, Ethernet5\r\n\r\nARISTA01T0#show ip bgp 200.0.1.0/26\r\nBGP routing table information for VRF default\r\nRouter identifier 100.1.0.17, local AS number 64001\r\nBGP routing table entry for 200.0.1.0/26\r\n Paths: 2 available\r\n  64700\r\n    - from - (100.1.0.17)\r\n      Origin INCOMPLETE, metric 0, localpref 0, weight -, valid, local, best, redistributed (Static)\r\n  65100 64003 64700\r\n    10.0.0.32 from 10.0.0.32 (10.1.0.32)\r\n      Origin INCOMPLETE, metric 0, localpref 100, weight 0, valid, external\r\n```\r\nBut on a testbed where the test fails, we see\r\n```\r\n\r\nARISTA01T0#show ip route 200.0.1.0/26\r\n\r\nVRF: default\r\nCodes: C - connected, S - static, K - kernel, \r\n       O - OSPF, IA - OSPF inter area, E1 - OSPF external type 1,\r\n       E2 - OSPF external type 2, N1 - OSPF NSSA external type 1,\r\n       N2 - OSPF NSSA external type2, B I - iBGP, B E - eBGP,\r\n       R - RIP, I L1 - IS-IS level 1, I L2 - IS-IS level 2,\r\n       O3 - OSPFv3, A B - BGP Aggregate, A O - OSPF Summary,\r\n       NG - Nexthop Group Static Route, V - VXLAN Control Service,\r\n       DH - DHCP client installed default route, M - Martian\r\n\r\nGateway of last resort:\r\n B E    0.0.0.0/0 [200/0] via 10.0.0.32, Ethernet1\r\n\r\n\r\nARISTA01T0#show ip bgp 200.0.1.0/26\r\nBGP routing table information for VRF default\r\nRouter identifier 100.1.0.17, local AS number 64001\r\nARISTA01T0#\r\n```\r\nThis route entry is configured by the following command\r\n```\r\nip prefix-list test_vip_1 seq 11 permit 200.0.1.0/26\r\n!\r\nroute-map PREPENDAS permit 21\r\n   match ip address prefix-list test_vip_1\r\n   set as-path prepend 64700\r\n!\r\nrouter bgp 64001\r\n...\r\n   redistribute static route-map PREPENDAS\r\n...\r\n``` \r\nI see the above configuration was removed from `t1-lag-spine.j2` and `t1-lag-tor.j2`.\r\nShould they be added back or there should be some other way to advertise the route entry?\r\n\r\n**Describe the results you expected:**\r\nThe route entry should be learnt by VM.\r\n\r\n**Additional information you deem important:**\r\n<!--\r\nsoftware/ASIC/Hardware Flatform version and info\r\n-->\r\n    **Output of `show version`:**\r\n\r\n    ```\r\n    (paste your output here)\r\n    ```\r\n\r\n    **Attach debug file `sudo generate_dump`:**\r\n\r\n    ```\r\n    (paste your output here)\r\n    ```\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 1692,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/1692",
+      "title": "Announce vips routes for bgp_multipath_relax testing",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-05-21T16:23:19Z",
+      "createdAt": "2020-05-21T06:28:03Z",
+      "author": "wangxin",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background contaxt?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #1587 \r\n\r\nPreviously the vips routes were statically configured in the VMs for\r\nbgp_multipath_relax testing. After the change of announcing\r\nroutes from exabgp in PTF to VMs, the vips routes were missing.\r\nThe bgp_multipath_relax testing depends on the vips routes failed.\r\n\r\nThis change is to announce the vips routes to VMs  that have the\r\nvips routes configuration. The functions in the fib fixture definition\r\nfile were refactored a little bit.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n### Approach\r\n#### How did you do it?\r\nUpdated the fib fixture to announce vips routes to VMs that have this configuration in topology definition.\r\n\r\n#### How did you verify/test it?\r\n* Run the test_announce_routes.py to announce all the routes.\r\n* Run the bgp_multipath_relax ansible test. It passed.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/plugins/fib.py",
+          "additions": 51,
+          "deletions": 35
+        }
+      ],
+      "comments": [
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-05-21T06:37:53Z",
+          "body": "This pull request **introduces 2 alerts** when merging a2b4fc7deaf6b134d6c7736d419284a45cd264d0 into f17471c70bd830f7c77e3f65995428ffb40af626 - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-eb167cb7df07a55cb5b0f6d1a8aa498ca17f1816)\n\n**new alerts:**\n\n* 2 for Unused local variable"
+        }
+      ]
+    }
+  ]
+}

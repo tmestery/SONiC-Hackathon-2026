@@ -1,0 +1,43 @@
+{
+  "id": "management-22522",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22522,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22522",
+    "title": "Bug: bgp/test_bgp_suppress_fib.py::test_suppress_fib_performance - IndexError: list index out of range",
+    "created_at": "2026-02-21T04:46:55Z",
+    "closed_at": "2026-02-24T12:53:53Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nAfter Ubuntu 24.04 upgrade, we saw the following failures in bgp/test_bgp_suppress_fib.py::test_suppress_fib_performance:\n```log\nbgp/test_bgp_suppress_fib.py::test_suppress_fib_performance\n-------------------------------- live log call ---------------------------------\n11/02/2026 <IPV6> __init__.pytest_runtest_call             L0040 ERROR  | Traceback (most recent call last):\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 1720, in runtest\n    self.ihook.pytest_pyfunc_call(pyfuncitem=self)\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_hooks.py\", line 512, in __call__\n    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_manager.py\", line 120, in _hookexec\n    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 167, in _multicall\n    raise exception\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 121, in _multicall\n    res = hook_impl.function(*args)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 166, in pytest_pyfunc_call\n    result = testfunction(**testargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/src/sonic-mgmt_testbed-bjw-can-t1-7260-12/tests/bgp/test_bgp_suppress_fib.py\", line 1204, in test_suppress_fib_performance\n    validate_route_process_perf(tcpdump_sniffer.pcap_path, ipv4_route_list, ipv6_route_list)\n  File \"/var/src/sonic-mgmt_testbed-bjw-can-t1-7260-12/tests/bgp/test_bgp_suppress_fib.py\", line 582, in validate_route_process_perf\n    withdraw_middle_time, withdraw_average_time = compute_middle_average_time(withdraw_prefix_time_stamp)\n                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/var/src/sonic-mgmt_testbed-bjw-can-t1-7260-12/tests/bgp/test_bgp_suppress_fib.py\", line 564, in compute_middle_average_time\n    time_delta_list.append(abs(timestamp_list[1] - timestamp_list[0]))\n                               ~~~~~~~~~~~~~~^^^\nIndexError: list index out of range\n\nFAILED\n```\n\nI found the problem is caused by new scapy version (2.5.0 -> 2.7.0), which includes a new max_list_count config option (default 100). This limits the number of PacketListField/FieldListField it can parse, which fails to count BGP update packets with over 100 withdrawn routes as bgp.BGPUpdate in:\n```python\ndef parse_time_stamp(bgp_packets, ipv4_route_list, ipv6_route_list):\n    announce_prefix_time_stamp, withdraw_prefix_time_stamp = {}, {}\n    bgp_updates = bgp_packets[bgp.BGPUpdate]\n...\n```\nThis led to the index error because one BGP update packet in the pair was filtered out.\n\n### Steps to Reproduce\n\nRun bgp/test_bgp_suppress_fib.py::test_suppress_fib_performance on sonic-mgmt container with Ubuntu 24.04 base image.\n\n### Actual Behavior and Expected Behavior\n\nThe scapy parser should be able to parse BGP update packet with more than 100 withdrawn routes.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22529,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22529",
+    "title": "Fix scapy's max_list_count for test_bgp_suppress_fib.py",
+    "merged_at": "2026-02-24T12:53:52Z",
+    "description": "### Description of PR\n\nSummary:\nNew Ubuntu 24.04 base image upgrades Scapy from 2.5.0 to 2.7.0.\nScapy 2.6.0+ uses conf.max_list_count (default 100) as global size limit for PacketListField/FieldListField. scapy.contrib.bgp overrides it with max_count=20000 for nlri, but not for withdrawn_routes.\nThis causes failures when parsing BGP udpate packets with more than 100 withdrawn routes.\nIncrease conf.max_list_count to 20000 and restore it in the module fixture.\nFixes #22522\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\n#### How did you do it?\n\n#### How did you verify/test it?\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/bgp/test_bgp_suppress_fib.py",
+        "additions": 14,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

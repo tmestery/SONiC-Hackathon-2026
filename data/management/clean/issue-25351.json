@@ -1,0 +1,58 @@
+{
+  "id": "management-25351",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25351,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25351",
+    "title": "Trimming PACKET_COUNT increase to 1000 lead to nnpy.errors.NNError: Connection timed out",
+    "created_at": "2026-06-14T02:28:43Z",
+    "closed_at": "2026-08-17T19:31:34Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n`PACKET_COUNT` (the number of packets sent during trimming verification) was\nraised from **100 to 1000** in PR #21434 (\"Change src_port to fix PortChannel\nhashing on th5\").\n\nWith `PACKET_COUNT = 1000`, trimming tests on non-th5 platforms (e.g.\nSpectrum-5) intermittently break with:\n```\nnnpy.errors.NNError: Connection timed out\n```\nThe send path that fails is the PTF dataplane injection over nanomsg\n(`ptf/dataplane.py` -> `nnpy/socket.py`), i.e. the link between the test\nframework and the `ptf_nn_agent` in the PTF container \u2014 not the DUT.\n\nRoot cause: each verification round blocks an egress queue, fills its buffer,\nand then sends the verification packets. When the queue is unblocked, the large\namount of packets that were buffered in the queue drains back toward the PTF in\na very short window. Combined with the high injection volume\n(`PACKET_COUNT = 1000` x 4 packet types, repeated across multiple rounds/ports),\nthe PTF<->ptf_nn_agent nanomsg socket backs up and a `send()` exceeds the\nnanomsg send timeout, raising `NNError: Connection timed out`.\n\nCould you update the case:\n- th5 keeps the higher count (1000) to preserve the PortChannel hashing\nreliability introduced in #21434.\n- All other platforms use 100, which significantly reduces the volume of packets\ninjected over the PTF nanomsg channel.\n\n### Steps to Reproduce\n\nRun packet trimming case `test_symmetric_asymmetric_mode_switch`\n\n### Actual Behavior and Expected Behavior\n\n- Actual Behavior: encounter error `nnpy.errors.NNError: Connection timed out`\n- Expected Behavior: case pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25608,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25608",
+    "title": "Make trimming verification packet count dependent on platform",
+    "merged_at": "2026-08-17T19:31:33Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #25351\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\n### Approach\n#### What is the motivation for this PR?\nIncreasing the number of verification packets sent in packet trimming tests has caused a problem for Mellanox chips. This is due to a difference in behavior between the Mellanox and Broadcom shapers. More details can be found in the public Github issue (https://github.com/sonic-net/sonic-mgmt/issues/25351).\n\n#### How did you do it?\nRefactored the packet count from a constant to a function that looks at the asic name of the dut to determine which value should be used. This is a common pattern used by other platform dependent values in packet trimming tests.\n\n#### How did you verify/test it?\nVerified this has no effect on the pass rate for Broadcom chips. Unable to test with Mellanox.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/packet_trimming/constants.py",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "tests/packet_trimming/packet_trimming_config.py",
+        "additions": 9,
+        "deletions": 0
+      },
+      {
+        "path": "tests/packet_trimming/packet_trimming_helper.py",
+        "additions": 9,
+        "deletions": 5
+      },
+      {
+        "path": "tests/packet_trimming/test_packet_trimming_asymmetric.py",
+        "additions": 5,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

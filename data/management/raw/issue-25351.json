@@ -1,0 +1,181 @@
+{
+  "number": 25351,
+  "title": "Trimming PACKET_COUNT increase to 1000 lead to nnpy.errors.NNError: Connection timed out",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25351",
+  "createdAt": "2026-06-14T02:28:43Z",
+  "closedAt": "2026-08-17T19:31:34Z",
+  "author": "weiguo-nvidia",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n`PACKET_COUNT` (the number of packets sent during trimming verification) was\nraised from **100 to 1000** in PR #21434 (\"Change src_port to fix PortChannel\nhashing on th5\"). \n\nWith `PACKET_COUNT = 1000`, trimming tests on non-th5 platforms (e.g.\nSpectrum-5) intermittently break with:\n```\nnnpy.errors.NNError: Connection timed out\n```\nThe send path that fails is the PTF dataplane injection over nanomsg\n(`ptf/dataplane.py` -> `nnpy/socket.py`), i.e. the link between the test\nframework and the `ptf_nn_agent` in the PTF container \u2014 not the DUT.\n\nRoot cause: each verification round blocks an egress queue, fills its buffer,\nand then sends the verification packets. When the queue is unblocked, the large\namount of packets that were buffered in the queue drains back toward the PTF in\na very short window. Combined with the high injection volume\n(`PACKET_COUNT = 1000` x 4 packet types, repeated across multiple rounds/ports),\nthe PTF<->ptf_nn_agent nanomsg socket backs up and a `send()` exceeds the\nnanomsg send timeout, raising `NNError: Connection timed out`.\n\n\nCould you update the case:\n- th5 keeps the higher count (1000) to preserve the PortChannel hashing\nreliability introduced in #21434.\n- All other platforms use 100, which significantly reduces the volume of packets\ninjected over the PTF nanomsg channel.\n\n### Steps to Reproduce\n\nRun packet trimming case `test_symmetric_asymmetric_mode_switch`\n\n### Actual Behavior and Expected Behavior\n\n- Actual Behavior: encounter error `nnpy.errors.NNError: Connection timed out`\n- Expected Behavior: case pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "weiguo-nvidia",
+      "createdAt": "2026-06-14T02:29:44Z",
+      "body": "Hi @rgarofano-arista ,\n\nCould you help check the issue and update the case?\n- th5 keeps the higher count (1000) to preserve the PortChannel hashing\nreliability introduced in #21434.\n- All other platforms use 100, which significantly reduces the volume of packets\ninjected over the PTF nanomsg channel."
+    },
+    {
+      "author": "rgarofano-arista",
+      "createdAt": "2026-06-15T18:06:56Z",
+      "body": "We do not see this issue."
+    },
+    {
+      "author": "weiguo-nvidia",
+      "createdAt": "2026-06-16T01:45:50Z",
+      "body": "> We do not see this issue.\n\nHi @rgarofano-arista \nWhat's the purpose to update the `PACKET_COUNT` from 100 to 1000?"
+    },
+    {
+      "author": "rgarofano-arista",
+      "createdAt": "2026-06-16T19:52:08Z",
+      "body": "The shaper for Broadcom chips is not capable of completely blocking a queue, there will always be some packets leaking. That is why we require more packets to be sent to trigger trimming. Based on the description of this issue, it sounds like this would also explain why we don't have this problem. In light of this new information, we should probably make packet count a function in `packet_trimming_config.py` instead of a constant."
+    },
+    {
+      "author": "rgarofano-arista",
+      "createdAt": "2026-06-24T00:30:57Z",
+      "body": "https://github.com/sonic-net/sonic-mgmt/pull/25608"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25608,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25608",
+      "title": "Make trimming verification packet count dependent on platform",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-17T19:31:33Z",
+      "createdAt": "2026-06-24T00:29:51Z",
+      "author": "rgarofano-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #25351 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nIncreasing the number of verification packets sent in packet trimming tests has caused a problem for Mellanox chips. This is due to a difference in behavior between the Mellanox and Broadcom shapers. More details can be found in the public Github issue (https://github.com/sonic-net/sonic-mgmt/issues/25351).\r\n\r\n#### How did you do it?\r\nRefactored the packet count from a constant to a function that looks at the asic name of the dut to determine which value should be used. This is a common pattern used by other platform dependent values in packet trimming tests.\r\n\r\n#### How did you verify/test it?\r\nVerified this has no effect on the pass rate for Broadcom chips. Unable to test with Mellanox.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/packet_trimming/constants.py",
+          "additions": 0,
+          "deletions": 1
+        },
+        {
+          "path": "tests/packet_trimming/packet_trimming_config.py",
+          "additions": 9,
+          "deletions": 0
+        },
+        {
+          "path": "tests/packet_trimming/packet_trimming_helper.py",
+          "additions": 9,
+          "deletions": 5
+        },
+        {
+          "path": "tests/packet_trimming/test_packet_trimming_asymmetric.py",
+          "additions": 5,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-24T00:29:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-24T00:30:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-24T11:14:57Z",
+          "body": "This PR has backport request for branch(es): 202511,202605.<br>Added label(s) for branch(es) 202511,202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "weiguo-nvidia",
+          "createdAt": "2026-06-26T00:28:58Z",
+          "body": "Hi @rgarofano-arista ,\r\n\r\nThanks for the fix! Could you help merge it!"
+        },
+        {
+          "author": "weiguo-nvidia",
+          "createdAt": "2026-07-01T08:49:09Z",
+          "body": "> Hi @rgarofano-arista ,\r\n> \r\n> Thanks for the fix! Could you help merge it!\r\n\r\nCould you help merge it?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-07T17:50:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-07T17:50:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-07-08T15:23:12Z",
+          "body": "@weiguo-nvidia can you confirm that this fix works for Nvidia platforms?"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2026-07-08T15:24:02Z",
+          "body": "please fix lint issues on this PR"
+        },
+        {
+          "author": "weiguo-nvidia",
+          "createdAt": "2026-07-09T02:28:01Z",
+          "body": "> @weiguo-nvidia can you confirm that this fix works for Nvidia platforms?\r\n\r\nThanks for your help! The change should be work on Nvidia platforms"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-10T00:35:09Z",
+          "body": "There is a valid prechecker failure, please address, for the rest, please rerun after https://github.com/sonic-net/sonic-mgmt/pull/26044 merged.\r\n"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-10T03:12:09Z",
+          "body": "> There is a valid prechecker failure, please address, for the rest, please rerun after #26044 merged.\r\n\r\nThe CodeQL error was a false positive, I dismissed it. Please rebase this change on top of #26044 to get rid of the precheck failures. @rgarofano-arista "
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-14T16:36:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-14T16:36:24Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "weiguo-nvidia",
+          "createdAt": "2026-07-20T02:27:05Z",
+          "body": "Hi @rgarofano-arista ,\r\n\r\nI think the PR is ready to merge, could you help rebase it? Thanks"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T15:52:36Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T15:52:53Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "weiguo-nvidia",
+          "createdAt": "2026-07-21T07:00:04Z",
+          "body": "Hi @yxieca ,\r\n\r\nCould you help merge it? Thanks!"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T08:36:25Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511,202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "weiguo-nvidia",
+          "createdAt": "2026-08-02T13:09:22Z",
+          "body": "Hi @rgarofano-arista ,\r\n\r\nCould you help merge it? Thanks!"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "number": 23313,
+  "title": "Bug: Sanity check fails to detect crashed critical processes in supervisor groups",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23313",
+  "createdAt": "2026-03-25T15:36:15Z",
+  "closedAt": "2026-03-31T05:56:30Z",
+  "author": "yxieca",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nThe sanity check's `parse_service_status_and_critical_process()` in `tests/common/devices/sonic.py` fails to match critical processes that belong to supervisor groups. This was observed on the **VS (virtual switch) platform** during KVM testbed testing \u2014 it has not been verified on physical platforms.\n\nWhen a container's `critical_processes` file specifies a group (e.g., `group:dhcp-relay`), the sanity check collects `dhcp-relay` in `critical_group_list`. However, `supervisorctl status` outputs process names in `group:process` format (e.g., `dhcp-relay:dhcprelayd`). The code does an exact string match:\n\n```python\nif pname in critical_group_list or pname in critical_process_list:\n```\n\nSince `'dhcp-relay:dhcprelayd' != 'dhcp-relay'`, no processes in the group are ever tracked as critical. The result is `running_critical_process: []` and `exited_critical_process: []` \u2014 the container always appears healthy regardless of whether its critical processes are alive or dead.\n\n> **Note**: This issue was filed with the assistance of an AI agent (OpenClaw/Claude).\n\n### Steps to Reproduce\n\n1. Deploy a SONiC VS image on a KVM testbed (T0 topology)\n2. Confirm `/etc/supervisor/critical_processes` inside `dhcp_relay` container contains `group:dhcp-relay`\n3. Crash `dhcprelayd` inside the container (e.g., via a stress test that causes it to segfault)\n4. Run any test with `--allow_recover` \u2014 the sanity check reports `dhcp_relay` as healthy:\n   ```\n   'dhcp_relay': {'status': True, 'exited_critical_process': [], 'running_critical_process': []}\n   ```\n\n### Actual Behavior and Expected Behavior\n\n**Actual:** When `critical_processes` uses `group:dhcp-relay`, the sanity check never matches any processes in that group. `running_critical_process` and `exited_critical_process` are always empty. A crashed `dhcprelayd` goes undetected, and `--allow_recover` cannot trigger recovery.\n\n**Expected:** The sanity check should match supervisor group members. When `supervisorctl status` reports `dhcp-relay:dhcprelayd  FATAL`, and `critical_group_list` contains `dhcp-relay`, the process should be detected as a failed critical process.\n\n**Possible fix:** In `parse_service_status_and_critical_process()`, extract the group prefix from the process name and match against `critical_group_list`:\n\n```python\ngroup_name = pname.split(':')[0] if ':' in pname else None\nif pname in critical_process_list or (group_name and group_name in critical_group_list):\n```\n\n### Relevant log output\n\n```shell\n# supervisorctl status inside dhcp_relay container:\ndhcp-relay:dhcp4relay            RUNNING   pid 45, uptime 1:23:45\ndhcp-relay:dhcp6relay            RUNNING   pid 46, uptime 1:23:45\ndhcp-relay:dhcprelayd            RUNNING   pid 47, uptime 1:23:45\n\n# critical_processes file:\ngroup:dhcp-relay\n\n# Sanity check output (even after dhcprelayd crash):\ndhcp_relay: {status: True, exited_critical_process: [], running_critical_process: []}\n```\n\n### Output of `show version`\n\n```shell\nSONiC Software Version: SONiC.feat_trixie-dhcp-relay.0-d772089f4\nPlatform: x86_64-kvm_x86_64-r0\nDistribution: Debian 13.0\nKernel: 6.1.0-11-2-amd64\n```\n\n### Attach files (if any)\n\nN/A\n",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2026-03-25T15:45:51Z",
+      "body": "This issue was discovered because AI agent missed --device_type=vs parameter while running KVM tests. The test is not intended to run on kvm testbed, but the test issue seems to be valid."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 23445,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23445",
+      "title": "Fix sanity check to detect crashed processes in supervisor groups",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-31T05:56:28Z",
+      "createdAt": "2026-03-31T02:25:13Z",
+      "author": "StormLiangMS",
+      "body": "### Description of PR\n\nSummary:\nFix sanity check to properly detect crashed critical processes in supervisor groups.\n\nWhen a container's `critical_processes` file specifies a group (e.g., `group:dhcp-relay`), the sanity check collects `dhcp-relay` in `critical_group_list`. However, `supervisorctl status` outputs process names in `group:process` format (e.g., `dhcp-relay:dhcprelayd`). The current exact string match never matches group members, so crashed processes in groups go undetected.\n\nFixes #23313\n\n### Type of change\n\n- [x] Bug fix\n\n### Back port request\n\n- [ ] 202411\n- [ ] 202405\n- [ ] 202311\n- [ ] 202305\n- [ ] 202211\n- [ ] 202012\n\n### Approach\n#### What is the motivation for this PR?\nThe sanity check's `parse_service_status_and_critical_process()` silently ignores crashed processes that belong to supervisor groups, making `--allow_recover` unable to trigger recovery for those containers.\n\n#### How did you do it?\nExtract the group prefix from supervisor process names (splitting on `:`) and match against `critical_group_list` in addition to the existing exact match against `critical_process_list`.\n\n#### How did you verify/test it?\nVerified through code analysis:\n- `supervisorctl status` outputs `dhcp-relay:dhcprelayd RUNNING pid 100, uptime 1:00:00`\n- Before fix: `pname = \"dhcp-relay:dhcprelayd\"`, `\"dhcp-relay:dhcprelayd\" in critical_group_list` \u2192 `False` (bug)\n- After fix: `group_name = \"dhcp-relay\"`, `\"dhcp-relay\" in critical_group_list` \u2192 `True` (correct)\n\nThe fix is minimal and backward-compatible \u2014 processes without a `:` in their name continue to match via `critical_process_list` as before.\n\n#### Any platform specific information?\nGeneric \u2014 affects all platforms using supervisor groups in critical_processes files.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 bug fix to existing infrastructure code.\n\n### Documentation\nN/A\n",
+      "files": [
+        {
+          "path": "tests/common/devices/sonic.py",
+          "additions": 5,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-03-31T02:25:19Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: StormLiangMS / name: StormLiangMS  (20864b05baff7a34934a37116a246569aa7ba9df)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T02:25:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-31T02:25:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T02:42:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-31T02:42:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

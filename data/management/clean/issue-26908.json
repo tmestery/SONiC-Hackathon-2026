@@ -1,0 +1,50 @@
+{
+  "id": "management-26908",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26908,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26908",
+    "title": "Regression: CACL tests reject protected FRR loopback iptables rules",
+    "created_at": "2026-08-09T23:54:39Z",
+    "closed_at": "2026-08-19T04:43:07Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "Control Plane ACL"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Previous Working Version\n\nsonic-buildimage master before sonic-buildimage#28061, with `sonic-host-services` pinned to `233cd591c324d4090a077f87da0eaaad7d12cabc`.\n\n### Steps to Reproduce\n\n1. Build or install a master image containing sonic-buildimage#28061 and sonic-host-services#389.\n2. Run:\n   `cacl/test_cacl_application.py::test_cacl_application_nondualtor[vlab-01-None]`\n3. Observe that the generated expected iptables rule set does not contain the new FRR loopback protection rules.\n4. The exact-set comparison reports those rules as unexpected.\n\nThis also affects `test_multiasic_cacl_application`.\n\nsonic-mgmt#26554 temporarily skipped these tests while sonic-buildimage#28061 was open. The skip self-expired after #28061 merged, but the expected-rule generator was not updated.\n\n### Impact of this regression\n\nPost-sonic-buildimage#28061 master images fail the CACL application tests across affected PR-checker topologies, blocking unrelated sonic-buildimage pull requests. The DUT behavior is expected; the regression is in the sonic-mgmt expected iptables rule set.\n\nThe fix should update `generate_expected_rules()` in `tests/cacl/test_cacl_application.py` to expect the four IPv4 `OUTPUT` rules for FRR UID 300 and ports 2601 and 2620. Exact-set validation should remain enabled so missing, partial, or malformed FRR rules are still detected.\n\n### Relevant log output\n\n```text\nFailed: iptables rules did not match either the legacy (pre multi-asic FORWARD-chain security patch) or the newer (post-patch) expected rule set.\nLegacy variant - missing: set(), unexpected: {\n  '-A OUTPUT -o lo -p tcp -m tcp --dport 2601 -m owner --uid-owner 300 -j ACCEPT',\n  '-A OUTPUT -o lo -p tcp -m tcp --dport 2601 -j DROP',\n  '-A OUTPUT -o lo -p tcp -m tcp --dport 2620 -m owner --uid-owner 300 -j ACCEPT',\n  '-A OUTPUT -o lo -p tcp -m tcp --dport 2620 -j DROP'\n}\nFORWARD-chain variant - missing: set(), unexpected: {same four rules}\n```\n\nExample failing build: https://dev.azure.com/mssonic/build/_build/results?buildId=1187249\n\n### References\n\n- sonic-mgmt#26554\n- sonic-buildimage#28061\n- sonic-host-services#389"
+  },
+  "resolution": {
+    "pr_number": 26935,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26935",
+    "title": "tests/cacl: add FRR loopback ACL expected rules; remove xfail marks (sonic-host-services#389)",
+    "merged_at": "2026-08-19T04:43:06Z",
+    "description": "## Description\n\nPort test coverage from internal sonic-mgmt-int now that https://github.com/sonic-net/sonic-host-services/pull/389 is merged to public master.\n\nFixes #26908\n\n### What changed\n\n**`tests/cacl/test_cacl_application.py`:**\n\nAdd expected OUTPUT chain rules for FRR VTY/FPM loopback ports in `generate_expected_rules()`.\n`caclmgrd` now programs these in **every managed namespace** (host and all per-ASIC namespaces on multi-ASIC) \u2014 so the rules are expected unconditionally, regardless of `asic_index`:\n- Port 2620 (fpmsyncd \u2194 zebra): ACCEPT for uid-owner 300 (frr user), DROP for all others\n- Port 2601 (zebra VTY): ACCEPT for uid-owner 300, DROP for all others\n\n**`tests/common/plugins/conditional_mark/tests_mark_conditions.yaml`:**\n\nRemove the `xfail` blocks for `test_cacl_application_nondualtor` and `test_multiasic_cacl_application` that were added in #26909 as a temporary workaround pending this fix.\n\n## Test plan\n\n- [ ] `test_cacl_application_nondualtor` \u2014 verifies FRR OUTPUT rules appear in actual iptables (was xfail, now expected to pass)\n- [ ] `test_multiasic_cacl_application` \u2014 verifies FRR OUTPUT rules appear in every ASIC namespace (was xfail, now expected to pass)\n\n## Related\n\n- Tracking issue: #26908\n- Temporary xfail workaround: #26909\n- sonic-host-services image change: https://github.com/sonic-net/sonic-host-services/pull/389",
+    "files": [
+      {
+        "path": "tests/cacl/test_cacl_application.py",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 1,
+        "deletions": 13
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

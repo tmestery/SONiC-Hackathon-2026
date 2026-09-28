@@ -1,0 +1,43 @@
+{
+  "id": "management-27080",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27080,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27080",
+    "title": "[HFT] Direct Docker restart leaves OTEL container stopped",
+    "created_at": "2026-08-16T01:29:53Z",
+    "closed_at": "2026-08-16T09:19:10Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Description\n\nThe HFT test fixture changes `/etc/sonic/otel_config.yml` and directly runs\n`docker restart otel`. The OTEL container is owned by `otel.service`, whose\nmain process waits for the container and whose stop action stops the container.\nRestarting it directly through Docker releases the service waiter and can make\nsystemd stop the newly restarted container.\n\nThis was reproduced on the 202511 branch with:\n\n- Image: `SONiC.20251110.43`\n- Platform: `Mellanox-SN5640-C512S2`\n- Topology: `t0-isolated-d32u32s2`\n- Test: `high_frequency_telemetry/test_high_frequency_telemetry.py`\n\nThe container was running before the fixture, briefly reported running after\n`docker restart`, and stopped less than 10 seconds later, before the first HFT\nprofile was configured. Since nightly pretest disables container autorestart,\nthe container remained stopped. All HFT test bodies passed, but LogAnalyzer\nreported `Expected containers not running: otel` during teardown.\n\n### Expected behavior\n\nThe fixture should restart OTEL through `otel.service`, verify that it remains\nrunning, and preserve LogAnalyzer coverage.\n\n### Backport request\n\nPlease backport the fix to the 202511 branch, where this regression was\nreproduced on an SN5640 physical testbed."
+  },
+  "resolution": {
+    "pr_number": 27082,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27082",
+    "title": "[HFT] Restart OTEL through systemd",
+    "merged_at": "2026-08-16T09:19:09Z",
+    "description": "### Description of PR\n\nSummary:\n\nRestart the OTEL container through its systemd service when the HFT fixture\nchanges or restores the collector configuration. A direct `docker restart`\nreleases the `otel.service` container waiter, after which systemd can stop the\nnewly restarted container. Also fail explicitly if OTEL is not running after a\n10-second stabilization delay.\n\nFixes #27080\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): #27080\nFailure type: regression\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n\n- master: static validation on the identical fixture code passed (`py_compile`, `pre-commit`, and `git diff --check`).\n- 202511: `SONiC.20251110.43`, `Mellanox-SN5640-C512S2`, `t0-isolated-d32u32s2`; full `high_frequency_telemetry/test_high_frequency_telemetry.py` run passed with LogAnalyzer enabled: `9 passed, 7 skipped`, `0 failures`, `0 errors`. All 7 executed HFT cases completed LogAnalyzer analysis without `Expected containers not running: otel`.\n\n### Approach\n#### What is the motivation for this PR?\n\nThe HFT fixture temporarily reduces OTEL debug exporter verbosity. Directly\nrestarting the systemd-managed container through Docker can leave it stopped,\nwhich makes otherwise-passing HFT cases fail during LogAnalyzer teardown.\n\n#### How did you do it?\n\nReplace both direct Docker restarts with `systemctl restart otel` and verify the\ncontainer is running after a 10-second stabilization delay. Restart and\nreadiness failures are no longer ignored.\n\n#### How did you verify/test it?\n\nRan the complete HFT module on physical testbed `vms95-t0-sn5640-3` after\ndisabling container autorestart, matching nightly behavior. LogAnalyzer stayed\nenabled for all HFT cases. The test restored the original OTEL configuration\nand container autorestart state afterward; OTEL remained running.\n\n#### Any platform specific information?\n\nValidated on Mellanox SN5640 (`Mellanox-SN5640-C512S2`, SPC5).\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/high_frequency_telemetry/conftest.py",
+        "additions": 6,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

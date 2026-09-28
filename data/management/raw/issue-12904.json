@@ -1,0 +1,58 @@
+{
+  "number": 12904,
+  "title": "[Bug]: [Snappi] Reboot and swss reboot logic needs to be adjusted for multidut scenario",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/12904",
+  "createdAt": "2024-05-20T19:50:27Z",
+  "closedAt": "2024-07-10T23:47:32Z",
+  "author": "amitpawar12",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\n\nTest Script- tests/snappi_tests/multidut/pfcwd/test_multidut_pfcwd_basic_with_snappi.py\r\n\r\n(1)\r\nTest case: test_pfcwd_basic_single_lossless_prio_reboot\r\n\r\nCode:\r\n ```\r\n   for duthost in dut_list:\r\n        logger.info(\"Issuing a {} reboot on the dut {}\".format(reboot_type, duthost.hostname))\r\n        reboot(duthost, localhost, reboot_type=reboot_type, safe_reboot=True)\r\n        logger.info(\"Wait until the system is stable\")\r\n        pytest_assert(wait_until(300, 20, 0, duthost.critical_services_fully_started),\r\n                      \"Not all critical services are fully started\")\r\n```\r\nIssue: if the test case is being executed on single line card (single or multiple ASIC), same DUT will be rebooted twice and hence longer testcase execution.\r\n\r\n(2)\r\nTest case - test_pfcwd_basic_single_lossless_prio_service_restart\r\n\r\nCode:\r\n```\r\n@pytest.mark.parametrize('restart_service', ['swss'])\r\n----\r\n    for duthost in dut_list:\r\n        logger.info(\"Issuing a restart of service {} on the dut {}\".format(restart_service, duthost.hostname))\r\n        duthost.command(\"systemctl reset-failed {}\".format(restart_service))\r\n        duthost.command(\"systemctl restart {}\".format(restart_service))\r\n        logger.info(\"Wait until the system is stable\")\r\n        pytest_assert(wait_until(300, 20, 0, duthost.critical_services_fully_started),\r\n                      \"Not all critical services are fully started\")\r\n```\r\n\r\nIssue:\r\nfor multi-asic environment, we do not have swss service but swss@0 and swss@1 service. With single linecard, we will end up restarting the same swss process twice. \r\n\r\n\n\n### Results you see\n\n=> sudo systemctl status swss\r\n\u25cf swss.service - switch state service\r\n     Loaded: loaded (/lib/systemd/system/swss.service; disabled; vendor preset: enabled)\r\n     Active: inactive (dead)\r\n=> sudo systemctl status swss@0\r\n\u25cf swss@0.service - switch state service\r\n     Loaded: loaded (/lib/systemd/system/swss@.service; enabled; vendor preset: enabled)\r\n    Drop-In: /etc/systemd/system/swss@0.service.d\r\n             \u2514\u2500auto_restart.conf\r\n     Active: active (running) since Mon 2024-05-20 17:26:39 UTC; 2h 9min ago\r\n ----- curtailed output --------\n\n### Results you expected to see\n\nFor reboot testcases:\r\nWe should add a check to see if duthost1.hostname == duthost2.hostname, and if not, then reboot both, else just do a single reboot (of either duthost1 or duthost2).\r\n\r\nFor swss restart testcases, we can find the dut<->asic mapping of the interfaces used and restart swss process based on that mapping.\r\n\r\n\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "sdszhang",
+      "createdAt": "2024-07-03T06:24:14Z",
+      "body": "Issue 2 is fixed in #13483. @amitpawar12 do we need another PR for issue 1?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 13483,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/13483",
+      "title": "[Snappi] - fixing swss service restart logic for basic PFCWD testcases in multi-asic environment",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-07-01T16:06:42Z",
+      "createdAt": "2024-06-27T15:54:30Z",
+      "author": "amitpawar12",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\nThe existing PFCWD basic testcases have restart SWSS service testcases.\r\n\r\nHowever, these testcases do not address the multi-asic environment.  The pull-request addresses this.\r\n\r\nSummary:\r\nFixes # (issue)\r\nThe fix finds out the DUT and interfaces used in the test and based on that selects swss@0 or swss@1 to restart. The fix first verifies if the platform field exists and if yes, is set to 'broadcom-dnx' field. If this is not true, then code executes the default testcase.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [X] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [X] 202405\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nTo address the multi-asic environment scenario and select appropriate SWSS depending upon the DUT-interface selected for the test.\r\n\r\n#### How did you do it?\r\n- Finding the DUT-interface used in the test. \r\n- For Single line card - Single ASIC, the DUT will be same and interfaces will be from same ASIC. So only single swss is selected.\r\n- For Single line card - Multi ASIC, DUT is same but interfaces will be from different ASIC and hence two SWSS instances are selected. Same logic for multiple line card scenario.\r\n\r\n#### How did you verify/test it?\r\n- Ran the test on local setup.\r\n\r\nLogs for single line card single ASIC:\r\n```\r\n15:33:49 test_multidut_pfcwd_basic_with_snappi.te L0574 INFO   | Issuing a restart of service swss@0 on the dut ixre-egl-board72\r\n15:35:15 test_multidut_pfcwd_basic_with_snappi.te L0577 INFO   | Wait until the system is stable\r\n\r\n```\r\n\r\nLogs for single line card multiple ASIC:\r\n```\r\n15:47:39 test_multidut_pfcwd_basic_with_snappi.te L0574 INFO   | Issuing a restart of service swss@1 on the dut ixre-egl-board71\r\n15:48:59 test_multidut_pfcwd_basic_with_snappi.te L0577 INFO   | Wait until the system is stable\r\n15:49:20 test_multidut_pfcwd_basic_with_snappi.te L0574 INFO   | Issuing a restart of service swss@0 on the dut ixre-egl-board71\r\n15:50:39 test_multidut_pfcwd_basic_with_snappi.te L0577 INFO   | Wait until the system is stable\r\n```\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/snappi_tests/multidut/pfcwd/test_multidut_pfcwd_basic_with_snappi.py",
+          "additions": 60,
+          "deletions": 14
+        }
+      ],
+      "comments": [
+        {
+          "author": "abdosi",
+          "createdAt": "2024-06-27T23:40:49Z",
+          "body": "@sdszhang for review"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2024-06-28T20:44:31Z",
+          "body": "@abdosi  - Thanks for the comment.\r\n\r\nInstead of doing the platform check, I am now checking if duthost.is_multi_asic True or not. If true, it will restart the appropriate SWSS instance, else it will execute the default code.\r\n\r\n@sdszhang - Thanks for the comment.\r\n\r\nModified the code to find the asic instance and will restart the appropriate corresponding swss instance. So in future, if there are more asics (more than 2 or 3), the code will still remain the same.\r\n\r\nThanks,\r\n-A"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-07-01T23:16:59Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-mgmt/pull/13519"
+        }
+      ]
+    }
+  ]
+}

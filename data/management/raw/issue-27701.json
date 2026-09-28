@@ -1,0 +1,112 @@
+{
+  "number": 27701,
+  "title": "Bug: Flaky standalone tunnel route test due to arp_update interference",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27701",
+  "createdAt": "2026-09-03T04:58:58Z",
+  "closedAt": "2026-09-22T12:36:09Z",
+  "author": "sireesha-n-arista",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "sireesha-n-arista"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe `test_standalone_tunnel_route` test fails intermittently because the\nbackground `arp_update` process runs while the test is creating an unresolved\nIPv6 neighbor.\n\nIn the failed runs, orchagent creates the required tunnel route, removes it\nalmost immediately, and creates it again about five seconds later. The test\npackets are sent while the route is missing, so PTF does not receive the\nexpected tunneled packet.\n\nThe logs show that orchagent/MuxOrch removes the route. They do not show\n`arp_update` directly deleting the route.\n\n\n### Steps to Reproduce\n\n1. Run the following test on a Dual-ToR testbed:\n\n   `tests/dualtor/test_standalone_tunnel_route.py::test_standalone_tunnel_route`\n\n2. Run the test multiple times in a loop.\n3. Check the DUT syslog and PTF packet verification result.\n4. In a failed run, observe the following sequence:\n   - `arp_update` tries to reach the unresolved IPv6 neighbor.\n   - Orchagent creates the standalone tunnel route.\n   - Orchagent immediately removes the route.\n   - Orchagent creates the route again about five seconds later.\n   - PTF does not receive the expected tunneled packet.\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior\nThe standalone tunnel route is removed while the test packets are being sent.\nPTF fails with:\n`AssertionError: Did not receive expected packet on any of ports`\nBefore the fix, 2 out of 30 loop runs failed with the same log sequence.\n\n### Expected Behavior\nThe background `arp_update` process should not change the neighbor state while\nthis test is checking standalone tunnel routing.\nThe tunnel route should remain available while the test packets are sent, and\nPTF should receive the expected IP-in-IP packet.\n\n\n### Relevant log output\n\n```shell\n2026 Aug 27 09:27:48.618913 gd272 WARNING swss#arp_update:\ncommand failed after 1 retries: ndisc6 on Vlan1000 to fc02:1000::1f4\n\n2026 Aug 27 09:27:48.902103 gd272 NOTICE swss#orchagent:\ncreate_route: Created tunnel route to fc02:1000::1f4/128\n\n2026 Aug 27 09:27:48.902531 gd272 NOTICE swss#orchagent:\nremoveStandaloneTunnelRoute: Removing standalone tunnel route for neighbor fc02:1000::1f4\n\n2026 Aug 27 09:27:48.903399 gd272 NOTICE swss#orchagent:\nremove_route: Removed tunnel route to fc02:1000::1f4/128\n\n2026 Aug 27 09:27:53.984435 gd272 NOTICE swss#orchagent:\ncreate_route: Created tunnel route to fc02:1000::1f4/128\n\n27/08/2026 09:28:00 tunnel_traffic_utils.__exit__:\nAssertionError: Did not receive expected packet on any of ports\n```\n\n### Output of `show version`\n\n```shell\nbranch.202605-ars.8512e7eb-buildimage.ad6f5b869a8cacb3cb7eefe7dc226bf6f85480ff-nightly-2026.08.25.14.40\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27703,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27703",
+      "title": "Fix intermittent standalone tunnel route test failure by pausing arp_update",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-22T12:36:08Z",
+      "createdAt": "2026-09-03T05:34:19Z",
+      "author": "sireesha-n-arista",
+      "body": "### Description of PR\r\nThe `test_standalone_tunnel_route` test can fail when the background\r\n`arp_update` process runs while the test is creating an unresolved IPv6\r\nneighbor.\r\nIn failed runs, the required tunnel route is removed while the test packets\r\nare being sent. PTF then fails because it does not receive the expected\r\ntunneled packet.\r\nThis change pauses `arp_update` for the whole test and starts it again during\r\ncleanup.\r\n\r\nSummary:\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/27701\r\n\r\n### Type of change\r\n- [X] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [X] 202605\r\n\r\n\r\n### Tested branch\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [X] 202605\r\n- [ ] N/A\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThe test needs full control of the neighbor state while it checks standalone\r\ntunnel routing.\r\nThe background `arp_update` process can interfere with this state and cause\r\nthe tunnel route to be removed while packets are being sent.\r\n\r\n\r\n#### How did you do it?\r\nThe `cleanup_neighbors` fixture now:\r\n1. Stops `arp_update`.\r\n2. Clears the ARP entries.\r\n3. Clears the NDP entries.\r\n4. Runs the test.\r\n5. Starts `arp_update` again in a `finally` block.\r\nUsing `finally` makes sure that `arp_update` is restarted even if the test\r\nfails.\r\nNo route-state waiting or synchronization was added.\r\n\r\n#### How did you verify/test it?\r\nThe test was run 30 times before and after the change.\r\n- Before the fix: 28 passed and 2 failed\r\n- After the fix: 30 passed and 0 failed\r\nThe two failures before the fix showed the same tunnel-route\r\ncreate, remove, and create-again sequence.\r\n\r\n#### Any platform specific information?\r\nThe failure was observed on a Broadcom Dual-ToR testbed. Other platforms were\r\nnot tested.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n\r\n### Documentation\r\nNo documentation change is needed. This change only updates the test fixture.\r\n",
+      "files": [
+        {
+          "path": "tests/dualtor/test_standalone_tunnel_route.py",
+          "additions": 11,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-09-03T05:34:26Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: sireesha-n-arista / name: Sireesha Lingareddy (a3c05b7b9de0383b5b1f182407ec7ee3cbe11810)</li></ul>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-03T05:34:29Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-03T05:34:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-03T05:34:55Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-03T06:17:55Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-03T06:17:57Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-03T06:24:41Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-10T05:22:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-10T05:23:11Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-21T09:02:53Z",
+          "body": "<!-- AzurePipelinesStatusComment -->\n<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-21T09:03:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-21T09:03:21Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "sireesha-n-arista",
+          "createdAt": "2026-09-22T05:20:22Z",
+          "body": "Hi @StormLiangMS @lolyu \r\nthe Semgrep workflow is waiting for approval because this is a contribution from my public fork. EasyCLA has passed. Could someone with Actions write access please approve and run the pending Semgrep workflow? \r\nThank you."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T12:36:45Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/28094"
+        }
+      ]
+    }
+  ]
+}

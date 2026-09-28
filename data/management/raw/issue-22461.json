@@ -1,0 +1,96 @@
+{
+  "number": 22461,
+  "title": "Bug: IPv6 neighbour address duplicates VLAN address in test_vlan_ping",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22461",
+  "createdAt": "2026-02-18T14:57:30Z",
+  "closedAt": "2026-03-26T18:23:52Z",
+  "author": "illia-kotvitskyi",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter the following change, support of IPv6 was added to the test_vlan_ping:\nhttps://github.com/sonic-net/sonic-mgmt/pull/21018\n\nFor IPv4 addresses of neighbours, we filter out the network address, broadcast address, and VLAN address itself.\nFor an IPv6 address we define it as follows:\n`ipaddress.IPv6Interface(ip6).network[ptfhost_info[member][\"port_index_list\"][0]])`\nwhich means that in case `ptfhost_info[member][\"port_index_list\"][0]` is equal to 0(first port), we will assign the very first IP of the range, which duplicates VLAN address causing unexpected behaviour\n\n### Steps to Reproduce\n\nRun the test with `rand_vlan_member_list` containing the first interface(Ethernet0).\nIn this case `ptfhost_info[member][\"ipv6\"]` will be the same as VLAN IP\n\n### Actual Behavior and Expected Behavior\n\nTest fails because the expected packet was not received.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "illia-kotvitskyi",
+      "createdAt": "2026-02-18T14:58:08Z",
+      "body": "@yanmo96  could you please take a look?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22964,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22964",
+      "title": "[vlan] Fix IPv6 address duplication in test_vlan_ping",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-26T18:23:51Z",
+      "createdAt": "2026-03-13T23:56:45Z",
+      "author": "rustiqly",
+      "body": "### Description of PR\n[agent]\nFix IPv6 address assignment in `test_vlan_ping` that could assign the same IP to a PTF host as the VLAN interface, causing test failures.\n\n**Root cause:** `ipaddress.IPv6Interface(ip6).network[port_index_list[0]]` could return the VLAN address itself when the port index happened to match the VLAN IP's position in the network. For example, with VLAN IP `fc02:1000::1/64` and `port_index_list[0] == 1`, `network[1]` returns `fc02:1000::1` \u2014 the VLAN address.\n\n**Fix:** Offset the index by 1 to skip the network address (index 0), and additionally check if the candidate IP collides with the VLAN address, skipping to the next address if so. This mirrors the IPv4 logic which already excludes the network address, broadcast address, and VLAN address.\n\nAlso removes the xfail workaround added by PR #22469.\n\nFixes: #22461\n\n### Type of change\n- [x] Bug fix\n\n### How did you test it?\n```\nPASS: ip6=fc02:1000::1/64 port_idx=0 \u2192 fc02:1000::2 (VLAN IP at idx 1, skipped)\nPASS: ip6=fc02:1000::1/64 port_idx=1 \u2192 fc02:1000::2 (idx+1=2, no collision)\nPASS: ip6=fc02:1000::1/64 port_idx=5 \u2192 fc02:1000::6 (no collision)\nPASS: ip6=fc02:1000::/64   port_idx=0 \u2192 fc02:1000::1 (VLAN at idx 0, offset skips it)\n```",
+      "files": [
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 0,
+          "deletions": 4
+        },
+        {
+          "path": "tests/vlan/test_vlan_ping.py",
+          "additions": 20,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-13T23:56:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-13T23:57:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-03-13T23:57:14Z",
+          "body": "@copilot review"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-18T14:06:44Z",
+          "body": "AI agent on behalf of Ying.\n\nIssues found:\n- Found 'test_' prefix in paths; avoid test_ for fixtures"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-19T19:36:04Z",
+          "body": "Apologies for the duplicate review/comment noise earlier. We've fixed the automation to prevent repeat approvals/comments and cleaned up extras where possible.\n\nAI agent on behalf of Ying.\n<!-- AI_AGENT_APOLOGY:20260319 -->"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T17:43:11Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-25T17:43:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "JibinBao",
+          "createdAt": "2026-04-07T08:37:30Z",
+          "body": "@rustiqly It seems the fix also needs to be cherry-pick to develop-202511?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-14T15:17:12Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/23902"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "number": 26549,
+  "title": "Bug: dualtor_io: mux/pmon container checks fail with Ansible 2.18 due to Docker Go-template parsing",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26549",
+  "createdAt": "2026-07-24T06:52:17Z",
+  "closedAt": "2026-07-27T07:40:33Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\ndualtor_io/test_tor_failure.py fails while waiting for mux/pmon containers after ToR reboot.\n\n  This was seen with: _ansible: 2.18.16_\n\n  The failure is caused by Docker Go-template syntax in tests/common/dualtor/tor_failure_utils.py:\n\n  `docker inspect -f '{{ .State.Status }}' mux`\n\n  With Ansible 2.18/Jinja, {{ .State.Status }} is parsed before the command reaches the shell and fails with:\n\n  template error while templating string: unexpected '.'\n\n### Steps to Reproduce\n\nrun the same test file through run_tests.sh:\n\n  ```\nsudo ./run_tests.sh -n dt -m individual -r \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -c dualtor_io/test_tor_failure.py\n\n```\n  The failing test cases observed were:\n\n1.   dualtor_io/test_tor_failure.py::test_active_tor_reboot_upstream[active-standby]\n2.   dualtor_io/test_tor_failure.py::test_active_tor_reboot_downstream_standby[active-standby]\n3.   dualtor_io/test_tor_failure.py::test_standby_tor_reboot_upstream[active-standby]\n4.   dualtor_io/test_tor_failure.py::test_standby_tor_reboot_downstream_active[active-standby]\n\n\n\n### Actual Behavior and Expected Behavior\n\n **Actual:**\n\n  The mux/pmon container status check fails before Docker is queried, so the wait loop never sees the container running. The test eventually fails with:\n\n  Exception: Mux container is not up after 100 seconds\n\n  **Expected:**\n\n  The test should correctly read the Docker container state and continue once mux/pmon is running.\n\n\n\n### Relevant log output\n\n```shell\nplatform linux -- Python 3.12.3, pytest-9.0.3, pluggy-1.6.0\n  ansible: 2.18.16\n\n  File \"/var/src/sonic-mgmt_bjw2-can-dual-t0-7260-1/tests/common/dualtor/tor_failure_utils.py\", line 167, in check_mux_container\n    output = duthost.shell(\"docker inspect -f '{{ .State.Status }}' mux\")['stdout_lines']\n\n  tests.common.errors.RunAnsibleModuleFail: run module shell failed, Ansible Results =>\n  failed = True\n  msg = template error while templating string: unexpected '.'. String: docker inspect -f '{{ .State.Status }}' mux. unexpected '.'\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure_output.log](https://github.com/user-attachments/files/30335908/6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure_output.log)\n<!-- Failed to upload \"6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure.log\" -->\n[6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure.xml](https://github.com/user-attachments/files/30335907/6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure.xml)",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26550,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26550",
+      "title": "Fix mux container status check for Ansible compatibility",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-27T07:40:32Z",
+      "createdAt": "2026-07-24T08:56:01Z",
+      "author": "pdam-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n  Fix DualToR mux/pmon container status checks to avoid Docker\r\n  Go-template parsing by Ansible/Jinja.\r\n\r\n  The current check uses Docker Go-template syntax in an Ansible shell\r\n  command. With Ansible 2.18.16, the Go-template expression can be parsed\r\n  as a Jinja template before the command reaches the shell, causing:\r\n\r\n\r\n`  template error while templating string: unexpected '.'`\r\n\r\n  This PR uses docker inspect --type container and parses the returned\r\n  JSON in Python.\r\n\r\n\r\nSummary:\r\n  Fixes #26549\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n- [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: regression from https://github.com/sonic-net/sonic-mgmt/pull/26007 ( Fix did not make it backward compatible with Ansible < 2.19 )\r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n202605 Results \r\n\r\nAnsible 2.21 : \r\n[console.log](https://github.com/user-attachments/files/30338666/console.log)\r\n[summary.txt](https://github.com/user-attachments/files/30338667/summary.txt)\r\n[test_tor_failure.log](https://github.com/user-attachments/files/30338668/test_tor_failure.log)\r\n[test_tor_failure.xml](https://github.com/user-attachments/files/30338673/test_tor_failure.xml)\r\n\r\nAnsible 2.18 : \r\n[test_tor_failure.log](https://github.com/user-attachments/files/30340001/test_tor_failure.log)\r\n[test_tor_failure.xml](https://github.com/user-attachments/files/30340020/test_tor_failure.xml)\r\n[runtime.txt](https://github.com/user-attachments/files/30340023/runtime.txt)\r\n[summary.txt](https://github.com/user-attachments/files/30340024/summary.txt)\r\n\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n DualToR ToR failure tests can fail with Ansible 2.18 while waiting for\r\n  mux/pmon containers after reboot. The existing helper uses Docker\r\n  Go-template syntax in an Ansible shell command:\r\n\r\n`  docker inspect -f '{{ .State.Status }}' mux`\r\n\r\n  With Ansible/Jinja, this can be parsed before the command reaches the\r\n  shell and fail with:\r\n`template error while templating string: unexpected '.'`\r\n\r\n#### How did you do it?\r\nAdded a small helper that reads container status from Docker JSON output\r\n  instead of using Docker Go-template syntax.\r\n  The mux and pmon checks now use:\r\n  docker inspect --type container <container>\r\n  and parse State.Status in Python.\r\n\r\n#### How did you verify/test it?\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\nTested on kvm003 with the sonic_mgmt_202605 container.\r\n\r\n  Default container environment:\r\n\r\n1.   Python 3.12.3\r\n2.   pytest 9.1.1\r\n3.   Ansible 2.21.2\r\n4.   pytest-ansible 26.6.0\r\n\r\n\r\n  Command:\r\n ```\r\n sudo ./run_tests.sh -n dt -m individual -r \\\r\n    -t any,util,dualtor,t0 \\\r\n    -f ../ansible/testbed.yaml \\\r\n    -u \\\r\n    -c dualtor_io/test_tor_failure.py\r\n\r\n```\r\n  Result:\r\n\r\n  `4 passed, 6 skipped, 537 warnings in 1915.49s (0:31:55)`\r\n\r\n  Also installed Ansible 2.18.16 as an overlay in the same container:\r\n\r\n  /opt/ansible-core-2.18.16-overlay\r\n\r\n  and ran:\r\n\r\n  ```\r\nsudo env PYTHONPATH=/opt/ansible-core-2.18.16-overlay ./run_tests.sh \\\r\n    -n dt -m individual -r \\\r\n    -t any,util,dualtor,t0 \\\r\n    -f ../ansible/testbed.yaml \\\r\n    -u \\\r\n    -p logsansible218_tor_failure \\\r\n    -c dualtor_io/test_tor_failure.py\r\n```\r\n1.   Python 3.12.3\r\n2.   pytest 9.1.1\r\n3.   Ansible 2.18.16\r\n4.   pytest-ansible 26.6.0\r\n\r\n\r\n\r\n#### Any platform specific information?\r\nN/A\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nN/A\r\n\r\n",
+      "files": [
+        {
+          "path": "tests/common/dualtor/tor_failure_utils.py",
+          "additions": 9,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-24T08:56:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-24T08:56:10Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-24T08:56:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-24T12:16:04Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-24T12:16:08Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-07-24T14:06:25Z",
+          "body": "This failure is unrelated to this PR.\r\n\r\n  This PR only changes the DualToR mux container status check in\r\n  tests/common/dualtor/tor_failure_utils.py.\r\n\r\n  The failed job is in the MACsec recovery test:\r\n  macsec/test_macsec_recovery.py::test_dirty_container_kill_preserves_sak_consistency[128_SCI].\r\n\r\n  The failure is a MACsec APPL_DB/ASIC_DB SAK mismatch plus a MACsec\r\n  LogAnalyzer teardown match. Neither code path is touched by this PR."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-24T14:07:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-24T14:07:31Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-24T14:07:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-27T07:45:46Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26580"
+        }
+      ]
+    }
+  ]
+}

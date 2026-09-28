@@ -1,0 +1,59 @@
+{
+  "number": 22335,
+  "title": "Bug: [ARP tests] CRM polling interval not set on all DUTs in multi-DUT testbeds",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22335",
+  "createdAt": "2026-02-11T04:57:09Z",
+  "closedAt": "2026-02-17T22:25:18Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe set_polling_interval fixture in tests/arp/conftest.py only sets CRM polling\n  interval on a single DUT (duthost parameter). In multi-DUT testbeds, other DUTs\n  retain the default 300-second polling interval, causing CRM neighbor counters to\n  update slowly. This leads to intermittent test failures when tests expect counters\n  to be current.\n\n  Current code (tests/arp/conftest.py:26-35):\n  \n```\n@pytest.fixture(scope=\"module\", autouse=True)\n  def set_polling_interval(duthost):\n      wait_time = 2\n      duthost.command(\"crm config polling interval {}\".format(CRM_POLLING_INTERVAL))\n      wait(wait_time, \"Waiting {} sec for CRM counters to become updated\".format(wait_time))\n\n      yield\n\n      duthost.command(\"crm config polling interval {}\".format(CRM_DEFAULT_POLL_INTERVAL))\n      wait(wait_time, \"Waiting {} sec for CRM counters to become updated\".format(wait_time))\n```\n\n\n### Steps to Reproduce\n\n  1. Run ARP tests (tests/arp/test_stress_arp.py) on a multi-DUT testbed\n  2. Observe that CRM neighbor counters are only updated on one DUT\n  3. Some DUTs retain the default 300-second CRM polling interval\n  4. Tests randomly selecting DUTS may fail intermittently due to delayed CRM counter updates\n\n### Actual Behavior and Expected Behavior\n\n **Actual** \n - Only one DUT (duthost) has CRM polling interval set to 1 second\n - Other DUTs in the testbed retain default 300-second polling interval\n**Expected** \n- All DUTs in the testbed should have CRM polling interval set to 1 second\n- CRM neighbor counters should update every 1 second on all DUTs\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22400,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22400",
+      "title": "[arp] Fix CRM polling interval not set on all DUTs in multi-DUT testbeds",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-17T22:25:17Z",
+      "createdAt": "2026-02-13T02:41:25Z",
+      "author": "sonicly1g",
+      "body": "**Summary:**\nThis PR fixes intermittent ARP test failures on multi-DUT testbeds by setting the CRM polling interval on **all** frontend DUTs, not just one.\n\n**Context:** The `set_polling_interval` fixture in `tests/arp/conftest.py` uses the `duthost` parameter (single DUT). In multi-DUT testbeds, only one DUT gets the 1-second CRM polling interval while others retain the default 300-second interval. Tests that randomly select a DUT may hit one with stale CRM counters, causing intermittent failures.\n\n**Fix:** Changed the fixture to accept `duthosts` and iterate over `duthosts.frontend_nodes` to set the CRM polling interval on every frontend DUT in the testbed.\n\nFixes #22335\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\nTo eliminate flaky ARP test failures caused by stale CRM counters on DUTs that were not configured with the fast polling interval.\n\n#### How did you do it?\nChanged `set_polling_interval` fixture parameter from `duthost` (single) to `duthosts` (all), and iterate over `duthosts.frontend_nodes` to apply the CRM polling interval config to every frontend DUT.\n\n#### How did you verify/test it?\nCode review confirmed the pattern matches other multi-DUT fixtures in the codebase (e.g., `tests/common/helpers/voq_helpers.py`, `tests/common/helpers/drop_counters/drop_counters.py`).\n\n#### Any platform specific information?\nN/A \u2014 generic test framework fix.\n\n#### Supported testbed topology if it is a new test case?\nN/A \u2014 existing test fix.\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "tests/arp/conftest.py",
+          "additions": 5,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-13T02:41:34Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-13T02:41:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-02-14T20:47:28Z",
+          "body": "## \u2705 VS Testbed Test Results\n\n**Test**: `tests/arp/test_neighbor_mac_noptf.py`\n**Testbed**: KVM-based T0 virtual switch (vlab-01 + 4 SONiC T1 VMs)\n**Platform**: `vs` (SONiC Virtual Switch)\n\n```\n================= 2 passed in ~60s =================\n```\n\nBoth test cases passed on a local VS testbed with this fix applied. The CRM polling interval fix correctly applies to all DUTs."
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-02-18T07:41:56Z",
+          "body": "@sonicly1g @yxieca  Can you please backport this to 202511"
+        }
+      ]
+    }
+  ]
+}

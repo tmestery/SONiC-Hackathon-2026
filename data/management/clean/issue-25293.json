@@ -1,0 +1,43 @@
+{
+  "id": "management-25293",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25293,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25293",
+    "title": "remove-topo brings down the host's primary NIC (e.g. eth0) when the PTF container is absent",
+    "created_at": "2026-06-11T03:03:34Z",
+    "closed_at": "2026-06-12T07:17:13Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\nWhen running `./testbed-cli.sh ... remove-topo <testbed> <pw>` and the testbed's PTF\ncontainer (`ptf_<vm_set_name>`) has already been removed/stopped, the teardown\nbrings down the **host's** primary network interface, knocking the host off the\nnetwork. The host then needs a reboot to recover.\n\n## Root cause\n\n`ansible/roles/vm_set/library/vm_topology.py`\n\n1. `remove-topo` runs the `unbind` command, which calls\n   `net.init(..., check_bridge=False)` **without** `ptf_exists=False`. `init()` therefore\n   calls `get_pid(\"ptf_<vm_set_name>\")`, which returns `None` when the PTF container does\n   not exist, so `self.pid = None`.\n2. `unbind` then calls `remove_injected_fp_ports_from_docker()` \u2192\n   `remove_veth_if_from_docker(ext_if, int_if=\"eth0\", ...)` (the PTF front-panel data\n   ports are named `eth0..ethN`, see `PTF_FP_IFACE_TEMPLATE = 'eth%d'`).\n3. `remove_veth_if_from_docker()` is **missing the `self.pid is None` guard** that its\n   siblings `remove_dut_if_from_docker()` and `remove_dut_vlan_subif_from_docker()` already\n   have:\n\n   ```python\n   def remove_veth_if_from_docker(self, ext_if, int_if, tmp_name):\n       if VMTopology.intf_exists(int_if, pid=self.pid):   # pid is None here\n           VMTopology.iface_down(int_if, pid=self.pid)\n           ...\n   ```\n4. With `pid=None`, `_intf_cmd()` falls back to running `ifconfig -a <int_if>` in the\n   **host root namespace**, and `iface_updown()` falls back to `ip link set <int_if> <state>`\n   in the **host root namespace**. So `intf_exists(\"eth0\", pid=None)` matches the host's\n   own `eth0`, and `iface_down(\"eth0\", pid=None)` runs `ip link set eth0 down` **on the host**.\n\nThe same fallback also affects the `mgmt` / `backplane` interface names via\n`remove_ptf_mgmt_port()` / `remove_ptf_backplane_port()`, but `eth0` is the dangerous one\nbecause hosts commonly use `eth0` as their primary/management NIC.\n\n## Steps to reproduce\n\n1. Bring up a VS testbed (e.g. `add-topo vms-kvm-t0`).\n2. Manually remove the PTF container: `docker rm -f ptf_<vm_set_name>`.\n3. Run `remove-topo <testbed>`.\n4. Observe the host loses connectivity (on hosts whose primary NIC is `eth0`); the host's\n   `eth0` is administratively down.\n\n## Expected behavior\n\n`remove-topo` should never touch host root-namespace interfaces. When the PTF container is\ngone, the in-container interfaces are gone with it; teardown should only clean up the\nuniquely-named host-side peer veths (`ptf-<vmset>-m`, `ptf-<vmset>-b`, `inje-<vmset>-N`).\n\n## Fix\n\nAdd the missing `self.pid is None` guard to `remove_veth_if_from_docker()` so the\nin-container manipulation is skipped when the PTF container is absent, while still deleting\nthe host-side peer veth. (PR attached.)\n\n## Environment\n\n- Affects all topologies whose PTF data ports are `ethN` (t0, t1, t1-lag, etc.).\n- Reproduced on a KVM VS testbed host whose primary NIC / default route is `eth0`."
+  },
+  "resolution": {
+    "pr_number": 25294,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25294",
+    "title": "[vm_set]: Fix remove-topo bringing down host NIC when PTF container i\u2026",
+    "merged_at": "2026-06-12T07:17:12Z",
+    "description": "### Description of PR\n\nSummary: Fix `remove-topo` bringing down the host's primary NIC (e.g. `eth0`) when the testbed's PTF container is not running, which disconnects the host and requires a reboot to recover.\n\nFixes #25293\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\n### Approach\n#### What is the motivation for this PR?\n\nWhen `remove-topo` runs while the testbed's PTF container (`ptf_<vm_set_name>`) is not running \u2014 either already removed or merely stopped/`Exited` \u2014 the teardown brings down the **host's** primary network interface, disconnecting the host (it needs a reboot to recover).\n\nRoot cause: in `ansible/roles/vm_set/library/vm_topology.py`, `remove_veth_if_from_docker()` lacks the `self.pid is None` guard that its siblings `remove_dut_if_from_docker()` and `remove_dut_vlan_subif_from_docker()` already have. When the PTF container is not running, `get_pid()` returns `None` (it gates on `State.Running`), so `init()` sets `self.pid = None`. The `unbind` path then calls `remove_injected_fp_ports_from_docker()` \u2192 `remove_veth_if_from_docker(int_if=\"eth0\", ...)` (PTF front-panel data ports are `ethN`). With `pid=None`, `intf_exists()`/`iface_down()` fall back to the **host root namespace**, so `ip link set eth0 down` is executed on the host's own `eth0`.\n\n#### How did you do it?\n\nGuard the in-container interface manipulation with `self.pid is not None`. When the PTF container is not running, the in-container interface is already gone with the container, so only the uniquely-named host-side peer veth (`ext_if`, e.g. `inje-<vm_set>-N`) needs to be deleted \u2014 which the code still does unconditionally.\n\n#### How did you verify/test it?\n\n- `python -m py_compile` and `flake8 --max-line-length=120` pass on the modified file.\n- Unit-level check with `VMTopology.cmd` mocked (no real commands executed): the pre-fix code issues `ip link set eth0 down` in the host namespace when `pid=None`; the fixed code does not, while still deleting the host-side peer veth; the PTF-present path (`pid` set) is unchanged.\n- Live test on a KVM VS testbed host whose default route is on `eth0`: with `ptf_vms6-2` in `Exited` state, ran `./testbed-cli.sh -m veos_vtb -t vtestbed.yaml -k ceos remove-topo vms-kvm-vpp-t1-lag password.txt`. Result: PLAY RECAP `failed=0`; `eth0` stayed UP for the entire run (a 2s-interval watchdog logged 0 interventions over ~5 min); external connectivity (`https://github.com` \u2192 HTTP 200) was intact afterward; the topology was fully torn down.\n\nNote: `vm_topology.py` requires root + network namespaces and is not covered by unit tests in this repo.\n\n#### Any platform specific information?\n\nAffects any VS/KVM testbed host that uses `eth0` (or another `ethN`/`mgmt`/`backplane` name) as a real host interface. No platform-specific behavior in the fix.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A (bug fix in testbed teardown framework).\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/roles/vm_set/library/vm_topology.py",
+        "additions": 7,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

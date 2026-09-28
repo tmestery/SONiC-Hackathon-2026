@@ -1,0 +1,43 @@
+{
+  "id": "management-16495",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 16495,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/16495",
+    "title": "[Bug]: mux simulator cannot handle new requests due to the listen backlog full",
+    "created_at": "2025-01-13T11:38:30Z",
+    "closed_at": "2025-01-24T02:35:39Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\ndualtor nightly suffers from http request timeout:\n```\n2025 Jan 13 <IPV6>.678044 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: y_cable_port 5: attempt=3, GET http://<IP>:8080/mux/vms21-3/8 for physical_port 5 failed with TimeoutError('timed out')\n2025 Jan 13 <IPV6>.678044 str2-7050cx3-acs-10 NOTICE pmon#CCmisApi: y_cable_port 5: Sleep 1 seconds to retry GET http://<IP>:8080/mux/vms21-3/8 for physical port 5\n2025 Jan 13 <IPV6>.073700 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: y_cable_port 1: attempt=6, GET http://<IP>:8080/mux/vms21-3/0 for physical_port 1 failed with TimeoutError('timed out')\n2025 Jan 13 <IPV6>.073700 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: y_cable_port 1: Retry GET http://<IP>:8080/mux/vms21-3/0 for physical port 1 timeout after 30 seconds, attempted=6\n2025 Jan 13 <IPV6>.073700 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: Error: Could not get active side for cli command show mux hwmode muxdirection logical port Ethernet0 and physical port 1\n```\nMux simulator cannot handle new requests to to the listen backlog is full; it appeared that there are too many connections in `CLOSE_WAIT`; so mux simulator cannot accept new connections due to this socket fd leak.\n\n```\n# ss -lnt | grep 8080\nLISTEN   1025         1024                <IP>:8080             <IP>:*\n# netstat -s | grep -i listen\n    472273 times the listen queue of a socket overflowed\n    472277 SYNs to LISTEN sockets dropped\n# netstat -ant | grep 8080 | grep CLOSE_WAIT | wc -l\n1313\n```\n\n## how to reproduce?\nThe `CLOSE_WAIT` sockets are created by the HTTP requests from the following code:\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/62a15b7fc6755830a21b49edcaeae1da44c7c139/tests/common/dualtor/mux_simulator_control.py#L178-L209\n\nIt appeared that, the toggle-all command that calls this function can take more than 10 seconds to finish, which causes the post request timeout and close the tcp connection on the client side. The TCP socket on the server side (mux simulator) transits into `CLOSE_WAIT` and mux simulator doesn't close them, which results in a socket fd leak.\n\n### Results you see\n\nAs the description.\n\n### Results you expected to see\n\nAs the description.\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n```shell\nAs the description.\n```\n\n### Output of `show version`\n\n```shell\nAs the description.\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 16651,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/16651",
+    "title": "[dualtor][mux simulator] Fine-tune the mux simulator control post timeout",
+    "merged_at": "2025-01-24T02:35:38Z",
+    "description": "### Description of PR\n\nSummary:\nFixes # (issue)\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [x] 202411\n\n### Approach\n#### What is the motivation for this PR?\nThis is to fix https://github.com/sonic-net/sonic-mgmt/issues/16495.\nThe root cause is that, on dualtor testbed, the post request to `mux_simulator` to toggle all mux ports can take up to 15+ seconds to finish; but the post timeout is 10s, so the post request to toggle all mux ports always timeout.\n\nHere is the workflow for a HTTP requests to `mux_simulator`:\n```\n#\n# how does a HTTP request to mux_simulator work?\n#         +------------+       +------------+      +-------------+       +--------------+\n# ------->|listen queue+------>|accept queue+----->|mux simulator+------>| mux simulator|\n#         +------------+       +------------+      |  dispatcher |       |handler worker|\n#                                                  +-------------+       +--------------+\n```\nThe HTTP requests are handled by TCP listen/accept queue first; after the connection is established, `mux_simulator` will consume the request and dispatch the request to workers to handle the request.\nBack to the toggle all mux ports post request, the client times out and disconnects, but the request has already been dispatched by the `mux_simulator`, its handler worker is still busy handling the request. If our test code send more timeout requests to `mux_simulator`, those inundated requests could overload the `mux_simulator` handler workers and a kind of denial-of-service occurs. Even worse, with more HTTP requests coming, the listen/accept queue will overflow.\n\nThis PR is to stop creating timeout requests to `mux_simulator`.\n\nSigned-off-by: Longxiang Lyu <<EMAIL>>\n\n#### How did you do it?\nThe post timeout needs to be adjusted to allow the `mux_simulator` slowness, in addition, it should be able to detect the TCP connection slowness/failure.\n\nBased on the [timeout specification](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts), let's use `3.5s` as the TCP connection timeout as it is slightly greater than 3 (default TCP retran timeout); and use `30s` as the mux simulator response timeout, which should covers all the mux simulator APIs.\n\n#### How did you verify/test it?\nRun the dualtor, and no more timeout happens.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/dualtor/mux_simulator_control.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

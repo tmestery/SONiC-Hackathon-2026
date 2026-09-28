@@ -1,0 +1,64 @@
+{
+  "number": 1882,
+  "title": "test_vlan.py may unintentionally add a port-channel member port as a VLAN member",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/1882",
+  "createdAt": "2020-07-12T08:10:57Z",
+  "closedAt": "2020-07-14T03:31:09Z",
+  "author": "rck-innovium",
+  "labels": [],
+  "assignees": [
+    "mykolaf"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\n _test_vlan_ verifies the VLAN functionality.\r\nhttps://github.com/Azure/sonic-mgmt/blob/master/tests/vlan/test_vlan.py\r\n\r\nIt selects four ports from the device and adds them as VLAN members. \r\nThe script creates a candidate list of ports consisting of all port-channels and ports from the config whose links are up. From this candidate list, the first four ports are picked.\r\n\r\nThe candidate list of ports (stored in variable _ports_) should be either Port-channels or front panel ports that are not members of any port-channel.\r\nHowever, in the current script, _ports_ contains port-channels and all front-panel ports including ports that are members of port-channels.\r\nDepending on the order in which the ports are present in the python dictionary,  the test could end up unintentionally adding a port-channel member port as a VLAN member. \r\nIdeally, port-channel members should not be added to a VLAN, only the parent port-channel interface should be added to the VLAN.\r\n\r\n```\r\n 42     # when running on t0 we can use the portchannel members\r\n 43     if config_portchannels:\r\n 44         for po in config_portchannels.keys()[:2]:\r\n 45             port = config_portchannels[po]['members'][0]\r\n 46             vlan_ports_list.append({\r\n 47                 'dev' : po,\r\n 48                 'port_index' : config_port_indices[port],\r\n 49                 'pvid' : pvid_cycle.next(),\r\n 50                 'permit_vlanid' : { vid : {\r\n 51                     'peer_ip' : '192.168.{}.{}'.format(vid, 2 + config_port_indices.keys().index(port)),\r\n 52                     'remote_ip' : '{}.1.1.{}'.format(vid, 2 + config_port_indices.keys().index(port))\r\n 53                     } for vid in vlan_id_list }\r\n 54             })\r\n 55\r\n 56     ports = [ port for port in config_ports\r\n 57         if config_port_indices[port] in ptf_ports_available_in_topo and config_ports[port].get('admin_status',     'down') == 'up' ]\r\n 58\r\n 59     for port in ports[:4]:\r\n 60         vlan_ports_list.append({\r\n 61             'dev' : port,\r\n 62             'port_index' : config_port_indices[port],\r\n 63             'pvid' : pvid_cycle.next(),\r\n 64             'permit_vlanid' : { vid : {\r\n 65                 'peer_ip' : '192.168.{}.{}'.format(vid, 2 + config_port_indices.keys().index(port)),\r\n 66                 'remote_ip' : '{}.1.1.{}'.format(vid, 2 + config_port_indices.keys().index(port))\r\n 67                 } for vid in vlan_id_list }\r\n 68         })\r\n 69\r\n 70     return vlan_ports_list\r\n```\r\n\r\n**Steps to reproduce the issue:**\r\n1. Run vlan/test_vlan.py  on t0 testbed\r\n2. Reproduction depends on the internal python dictionary hashing. If any of the port-channel member ports occur among the first four entries, then the script would fail.\r\n\r\n**Describe the results you received:**\r\nOn some topologies, the test fails. This happens if any of the port-channel member ports occur among the first four entries in the script variable _ports_\r\n\r\n**Describe the results you expected:**\r\nPort-channel member ports should not be added as VLAN members.\r\n\r\n**Fix for the issue:**\r\nThe below patch fixed the issue.\r\n\r\n```\r\n--- a/tests/vlan/test_vlan.py\r\n+++ b/tests/vlan/test_vlan.py\r\n@@ -36,9 +36,10 @@ def vlan_ports_list(cfg_facts, ptfhost):\r\n     config_portchannels = cfg_facts.get('PORTCHANNEL', {})\r\n     config_port_indices = cfg_facts['port_index_map']\r\n     ptf_ports_available_in_topo = ptfhost.host.options['variable_manager'].extra_vars.get(\"ifaces_map\")\r\n+    config_port_channel_member_ports = [port_channel_member[1].keys()[0] for port_channel_member in config_portchannels.items()]\r\n \r\n    pvid_cycle = itertools.cycle(vlan_id_list)\r\n\r\n     # when running on t0 we can use the portchannel members\r\n     if config_portchannels:\r\n         for po in config_portchannels.keys()[:2]:\r\n@@ -54,7 +55,7 @@ def vlan_ports_list(cfg_facts, ptfhost):\r\n             })\r\n \r\n     ports = [ port for port in config_ports\r\n-        if config_port_indices[port] in ptf_ports_available_in_topo and config_ports[port].get('admin_status', 'down') == 'up' ]\r\n+        if config_port_indices[port] in ptf_ports_available_in_topo and config_ports[port].get('admin_status', 'down') == 'up' and port not in config_port_channel_member_ports]\r\n \r\n     for port in ports[:4]:\r\n         vlan_ports_list.append({\r\n \r\n```\r\n",
+  "comments": [
+    {
+      "author": "ljyfree",
+      "createdAt": "2020-07-13T06:12:50Z",
+      "body": "Hi rck\r\n\r\n   Could you please show me how to \"Run vlan/test_vlan.py on t0 testbed\"?"
+    },
+    {
+      "author": "ljyfree",
+      "createdAt": "2020-07-13T06:17:56Z",
+      "body": "![\u5fae\u4fe1\u56fe\u7247_20200713141714](https://user-images.githubusercontent.com/13234976/87276775-9ef30a80-c513-11ea-8df1-f7c300622e1c.jpg)\r\n"
+    },
+    {
+      "author": "rck-innovium",
+      "createdAt": "2020-07-13T06:23:46Z",
+      "body": "> Hi rck\r\n> \r\n> Could you please show me how to \"Run vlan/test_vlan.py on t0 testbed\"?\r\n\r\n```\r\ndocker exec -it docker-sonic-mgmt bash\r\ncd sonic-mgmt/tests/\r\n\r\n\r\npy.test vlan/test_vlan.py --testbed=vms_centec-t0 --inventory=/var/admin/sonic-mgmt/ansible/inventory --testbed_file=../ansible/testbed.csv --host-pattern=vms_centec-t0 --module-path=../ansible/library -v --log-level=info\r\n```"
+    },
+    {
+      "author": "ljyfree",
+      "createdAt": "2020-07-13T06:53:13Z",
+      "body": "Hi rck\r\n\r\n   What are the setup steps before run the \"py.test\" command above?"
+    },
+    {
+      "author": "ljyfree",
+      "createdAt": "2020-07-20T03:01:58Z",
+      "body": "Hi rck-innovium\r\n\r\n     I am working on running https://github.com/Azure/sonic-mgmt/blob/master/tests/vlan/test_vlan.py too.  There was no attr \u201cmembers\u201d for the specific portchannel port in table 'PORTCHANNEL' , so it would report \"KeyError:'members'\".\r\n     Could you please share the content of table 'PORTCHANNEL' on your side?\r\n\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1889,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/1889",
+      "title": "[vlan] fix unintentionally addidng portchannel member as vlan member",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-07-14T03:31:09Z",
+      "createdAt": "2020-07-13T16:20:50Z",
+      "author": "mykolaf",
+      "body": "Change-Id: I92950baa343082c6725a1d516a9343b12f50012d\r\nSigned-off-by: Mykola Faryma <mykolaf@mellanox.com>\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background contaxt?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #1882 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\n#### How did you do it?\r\n\r\n#### How did you verify/test it?\r\nRun the vlan test\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/vlan/test_vlan.py",
+          "additions": 8,
+          "deletions": 3
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "number": 21954,
+  "title": "Bug: test_bgp_bbr.py check_other_vms doesn't populate results dict, causing test to always pass",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/21954",
+  "createdAt": "2026-01-16T21:36:05Z",
+  "closedAt": "2026-02-10T13:35:30Z",
+  "author": "markx-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHIgh\n\n### Description of the bug\n\nhttps://github.com/sonic-net/sonic-mgmt/pull/18300 modified the function check_other_vms and doesn't populate results dictionary, and vm_route returned by it is ignored by parallel_run:\n```diff\n     # Check route on other VMs\n@@ -378,23 +399,45 @@ def check_other_vms(nbrhosts, setup, route, accepted=True, node=None, results=No\n         vm_route['failed'] = False\n         vm_route['message'] = 'Checking route {} on {} passed'.format(str(route), node)\n         if accepted:\n-            if route.prefix not in list(vm_route['vrfs']['default']['bgpRouteEntries'].keys()):\n-                vm_route['failed'] = True\n-                vm_route['message'] = 'No route for {} found on {}'.format(route.prefix, node)\n-            else:\n-                tor_route_aspath = vm_route['vrfs']['default']['bgpRouteEntries'][route.prefix]['bgpRoutePaths'][0]\\\n-                    ['asPathEntry']['asPath']   # noqa:E211\n-                # Route path from other VMs: -> DUT(T1) -> TOR1 -> aspath(other T1 -> DUMMY_ASN1)\n-                tor_route_aspath_expected = '{} {} {}'.format(dut_asn, tor1_asn, route.aspath)\n-                if tor_route_aspath != tor_route_aspath_expected:\n+            tor_route_aspath = None\n+            if isinstance(nbrhosts[node]['host'], EosHost):\n+                if route.prefix not in list(vm_route['vrfs']['default']['bgpRouteEntries'].keys()):\n+                    vm_route['failed'] = True\n+                    vm_route['message'] = 'No route for {} found on {}'.format(route.prefix, node)\n+                else:\n+                    tor_route_aspath = vm_route['vrfs']['default']['bgpRouteEntries'][route.prefix]['bgpRoutePaths'][0]\\\n+                    ['asPathEntry']['asPath']   # noqa E211\n+            elif isinstance(nbrhosts[node]['host'], SonicHost):\n+                if vm_route and 'paths' in vm_route:\n+                    tor_route_aspath = vm_route['paths'][0]['aspath']['string']\n+                else:\n                     vm_route['failed'] = True\n-                    vm_route['message'] = 'On {} expected aspath: {}, actual aspath: {}'\\\n-                        .format(node, tor_route_aspath_expected, tor_route_aspath)\n+                    vm_route['message'] = 'No route for {} found on {}'.format(route.prefix, node)\n+            else:\n+                vm_route['failed'] = True\n+                logging.error('Unknown host type {} for {}'.format(type(nbrhosts[node]['host']), node))\n+                return\n+\n+            # Route path from other VMs: -> DUT(T1) -> TOR1 -> aspath(other T1 -> DUMMY_ASN1)\n+            tor_route_aspath_expected = '{} {} {}'.format(dut_asn, tor1_asn, route.aspath)\n+            if tor_route_aspath != tor_route_aspath_expected:\n+                vm_route['failed'] = True\n+                vm_route['message'] = 'On {} expected aspath: {}, actual aspath: {}'\\\n+                    .format(node, tor_route_aspath_expected, tor_route_aspath)\n         else:\n-            if route.prefix in list(vm_route['vrfs']['default']['bgpRouteEntries'].keys()):\n+            if isinstance(nbrhosts[node]['host'], EosHost):\n+                if route.prefix in list(vm_route['vrfs']['default']['bgpRouteEntries'].keys()):\n+                    vm_route['failed'] = True\n+                    vm_route['message'] = 'No route {} expected on {}'.format(route.prefix, node)\n+            elif isinstance(nbrhosts[node]['host'], SonicHost):\n+                if vm_route and 'paths' in vm_route:\n+                    vm_route['failed'] = True\n+                    vm_route['message'] = 'No route {} expected on {}'.format(route.prefix, node)\n+            else:\n                 vm_route['failed'] = True\n-                vm_route['message'] = 'No route {} expected on {}'.format(route.prefix, node)\n-        results[node] = vm_route\n+                logging.error('Unknown host type {} for {}'.format(type(nbrhosts[node]['host']), node))\n+                return\n+        return vm_route\n```\n The results dict remains empty after parallel_run, and route validation failures are never detected , so the test always passes:\n```python\n    results = parallel_run(check_other_vms, (nbrhosts, setup, route), {'accepted': accepted},\n                           other_vms, timeout=120, concurrent_tasks=6)\n\n    failed_results = {}\n    for node, result in list(results.items()):\n        if result['failed']:\n            failed_results[node] = result\n\n    pytest_assert(not failed_results, 'Checking route {} failed, failed_results: {}'\n                  .format(str(route), json.dumps(failed_results, indent=2)))\n```\n\n### Steps to Reproduce\n\nRun the test, print results after parallel_run, it will be empty.\n\n### Actual Behavior and Expected Behavior\n\nresults dictionary shouldn't be empty and check_other_vms should detect route validation failures.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "markx-arista",
+      "createdAt": "2026-01-22T03:51:28Z",
+      "body": "PR available: https://github.com/sonic-net/sonic-mgmt/pull/22088"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22088,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22088",
+      "title": "Fix check_other_vms in test_bgp_bbr.py",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-10T13:35:29Z",
+      "createdAt": "2026-01-22T03:44:40Z",
+      "author": "markx-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\n#18300 made a mistake that returns vm_route in check_other_vms instead of populating results dict for parallel_run, causing the check to always pass.\r\nFix it and add wait_until to fix the flakiness of this check.\r\nFixes #21954 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [x] 202412\r\n- [x] 202505\r\n- [x] 202511\r\n- [x] 202503\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nA bug caused check_other_vms to always pass, and the test is flaky after it is fixed\r\n\r\n#### How did you do it?\r\nPopulate results dict for parallel_run and add wait_until to fix flakiness\r\n\r\n#### How did you verify/test it?\r\nTest passed on t1-64-lag topo\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/bgp/test_bgp_bbr.py",
+          "additions": 53,
+          "deletions": 42
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-22T03:44:48Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-22T03:45:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "markx-arista",
+          "createdAt": "2026-02-05T17:17:41Z",
+          "body": "Manually cherry-pick to 202503: https://github.com/Azure/sonic-mgmt.msft/pull/1007\r\nNote that 202503 doesn't contain #18300, so only the flakiness fix is needed"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-10T17:13:06Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/22317"
+        }
+      ]
+    }
+  ]
+}

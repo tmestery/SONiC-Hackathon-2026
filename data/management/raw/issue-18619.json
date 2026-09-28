@@ -1,0 +1,166 @@
+{
+  "number": 18619,
+  "title": "Regression: `macsec/test_docker_restart.py` preventing run_tests.py from running on T2 without a macsec enabled node.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/18619",
+  "createdAt": "2025-05-26T17:57:27Z",
+  "closedAt": "2025-06-04T04:09:32Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "regression",
+    "Triaged"
+  ],
+  "assignees": [
+    "yejianquan",
+    "augusdn",
+    "arlakshm"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Previous Working Version\n\nPrior to https://github.com/sonic-net/sonic-mgmt/pull/18518 merging\n\n### Steps to Reproduce\n\nRun run_tests.py on a T2 device with no macsec enabled nodes and the `pytest_generate_tests` will fail with:\n`sudo ./run_tests.sh -n ardut -c test_pretest.py -x -e '--pdb'`\n`ERROR macsec/test_docker_restart.py - AssertionError: Test selected require at-least one macsec node, none of the DUTs`\n\nThis is the assertion line:\n```\nassert len(frontend_duts) > 0, \\\n    \"Test selected require at-least one {} node, \" \\\n    \"none of the DUTs '{}' in testbed '{}' are a {} node\".format(host_type, duts, tbname, host_type)\n```\n\nFrom PDB I can see that it's this function check which prevents the node from being added to `frontend_duts`:\n```\n(Pdb) is_macsec_capable_node(inv_files, dut)\nFalse\n```\n\n### Impact of this regression\n\nCan't run `run_tests.sh` on a T2 without macsec enabled unless I first revert https://github.com/sonic-net/sonic-mgmt/pull/18518\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2025-05-27T13:42:07Z",
+      "body": "@augusdn, can you please look at this issue"
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2025-05-28T15:51:29Z",
+      "body": "@augusdn @yejianquan @arlakshm did you see same failure in nightly tests? Please follow up."
+    },
+    {
+      "author": "augusdn",
+      "createdAt": "2025-05-28T22:44:21Z",
+      "body": "@arlakshm @yxieca I will take a look and follow up with you soon"
+    },
+    {
+      "author": "augusdn",
+      "createdAt": "2025-05-30T06:32:04Z",
+      "body": "This behaviour is expected following the changes introduced in https://github.com/sonic-net/sonic-mgmt/pull/18518. The intent of that update was to ensure MACSec tests only run on devices that are both MACSec-capable and explicitly marked as such in the inventory file using the macsec_card = True flag.\n\nThe failure you're seeing:\n`AssertionError: Test selected require at-least one macsec node, none of the DUTs`\nis triggered by the is_macsec_capable_node(inv_files, dut) check, which correctly returns False when the DUT is not marked as MACSec-enabled in the inventory. This is by design to avoid false failures on non-MACSec nodes, especially in T2 environments where MACSec support is not universal.\n\nTo resolve this, please ensure that:\n\nThe DUT in your testbed is MACSec-capable.\nThe inventory file includes macsec_card = True for that DUT.\n\nAs this change was not very user-friendly, I\u2019ll add a comment to `def generate_params_frontend_hostname(request, macsec_only=False):` to clarify the need to set `macsec_card = True` in the inventory to avoid assertion failures."
+    },
+    {
+      "author": "augusdn",
+      "createdAt": "2025-05-30T06:33:46Z",
+      "body": "@judyjoseph, can I ask for your feedback on this code change, use of macsec only DUT fixture, which could lead to test failure for cases where we don't specify `macsec_card = True` in the inventory of DUT?"
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2025-05-30T17:35:32Z",
+      "body": "> This behaviour is expected following the changes introduced in [#18518](https://github.com/sonic-net/sonic-mgmt/pull/18518). The intent of that update was to ensure MACSec tests only run on devices that are both MACSec-capable and explicitly marked as such in the inventory file using the macsec_card = True flag.\n> \n> The failure you're seeing: `AssertionError: Test selected require at-least one macsec node, none of the DUTs` is triggered by the is_macsec_capable_node(inv_files, dut) check, which correctly returns False when the DUT is not marked as MACSec-enabled in the inventory. This is by design to avoid false failures on non-MACSec nodes, especially in T2 environments where MACSec support is not universal.\n> \n> To resolve this, please ensure that:\n> \n> The DUT in your testbed is MACSec-capable. The inventory file includes macsec_card = True for that DUT.\n> \n> As this change was not very user-friendly, I\u2019ll add a comment to `def generate_params_frontend_hostname(request, macsec_only=False):` to clarify the need to set `macsec_card = True` in the inventory to avoid assertion failures.\n\nThanks for taking a look @augusdn the problem isn't that the `macsec/test_docker_restart.py` test fails on our non-macsec LC. The problem is that I'm not running `macsec/test_docker_restart.py` and it's still failing, I was just running `test_pretest.py`, note my `run_tests.py` command: `sudo ./run_tests.sh -n ardut -c test_pretest.py -x -e '--pdb'`\n\nI agree preventing non-macsec SKUs/LCs from running macsec tests makes sense but we shouldn't prevent non-macsec SKUs/LCs from running all tests."
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2025-05-30T17:36:51Z",
+      "body": "Also I'd argue that if there isn't a macsec capable card it should be a test skip, not an assertion\n`ERROR macsec/test_docker_restart.py - AssertionError: Test selected require at-least one macsec node, none of the DUTs`"
+    },
+    {
+      "author": "augusdn",
+      "createdAt": "2025-06-02T07:31:56Z",
+      "body": "@arista-nwolfe I see your point, and I agree it's a valid point to skip macsec tests when we don't set up/enable macsec.\n\nI have raised a PR to mitigate this issue.\n\nBasically, we will skip macsec tests for T2, when 'macsec_en' is not set. This flag is set, when we provide 'enable_macsec' as extra params."
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2025-06-02T22:54:27Z",
+      "body": "> [@arista-nwolfe](https://github.com/arista-nwolfe) I see your point, and I agree it's a valid point to skip macsec tests when we don't set up/enable macsec.\n> \n> I have raised a PR to mitigate this issue.\n> \n> Basically, we will skip macsec tests for T2, when 'macsec_en' is not set. This flag is set, when we provide 'enable_macsec' as extra params.\n\nThanks https://github.com/sonic-net/sonic-mgmt/pull/18725 fixes the issue"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 18725,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/18725",
+      "title": "[T2 MACSec] Skip macsec tests for T2 without macsec enable param",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-06-04T04:09:31Z",
+      "createdAt": "2025-05-30T07:51:41Z",
+      "author": "augusdn",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #18619, added comment to improve user experience on T2 MACSec tests \r\n\r\nAlso skip MACSec tests for T2, when enable_macsec is not set during test run.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n- [x] 202411\r\n- [x] 202505\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\n#### How did you do it?\r\n\r\n#### How did you verify/test it?\r\nmacsec_enabled:\r\nmacsec/test_docker_restart.py::test_restart_macsec_docker[macsec_LC1] PASSED                                                                   [100%]\r\n================================================================= 1 passed, 1 warning in 332.85s (0:05:32) ================================================================\r\n\r\nnot passing in macsec_enabled:\r\nSKIPPED [1] macsec/test_docker_restart.py: got empty parameter set ['enum_rand_one_per_hwsku_macsec_frontend_hostname'], function test_restart_macsec_docker at /tests/macsec/test_docker_restart.py:14\r\n====================================================================== 1 skipped, 1 warning in 52.95s\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/conftest.py",
+          "additions": 6,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-30T07:51:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-30T07:52:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-02T04:56:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-02T04:56:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-02T04:59:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-02T05:00:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-02T07:32:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-02T07:32:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-02T08:57:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-02T08:57:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-03T00:03:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-03T00:03:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-04T04:10:13Z",
+          "body": "@augusdn PR conflicts with 202505 branch"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-04T12:54:17Z",
+          "body": "@augusdn PR conflicts with 202505 branch"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-06-05T06:30:35Z",
+          "body": "msft-202405 included https://github.com/Azure/sonic-mgmt.msft/pull/360"
+        }
+      ]
+    }
+  ]
+}

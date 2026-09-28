@@ -1,0 +1,125 @@
+{
+  "number": 16585,
+  "title": "[Bug]: Random ptf verify packet failures caused by PR#15349",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16585",
+  "createdAt": "2025-01-20T03:24:56Z",
+  "closedAt": "2025-02-11T09:39:48Z",
+  "author": "congh-nvidia",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\n\nWe observe random ptf verify packet failures recently, and after the RCA, it was found that PR(#15349) introduced the issue in:\nhttps://github.com/sonic-net/sonic-mgmt/blob/af0c5c81fde5466217eb3182e9414497662b3584/tests/common/plugins/ptfadapter/__init__.py#L95-L99\nThis change added the ptf backplane interface to an unused index of the ptf adapter port list. This causes issue in the methods like ptf.testutils.verify_packet_any_port()\nMethods like verify_packet_any_port() not only validate the packet is received by the expected ports, but also validate it's not received by the unexpected ports.\nThe problem is, when the test packet dst IP matches the IP prefix advertised by the exabgp, the ptf backplane interface will receive the test packet from the neighbor VM. The reason is the routes are advertised by exabgp to VM through the ptf backplane interface.\n\nptf backplane interface:\n```\nroot@70229c21e672:~# ifconfig \nbackplane: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n        inet 10.10.246.254  netmask 255.255.255.0  broadcast 0.0.0.0\n        inet6 fc0a::ff  prefixlen 64  scopeid 0x0<global>\n        inet6 fc0a::ff  prefixlen 64  scopeid 0x0<global>\n        ether 1a:f8:ed:0e:10:38  txqueuelen 1000  (Ethernet)\n        RX packets 248605  bytes 162615977 (155.0 MiB)\n        RX errors 0  dropped 282  overruns 0  frame 0\n        TX packets 214828  bytes 38056135 (36.2 MiB)\n        TX errors 0  dropped 20 overruns 0  carrier 0  collisions 0\n```\n\nExabgp route in VM:\n```\nARISTA01T0(config)#show ip route 192.168.0.253\n\nVRF: default\nCodes: C - connected, S - static, K - kernel, \n       O - OSPF, IA - OSPF inter area, E1 - OSPF external type 1,\n       E2 - OSPF external type 2, N1 - OSPF NSSA external type 1,\n       N2 - OSPF NSSA external type2, B - BGP, B I - iBGP, B E - eBGP,\n       R - RIP, I L1 - IS-IS level 1, I L2 - IS-IS level 2,\n       O3 - OSPFv3, A B - BGP Aggregate, A O - OSPF Summary,\n       NG - Nexthop Group Static Route, V - VXLAN Control Service,\n       DH - DHCP client installed default route, M - Martian,\n       DP - Dynamic Policy Route, L - VRF Leaked,\n       G  - gRIBI, RC - Route Cache Route\n\n B I      192.168.0.128/25 [200/0] via 10.10.246.254, Ethernet5\n```\nEthernet5 is the interface of Arista VM connecting to ptf backplane interface.\nThis issue can be reproduced easily by running the acl test  tests/acl/test_acl.py.\n\n\n### Results you see\n\nWhen the test case fails due to this issue, you will see error like this:\n\n```\nAssertionError: Received expected packet on port 32 for device 0, but it should have arrived on one of these ports: [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31].\n========== RECEIVED ==========\n0000  AE 03 1D 2B FC EB E2 CF E6 ED 0D 8B 86 DD 60 00  ...+..........`.\n0010  00 00 00 2E 7E 3E 60 C0 A8 00 00 00 00 00 00 00  ....~>`.........\n0020  00 00 00 00 00 05 20 C0 A8 00 00 00 00 00 00 00  ...... .........\n0030  00 00 00 00 00 14 43 21 00 51 00 00 00 00 00 00  ......C!.Q......\n0040  00 00 50 02 20 00 5D A2 00 00 74 65 73 74 5F 61  ..P. .]...test_a\n0050  63 6C 20 74 65 73 74 5F 61 63 6C 20 74 65 73 74  cl test_acl test\n0060  5F 61 63 6C                                      _acl\n==============================\n```\n\nHere the testbed has only 32 dataplane interfaces mapping to ptf index 0-31, the 32 is the ptf backplane interface.\nWhen running the function ptf.testutils.verify_packet_any_port(), if the packet received by the expected port is before the one received by the backplane interface, the test can pass. But if the packet received by the backplane interface arrives first, the test fails.\n\n\n### Results you expected to see\n\nAll the affected tests, which are using methods like testutils.verify_packet_any_port/verify_packet_any_port, should pass.\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "congh-nvidia",
+      "createdAt": "2025-01-20T03:42:05Z",
+      "body": "Hi @wangxin @eddieruan-alibaba, could you please review this issue, it affects multiple tests."
+    },
+    {
+      "author": "eddieruan-alibaba",
+      "createdAt": "2025-01-21T20:12:49Z",
+      "body": "Please assign it to @LARLSN  from my team. We will add a topo check and only add backplane port in our topology. "
+    },
+    {
+      "author": "LARLSN",
+      "createdAt": "2025-01-24T05:39:00Z",
+      "body": "fixed in #16669"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16669,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16669",
+      "title": "fix(tests): add backplane port only in srv6 tests",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-02-11T09:39:47Z",
+      "createdAt": "2025-01-24T05:38:36Z",
+      "author": "LARLSN",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\nupdate to configure the backplane port only in the srv6 test. \r\nfix #16585 \r\n\r\nSummary:\r\nFixes #16585 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [X ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nBackplane port is necessary in our srv6 tests, but it will cause random failure in other tests.  When the test packet dst IP matches the IP prefix advertised by the exabgp, the ptf backplane interface will receive the test packet from the neighbor VM. The reason is the routes are advertised by exabgp to VM through the ptf backplane interface. And methods like verify_packet_any_port() not only validate the packet is received by the expected ports, but also validate it's not received by the unexpected ports.\r\n\r\n#### How did you do it?\r\n \r\nAdded configuration options in ptf initial to limite the configuration scenarios of backplane ports only in srv6 tests\r\n\r\n#### How did you verify/test it?\r\nwe tested it via daily jenkins run \r\n<img width=\"1007\" alt=\"image\" src=\"https://github.com/user-attachments/assets/f80ac242-e0ae-4341-91a0-4c8d48aacd5b\" />\r\n![image](https://github.com/user-attachments/assets/825e8430-402b-4190-b8f6-3d9f76542a7f)\r\n\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/ptftests/remote.py",
+          "additions": 7,
+          "deletions": 3
+        },
+        {
+          "path": "tests/common/plugins/ptfadapter/__init__.py",
+          "additions": 7,
+          "deletions": 3
+        },
+        {
+          "path": "tests/iface_loopback_action/conftest.py",
+          "additions": 6,
+          "deletions": 1
+        },
+        {
+          "path": "tests/srv6/test_srv6_basic_sanity.py",
+          "additions": 7,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-24T05:38:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-24T05:38:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rajneeshaec",
+          "createdAt": "2025-01-27T06:31:54Z",
+          "body": "Same fix is also applicable in 202411 branch"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2025-02-08T05:58:26Z",
+          "body": "/azp run Azure.sonic-mgmt"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-08T05:58:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2025-02-08T07:38:05Z",
+          "body": "hi @LARLSN could you check the pre test SA failure?\r\n![image](https://github.com/user-attachments/assets/1c5fa22b-e974-4082-8047-f22c4979b60e)\r\n"
+        },
+        {
+          "author": "LARLSN",
+          "createdAt": "2025-02-08T07:50:28Z",
+          "body": "> hi @LARLSN could you check the pre test SA failure? ![image](https://private-user-images.githubusercontent.com/89824293/411181387-1c5fa22b-e974-4082-8047-f22c4979b60e.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3MzkwMDEyNDcsIm5iZiI6MTczOTAwMDk0NywicGF0aCI6Ii84OTgyNDI5My80MTExODEzODctMWM1ZmEyMmItZTk3NC00MDgyLTgwNDctZjIyYzQ5NzliNjBlLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAyMDglMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMjA4VDA3NDkwN1omWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTkxODFiYzAwMTg2MmYxMDNmMWU3ZWUwODEyMmVmZTdiODYwZmZmZmU3NDZiYWE3NzFhMWY2Y2FjOTQyZTA1OTYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.ZQmyt0nQmmNk0FVrPCSjyFHAH2_zcUVazzqKom7F8jg)\r\n\r\nok, let me check it"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-08T08:41:19Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-08T08:41:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "LARLSN",
+          "createdAt": "2025-02-08T09:06:36Z",
+          "body": "> hi @LARLSN could you check the pre test SA failure? ![image](https://private-user-images.githubusercontent.com/89824293/411181387-1c5fa22b-e974-4082-8047-f22c4979b60e.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3MzkwMDQ0MTQsIm5iZiI6MTczOTAwNDExNCwicGF0aCI6Ii84OTgyNDI5My80MTExODEzODctMWM1ZmEyMmItZTk3NC00MDgyLTgwNDctZjIyYzQ5NzliNjBlLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNTAyMDglMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjUwMjA4VDA4NDE1NFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTJhM2JkOTA0NTZmZjM0ODUyNzU1YmE3ZDE1NDk2NmJmNWQ4YmE2YjY3N2Q3NzJjY2FkYjU5MmEzNWM5ZjRmZTImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.0ENnrEJg1gy1kpLAfyvPxc770TzLRyy-U83TKVqvuhU)\r\n\r\ni've resolved it and Pre_test Static Analysis seems successful\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-11T10:22:20Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-mgmt/pull/16902"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "number": 24974,
+  "title": "[generate_golden_config_db] is_bmc_device() also matches switch-host-with-BMC, will disable swss/syncd on real switches",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24974",
+  "createdAt": "2026-05-29T08:42:55Z",
+  "closedAt": "2026-06-05T07:47:53Z",
+  "author": "ganglyu",
+  "labels": [],
+  "assignees": [
+    "Gfrom2016"
+  ],
+  "milestone": null,
+  "body": "### Summary\n\n`is_bmc_device()` in `ansible/library/generate_golden_config_db.py` (introduced in #24585) uses the presence of `/etc/sonic/bmc.json` as the BMC sentinel. That file is created on **both** Switch-BMC devices (`switch_bmc=1`) and Switch-Host-with-BMC devices (`switch_host=1`), so the helper cannot distinguish a real BMC from a normal switch that happens to ship next to one.\n\nThe consequence is that on any future Switch-Host-with-BMC platform running through `deploy-mg`, `swss` / `syncd` / `bmp` / `frr_bmp` will be forced to `disabled` in `golden_config_db`, even though that host actually owns the front-panel ASIC and BGP sessions.\n\n### Where the ambiguity comes from\n\n`files/image_config/config-setup/config-setup` (sonic-buildimage):\n\n```bash\nif [[ \"${switch_bmc}\" == \"1\" || \"${switch_host}\" == \"1\" ]]; then\n    # copies bmc.json to /etc/sonic/\nfi\n```\n\nSo `/etc/sonic/bmc.json` is a \"BMC link exists\" marker, not a \"I am the BMC\" marker.\n\n### References\n\n- PR that introduced the helper: #24585\n- `sonic-buildimage:src/sonic-py-common/sonic_py_common/device_info.py`\n- `bmc.json` creation logic: `sonic-buildimage:files/image_config/config-setup/config-setup`",
+  "comments": [
+    {
+      "author": "Gfrom2016",
+      "createdAt": "2026-06-02T02:13:56Z",
+      "body": "Fix proposed in #25021 \u2014 switches `is_bmc_device()` from `device_info.get_bmc_data() is not None` to `device_info.get_localhost_info('type') == 'NetworkBmc'`. The previous helper matched both sides of switch-with-BMC platforms because `/etc/sonic/bmc.json` is provisioned on the Switch-Host too; `DEVICE_METADATA.type == 'NetworkBmc'` only matches standalone BMC instances (same marker used by `SonicHost.is_bmc()`)."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25021,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25021",
+      "title": "[BMC] Fix is_bmc_device() to use DEVICE_METADATA.type instead of bmc.json presence",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-05T07:47:52Z",
+      "createdAt": "2026-06-02T02:13:46Z",
+      "author": "Gfrom2016",
+      "body": "### Description of PR\r\n\r\nFixes the bug introduced by #24585 that caused the swss/syncd FEATURE to be disabled on real switches (Switch-Host side of switch-with-BMC platforms), not just on standalone BMC devices.\r\n\r\nThe previous implementation used `device_info.get_bmc_data() is not None`. `get_bmc_data()` returns truthy whenever `/etc/sonic/bmc.json` exists, and that file is provisioned on **both** sides of a switch-with-BMC platform (the Switch-Host has it so it can reach the BMC's Redis; the Switch-BMC has it so it can reach the host's Redis). So `is_bmc_device()` mistakenly flagged switch hosts as BMC devices.\r\n\r\nFix: use `DEVICE_METADATA.localhost.type == 'NetworkBmc'`, which is the same strict marker that `tests/common/devices/sonic.py:285` (`SonicHost.is_bmc()`) and `ansible/library/sonic_basic_facts.py` already rely on. Only standalone BMC instances carry that type.\r\n\r\nFixes #24974\r\n\r\n### Summary\r\nFixes # (issue) 24974\r\n\r\n### Type of change\r\n- [x] Bug fix\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nPR #24585 introduced `is_bmc_device()` to gate the BMC-only behavior of disabling the swss/syncd FEATURE during deployment. The helper as written wrongly matches Switch-Host devices that have a BMC attached, which then disables swss/syncd on real switches and breaks NVIDIA's switch-with-BMC deployments.\r\n\r\n#### How did you do it?\r\nReplaced `device_info.get_bmc_data() is not None` with `device_info.get_localhost_info('type') == 'NetworkBmc'`. That field is only set on standalone BMC ConfigDB and is what the rest of the codebase already uses to identify BMC devices.\r\n\r\n#### How did you verify/test it?\r\nStatic review against the existing BMC detection patterns in:\r\n- `tests/common/devices/sonic.py:285` (`SonicHost.is_bmc()`)\r\n- `ansible/library/sonic_basic_facts.py:441` (populates `router_type` from the same `DEVICE_METADATA.type`)\r\n\r\nCI will exercise the deployment flow on both BMC and non-BMC platforms.\r\n\r\n#### Any platform specific information?\r\nAffects deployment of any platform that has a `bmc.json` provisioned on the switch host side (i.e., switch-with-BMC SKUs such as NVIDIA's). Standalone BMC platforms continue to behave as intended by #24585.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A \u256c\u00f4\u251c\u00e7\u251c\u2562 bugfix to the deployment helper.\r\n\r\n### Documentation\r\nN/A\r\n\r\n\r\n### Empirical confirmation on Komodo BMC (2026-06-02)\r\n\r\nVerified the new condition on a live Komodo BMC running SONiC.master.1125559-f9827de19:\r\n\r\n```\r\nadmin@host1-komodo-bmc:~$ sonic-cfggen -d -v \"DEVICE_METADATA['localhost']['type']\"\r\nNetworkBmc\r\n```\r\n\r\nSo `device_info.get_localhost_info('type') == 'NetworkBmc'` evaluates as expected on a real BMC device, and the same call returns a different role (`ToRRouter`, `LeafRouter`, etc.) on switches \u0393\u00c7\u00f6 including switches that have a BMC attached, which is the exact scenario this PR fixes.\r\n\n\nWorkitem link: https://dev.azure.com/msazure/One/_workitems/edit/38207843\n",
+      "files": [
+        {
+          "path": "ansible/library/generate_golden_config_db.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-02T02:13:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-02T02:14:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-02T03:32:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-02T03:32:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-02T16:40:37Z",
+          "body": "Cherry-pick PR to msft-202608: https://github.com/Azure/sonic-mgmt.msft/pull/1270"
+        }
+      ]
+    }
+  ]
+}

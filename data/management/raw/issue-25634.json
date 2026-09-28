@@ -1,0 +1,141 @@
+{
+  "number": 25634,
+  "title": "[snappi][infra] get_addrs_in_subnet does not check case for IPv6 addresses.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25634",
+  "createdAt": "2026-06-24T16:36:55Z",
+  "closedAt": "2026-09-04T09:40:43Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Bug :bug:",
+    "Pending Triage :medical_symbol:",
+    "SNAPPI_IXIA"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/d513d50bf66febb880fb626b714cc676b543f11a/tests/common/snappi_tests/common_helpers.py#L189\n\nCode:\n```\ndef get_addrs_in_subnet(subnet, number_of_ip, exclude_ips=None):\n    \"\"\"\n    Efficiently yield N IPs from a subnet, skipping excluded IPs.\n    Handles large IPv6 subnets quickly.\n    \"\"\"\n    net = ipaddress.ip_network(subnet, strict=False)\n    exclude_set = set(exclude_ips) if exclude_ips else set()\n    results = []\n\n    # Calculate the first usable host (for IPv4, skip network & broadcast)\n    hosts = net.hosts() if net.version == 4 else net.hosts()\n    for addr in hosts:\n        if str(addr) not in exclude_set:\n            results.append(str(addr))\n            if len(results) == number_of_ip:\n                break\n    return results\n```\n\nThis function is extensively used in common/snappi_tests/snappi_fixtures.py:\n- __vlan_intf_config\n- _tgen_ports_from_portchannel\n- __intf_config\n- __intf_config_macsec\n\n**1. IPv6 and exclude_ips (case/spelling)**\n\nExclusions were stored as raw strings; comparison was str(addr) not in exclude_set.\nstr(IPv6Address('2001:db8::1')) \u2192 \"2001:db8::1\" does not match \"2001:DB8::1\" in a string set.\nSame issue for compressed vs expanded forms.\n\n### Steps to Reproduce\n\nEasiest way to reproduce this is to configure IPv6 addresses on the DUT in upper case. \n\nRun one of the snappi_testcase using the above functions.\n\n### Actual Behavior and Expected Behavior\n\nIf the IPv6 addresses on DUT are in UPPER case, the function treats its as different address. Example -  \"2001:db8::1\" does not match \"2001:DB8::1\" causing same IPv6 to be returned.\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25700,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25700",
+      "title": "[snappi] fix in get_addr_in_subnet function in common_helpers to fix case-sensitive IPv6 addresses",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-04T09:40:42Z",
+      "createdAt": "2026-06-26T16:29:04Z",
+      "author": "amitpawar12",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nThe function get_addr_in_subnet receives network-subnet, number of IPs to be returned back and exclude IPs list.\r\n\r\n**Why /31 prefix-length could fail:**\r\nOlder Python: /31 hosts() could return empty \u2192 function returns [] \u2192 callers like [0] raise IndexError.\r\nPolicy mismatch: some labs treat the \u201cnetwork\u201d side of /31 as non-assignable.\r\nShort/empty results: at most 2 addresses on /31; exclusions or large number_of_ip can yield fewer than requested.\r\n\r\nNote - Since the latest Python versions already handle this, this is not an issue anymore.\r\n\r\n**IPv6 and exclude_ips (case/spelling):**\r\nExclusions were stored as raw strings; comparison was str(addr) not in exclude_set.\r\nstr(IPv6Address('2001:db8::1')) \u2192 \"2001:db8::1\" does not match \"2001:DB8::1\" in a string set.\r\nSame issue for compressed vs expanded forms.\r\n\r\n\r\nSummary:\r\nFixes #25634 \r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request:\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nWith IPv6 addresses if minigraph.xml had upper-case IPv6 addresses, then function would sometimes return the same address as next-hop address (configured on IXIA end-point). \r\n```\r\nstr(IPv6Address('2001:db8::1')) \u2192 \"2001:db8::1\" does not match \"2001:DB8::1\" in a string set.\r\n```\r\nHowever, in this case function could return the same address, thus DUT configuration failed (in case where it tried to configure next-hop BGP endpoint and ended up with same address as local-address).\r\n\r\n#### How did you do it?\r\n\r\nChanges in get_addrs_in_subnet:\r\n - exclude_ips as real addresses \u2014 parse each entry with ipaddress.ip_address() (strip strings); store in a set of address objects.\r\n - IPv6 case/spelling \u2014 addr not in exclude_set instead of string comparison.\r\n - hosts() \u2014 removed redundant if net.version == 4 else; both use net.hosts().\r\n - Docstring \u2014 documents list return, IPv6 normalization, RFC 3021 /31, and possible shorter results.\r\n \r\n#### How did you verify/test it?\r\nTested with case different IPv6 addresses on local clone.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/common_helpers.py",
+          "additions": 35,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-26T16:29:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-26T16:29:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-06-26T16:29:52Z",
+          "body": "@rawal01 @sdszhang for viz.\r\n\r\nHi Shawn, can you please tag with sonic-snappi tag to this pull-request?\r\n\r\nThanks."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-27T11:14:17Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T19:45:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-09T19:45:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-14T17:41:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-14T17:42:05Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-14T18:02:18Z",
+          "body": "Hi, the **Pre_test Static Analysis** pre-checker is failing on this PR due to a flake8 lint error in your change:\n\n```\ntests/common/snappi_tests/common_helpers.py:1269:51: E713 test for membership should be 'not in'\n```\n\n`/azp run` won't clear this since it's a real lint error in the code \u2014 please fix it (run `python3 -m flake8 <file> --max-line-length=120` locally to confirm clean), then push an update. Thanks!"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-27T12:20:45Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T00:19:00Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T17:53:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T17:53:43Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T17:54:00Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-08-07T04:00:18Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-07T04:00:54Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-08-19T05:20:20Z",
+          "body": "Merge recommendation: CI passed and approved by 1 reviewer.\n\nAI-assisted review, reviewed by Ying Xie (@yxieca)."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-08-19T05:23:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-19T05:23:49Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T15:47:11Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

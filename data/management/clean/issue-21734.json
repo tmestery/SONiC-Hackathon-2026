@@ -1,0 +1,43 @@
+{
+  "id": "management-21734",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 21734,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/21734",
+    "title": "[Snappi]: Incorrect behavior in port-selection infra if similar ports from different LCs or DUTs are used in the test.",
+    "created_at": "2025-12-17T15:44:06Z",
+    "closed_at": "2026-02-17T05:47:57Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nIf similar interfaces from two different LCs are selected for the test, then most of the port-selection function fail because there is no check on hostname.\n\nExample:\nIf user has Ethernet144 on LC1 and Ethernet144 on LC2, then most of the infra-code fails.\n\nCode:\nsnappi_fixtures.py has function setup_dut_ports which has following sub-functions to select ports from snappi_ports:\n- __vlan_intf_config\n- __portchannel_intf_config\n- __intf_config_multidut\n- __l3_intf_config\n\nEach of these functions, then go through the snappi_ports to select the port for the test. However, it ONLY check if the port-name matches and does not check if the port belongs to the right duthost.\n\nExample:\nfor '__portchannel_intf_config':\n```\nmember_port_ids = [i for i, sp in enumerate(snappi_ports) for m in members if sp['peer_port'] == m]\n```\n\nfor '__l3_intf_config':\n```\nport_ids = [i for i, sp in enumerate(snappi_ports) if sp['peer_port'] == intf]\n```\nThe above will fail if the same interface names from two different duthosts are used.\n\nThere should be a check to ensure that interfaces from right duthost are selected.\n\n### Steps to Reproduce\n\nSelect two similar port-names from two different duthosts. Example Ethernet144 on LC1 and LC2 for test.\n\nEnsure that either '__l3_intf_config' or '__portchannel_intf_config' is used for port selection.\n\nCheck the port_config_list in function 'setup_dut_ports' function once the ports are selected. The port_config_list will select the same port from same DUT as Tx and Rx.\n\n### Actual Behavior and Expected Behavior\n\nThe test ends up selecting same port from same DUT as Tx and Rx port.\n\nThere should be check for duthost hostname when the port from snappi_port is selected.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22435,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22435",
+    "title": "[Snappi] Fix issue to additionally use peer duthost-name to select right snappi_port",
+    "merged_at": "2026-02-17T05:47:56Z",
+    "description": "### Description of PR\n\nSnappi has infra file snappi_fixtures.py and function setup_dut_ports to populate port_config_list for selecting right Rx and Tx ports for the test.\n\nIt iterates through the VLAN interfaces, Portchannels, L3 interfaces in that order to select the ports. However, in port-channel and l3_interfaces, it goes through the snappi_ports only based on the names (say Ethernet144) to select the ports.\n\nThis is an issue if test has two or more LCs with same port names in the test. Example - LC1 has Ethernet144 and so does LC2.\n\nIn this case, a code like this, will cause same port to be selected:\nmember_port_ids = [i for i, sp in enumerate(snappi_ports) for m in members if sp['peer_port'] == m]\n\nThe snappi_ports will have LC1-Ethernet144 and LC2-Ethernet144, causing member_port_ids to match ONLY the first port-name Ethernet144 of LC1 everytime.\n\nThis PR addresses the issue by checking dut-hostname as well, thus ensuring that same port does not get selected twice.\n\nFixes are present in function - __portchannel_intf_config and __l3_intf_config.\n\nSummary:\nSummary:\nFixes #21734\n\n### Type of change\n\n- [X] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [X] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [X] 202511\n\n### Approach\n#### What is the motivation for this PR?\nThe selection of same port on two different LCs will cause same snappi_port to be selected every time as Rx and Tx.\n\n#### How did you do it?\nIncluded duthost.hostname + peer_port to be used as key instead of just peer_port.\n\nIn this case, the right port from different DUT will be selected, even though port-names are same.\n\n#### How did you verify/test it?\nRan the test locally to determine the fix.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/snappi_tests/snappi_fixtures.py",
+        "additions": 18,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

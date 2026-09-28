@@ -1,0 +1,43 @@
+{
+  "id": "management-26673",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26673,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26673",
+    "title": "Bug: dualtor golden config generation preserves unused ports as admin up",
+    "created_at": "2026-07-30T02:19:32Z",
+    "closed_at": "2026-08-06T08:34:04Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nAfter PR #26376, dualtor topologies generate `golden_config_db.json`\n  through `generate_dualtor_golden_config_db()`. That path copies the\n  `PORT` table from minigraph into golden config.\n\n  The deploy playbook already runs `config load_minigraph -y` before\n  golden config generation for `lt2` and `ft2`, because those topologies\n  modify/copy `PORT` and need the DUT config to reflect testbed-specific\n  admin state first. The new dualtor golden config path missed this\n  preload step.\n\n  As a result, unused routed ports can be preserved as `admin up` in\n  golden config. These ports have no physical link, stay `oper down`, and\n  pretest interface sanity fails.\n\n### Steps to Reproduce\n\n1. Use a 202605 sonic-mgmt checkout containing PR #26376.\n2. Deploy a dualtor or dualtor-aa testbed using `deploy-mg`.\n3. Run pretest:\n     `sudo ./run_tests.sh -n <testbed> -m individual -r -t any,util,dualtor,t0 -f ../ansible/testbed.yaml -u -c test_pretest.py`\n4. Check `test_pretest.log` or `test_pretest.xml`.\n\n### Actual Behavior and Expected Behavior\n\n **Actual behavior:**\n  - Pretest fails during setup sanity.\n  - Interface sanity reports unused routed ports as down ports.\n  - Example failures:\n    - `Ethernet128`, `Ethernet132`\n    - `Ethernet256`, `Ethernet260`\n  - `show interfaces status` shows those ports as `routed down up`.\n\n  **Expected behavior:**\n  - Unused routed ports should remain `admin down / oper down`.\n  - Pretest interface sanity should not fail on unused ports.\n  - dualtor golden config generation should follow the same minigraph\n    preload flow as lt2/ft2 before copying `PORT`.\n\n### Relevant log output\n\n```shell\ntst-esx-61:\n  stage_pre_test sanity check after recovery failed\n  check_item: interfaces\n  host: ld301\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n  host: ld302\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n\n  Ethernet128 ... routed down up\n  Ethernet132 ... routed down up\n\n  tst-esx-62:\n  stage_pre_test sanity check after recovery failed\n  check_item: interfaces\n  host: gd377\n  down_ports: [\"Ethernet256\", \"Ethernet260\"]\n  host: gd426\n  down_ports: [\"Ethernet256\", \"Ethernet260\"]\n\n  Ethernet256 ... routed down up\n  Ethernet260 ... routed down up\n\n  tst-esx-63:\n  stage_pre_test sanity check after recovery failed\n  check_item: interfaces\n  host: ldp203\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n  host: ldp205\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n\n  Ethernet128 ... routed down up\n  Ethernet132 ... routed down up\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[test_pretest.log](https://github.com/user-attachments/files/30528564/test_pretest.log)\n[test_pretest.xml](https://github.com/user-attachments/files/30528565/test_pretest.xml)\n\n[test_pretest.log](https://github.com/user-attachments/files/30528570/test_pretest.log)\n[test_pretest.xml](https://github.com/user-attachments/files/30528569/test_pretest.xml)"
+  },
+  "resolution": {
+    "pr_number": 26676,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26676",
+    "title": "[dualtor] Load minigraph before golden config generation",
+    "merged_at": "2026-08-06T08:34:03Z",
+    "description": "### Description of PR\n\nPR #26376 added dual-ToR golden config generation support for `prober_type`\n  and `neighbor_mode`. As part of that change, dualtor topologies started\n  generating `golden_config_db.json` with a `PORT` table copied from minigraph.\n\n  The deploy flow already runs `config load_minigraph -y` before golden config\n  generation for `lt2` and `ft2`, because those topologies modify/copy `PORT`\n  and need the DUT config to reflect testbed-specific interface admin state\n  first. The new dualtor golden config path missed this preload step.\n\n  Without the preload, unused routed ports can be preserved as `admin up` in\n  `golden_config_db.json`. These ports have no link, remain `oper down`, and\n  pretest interface sanity fails.\n\n  This PR extends the existing preload condition to include dualtor.\n\nSummary:\nFixes #26673\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: regression\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n202605\n\n**Failure Results**\n  - SONiC image: branch.202605-ars.e7f59890-buildimage.de4f9f0baae9667c05bfe9fdeb1a4fdf4bd19d6c-nightly-2026.07.28.16.40\n  - SONiC build commit: 0a4101e99\n  - Build date: Tue Jul 28 <IPV6> UTC 2026\n[test_pretest.log](https://github.com/user-attachments/files/30528920/test_pretest.log)\n[test_pretest.xml](https://github.com/user-attachments/files/30528921/test_pretest.xml)\n\n**Pass Results (after fix)**\n  - SONiC image: branch.202605-ars.e7f59890-buildimage.de4f9f0baae9667c05bfe9fdeb1a4fdf4bd19d6c-nightly-2026.07.28.16.40\n  - SONiC build commit: 0a4101e99\n  - Build date: Tue Jul 28 <IPV6> UTC 2026\n[test_pretest.log](https://github.com/user-attachments/files/30528954/test_pretest.log)\n[test_pretest.xml](https://github.com/user-attachments/files/30528955/test_pretest.xml)\n\nsonic-mgmt change under test:\n  - PR head commit: f0c462b86ee7257451aede547b4d099a778678ef\n\n  Note: Both before and after tests used the same SONiC image/build; the validated change is in sonic-mgmt.\n\n### Approach\n#### What is the motivation for this PR?\n\nFix a regression introduced when dualtor was added to the golden config\n  generation path. dualtor golden config now copies `PORT`, so it needs the\n  same minigraph preload step that already exists for `lt2` and `ft2`.\n\n#### How did you do it?\n\n Updated `ansible/config_sonic_basedon_testbed.yml` so the existing\n  `config load_minigraph -y` step runs for dualtor before\n  `golden_config_db.json` is generated.\n\n```\n  -        when: \"'lt2' in topo or 'ft2' in topo\"\n  +        when: \"'lt2' in topo or 'ft2' in topo or 'dualtor' in topo\"\n```\n\n#### How did you verify/test it?\n\nInspected failed pretest logs from tst-esx-31.\nAll failed during pretest setup sanity with unused routed ports\n  left as admin up / oper down.\nApplied the fix and sanitized the duts , ran deploy-mg and  pret-tests\n\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/config_sonic_basedon_testbed.yml",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

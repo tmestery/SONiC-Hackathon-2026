@@ -1,0 +1,74 @@
+{
+  "number": 26217,
+  "title": "Bug: [HA] swbusd h2 connection reset errors during HA process crash tests",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26217",
+  "createdAt": "2026-07-09T18:13:44Z",
+  "closedAt": "2026-07-15T22:34:14Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "zjswhhh",
+    "BYGX-wcr"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium, Log Analyzer noise\n\n### Description of the bug\n\nDuring HA process-crash tests, Log Analyzer reports `swbusd` h2 protocol errors from `dash-hadpu*` containers:\n\n```text\nERR dash-hadpuX#swbusd: ... ERROR ConnWorker{conn_id=\"swbs-from://...\"}:\nFailed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\"\n```\n\nThe test intentionally crashes an HA-related process on one side. When that happens, existing swbus connections to the crashed/restarting peer can be abruptly closed. The reported `h2 protocol error: error reading a body from connection` is consistent with that expected connection teardown during the crash/recovery window.\n\nThe test function itself passed. This does not currently indicate a functional HA failure; it is a log cleanliness / Log Analyzer filtering issue for intentional process-crash scenarios.\n\n## Triage\n\nThe reported failures are from HA process crash tests:\n\n```text\ntest_crash_active_npu_traffic_on_active[hamgrd]\ntest_crash_active_npu_traffic_on_standby[pmon]\ntest_crash_active_npu_traffic_on_standby[bgp]\n```\n\nThe common error signature is:\n\n```text\nFailed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\"\n```\n\nRepresentative logs:\n\n```shell\nERR dash-hadpu0#swbusd:\nERROR ConnWorker{conn_id=\"swbs-from://<peer-ip>:<port>\"}:\n107: Failed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\",\ndetails: [], metadata: MetadataMap { headers: {} }.\n\nERR dash-hadpu1#swbusd:\nERROR ConnWorker{conn_id=\"swbs-to://<peer-ip>:<port>\"}:\n107: Failed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\",\ndetails: [], metadata: MetadataMap { headers: {} }.\n\nERR dash-hadpu2#swbusd:\nERROR ConnWorker{conn_id=\"swbs-to://<peer-ip>:<port>\"}:\n107: Failed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\",\ndetails: [], metadata: MetadataMap { headers: {} }.\n\nERR dash-hadpu3#swbusd:\nERROR ConnWorker{conn_id=\"swbs-from://<peer-ip>:<port>\"}:\n107: Failed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\",\ndetails: [], metadata: MetadataMap { headers: {} }.\n```\n\nThe errors occur across multiple `dash-hadpu*` instances at approximately the same time, which is expected when the test intentionally disrupts the active NPU-side `hamgrd` process and swbus connections to that node reset.\n\n### Steps to Reproduce\n\n1. Run HA NPU process crash test with `hamgrd` as the crashed process.\n2. Let traffic run during the process crash/recovery flow.\n3. Inspect Log Analyzer output or NPU syslog.\n\nExample test:\n\n```shell\npython3 -m pytest ha/test_ha_npu_process_crash.py \\\n  --ignore_la_failure\n```\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\n\nThe HA process-crash test passes, but Log Analyzer flags `swbusd` h2 connection teardown logs as errors.\n\nExpected behavior:\n\nIntentional crash/restart tests should not fail Log Analyzer on expected swbus connection reset messages during the crash window.\n\n### Relevant log output\n\n```shell\nERR dash-hadpu0#swbusd: ... ERROR ConnWorker{conn_id=\"swbs-from://10.1.0.32:42264\"}:\nFailed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\"\n\nERR dash-hadpu1#swbusd: ... ERROR ConnWorker{conn_id=\"swbs-to://10.1.0.32:23606\"}:\nFailed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\"\n\nERR dash-hadpu2#swbusd: ... ERROR ConnWorker{conn_id=\"swbs-to://10.1.0.32:23606\"}:\nFailed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\"\n\nERR dash-hadpu3#swbusd: ... ERROR ConnWorker{conn_id=\"swbs-to://10.1.0.32:23606\"}:\nFailed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\"\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC master HA build\n```\n\n### Attach files (if any)\n\n_No response_\n\n### Potential Fix\n\nAdd a Log Analyzer/test ignore rule for this h2 protocol connection-reset signature during HA process-crash tests.\n\nSuggested scoped ignore:\n\n```text\nERR dash-hadpu\\d+#swbusd: .* ERROR ConnWorker\\{conn_id=\"swbs-(from|to)://.*\"\\}: .* Failed to receive message: status: Unknown, message: \"h2 protocol error: error reading a body from connection\".*\n```\n\nScope the ignore to tests that intentionally crash or restart HA/NPU-side processes, for example:\n\n```text\nha/test_ha_npu_process_crash.py\ntest_crash_active_npu_traffic_on_active[hamgrd]\ntest_crash_active_npu_traffic_on_standby[pmon]\ntest_crash_active_npu_traffic_on_standby[bgp]\n```\n\nThis keeps unexpected h2 errors visible in normal tests while suppressing expected connection teardown noise during intentional crash/recovery scenarios.\n",
+  "comments": [
+    {
+      "author": "zjswhhh",
+      "createdAt": "2026-07-15T15:44:39Z",
+      "body": "Need to add the error log to skip list for log analyzer. "
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2026-07-15T19:40:00Z",
+      "body": "Can't reproduce this issue when running PMON crash test"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 208,
+      "repository": "sonic-net/sonic-dash-ha",
+      "url": "https://github.com/sonic-net/sonic-dash-ha/pull/208",
+      "title": "swbus: log receive stream closure as warning",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-15T22:34:13Z",
+      "createdAt": "2026-07-15T22:02:59Z",
+      "author": "BYGX-wcr",
+      "body": "### Description of PR\r\n\r\nSummary:\r\n\r\nDuring intentional HA process crash and restart tests, peer swbus connections can close abruptly. Tonic reports these expected transport closures as errors such as:\r\n\r\n```text\r\nh2 protocol error: error reading a body from connection\r\n```\r\n\r\nThe swbus receive loops previously logged every stream error at `ERROR` severity. This caused Log Analyzer failures even though the connection cleanup, route removal, and reconnection paths operated as designed.\r\n\r\nThis change logs receive-stream closure at `WARN` severity in both `swbus-core` and `swbus-edge`. Error propagation and recovery behavior are unchanged.\r\n\r\nReviewer entry points:\r\n\r\n- `crates/swbus-core/src/mux/conn_worker.rs`\r\n- `crates/swbus-edge/src/core_client.rs`\r\n\r\nNo new dependencies are required.\r\n\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/26217\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [ ] Test improvement\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nHA process crash tests intentionally terminate or restart processes and containers. Existing HTTP/2 streams can therefore close with connection reset, broken pipe, or timeout errors.\r\n\r\nThese events already trigger the expected swbus recovery path:\r\n\r\n1. The connection worker exits with a connection error.\r\n2. Routes associated with the connection are unregistered.\r\n3. The connection store marks the connection lost.\r\n4. Client-owned connections reconnect.\r\n\r\nLogging the initial stream closure at `ERROR` incorrectly presents this recoverable lifecycle event as a functional failure and causes unnecessary Log Analyzer failures.\r\n\r\n#### How did you do it?\r\n\r\nChanged the receive-stream closure log from `error!` to `warn!` in:\r\n\r\n- The swbus core connection worker.\r\n- The swbus edge client receive loop.\r\n\r\nThe message was also changed from:\r\n\r\n```text\r\nFailed to receive message\r\n```\r\n\r\nto:\r\n\r\n```text\r\nConnection receive stream closed\r\n```\r\n\r\nThe returned error, route cleanup, connection-loss handling, and reconnect behavior remain unchanged.\r\n\r\nThe implementation does not depend on matching Tonic status codes or Hyper error text, which can represent unrelated failures or change between dependency versions.\r\n\r\n#### How did you verify/test it?\r\n\r\nUnit and integration tests:\r\n\r\n```text\r\ncargo test -p swbus-core -p swbus-edge\r\n\r\n36 passed; 0 failed\r\n```\r\n\r\nDebian packaging:\r\n\r\n```text\r\ndpkg-buildpackage -us -uc -b -d\r\n```\r\n\r\nSuccessfully built and verified `dash-ha_1.0.0_amd64.deb`.\r\n\r\nPhysical SmartSwitch validation:\r\n\r\n- Deployed the package to `dash-hadpu0` through `dash-hadpu3` on both switches.\r\n- Verified all `swbusd` and `hamgrd` processes were running the updated binaries.\r\n- Verified bidirectional swbus connectivity with 3/3 successful pings in both directions.\r\n- Ran `test_crash_active_npu_traffic_on_active[hamgrd]`.\r\n- HA crash and recovery completed with 133/133 packets received and 0% traffic loss.\r\n- Observed 15 expected HTTP/2 stream closures:\r\n  - Old `ERR/ERROR Failed to receive message` events: 0\r\n  - New `WARNING/WARN Connection receive stream closed` events: 15\r\n\r\nThe pytest run still reported an unrelated Log Analyzer teardown error from `orchagent` failing to remove referenced HA scope/set objects. No swbus HTTP/2 closure was reported at `ERROR` severity.\r\n\r\n#### Any platform specific information?\r\n\r\nNo. The change applies to generic swbus gRPC stream handling. Physical validation was performed on NVIDIA SN4280 SmartSwitches.\r\n\r\n### Documentation\r\n\r\nNo documentation update is required. This change only corrects log severity and wording; it does not modify public behavior or configuration.\r\n",
+      "files": [
+        {
+          "path": "crates/swbus-core/src/mux/conn_worker.rs",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "crates/swbus-edge/src/core_client.rs",
+          "additions": 2,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T22:03:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-15T22:03:08Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-15T22:03:17Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-25980",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25980,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25980",
+    "title": "Bug: test_gnmi_configdb_polling_01 fails on IPv6-only management DUTs due to invalid gnmi_cli -a address after VRF parameterization (#20456)",
+    "created_at": "2026-07-08T10:09:12Z",
+    "closed_at": "2026-08-05T20:40:39Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n@spandan-nexthop , After https://github.com/sonic-net/sonic-mgmt/pull/20456, test_gnmi_configdb_polling_01 fails deterministically on DUTs with IPv6-only management addresses.\n\n### Steps to Reproduce\n\nRun test_gnmi_configdb_polling_01 on DUTs with IPv6-only management addresses\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\ngnmi_subscribe_polling() builds an invalid -a <ipv6-address>:<port> target because IPv6 bracket formatting is skipped when ip is passed explicitly, causing gnmi_cli to time out and return empty output. The test then fails because msg.count(\"bgp_asn\") is 0 instead of the expected 3.\n\nExpected Behavior:\ngnmi_subscribe_polling() should format IPv6 addresses as [<ipv6-address>]:<port> regardless of whether ip is defaulted or explicitly provided. gnmi_cli should connect successfully and return polling responses containing bgp_asn at least 3 times.\n\n### Relevant log output\n\n```shell\nAssertionError: Subscribe table key for DEVICE_METADATA:\n]\nduthosts = []\nrand_one_dut_hostname = 'r-panther-02'\nptfhost =\ntest_data = {'name': 'Subscribe table key for DEVICE_METADATA', 'path': '/sonic-db:CONFIG_DB/localhost/DEVICE_METADATA/localhost'}\nvrf_config = {'description': 'Default (no VRF)', 'dut_intf': 'eth0', 'dut_ip': '<IPV6>', 'name': 'default_1', ...}\n\n    @pytest.mark.parametrize('test_data', test_data_metadata)\n    def test_gnmi_configdb_polling_01(duthosts, rand_one_dut_hostname, ptfhost, test_data, vrf_config):\n        '''\n        Verify GNMI subscribe API, streaming onchange mode\n        Subscribe polling mode\n        '''\n        duthost = duthosts[rand_one_dut_hostname]\n        exp_cnt = 3\n        path_list = [test_data[\"path\"]]\n        msg, _ = gnmi_subscribe_polling(\n            duthost, ptfhost, path_list, 1000, exp_cnt, ip=vrf_config[\"dut_ip\"], vrf_name=vrf_config[\"vrf\"]\n        )\n>       assert msg.count(\"bgp_asn\") >= exp_cnt, test_data[\"name\"] + \": \" + msg\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       AssertionError: Subscribe table key for DEVICE_METADATA:\nE       ]\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25984,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25984",
+    "title": "[gnmi] Fix IPv6 target formatting in gnmi_subscribe_polling (#25980)",
+    "merged_at": "2026-08-05T20:40:38Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #25980\n\nAfter #20456 parameterized the gNMI polling tests over VRF configurations,\n`test_gnmi_configdb_polling_01` fails deterministically on DUTs with\nIPv6-only management addresses. The VRF parameterization now passes the DUT\nIP explicitly (`ip=vrf_config[\"dut_ip\"]`), which is a bare IPv6 literal.\n\n`gnmi_subscribe_polling()` only wrapped the address in brackets on the\ndefault path (`ip is None`); when `ip` is supplied explicitly the IPv6\nbrackets were skipped, so the command built an invalid target\n`-a 2001:db8:...:PORT`. `gnmi_cli` cannot parse the colon-laden bare IPv6\nagainst the `:port` separator, times out, and returns empty output. The\ntest then fails because `msg.count(\"bgp_asn\")` is `0` instead of the\nexpected `3`.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request:\nFailure type: regression (introduced by #20456)\n\n### Approach\n#### What is the motivation for this PR?\nMake `gnmi_subscribe_polling()` connect successfully on IPv6-only management\nDUTs so `test_gnmi_configdb_polling_01` passes, regardless of whether the\nserver IP is defaulted from `duthost.mgmt_ip` or passed in explicitly by the\nVRF-parameterized test.\n\n#### How did you do it?\nAdded a small `_bracket_ipv6()` helper that wraps IPv6 literals as\n`[<ipv6>]:<port>` (using `ipaddress.ip_address(...).version == 6`) and left\nIPv4 addresses, hostnames, and already-bracketed values untouched. The\nhelper is applied in `gnmi_subscribe_polling()` after `ip` is resolved, so\nbracketing is correct on both the defaulted and explicit paths. The default\npath no longer needs the `is_mgmt_ipv6_only` fact lookup, since bracketing is\nnow driven by the actual address family.\n\n#### How did you verify/test it?\n- Unit-verified `_bracket_ipv6()` against IPv4, bare IPv6, already-bracketed\n  IPv6, link-local IPv6, hostname, empty, and `None` inputs \u2014 the bug-repro\n  IPv6 now yields the correct target `-a [2001:db8:...]:8080`.\n- `python3 -m py_compile tests/gnmi/helper.py` \u2014 clean.\n- `flake8 --max-line-length=120 tests/gnmi/helper.py` \u2014 clean.\n- Elastictest CI (gnmi tests run on t0/t1-lag).\n\n#### Any platform specific information?\nNo. The fix is generic; it only affects how the gNMI polling client target\nstring is formatted for IPv6 addresses.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 fix to an existing helper used by `gnmi/test_gnmi_configdb.py`.\n\n### Documentation\nNo documentation changes required.\n\n\ud83e\udd16 *This response was generated by an AI agent on behalf of @yxieca.*",
+    "files": [
+      {
+        "path": "tests/gnmi/helper.py",
+        "additions": 35,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

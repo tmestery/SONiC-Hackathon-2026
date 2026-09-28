@@ -1,0 +1,48 @@
+{
+  "id": "management-27454",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27454,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27454",
+    "title": "Bug: snappi pfcwd burst-storm and multi-node tests crash with TypeError instead of skipping when PFC_WD config is absent",
+    "created_at": "2026-08-28T08:09:19Z",
+    "closed_at": "2026-09-17T00:17:23Z"
+  },
+  "metadata": {
+    "severity": "low",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n_(Reproduces on any platform whose image ships without a default pfcwd profile \u2014 i.e. `default_pfcwd_status` disabled / no `pfcwd_profile` \u2014 where `pfcwd start_default` is effectively a no-op and CONFIG_DB `PFC_WD` stays unpopulated.)_\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\n`run_pfcwd_burst_storm_test` (`tests/snappi_tests/pfcwd/files/pfcwd_burst_storm_helper.py`, lines 76\u201378) and `run_pfcwd_multi_node_test` (`tests/snappi_tests/pfcwd/files/pfcwd_multi_node_helper.py`, lines 106\u2013107) call `start_pfcwd()` (which runs `pfcwd start_default`) and then immediately read the watchdog timers with the raw getters and divide:\n\n```python\npoll_interval_sec = get_pfcwd_poll_interval(egress_duthost, rx_port['asic_value']) / 1000.0\ndetect_time_sec = get_pfcwd_detect_time(host_ans=egress_duthost, intf=rx_port['peer_port'], asic_value=rx_port['asic_value']) / 1000.0\nrestore_time_sec = get_pfcwd_restore_time(host_ans=egress_duthost, intf=rx_port['peer_port'], asic_value=rx_port['asic_value']) / 1000.0\n```\n\nOn a platform without a default pfcwd profile, `pfcwd start_default` leaves the `PFC_WD` table empty, the getters return `None`, and the test errors out with a `TypeError` instead of skipping with an actionable message.\n\nThe pattern dates back to the original migration of the PFCWD tests to snappi in #3906 (2021), inherited from the `tests/ixia` versions of the same helpers (which still carry it too: `tests/ixia/pfcwd/files/pfcwd_basic_helper.py`, `pfcwd_burst_storm_helper.py`, `pfcwd_multi_node_helper.py`).\n\n#25950 introduced `get_pfcwd_timers()` in `tests/common/snappi_tests/common_helpers.py`, which reads all three timers, skips the test via `pytest_require` when any is missing, and converts ms to seconds \u2014 but only `pfcwd_basic_helper.py` was switched to it. The burst-storm and multi-node helpers were left on the raw getter + division pattern.\n\n### Steps to Reproduce\n\n1. Testbed whose DUT image has no default pfcwd profile (`pfcwd start_default` does not populate `PFC_WD`).\n2. `pytest snappi_tests/pfcwd/test_pfcwd_burst_storm_with_snappi.py` or `pytest snappi_tests/pfcwd/test_pfcwd_m2o_with_snappi.py`\n\n### Actual Behavior and Expected Behavior\n\n**Actual** \u2014 the test errors during setup:\n\n```\nTypeError: unsupported operand type(s) for /: 'NoneType' and 'float'\n```\n\n**Expected** \u2014 the test skips with a clear message that PFC watchdog is not configured on the DUT, as `test_pfcwd_basic_with_snappi.py` already does via `get_pfcwd_timers()`.\n\n### Relevant log output\n\n```shell\n    poll_interval_sec = get_pfcwd_poll_interval(egress_duthost, rx_port['asic_value']) / 1000.0\nTypeError: unsupported operand type(s) for /: 'NoneType' and 'float'\n```\n\n### Output of `show version`\n\nNot included \u2014 the failure is in `sonic-mgmt` test setup logic and reproduces independently of the image under test, provided the image has no default pfcwd profile.\n\n### Attach files (if any)\n\nA fix is in progress (switch both helpers to the existing `get_pfcwd_timers()`) and will be linked here as a PR."
+  },
+  "resolution": {
+    "pr_number": 27455,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27455",
+    "title": "snappi/pfcwd: use get_pfcwd_timers in burst-storm and multi-node helpers",
+    "merged_at": "2026-09-17T00:17:22Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #27454\n\n`run_pfcwd_burst_storm_test` (`tests/snappi_tests/pfcwd/files/pfcwd_burst_storm_helper.py`) and `run_pfcwd_multi_node_test` (`tests/snappi_tests/pfcwd/files/pfcwd_multi_node_helper.py`) read the pfcwd timers with the raw getters (`get_pfcwd_poll_interval` / `get_pfcwd_detect_time` / `get_pfcwd_restore_time`) and divide by 1000.0 immediately. On a platform whose image ships without a default pfcwd profile, `pfcwd start_default` is effectively a no-op, the CONFIG_DB `PFC_WD` table stays unpopulated, the getters return `None`, and the tests error out during setup:\n\n```\nTypeError: unsupported operand type(s) for /: 'NoneType' and 'float'\n```\n\n`get_pfcwd_timers()` in `tests/common/snappi_tests/common_helpers.py` (added in #25950) already solves this for `pfcwd_basic_helper.py`: it reads all three timers, skips the test via `pytest_require` with a clear message when any is missing, and converts ms to seconds. This PR switches the two remaining helpers to it, matching the basic helper's idiom.\n\nThe multi-node helper only consumes `poll_interval` and `detection_time`; `get_pfcwd_timers` still validates all three fields, which is correct since they are populated together by `pfcwd start_default`.\n\nThe pattern dates back to the original snappi migration in #3906. No behavioral change when PFC_WD config is present \u2014 the same three CONFIG_DB reads and the same ms-to-sec conversion happen inside `get_pfcwd_timers()`.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [x] 202512\n- [x] 202605\n- [ ] N/A\n\n### Tested branch\n\n- [x] master\n\n### Test result\n\nStatic verification: flake8 and `py_compile` pass on both files; no remaining references to the removed imports.\n\nBehavior with PFC_WD configured is unchanged by construction \u2014 `get_pfcwd_timers()` performs the identical getter calls and `/ 1000.0` conversion the helpers did inline. The skip path (PFC_WD absent) is the same code already exercised daily by `test_pfcwd_basic_with_snappi.py` since #25950.",
+    "files": [
+      {
+        "path": "tests/snappi_tests/pfcwd/files/pfcwd_burst_storm_helper.py",
+        "additions": 5,
+        "deletions": 5
+      },
+      {
+        "path": "tests/snappi_tests/pfcwd/files/pfcwd_multi_node_helper.py",
+        "additions": 4,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

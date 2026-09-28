@@ -1,0 +1,43 @@
+{
+  "id": "management-18624",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 18624,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/18624",
+    "title": "Bug: `crm/test_crm.py` fails with `[Errno 7] Argument list too long: '/bin/sh` when neighbor add command is too long",
+    "created_at": "2025-05-26T22:46:57Z",
+    "closed_at": "2025-07-02T16:49:00Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nFailure:\n```\n  File \"/data/tests/crm/test_crm.py\", line 793, in test_crm_neighbor\n    configure_neighbors(amount=neighbours_num, interface=crm_interface[0], ip_ver=ip_ver,\n  File \"/data/tests/crm/test_crm.py\", line 423, in configure_neighbors\n    asichost.shell(add_neighbors_template.render(\n  File \"/data/tests/common/devices/sonic_asic.py\", line 580, in shell\n    return self.sonichost.shell(*module_args, **complex_args)\n  File \"/data/tests/common/devices/base.py\", line 131, in _run\n    raise RunAnsibleModuleFail(\"run module {} failed\".format(self.module_name), res)\ntests.common.errors.RunAnsibleModuleFail: run module shell failed, Ansible Results =>\nfailed = True\nrc = 7\ncmd = for s in <IP> <IP> <snip>  <IP> <IP> do ip neigh replace '${s}' lladdr <IPV6> dev PortChannel2001 echo added - '${s}' done\nmsg = [Errno 7] Argument list too long: '/bin/sh\n```\n\nIn `crm/test_crm.py::test_crm_neighbor` the test tries to add 1% of the available IPv4 neighbors.\nOn systems with very large number of neighbors:\n```\n> sonic-db-cli  COUNTERS_DB HMGET CRM:STATS crm_stats_ipv4_neighbor_used crm_stats_ipv4_neighbor_available\n5\n3233468\n```\nJust 1% of this is `((5 + 3233468) // 100) + 1 = 32335` neighbors.\n\nThis results in a very long command in the form of:\n```\nfor s in <IP> <IP> <snip> <IP> <IP> do ip neigh replace '${s}' lladdr <IPV6> dev PortChannel2001\n```\n\nBecause there is a 128KB character limit in the command this ends up going beyond our limit:\n```\n(Pdb) len(ip_addr_list)\n345913\n```\n\nHence the error:\n```\nmsg = [Errno 7] Argument list too long: '/bin/sh\n```\n\n### Steps to Reproduce\n\nRun `crm/test_crm.py::test_crm_neighbor` on a device that supports a large number of IPv4 neighbors (> 900000)\n\n### Actual Behavior and Expected Behavior\n\nThe test shouldn't fail because of a character limit issue due to our command length.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 18625,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/18625",
+    "title": "Batch neighbor add/del commands in `test_crm_neighbor`",
+    "merged_at": "2025-07-02T16:48:59Z",
+    "description": "On certain platforms `test_crm_neighbor` can create commands that go beyond our character limit, resulting in errors like:\n`[Errno 7] Argument list too long: '/bin/sh`\n\nThis change will chunk up the long commands into smaller batches that don't go beyond the character limit to avoid hitting these failures.\n\nDetails in: https://github.com/sonic-net/sonic-mgmt/issues/18624\n\nA similar issue and solution has been seen in this test in the past, used the same approach:\nIssue: https://github.com/sonic-net/sonic-mgmt/issues/8125\nSolution: https://github.com/sonic-net/sonic-mgmt/pull/8126\n\nSummary:\nFixes #18624\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [x] 202505",
+    "files": [
+      {
+        "path": "tests/crm/test_crm.py",
+        "additions": 19,
+        "deletions": 12
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

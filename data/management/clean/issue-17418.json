@@ -1,0 +1,43 @@
+{
+  "id": "management-17418",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 17418,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/17418",
+    "title": "Bug:bfd_responder crash when process partial packet sent by itself",
+    "created_at": "2025-03-07T20:41:39Z",
+    "closed_at": "2025-03-25T21:30:31Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThese 2 cases may cause BFD related mgmt test fails:\nbfd responder can receive the packet it sent. and at the time of restart, partial packet could be process and cause  it crash:\n```\nTraceback (most recent call last):\n  File \"/opt/bfd_responder.py\", line 205, in <module>\n    main()\n  File \"/opt/bfd_responder.py\", line 200, in main\n    p.poll()\n  File \"/opt/bfd_responder.py\", line 80, in poll\n    self.responder.action(self.mapping[handler])\n  File \"/opt/bfd_responder.py\", line 92, in action\n    data)\n  File \"/opt/bfd_responder.py\", line 127, in extract_bfd_info\n    bfdpkt = BFD(ether.payload.payload.payload.load)\n  File \"/usr/local/lib/python2.7/dist-packages/scapy/packet.py\", line 1070, in __getattr__\n    raise AttributeError, attr\n```\nAnd also bfd responder initialize it's packet when receive DOWN bfd packet. In the case of bfd_responder restart and it get BFD UP packet, the packet become uninitialized, it cause socket sending packet error:\n```\nTraceback (most recent call last):\n  File \"/opt/bfd_responder.py\", line 224, in <module>\n    main()\n  File \"/opt/bfd_responder.py\", line 219, in main\n    p.poll()\n  File \"/opt/bfd_responder.py\", line 81, in poll\n    self.responder.action(self.mapping[handler])\n  File \"/opt/bfd_responder.py\", line 106, in action\n    interface.send(session[\"pkt\"])\n  File \"/opt/bfd_responder.py\", line 60, in send\n    scapy2.sendp(data, iface=self.iface)\n  File \"/usr/local/lib/python2.7/dist-packages/scapy/sendrecv.py\", line 259, in sendp\n    __gen_send(conf.L2socket(iface=iface, *args, **kargs), x, inter=inter, loop=loop, count=count, verbose=verbose, realtime=realtime)\n  File \"/usr/local/lib/python2.7/dist-packages/scapy/sendrecv.py\", line 234, in __gen_send\n    s.send(p)\n  File \"/usr/local/lib/python2.7/dist-packages/scapy/supersocket.py\", line 35, in send\n    return self.outs.send(sx)\nsocket.error: [Errno 22] Invalid argument\n```\n\n### Steps to Reproduce\n\nusing a python script craft bfd packet:\nsend an incomplete BFD packet or send UP state BFD packet to bfd_responder can trigger the issue.\n\n### Actual Behavior and Expected Behavior\n\n1, for partial packet just ignore the packet.\n2, for the UP BFD packet right after bfd_responder start or restart, ignore the packet per RFC5880 FSM.\n    treat the bfd_responder in DOWN state by default right after start or restart.\n\n### Relevant log output\n\n```shell\nTraceback (most recent call last):\n  File \"/opt/bfd_responder.py\", line 224, in <module>\n    main()\n  File \"/opt/bfd_responder.py\", line 219, in main\n    p.poll()\n  File \"/opt/bfd_responder.py\", line 81, in poll\n    self.responder.action(self.mapping[handler])\n  File \"/opt/bfd_responder.py\", line 106, in action\n    interface.send(session[\"pkt\"])\n  File \"/opt/bfd_responder.py\", line 60, in send\n    scapy2.sendp(data, iface=self.iface)\n  File \"/usr/local/lib/python2.7/dist-packages/scapy/sendrecv.py\", line 259, in sendp\n    __gen_send(conf.L2socket(iface=iface, *args, **kargs), x, inter=inter, loop=loop, count=count, verbose=verbose, realtime=realtime)\n  File \"/usr/local/lib/python2.7/dist-packages/scapy/sendrecv.py\", line 234, in __gen_send\n    s.send(p)\n  File \"/usr/local/lib/python2.7/dist-packages/scapy/supersocket.py\", line 35, in send\n    return self.outs.send(sx)\nsocket.error: [Errno 22] Invalid argument\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 17419,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/17419",
+    "title": "[sonic-mgmt][BFD][issues/17418]fix bfd responder crash",
+    "merged_at": "2025-03-25T21:30:30Z",
+    "description": "### Description of PR\n\nfix bug https://github.com/sonic-net/sonic-mgmt/issues/17418\nThese 2 cases may cause BFD related mgmt test fails:\n1, bfd responder can receive the packet it sent. and at the time of restart, partial packet could be process and cause it crash\n2, In the case of bfd_responder restart and it get BFD UP packet, the packet become uninitialized, it cause socket sending packet error.\n\nSummary:\nFixes # (issue)\nhttps://github.com/sonic-net/sonic-mgmt/issues/17418\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [x] 202012\n- [x] 202205\n- [x] 202305\n- [x] 202311\n- [x] 202405\n- [x] 202411\n\n### Approach\n#### What is the motivation for this PR?\n\n#### How did you do it?\n\n#### How did you verify/test it?\n\nset a breakpoint in a sonic_mgmt test (test_bfd.py),  using a separately python script to craft and send BFD packet from the DUT to bfd_responder. it can trigger the second issue listed in the description section.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/helpers/bfd_responder.py",
+        "additions": 8,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

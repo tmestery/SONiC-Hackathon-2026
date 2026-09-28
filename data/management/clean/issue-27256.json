@@ -1,0 +1,43 @@
+{
+  "id": "management-27256",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27256,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27256",
+    "title": "Bug: Everflow TD3 policer test fails on mirror-port TX-drop assertion",
+    "created_at": "2026-08-23T13:02:56Z",
+    "closed_at": "2026-08-27T02:14:53Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nEverflow policer validation can fail on TD3 because the test asserts that the\n  mirror port has no TX drops after the PTF policer traffic validation.\n\nThe PTF policer validation itself succeeds and receives the expected mirrored\npackets after rate limiting, but the test later fails in assert_no_tx_drops_on_mirror_port.\n\nThe existing logic already skips the queue TX-drop assertion on TH2/TD3 and\nskips the interface TX-drop assertion on TH2. TD3 should use the same skip\ncondition for the interface TX-drop assertion.\n\n### Steps to Reproduce\n\n Run the Everflow policer testcase on a TD3 fixed-testbed dt topology:\n\n  sudo ./run_tests.sh \\\n    -n dt \\\n    -m individual \\\n    -p everflow_td3_policer_logs \\\n    -r \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -c everflow/test_everflow_testbed.py::TestEverflowV4IngressAclIngressMirror::test_everflow_dscp_with_policer\n\n### Actual Behavior and Expected Behavior\n\n **Actual behavior:**\n  The IPv4 policer traffic/rate validation passes in PTF, but the test fails\n  afterward on TD3 with mirror-port TX drops:\n\n  Expected no tx drops on mirror port Ethernet112/Ethernet116/Ethernet120,\n  but found around 30K drops.\n\n  **Expected behavior:**\n  The test should keep validating policer traffic/rate behavior, but should avoid\n  platform-unreliable mirror-port TX-drop counter assertions on TH2/TD3.\n\n### Relevant log output\n\n```shell\nFailed: Expected no tx drops on mirror port Ethernet116, but found 31695\n  Failed: Expected no tx drops on mirror port Ethernet120, but found 29926\n\n  Retry examples:\n  Failed: Expected no tx drops on mirror port Ethernet112, but found 31599\n  Failed: Expected no tx drops on mirror port Ethernet120, but found 30191\n\n  PTF policer validation passed:\n  Received 1001 mirrored packets after rate limiting\n  Received 1000 mirrored packets after rate limiting\n```\n\n### Output of `show version`\n\n```shell\nSONiC image:\n  branch.202605-ars.111785e8-buildimage.84d74ca1aa3b233d1198b3eae18e79c420893493-nightly-2026.08.19.14.40\n\n  Platform:\n  x86_64-arista_7050cx3_32c\n\n  HWSKU:\n  Arista-7050CX3-32C-C32\n```\n\n### Attach files (if any)\n\n[test_everflow_testbed.log](https://github.com/user-attachments/files/31348577/test_everflow_testbed.log)\n[test_everflow_testbed.xml](https://github.com/user-attachments/files/31348578/test_everflow_testbed.xml)"
+  },
+  "resolution": {
+    "pr_number": 27257,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27257",
+    "title": "[everflow]: Skip TD3 policer mirror TX-drop checks",
+    "merged_at": "2026-08-27T02:14:51Z",
+    "description": "### Description of PR\n\nSummary:\nEverflow policer validation can pass on TD3, but the test can fail afterward\nin the mirror-port TX-drop counter assertion. This PR skips the same\nmirror-port TX-drop checks on TD3 that are already skipped for unsupported ASIC\ncounter behavior, while keeping the PTF policer traffic/rate validation enabled.\n\nFixes #27256\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: day-one issue\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n_202605:_\nImage: branch.202605-ars.111785e8-buildimage.84d74ca1aa3b233d1198b3eae18e79c420893493-nightly-2026.08.19.14.40\nPlatform: x86_64-arista_7050cx3_32c\nHWSKU: Arista-7050CX3-32C-C32\n\n***Before fix:***\n  Everflow policer failed on TD3 with mirror-port TX drops:\n  - test_everflow_dscp_with_policer[erspan_ipv4-cli-downstream-default]\n    Failed: Expected no tx drops on mirror port Ethernet112/Ethernet116,\n    but found around 31K drops.\n  - test_everflow_dscp_with_policer[erspan_ipv4-cli-upstream-default]\n    Failed: Expected no tx drops on mirror port Ethernet120,\n    but found around 30K drops.\n[test_everflow_testbed.log](https://github.com/user-attachments/files/31348794/test_everflow_testbed.log)\n[test_everflow_testbed.xml](https://github.com/user-attachments/files/31348796/test_everflow_testbed.xml)\n\n***After Fix:***\n Result:\n  tests=4, failures=0, errors=0, skipped=2\n  Passed:\n  - test_everflow_dscp_with_policer[erspan_ipv4-cli-downstream-default]\n  - test_everflow_dscp_with_policer[erspan_ipv4-cli-upstream-default]\n  Skipped:\n  - test_everflow_dscp_with_policer[erspan_ipv6-cli-downstream-default]\n  - test_everflow_dscp_with_policer[erspan_ipv6-cli-upstream-default]\n\n[test_everflow_testbed.py::TestEverflowV4IngressAclIngressMirror::test_everflow_dscp_with_policer.log](https://github.com/user-attachments/files/31348803/test_everflow_testbed.py.TestEverflowV4IngressAclIngressMirror.test_everflow_dscp_with_policer.log)\n[test_everflow_testbed.py::TestEverflowV4IngressAclIngressMirror::test_everflow_dscp_with_policer.xml](https://github.com/user-attachments/files/31348804/test_everflow_testbed.py.TestEverflowV4IngressAclIngressMirror.test_everflow_dscp_with_policer.xml)\n\n### Approach\n\n#### What is the motivation for this PR?\nOn TD3, the PTF Everflow policer traffic/rate validation succeeds, but the test\n can fail afterward on mirror-port TX-drop counters. The failure is not in the\n policer traffic validation itself; it is in the platform-sensitive counter\n assertion.\n\n#### How did you do it?\n Use the existing TH2/TD3 ASIC condition for both mirror-port TX-drop\n  assertions. This keeps policer traffic/rate validation enabled and only skips\n  the unreliable post-validation counter checks on TH2/TD3.\n\n#### How did you verify/test it?\n\nRan the targeted Everflow policer test on 202605 dt fixed-testbed. The\n IPv4 downstream and upstream policer cases passed. The IPv6 cases skipped\n because the image could not create the IPv6 ERSPAN mirror session.\n\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/everflow/test_everflow_testbed.py",
+        "additions": 1,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

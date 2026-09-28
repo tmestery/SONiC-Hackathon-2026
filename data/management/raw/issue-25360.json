@@ -1,0 +1,57 @@
+{
+  "number": 25360,
+  "title": "Bug: syslog/test_logrotate_normal_size intermittent 'No logrotate happens' failure",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25360",
+  "createdAt": "2026-06-15T05:26:50Z",
+  "closedAt": "2026-06-29T03:07:21Z",
+  "author": "securely1g",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric (observed on t2 KVM via Elastictest; also seen historically on other PR topologies)\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`tests/syslog/test_logrotate.py::test_logrotate_normal_size` intermittently fails because logrotate does not rotate `/var/log/syslog` after the test creates a file larger than the configured threshold.\n\nThis was split out from #25353 so the `normal_size` assertion failure can be tracked separately from the `small_size` setup/config-reload failure.\n\n**Observed in failed plan:**\n- Elastictest plan: https://elastictest.org/scheduler/testplan/6a2e403f729d944bd21ca1ce\n- PR under test: sonic-net/sonic-buildimage#26724\n- Build: `1138047`\n- Topology: `t2`, KVM, `vms-kvm-t2`\n- Retry runs: `syslog/test_logrotate.py|||1`, `syslog/test_logrotate.py|||2`\n\n**Failure:**\n\n```text\nFAILED syslog/test_logrotate.py::test_logrotate_normal_size\nAssertionError: No logrotate happens, both syslog file number and timestamp are the same\n```\n\nFrom retry #2:\n\n```text\nrand_selected_dut = <MultiAsicSonicHost vlab-t2-1-2>\nrotate_large_threshold = '2048K'\nsyslog_number_origin = 2\nsyslog_number_with_rotate = 2\noldest_checksum_before_rotate = '19c90908204a7882bb398e2419f9927b'\noldest_checksum_after_rotate = '19c90908204a7882bb398e2419f9927b'\n```\n\nThe failing assertion is in `validate_logrotate_function()`:\n\n```python\ncreate_temp_syslog_file(duthost, multiply_with_unit(logrotate_threshold, 1.1))\noldest_checksum_before_rotate = get_oldest_syslog_checksum(duthost)\nrun_logrotate(duthost)\nsyslog_number_with_rotate = get_syslog_file_count(duthost)\noldest_checksum_after_rotate = get_oldest_syslog_checksum(duthost)\n\nif syslog_number_origin == syslog_number_with_rotate:\n    assert oldest_checksum_before_rotate != oldest_checksum_after_rotate, \\\n        'No logrotate happens, both syslog file number and timestamp are the same'\nelse:\n    assert syslog_number_origin + 1 == syslog_number_with_rotate, \\\n        'No logrotate happens, the number of syslog files does not increase by 1'\n```\n\n### Root Cause Analysis\n\nThe test expects `logrotate /etc/logrotate.conf` to rotate `/var/log/syslog` after replacing `/var/log/syslog` with a file larger than the threshold. In the failure, both detection mechanisms show no rotation:\n\n1. rotated syslog file count did not increase\n2. oldest rotated syslog checksum did not change\n\nThe current test does not capture enough logrotate state to determine *why* logrotate skipped rotation. Missing debug data includes:\n\n- `sudo logrotate -d /etc/logrotate.conf`\n- `/var/lib/logrotate/status`\n- `ls -l /var/log/syslog*` before/after\n- actual `/var/log/syslog` size before logrotate\n- logrotate stdout/stderr/rc from the non-force invocation\n\n`run_logrotate()` currently only logs a warning when rc is non-zero, but does not return the result to the caller or include detailed state in the assertion failure.\n\n### Why this is flaky / not PR-specific\n\nThe PR under test (`sonic-net/sonic-buildimage#26724`) changes docker-sonic-vs feature composition and does not modify syslog/logrotate behavior.\n\nKusto history shows recurrent failures for `test_logrotate_normal_size`:\n\n- last 30 days for logrotate assertion-like failures: **4 hits / 3 test plans / 3 PRs**\n- last 90 days for all `test_logrotate_normal_size` failures: **47 hits / 21 test plans / 12 PRs**\n- branches observed: `master`, `internal`\n- topologies observed: `t0`, `t1-lag`, `t1-8-lag`, `t2`\n\n### Suggested Fix\n\n1. Improve failure diagnostics before changing behavior:\n   - capture `logrotate -d /etc/logrotate.conf`\n   - capture `/var/lib/logrotate/status`\n   - capture `ls -l /var/log/syslog*` and `du -k /var/log/syslog` before/after\n   - return/log `run_logrotate()` stdout/stderr/rc for both force and non-force runs\n2. Consider using a test-specific logrotate state file (`logrotate -s <tmp-state-file>`) so prior/default logrotate state cannot affect this test.\n3. Consider making the assertion wait/retry briefly after logrotate, since rsyslog/logrotate interactions can be timing-sensitive.\n4. If the test is meant to validate only `/var/log/syslog`, consider invoking logrotate against a minimal test-specific config rather than the full `/etc/logrotate.conf`.\n\n### Steps to reproduce\n\nRun `tests/syslog/test_logrotate.py` on a t2 KVM Elastictest plan. The failure is intermittent and often only appears on retry runs.\n\n### Link to failed CI run\n\n- Azure DevOps build: https://dev.azure.com/mssonic/be1b070f-be15-4154-aade-b1d3bfb17054/_build/results?buildId=1138047&view=logs&jobId=3ab7146d-ea64-5d52-0097-33a9aae59fb6\n- Elastictest plan: https://elastictest.org/scheduler/testplan/6a2e403f729d944bd21ca1ce\n- PR: https://github.com/sonic-net/sonic-buildimage/pull/26724\n\n### Related Issues\n\n- #25353 \u2014 split-out issue for `test_logrotate_small_size` setup/config-reload failure\n- #23051\n- #13451\n- #16055\n- #11179\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25361,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25361",
+      "title": "Improve logrotate test isolation and cleanup",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-29T03:07:19Z",
+      "createdAt": "2026-06-15T05:30:28Z",
+      "author": "securely1g",
+      "body": "## Description\n\nImprove `tests/syslog/test_logrotate.py` isolation and cleanup for the intermittent Elastictest failures tracked in #25353 and #25360.\n\nChanges:\n- Store the module-level syslog backup outside `/var/log`, so it is not hidden/lost when `test_logrotate_small_size` mounts a temporary filesystem on `/var/log`.\n- Make the small `/var/log` fixture cleanup run from `finally`, including when setup fails before `yield`.\n- Make cleanup best-effort after setup failure so cleanup errors do not hide the original `config_reload`/BGP setup failure.\n- Use a test-specific logrotate state file (`/tmp/logrotate-test.status`) so the test is isolated from the DUT's normal `/var/lib/logrotate/status` state.\n- Log logrotate return code/stdout/stderr and collect syslog/logrotate state on assertion failures.\n\n## Motivation and Context\n\nIn Elastictest plan `6a2e403f729d944bd21ca1ce`, `syslog/test_logrotate.py` failed in two different ways:\n\n1. `test_logrotate_small_size` failed during setup after remounting `/var/log`, then teardown failed with:\n   ```text\n   mv: cannot stat '/var/log/syslog_bk': No such file or directory\n   ```\n   because the backup lived under `/var/log` and the fixture cleanup did not run when setup failed before `yield`.\n\n2. Retry runs of `test_logrotate_normal_size` failed with:\n   ```text\n   AssertionError: No logrotate happens, both syslog file number and timestamp are the same\n   ```\n   but the test did not capture enough state to explain why logrotate skipped rotation.\n\n## Testing\n\n- `python3 -m py_compile tests/syslog/test_logrotate.py`\n- `git diff --check`\n\nFull behavioral validation requires a SONiC KVM/t2 Elastictest run.\n\nFixes #25353\nFixes #25360\n",
+      "files": [
+        {
+          "path": "tests/syslog/test_logrotate.py",
+          "additions": 109,
+          "deletions": 46
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T05:30:36Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T05:30:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-18T07:15:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-18T07:15:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

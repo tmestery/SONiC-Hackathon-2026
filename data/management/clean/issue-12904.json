@@ -1,0 +1,43 @@
+{
+  "id": "management-12904",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 12904,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/12904",
+    "title": "[Bug]: [Snappi] Reboot and swss reboot logic needs to be adjusted for multidut scenario",
+    "created_at": "2024-05-20T19:50:27Z",
+    "closed_at": "2024-07-10T23:47:32Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\nTest Script- tests/snappi_tests/multidut/pfcwd/test_multidut_pfcwd_basic_with_snappi.py\n\n(1)\nTest case: test_pfcwd_basic_single_lossless_prio_reboot\n\nCode:\n ```\n   for duthost in dut_list:\n        logger.info(\"Issuing a {} reboot on the dut {}\".format(reboot_type, duthost.hostname))\n        reboot(duthost, localhost, reboot_type=reboot_type, safe_reboot=True)\n        logger.info(\"Wait until the system is stable\")\n        pytest_assert(wait_until(300, 20, 0, duthost.critical_services_fully_started),\n                      \"Not all critical services are fully started\")\n```\nIssue: if the test case is being executed on single line card (single or multiple ASIC), same DUT will be rebooted twice and hence longer testcase execution.\n\n(2)\nTest case - test_pfcwd_basic_single_lossless_prio_service_restart\n\nCode:\n```\n@pytest.mark.parametrize('restart_service', ['swss'])\n----\n    for duthost in dut_list:\n        logger.info(\"Issuing a restart of service {} on the dut {}\".format(restart_service, duthost.hostname))\n        duthost.command(\"systemctl reset-failed {}\".format(restart_service))\n        duthost.command(\"systemctl restart {}\".format(restart_service))\n        logger.info(\"Wait until the system is stable\")\n        pytest_assert(wait_until(300, 20, 0, duthost.critical_services_fully_started),\n                      \"Not all critical services are fully started\")\n```\n\nIssue:\nfor multi-asic environment, we do not have swss service but swss@0 and swss@1 service. With single linecard, we will end up restarting the same swss process twice.\n\n### Results you see\n\n=> sudo systemctl status swss\n\u25cf swss.service - switch state service\n     Loaded: loaded (/lib/systemd/system/swss.service; disabled; vendor preset: enabled)\n     Active: inactive (dead)\n=> sudo systemctl status swss@0\n\u25cf <EMAIL> - switch state service\n     Loaded: loaded (/lib/systemd/system/swss@.service; enabled; vendor preset: enabled)\n    Drop-In: /etc/systemd/system/<EMAIL>.d\n             \u2514\u2500auto_restart.conf\n     Active: active (running) since Mon 2024-05-20 <IPV6> UTC; 2h 9min ago\n ----- curtailed output --------\n\n### Results you expected to see\n\nFor reboot testcases:\nWe should add a check to see if duthost1.hostname == duthost2.hostname, and if not, then reboot both, else just do a single reboot (of either duthost1 or duthost2).\n\nFor swss restart testcases, we can find the dut<->asic mapping of the interfaces used and restart swss process based on that mapping.\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 13483,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/13483",
+    "title": "[Snappi] - fixing swss service restart logic for basic PFCWD testcases in multi-asic environment",
+    "merged_at": "2024-07-01T16:06:42Z",
+    "description": "### Description of PR\nThe existing PFCWD basic testcases have restart SWSS service testcases.\n\nHowever, these testcases do not address the multi-asic environment.  The pull-request addresses this.\n\nSummary:\nFixes # (issue)\nThe fix finds out the DUT and interfaces used in the test and based on that selects swss@0 or swss@1 to restart. The fix first verifies if the platform field exists and if yes, is set to 'broadcom-dnx' field. If this is not true, then code executes the default testcase.\n\n### Type of change\n\n- [X] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [X] 202405\n\n### Approach\n#### What is the motivation for this PR?\nTo address the multi-asic environment scenario and select appropriate SWSS depending upon the DUT-interface selected for the test.\n\n#### How did you do it?\n- Finding the DUT-interface used in the test.\n- For Single line card - Single ASIC, the DUT will be same and interfaces will be from same ASIC. So only single swss is selected.\n- For Single line card - Multi ASIC, DUT is same but interfaces will be from different ASIC and hence two SWSS instances are selected. Same logic for multiple line card scenario.\n\n#### How did you verify/test it?\n- Ran the test on local setup.\n\nLogs for single line card single ASIC:\n```\n<IPV6> test_multidut_pfcwd_basic_with_snappi.te L0574 INFO   | Issuing a restart of service swss@0 on the dut ixre-egl-board72\n<IPV6> test_multidut_pfcwd_basic_with_snappi.te L0577 INFO   | Wait until the system is stable\n\n```\n\nLogs for single line card multiple ASIC:\n```\n<IPV6> test_multidut_pfcwd_basic_with_snappi.te L0574 INFO   | Issuing a restart of service swss@1 on the dut ixre-egl-board71\n<IPV6> test_multidut_pfcwd_basic_with_snappi.te L0577 INFO   | Wait until the system is stable\n<IPV6> test_multidut_pfcwd_basic_with_snappi.te L0574 INFO   | Issuing a restart of service swss@0 on the dut ixre-egl-board71\n<IPV6> test_multidut_pfcwd_basic_with_snappi.te L0577 INFO   | Wait until the system is stable\n```\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/snappi_tests/multidut/pfcwd/test_multidut_pfcwd_basic_with_snappi.py",
+        "additions": 60,
+        "deletions": 14
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

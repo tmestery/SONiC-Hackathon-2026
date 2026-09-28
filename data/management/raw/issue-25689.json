@@ -1,0 +1,89 @@
+{
+  "number": 25689,
+  "title": "Bug: wait_until enhancement in test_acl_outer_vlan is redundant and causes test failure",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25689",
+  "createdAt": "2026-06-26T04:58:40Z",
+  "closedAt": "2026-07-09T14:02:00Z",
+  "author": "markx-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nPR #22978 replaced time.sleep(timeout) with wait_until(timeout, 2, 0, _check_acl_counter) in get_acl_counter(), introducing two bugs:\n\nBug 1: timeout=0 causes unconditional test failure\nThe first counter read calls get_acl_counter(..., timeout=0) to snapshot the counter value before sending traffic \u2014 no waiting is needed. The original time.sleep(0) returned immediately, which was correct. However, wait_until(0, 2, 0, _check_acl_counter) returns False with a zero timeout, triggering pytest.fail unconditionally.\n\nBug 2: wait_until checks the wrong condition, resulting in stale counter reads\nThe original time.sleep(timeout) inside get_acl_counter() waited a fixed duration for orchagent to flush updated counters to the aclshow output. The replacement _check_acl_counter only verifies that the ACL rule exists in aclshow -a output \u2014 it does not check whether the counter value has actually been updated. Since the rule is already present before any traffic is sent, wait_until succeeds immediately on the second call without waiting for the counter to refresh. This causes count_after to read the same stale value as count_before, leading to false test failures.\n\nRoot cause\nThe purpose of the timeout in get_acl_counter() is to allow time for orchagent to update the counters, not to poll for the aclshow -a command to succeed. The command is expected to work \u2014 if it doesn't, the test should fail. Replacing a wait-for-update sleep with a poll-for-command-output check misunderstands the intent.\n\n### Steps to Reproduce\n\nRun acl/test_acl_outer_vlan.py\n\n### Actual Behavior and Expected Behavior\n\nThe test should pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25690,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25690",
+      "title": "Revert \"[acl] Replace time.sleep with wait_until in test_acl_outer_vlan (#22978)\"",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-09T14:01:58Z",
+      "createdAt": "2026-06-26T05:08:54Z",
+      "author": "markx-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nThis reverts commit d11d9a5d6154b1e7705ebb6b0dbc1be620f578bf\r\nwhich breaks get_acl_counter: \r\n1. timeout=0 on the first poll makes wait_until fail immediately instead\r\nof reading the counter without waiting.\r\n2. The second poll returns instantly because wait_until only checks rule\r\nexistence, not counter freshness \u2014 reading stale values and causing\r\nfalse failures.\r\n\r\nThe original time.sleep(timeout) works correctly \u2014 it gives orchagent\r\ntime to flush updated counters, which is the actual intent.\r\n\r\nFixes #25689\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request:\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nFix a PR that causes regression\r\n\r\n#### How did you do it?\r\nRevert the PR\r\n\r\n#### How did you verify/test it?\r\nacl/test_acl_outer_vlan.py passed with revert\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/acl/test_acl_outer_vlan.py",
+          "additions": 4,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-26T05:09:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-26T05:09:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-26T05:09:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-26T05:09:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-26T11:14:35Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-08T21:13:05Z",
+          "body": "**AI review \u2014 Changes requested**\n\n### Blocking\n\n- tests/acl/test_acl_outer_vlan.py, `get_acl_counter` (lines ~299-309 at head): After `result = duthost.show_and_parse('aclshow -a')` and the `len(result) == 0` guard, the `for rule in result:` loop only returns when both `table_name` and `rule_name` match. If `aclshow -a` returns rows that do not include the requested `{table_name}|{rule_name}`, control falls out of the loop and the function implicitly returns `None`. Callers (e.g. `_do_verification`: `count_before = get_acl_counter(...)`, `count_after = get_acl_counter(...)`, `pytest_assert(count_after >= count_before + 1, ...)`) treat the return as an `int`, so a `None` will surface as a confusing `TypeError` instead of a clear failure. Add an explicit `pytest.fail(\"Failed to retrieve acl counter for {}|{}\".format(table_name, rule_name))` after the loop.\n\n### Grounded nits\n\n- tests/acl/test_acl_outer_vlan.py, `get_acl_counter`: the `len(result) == 0` branch reuses the same message as the \"rule not found\" case would. Tightening it (e.g. \"aclshow -a returned no rows\") would help triage.\n- `time.sleep(timeout)` uses the parameter named `timeout`, which semantically denotes a maximum wait, not a guaranteed sleep. Callers pass `timeout=0` for the \"before\" read (verified at head in `_do_verification`) and the default `ACL_COUNTERS_UPDATE_INTERVAL=15` for the \"after\" read, so behavior is preserved, but the parameter name is now misleading. Consider renaming or documenting.\n- Constant naming: the module defines `ACL_COUNTERS_UPDATE_INTERVAL = 15` and the default arg is `timeout=ACL_COUNTERS_UPDATE_INTERVAL`. A brief comment near the sleep explaining why a fixed interval is used (orchagent flush cadence) would prevent the previous `wait_until` regression from being reintroduced.\n\n---\nReviewed by AI agent on behalf of Ying.\n"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-07-09T12:54:41Z",
+          "body": "@markx-arista I reviewed this. The revert makes sense: `get_acl_counter()` needs a fixed wait for orchagent counter flush, not a poll that only verifies the ACL rule exists. The previous `wait_until()` also broke the `timeout=0` pre-traffic read, where the intended behavior is an immediate counter snapshot.\n\nI also checked Ying's concern about falling out of the loop when `aclshow -a` returns rows but not the requested rule. The current head includes an explicit `pytest.fail(...)` after the loop, so that path now fails clearly instead of returning `None`.\n\nCI is green and the PR is already approved. No blockers from my side.\r\n"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-09T14:04:25Z",
+          "body": "**Correction to my earlier review.** I re-checked `get_acl_counter` at the merged head and my \"blocking\" call was wrong: the function already has an explicit `pytest.fail(...)` after the `for rule in result:` loop, so it fails clearly rather than returning `None`. My comment was reasoning from the diff hunk's context window, which cut off before that line \u2014 apologies for the noise. The revert is sound (fixed wait for the orchagent counter flush + correct `timeout=0` pre-traffic snapshot), and @StormLiangMS's read is right. No blockers from me. The remaining points (empty-vs-not-found sharing the same failure string, and the `timeout` parameter-name semantics) are minor, non-blocking nits for a future cleanup if anyone touches this again.\n\nAI-assisted review, reviewed by Ying Xie (@yxieca).\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-13T02:31:00Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26096"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-07-15T03:29:57Z",
+          "body": "Removed `Request for 202605 branch` because this change is already present in `202605`.\n\nEvidence: I checked the PR branch against `origin/202605` with `git cherry`; all commit patches from this PR are patch-equivalent to commits already in `202605` (no non-equivalent commits remain).\n\nSo no additional 202605 cherry-pick is needed."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "id": "management-23873",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 23873,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/23873",
+    "title": "Bug: [sflow] sflow tests on VS/KVM silently pass without executing PTF traffic",
+    "created_at": "2026-04-13T17:19:34Z",
+    "closed_at": "2026-04-17T23:09:17Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`tests/sflow/test_sflow.py` reports PASS on VS/KVM testbeds without actually running any PTF traffic. PR #21208 removed the global `skip` condition that excluded VS from sflow tests, but omitted `kvm_support=True` on the `ptf_runner` call in `partial_ptf_runner`. When `dut_type == \"kvm\"` and `kvm_support is False` (the default), `ptf_runner` silently skips the PTF test and returns a passing result.\n\n### Steps to Reproduce\n\n1. Set up a VS testbed\n2. Run `tests/sflow/test_sflow.py`\n3. Observe test reports PASS with no PTF traffic sent or validated\n\n### Actual Behavior and Expected Behavior\n\n- **Actual:** Test reports PASS but no sflow samples are generated or validated via PTF\n- **Expected:** PTF traffic executes and sflow sample counts are validated on VS/KVM\n\n### Relevant log output\n\nN/A \u2014 no error is surfaced; the test silently passes\n\n### Output of `show version`\n\nN/A (VS testbed)\n\n### Attach files (if any)\n\nFixed by #23659"
+  },
+  "resolution": {
+    "pr_number": 23659,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/23659",
+    "title": "[sflow] Properly enable sflow tests on VS/KVM",
+    "merged_at": "2026-04-17T23:09:16Z",
+    "description": "### Description of PR\n\nSummary:\nA previous attempt to enable sflow/test_sflow.py on VS (#21208) removed the global skip condition but omitted `kvm_support=True` on the `ptf_runner` call. As a result, `ptf_runner` silently skips the PTF test on KVM DUTs (`dut_type == \"kvm\"` and `kvm_support is False`), causing the test to report PASS without actually running any traffic.\n\nFixes #23873\n\n### Type of change\n\n- [x] Bug fix\n- [x] Test case improvement\n\n### Approach\n#### What is the motivation for this PR?\n\nWith `kvm_support=True` missing, running sflow tests on a VS testbed appeared\nto pass but the PTF traffic test was never executed. Three fixes are included:\n\n1. **`kvm_support=True`** in the `ptf_runner` call in `partial_ptf_runner` so the PTF test actually executes on VS/KVM DUTs.\n2. **PTF packet batching** \u2014 VS TAP interfaces have a limited kernel receive queue depth. Sending the full sampling burst (~512 packets) at once causes ~20% packet loss before the TC ingress sampler processes them, leading to under-sampling failures. Sending in 32-packet batches with a 1ms pause between batches allows the queue to drain.\n3. **xfail `testWarmreboot` on VS** \u2014 VS SAI does not re-apply TC ingress filters after `vs_recreate_hostif_tap_interfaces()` creates new TAP interfaces during warm reboot, resulting in 0 sflow samples. Tracked in sonic-net/sonic-buildimage#26594. The xfail will clear automatically once that issue is resolved.\n\n#### How did you do it?\n\n- `tests/sflow/test_sflow.py`: Add `kvm_support=True` to `ptf_runner` call.\n- `ansible/roles/test/files/ptftests/py3/sflow_test.py`: Send packets in 32-packet batches with 1ms between batches.\n- `tests_mark_conditions.yaml`: Add `xfail` for `testWarmreboot` on VS, conditioned on sonic-net/sonic-buildimage#26594 being open.\n\n#### How did you verify/test it?\n\nValidated on a VS testbed.\n\n#### Any platform specific information?\n\nVS/KVM only.\n\nNOTE: This is an AI-assisted PR, please review accordingly.\n\n*\u2014 anders-bot (AI-assisted, on behalf of @anders-nexthop)*",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/sflow_test.py",
+        "additions": 11,
+        "deletions": 1
+      },
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 4,
+        "deletions": 0
+      },
+      {
+        "path": "tests/sflow/test_sflow.py",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

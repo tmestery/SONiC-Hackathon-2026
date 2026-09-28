@@ -1,0 +1,43 @@
+{
+  "id": "management-24147",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24147,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24147",
+    "title": "Bug: test_gnoi_system_reboot_warm teardown fails on t0/vs after PR #23997 \u2014 gnmi_tls fixture rollback races with post-test YANG validation",
+    "created_at": "2026-04-23T02:58:11Z",
+    "closed_at": "2026-04-24T05:26:49Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n ## Summary\n\nSince `4f4cf8044a` (PR #23997, \"Fix TLS authentication failure in test_gnoi_system_reboot\", merged 2026-04-20 ~18:41\nUTC), `gnmi/test_gnoi_system_reboot.py::test_gnoi_system_reboot_warm` consistently errors on **teardown** on\nmaster/t0/vs. The test body itself passes; the failure is in the post-test YANG validation hook reporting `container ...\n is not running` and `Unable to connect to redis (unix-socket) \u2013 Cannot assign requested address`.\n\n ## Impact\n\n Module-level fail rate on master/t0/vs:\n\n | Date | Fail % |\n |---|---|\n | Apr 3 \u2013 Apr 19 | 0 % (>14 days clean, 3000+ runs) |\n | **Apr 20 (regression day)** | 4.3 % |\n | Apr 21 | 13.0 % |\n | Apr 22 | 14.6 % |\n | Apr 23 (partial) | 35.7 % |\n\n Affected scope (since Apr 20):\n\n | Topology | ASIC | Runs | Fails | Fail % |\n |---|---|---|---|---|\n | **t0** | vs | 250 | 58 | **23.2 %** |\n | t1-lag | vs | 197 | 1 | 0.5 % |\n | t1-8-lag | vs | 251 | 0 | 0 % |\n | t2 | vs | 238 | 0 | 0 % |\n\n Only `test_gnoi_system_reboot_warm` is affected; `test_gnoi_system_reboot_cold` continues to pass.\n\n### Steps to Reproduce\n\n ## Reproduction\n\n Any PR pipeline that runs the `impacted-area-kvmtest-t0` job on master will hit it intermittently. Recent example\ntestplan:\n\nhttps://elastictest.org/scheduler/testplan/69e96446678eea40b1d997fa?testcase=gnmi%2Ftest_gnoi_system_reboot.py%7C%7C%7C2&type=console\n\n (All three retry attempts `|||0`, `|||1`, `|||2` failed identically.)\n\n ## Failure signature (from test log)\n\n ```text\n test_gnoi_system_reboot.py::test_gnoi_system_reboot_cold PASSED     [ 50%]\n test_gnoi_system_reboot.py::test_gnoi_system_reboot_warm PASSED     [100%]\n test_gnoi_system_reboot.py::test_gnoi_system_reboot_warm ERROR      [100%]\n\n ERROR at teardown of test_gnoi_system_reboot_warm\n ERROR | YANG validation failed on vlab-01 (post-test):\n        Error response from daemon: container 290cab99f3f1f66adb2f99e2bf386ff... is not running\n        Error: Unable to connect to redis (unix-socket) - Connection refused(1): Cannot assign requested address\n        Failed: post-test YANG validation failed\n\n not running in container 'swss' are: ['buffermgrd','fabricmgrd','fdbsyncd','intfmgrd','nbrmgrd',\n                                       'neighsyncd','portmgrd','tunnelmgrd','vlanmgrd','vrfmgrd','vxlanmgrd']\n not running in container 'bgp'  are: ['bgpcfgd','bgpd','fpmsyncd','staticd','zebra']\n not running in container 'teamd' are: ['teamsyncd']\n not running in container 'dhcp_relay' are: ['dhcp-relay:dhcp6relayd','dhcp-relay:dhcprelayd']\n ```\n\n### Actual Behavior and Expected Behavior\n\n ## Root cause\n\n PR #23997 introduced a new `gnmi_tls` fixture in `tests/common/fixtures/grpc_fixtures.py`. Its `finally`-block teardown\n calls:\n\n ```python\n finally:\n     logger.info(\"Cleaning up gNOI TLS server environment\")\n     try:\n         output = rollback(duthost, checkpoint_name)\n         ...\n     except Exception as e:\n         logger.error(\"Configuration rollback failed with exception: %s\", e)\n     # No wait_critical_processes / wait_for_startup before returning\n ```\n\n After `test_gnoi_system_reboot_warm` runs, the in-memory config has drifted from the pre-test checkpoint, so `rollback`\n triggers a real `config replace` \u2192 restarts `swss`, `bgp`, `teamd`, `dhcp_relay` containers. The fixture returns\nimmediately without waiting for those containers to come back. Pytest then runs the post-test YANG validation hook,\nwhich `docker exec`s into those very containers mid-restart and fails.\n\n This explains:\n\n - **Why only WARM, not COLD**: cold reboot's checkpoint matches the post-startup state, so `rollback` is a no-op; warm\nreboot leaves drift, so `rollback` does real work.\n - **Why mainly t0 and not t1/t2**: t0 has more dynamic services (DHCP relay, VLAN intfs, single host-facing DUT) \u21d2\nlarger rollback diff \u21d2 longer container restart window.\n - **Why same-image runs flip pass\u2192fail across the same day**: same OS image (`SONiC.master.1093447-6c9e8c302`) passed\nat 10:23 UTC and failed at 22:30 UTC on Apr 20; only sonic-mgmt master moved.\n\n ## Suggested fix\n\n In the `gnmi_tls` fixture cleanup (`tests/common/fixtures/grpc_fixtures.py`), wait for critical processes after\nrollback:\n\n ```python\n finally:\n     logger.info(\"Cleaning up gNOI TLS server environment\")\n     try:\n         output = rollback(duthost, checkpoint_name)\n         ...\n     except Exception as e:\n         logger.error(\"Configuration rollback failed with exception: %s\", e)\n\n     # Wait for containers to come back before returning to pytest\n     from tests.common.platform.processes_utils import wait_critical_processes\n     wait_critical_processes(duthost)\n ```\n\n ## Suspect commit\n\n `4f4cf8044a` \u2014 sonic-net/sonic-mgmt PR [#23997](https://github.com/sonic-net/sonic-mgmt/pull/23997) \"Fix TLS\nauthentication failure in test_gnoi_system_reboot\" (author: @ravaliyel, merged 2026-04-20 18:41 UTC).\n\n ## Environment\n\n - Branch: master\n - Topology: t0 (KVM virtual, `vlab-01`)\n - ASIC: vs\n - Image: `SONiC.master.1093447-6c9e8c302` and later\n - sonic-mgmt: master at `4f4cf8044a` and later\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24150,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24150",
+    "title": "Fix gnmi_tls fixture teardown race: wait for critical processes after config rollback",
+    "merged_at": "2026-04-24T05:26:48Z",
+    "description": "After `test_gnoi_system_reboot_warm`, config drift causes `rollback()` in the `gnmi_tls` fixture teardown to trigger a real `config replace`, restarting containers (`swss`, `bgp`, `teamd`, `dhcp_relay`). The fixture returned immediately, so the post-test YANG validation hook ran `docker exec` into mid-restarting containers and failed.\n\n## Changes\n\n- **`tests/common/fixtures/grpc_fixtures.py`**: In the `gnmi_tls` fixture `finally` block, call `wait_critical_processes(duthost)` after `rollback()` to block until all critical processes are healthy before returning to pytest. Wrapped in `try/except` so a wait failure doesn't mask the original test result.\n\n```python\nfinally:\n    try:\n        output = rollback(duthost, checkpoint_name)\n        ...\n    except Exception as e:\n        logger.error(\"Configuration rollback failed with exception: %s\", e)\n\n    try:\n        logger.info(\"Waiting for critical processes to be healthy after rollback\")\n        wait_critical_processes(duthost)\n        logger.info(\"All critical processes are healthy\")\n    except Exception as e:\n        logger.error(\"Waiting for critical processes failed with exception: %s\", e)\n```\n\nOnly `test_gnoi_system_reboot_warm` was affected (not `cold`) because cold reboot's checkpoint matches the post-startup state, making `rollback` a no-op. The race is more pronounced on `t0` due to more dynamic services (DHCP relay, VLAN interfaces).",
+    "files": [
+      {
+        "path": "tests/common/fixtures/grpc_fixtures.py",
+        "additions": 8,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

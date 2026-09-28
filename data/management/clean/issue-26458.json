@@ -1,0 +1,43 @@
+{
+  "id": "management-26458",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26458,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26458",
+    "title": "Bug: LogAnalyzer false positive on dualtor config_reload tests due to journalctl-tagged TACACS+ error",
+    "created_at": "2026-07-22T09:37:43Z",
+    "closed_at": "2026-08-21T06:49:04Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nAfter sonic-buildimage PR [#18113](https://github.com/sonic-net/sonic-buildimage/pull/18113) migrated rsyslog from UDP to RELP for container-to-host syslog forwarding, transient TACACS+ errors during config reload now appear with the `journalctl:` syslog tag instead of process-specific tags like `audisp-tacplus`, `dockerd`, `ntpd`, etc.\n\nThe LogAnalyzer already ignores these same TACACS+ errors from those process-specific tags, but has no pattern for `journalctl:`. Any test calling `config_reload` on a TACACS+ enabled DUT running 202605+ builds will fail on teardown with a false positive.\n\n### Steps to Reproduce\n\n1. Use a testbed with TACACS+ authentication configured (e.g. dualtor-AA)\n2. Run any test that performs `config reload` on a 202605 build (e.g. `dualtor_io/test_link_failure.py::test_active_link_admin_down_config_reload_upstream`)\n3. LogAnalyzer catches transient TACACS+ errors during the networking restart phase.\n\n### Actual Behavior and Expected Behavior\n\n **Actual:** Tests fail on teardown with `Failed: Got matched syslog in processes \"analyze_logs\"` due to:\n`gd377 ERR journalctl: tac_connect_single: connection failed with <IP>:49: Transport endpoint is not connected`\n`gd377 ERR journalctl: nss_tacplus: failed to connect TACACS+ server <IP>:49, ret=-9: Transport endpoint is not connected`\n\n**Expected:** These transient errors should be ignored, as they are ignored for every other process tag.\n\n### Relevant log output\n\n```shell\n- Test: test_active_link_admin_down_config_reload_upstream[active-active]\n- Topology: dualtor-aa and dualtor-aa-56\n\ngd377 ERR journalctl: tac_connect_single: connection failed with <IP>:49: Transport endpoint is not connected\ngd377 ERR journalctl: nss_tacplus: failed to connect TACACS+ server <IP>:49, ret=-9: Transport endpoint is not connected\n```\n\n### Output of `show version`\n\n```shell\nbranch.202605-ars.e36dabd7-buildimage.7c11c58c300637d0f925e35a075c920e8a499f96-nightly-2026.06.17.15.48\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26460,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26460",
+    "title": "Add loganalyzer ignore for journalctl-tagged TACACS+ transient errors",
+    "merged_at": "2026-08-21T06:49:03Z",
+    "description": "During config reload, the NSS TACACS+ module attempts to connect to the TACACS+ server while the network stack is restarting, producing ERR-level syslog messages. The loganalyzer ignore list already covers these errors from ntpd, chronyd, iptables, audisp-tacplus, dockerd, and libnetwork-setkey. In 202605, these errors appear under the 'journalctl:' syslog tag instead of process-specific tags.\n\nThe regex matches only \"Transport endpoint is not connected\" (ENOTCONN), which occurs exclusively when the socket is created but the peer connection was never established \u2014 a transient state during service restarts. Real TACACS+ failures produce different errno strings that remain caught by LogAnalyzer.\n\n### Description of PR\nTests calling `config_reload` on TACACS+-enabled DUTs running 202605+ builds fail on teardown with false-positive LogAnalyzer matches:\n\n```\ngd377 ERR journalctl: tac_connect_single: connection failed with <IP>:49: Transport endpoint is not connected\ngd377 ERR journalctl: nss_tacplus: failed to connect TACACS+ server <IP>:49, ret=-9: Transport endpoint is not connected\n```\n\nThese are transient errors during the networking restart phase of `config reload`. The LogAnalyzer already ignores them from `audisp-tacplus`, `dockerd`, `ntpd`, `iptables`, `chronyd`, and `libnetwork-setkey`. After sonic-buildimage PR [#18113](https://github.com/sonic-net/sonic-buildimage/pull/18113) (RELP migration), the syslog tag changed to `journalctl:` which has no ignore pattern.\n\nThis fix adds ignore patterns for the `journalctl:`-tagged TACACS+ errors. 175 test files in sonic-mgmt call `config_reload` and are affected.\n\nSummary:\nFixes #26458\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: regression\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n- 202605: branch.202605-ars.e36dabd7 (nightly 2026.06.17) \u2014 `test_active_link_admin_down_config_reload_upstream[active-active]` and `test_active_link_admin_down_config_reload_downstream[active-active]` pass teardown with fix applied on testbed dtAA.\n\n### Approach\n#### What is the motivation for this PR?\nsonic-buildimage PR [#18113](https://github.com/sonic-net/sonic-buildimage/pull/18113) migrated rsyslog from UDP to RELP for container-to-host syslog forwarding. This changed the syslog tag for host-level TACACS+ transient errors from process-specific names to `journalctl:`. The LogAnalyzer ignore list had no pattern for this tag, causing false-positive teardown failures on all `config_reload` tests with TACACS+ enabled.\n\nThe loganalyzer ignore list already covers these errors from ntpd, chronyd, iptables, audisp-tacplus, dockerd, and libnetwork-setkey.\n\n#### How did you do it?\nAdded two ignore patterns to `loganalyzer_common_ignore.txt` matching `journalctl:`-tagged `tac_connect_single` and `nss_tacplus` errors with `Transport endpoint is not connected`.\n\nThe regex only matches errno=107 (ENOTCONN) which is specific to the \"socket not yet ready\" transient state during service restarts. Real TACACS+ failures produce different errno strings and remain caught on loganalyzer.\n\n#### How did you verify/test it?\nRan `test_active_link_admin_down_config_reload_upstream[active-active]` and `test_active_link_admin_down_config_reload_downstream[active-active]` on dualtor-AA testbed with build `branch.202605-ars.e36dabd7`. Both pass teardown with the fix applied.\n\n#### Any platform specific information?\nNo\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/tools/loganalyzer/loganalyzer_common_ignore.txt",
+        "additions": 5,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "number": 23756,
+  "title": "Bug: test_route_perf: reload_dut fixture crashes with AttributeError when rep_call is missing",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23756",
+  "createdAt": "2026-04-08T22:06:03Z",
+  "closedAt": "2026-04-15T07:42:13Z",
+  "author": "arista-hpandya",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "arista-hpandya"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe reload_dut fixture is an autouse=True teardown fixture. After yield, it accesses request.node.rep_call.failed to decide whether to config-reload the DUT. The problem is that rep_call is only set by the pytest_runtest_makereport hook after the test call phase completes. If the fixture teardown runs in a scenario where rep_call hasn't been attached yet (e.g., the test was skipped, collection failed, or an error occurred during setup), accessing request.node.rep_call raises an AttributeError, masking a real failure.\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/af3dde7d701145173a47061a2d086c1e6acfdeee/tests/route/test_route_perf.py#L152-L158\n\n\n\n### Steps to Reproduce\n\nIf any of the dependent fixture fails, this error can be reproduced.\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\n\nWhen test_perf_add_remove_routes fails during the setup phase (e.g., DUT unreachable, fixture error, or test skipped), the reload_dut teardown crashes with:\n\nAttributeError: 'Function' object has no attribute 'rep_call'\n\nThis results in:\n- The original setup failure / skip reason is masked in the test report by the AttributeError\n- The config_reload cleanup is never evaluated \u2014 if it was actually needed, the DUT is left in a dirty state\n- Test report shows an ERROR in teardown instead of the real root cause, making triage harder\n\nExpected behavior:\n\nWhen the test never reaches the call phase, the reload_dut teardown should exit gracefully without error. Specifically:\n\n- If rep_call is not present (test was skipped or failed in setup), the fixture should assume no config reload is needed and return silently\n- The original failure / skip reason should be the only error visible in the test report\n- No secondary AttributeError should appear in teardown\n\n### Relevant log output\n\n```shell\nAttributeError: 'Function' object has no attribute 'rep_call'\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23757,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23757",
+      "title": "Fix `reload_dut` AttributeError when test skips or fails in setup ",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-15T07:42:11Z",
+      "createdAt": "2026-04-08T22:11:35Z",
+      "author": "arista-hpandya",
+      "body": "\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nThe `reload_dut` fixture in `tests/route/test_route_perf.py` unconditionally accesses `request.node.rep_call.failed` during teardown. The `rep_call` attribute is only set by the `pytest_runtest_makereport` hook (in `tests/conftest.py`)\r\nafter the call phase completes. When a test is skipped or fails during setup, `rep_call` is never set, causing an `AttributeError` that masks the original failure.\r\n\r\nThis PR adds a `hasattr` guard so the teardown exits gracefully when the test never reaches the call phase\r\n\r\nFixes #23756 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n- [x] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nWhen `test_perf_add_remove_routes` fails during setup or is skipped, the `reload_dut` fixture teardown crashes with:\r\nAttributeError: 'Function' object has no attribute 'rep_call'\r\nThis secondary error masks the real root cause in the test report and may leave the DUT in a dirty state.\r\n\r\n#### How did you do it?\r\nAdded a `hasattr(request.node, \"rep_call\")` guard before accessing `request.node.rep_call.failed`\r\n\r\n#### How did you verify/test it?\r\n- Verified the fix by triggering a setup-phase failure (unreachable DUT) and confirming the teardown completes without `AttributeError`.\r\n- Confirmed that the `config_reload` path still executes correctly when `rep_call` is present and `failed` is `True`.\r\n\r\n#### Any platform specific information?\r\nNA\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nNA\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nNA\r\n",
+      "files": [
+        {
+          "path": "tests/route/test_route_perf.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T22:11:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T22:12:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T22:12:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T22:12:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

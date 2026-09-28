@@ -1,0 +1,86 @@
+{
+  "number": 21798,
+  "title": "Bug: test_vlan_ports_down need to be aligned for v6 only topology",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/21798",
+  "createdAt": "2025-12-30T06:58:33Z",
+  "closedAt": "2026-03-11T15:34:32Z",
+  "author": "JibinBao",
+  "labels": [
+    "Bug :bug:",
+    "Pending Triage :medical_symbol:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\nfile: vlan/test_vlan_ports_down.py\nWhen run t**est_vlan_ports_down** on t0-isolated-v6-d32u32s, it will raise the following error   \ndef test_vlan_ports_down(vlan_ports_setup, duthosts, rand_one_dut_hostname, nbrhosts, tbinfo, ptfadapter):\n        \"\"\"\n        Asserts the following conditions when all member ports of a VLAN interface are down:\n            1. The VLAN interface's oper status remains Up.\n            2. The VLAN's subnet IP is advertised to the T1 neighbors.\n            3. The IP decapsulation feature works for packets that are sent to the VLAN interfaces's IP address.\n        \"\"\"\n        duthost = duthosts[rand_one_dut_hostname]\n        vlan_name = vlan_ports_setup\n        ip_interfaces = duthost.show_ip_interface()[\"ansible_facts\"][\"ip_interfaces\"]\n>       vlan_info = ip_interfaces[vlan_name]\nE       KeyError: 'Vlan1000'\n\nduthost    = \nduthosts   = []\nip_interfaces = {'Loopback0': {'admin': 'up', 'bgp_neighbor': 'N/A', 'ipv4': '10.1.0.32', 'oper_state': 'up', ...}, 'docker0': {'admin..., 'oper_state': 'up', ...}, 'lo': {'admin': 'up', 'bgp_neighbor': 'N/A', 'ipv4': '127.0.0.1', 'oper_state': 'up', ...}}\nnbrhosts   = {'ARISTA01PT0': , 'ARISTA01T1': , 'ARISTA02PT0': , 'ARISTA09T1': , ...}\nptfadapter = \nvlan_name  = 'Vlan1000'\n\n### Steps to Reproduce\n\nNeed to align the test for v6 only topology\n\n### Actual Behavior and Expected Behavior\n\nThe test can be supported by v6 only topology\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2026-01-07T16:58:59Z",
+      "body": "@JibinBao can you add some clarifications? Are you saying that when the dataplane is IPv6 only (vlan1000 only have IPv6 address assigned, the expectation does not meet?"
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2026-01-07T16:59:21Z",
+      "body": "@yanmo96  FYI"
+    },
+    {
+      "author": "JibinBao",
+      "createdAt": "2026-01-08T01:23:27Z",
+      "body": "> [@JibinBao](https://github.com/JibinBao) can you add some clarifications? Are you saying that when the dataplane is IPv6 only (vlan1000 only have IPv6 address assigned, the expectation does not meet?\n\nHi @yxieca . Yes, vlan1000 only has ipv6 address. duthost.show_ip_interface() just returns the ipv4 data, for ipv6, we need to call duthost.show_ipv6_interface()"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22850,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22850",
+      "title": "Support IPv6-only topologies in test_vlan_ports_down",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-11T15:34:30Z",
+      "createdAt": "2026-03-10T17:24:37Z",
+      "author": "yxieca",
+      "body": "### Description of PR\n\nSummary:\n`test_vlan_ports_down` unconditionally calls `show_ip_interface()` and accesses the VLAN by name, causing a `KeyError` on IPv6-only topologies (e.g. `t0-isolated-v6-d32u32s`) where the VLAN has no IPv4 address.\n\nThis PR makes the test dual-stack aware by making IPv4 and IPv6 checks conditional on address availability.\n\nFixes #21798\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\n`test_vlan_ports_down` crashes with `KeyError: 'Vlan1000'` on IPv6-only topologies because `duthost.show_ip_interface()` only returns interfaces with IPv4 addresses. The VLAN exists but has no IPv4 address assigned.\n\n#### How did you do it?\n\nMade all three test phases (oper status, BGP route check, IP-in-IP decap) conditional on address family availability:\n- Use `.get()` to safely check if the VLAN appears in IPv4/IPv6 interface lists\n- Run oper status checks for whichever address families are present\n- Run BGP route advertisement checks per available address family\n- Skip the IP-in-IP decapsulation test on IPv6-only topologies (it requires an IPv4 destination)\n- Fail explicitly if the VLAN has neither IPv4 nor IPv6\n\n#### How did you verify/test it?\n\n- Code review against the issue description and `show_ipv6_interfaces()` API\n- flake8 lint pass (max-line-length=120)\n\n#### Any platform specific information?\n\nApplicable to any platform running IPv6-only topologies (e.g. `t0-isolated-v6-d32u32s`).\n\n#### Supported testbed topology if it's a new test case?\n\nN/A (bug fix)\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "tests/vlan/test_vlan_ports_down.py",
+          "additions": 42,
+          "deletions": 24
+        }
+      ],
+      "comments": [
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-10T17:24:42Z",
+          "body": "This PR was raised by an AI agent on behalf of Ying Xie."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T17:24:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T17:25:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-10T20:04:31Z",
+          "body": "## Local KVM Test Results (commit d96bf5819)\n\n**Test**: `vlan/test_vlan_ports_down.py` on KVM T0 (vms-kvm-t0, vlab-01)\n\n```\n1 passed in 109.04s (0:01:49)\n```\n\nIPv6-only topology support confirmed working on VS."
+        },
+        {
+          "author": "JibinBao",
+          "createdAt": "2026-03-11T09:13:06Z",
+          "body": "Hi @yxieca \r\nI have run it on our setup, it passed"
+        },
+        {
+          "author": "JibinBao",
+          "createdAt": "2026-03-11T09:14:33Z",
+          "body": "The fix also needs to be cherry-pick to 202511"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "id": "management-5372",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 5372,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/5372",
+    "title": "fragmented packets from DUT are not forwarded to VM",
+    "created_at": "2022-03-22T23:41:47Z",
+    "closed_at": "2022-04-10T05:01:55Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\nPR https://github.com/Azure/sonic-mgmt/pull/5320 introduced more flow control rules for packets being forwarded to the VM's on the testbed server.  However, some of the added rules cause fragmented packets from the DUT to not be forwarded over the ovs-vsctl bridge to the VM.\n\n**Steps to reproduce the issue:**\n1. In a T1/T2 topology, ping the IPv6 loopback address of one of the VM's to the other VM. In the example, below, we have VM1104 with loopback address ```2064:100::7``` and we are pinging the loopback address ```2064:100::9```.\n```\nARISTA01T1>en\nARISTA01T1#bash\n\nArista Networks EOS shell\n\nbash-4.2# sudo ping -c1 2064:100::9 -W 3 -I 2064:100::7\nPING 2064:100::9(2064:100::9) from 2064:100::7 : 56 data bytes\n64 bytes from 2064:100::9: icmp_seq=1 ttl=63 time=1.06 ms\n\n--- 2064:100::9 ping statistics ---\n1 packets transmitted, 1 received, 0% packet loss, time 0ms\nrtt min/avg/max/mdev = 1.069/1.069/1.069/0.000 ms\n\n```\n2. Now repeat the ping, but with a packet size of 1456 (which would cause the packet to be fragmented):\n```\nbash-4.2# sudo ping -c1 2064:100::9 -W 3 -I 2064:100::7 -s 1453 -t 255\nPING 2064:100::9(2064:100::9) from 2064:100::7 : 1453 data bytes\n\n--- 2064:100::9 ping statistics ---\n1 packets transmitted, 0 received, 100% packet loss, time 0ms\n\nbash-4.2#\n```\n\nOn the testbed server, we have the following bridge for VM1105:\n```\nansible@sonic-tb11:~$ sudo ovs-vsctl list-ports br-VM1105-0\nVM1105-t0\neno2.102\ninje-vms_11-8\n\n```\ntcpdump on the testbed server on the fanout port connected to VM1105 (eno2.100) when the ping fails shows:\n```\nansible@sonic-tb11:~$ sudo tcpdump -i eno2.102\ntcpdump: verbose output suppressed, use -v or -vv for full protocol decode\nlistening on eno2.102, link-type EN10MB (Ethernet), capture size 262144 bytes\n.\n.\n<IPV6>.440251 IP6 2064:100::7 > 2064:100::9: frag (0|1448) ICMP6, echo request, seq 1, length 1448\n<IPV6>.440378 IP6 2064:100::7 > 2064:100::9: frag (1448|13)\n```\nWe can see the two fragments on the fanout port eno2.100.\ntcpdump on the testbed server on the injected port connected to VM1105 (eno2.100) when the ping fails shows:\n```\nansible@sonic-tb11:~$ sudo tcpdump -i inje-vms_11-8\ntcpdump: verbose output suppressed, use -v or -vv for full protocol decode\nlistening on inje-vms_11-8, link-type EN10MB (Ethernet), capture size 262144 bytes\n\n<IPV6>.872360 IP6 2064:100::7 > 2064:100::9: frag (0|1448) ICMP6, echo request, seq 1, length 1448\n<IPV6>.872487 IP6 2064:100::7 > 2064:100::9: frag (1448|13)\n\n```\nAgain we see both fragments forwarded to the injected port.\n\nHowever, tcpdump on port that maps to the VM1105 (VM1105-t0) does not see both the fragments. It only sees the first fragment:\n```\nansible@sonic-tb11:~$ sudo tcpdump -i VM1105-t0\ntcpdump: verbose output suppressed, use -v or -vv for full protocol decode\nlistening on VM1105-t0, link-type EN10MB (Ethernet), capture size 262144 bytes\n\n<IPV6>.164243 IP6 2064:100::7 > 2064:100::9: frag (0|1448) ICMP6, echo request, seq 1, length 1448\n\n```\n\nThe packet is not forwarded to the VM because of the following added rules:\n\n```\nansible@sonic-tb11:~$ sudo ovs-ofctl dump-flows br-VM1105-0\n .\n .\n cookie=0x0, duration=4348.314s, table=0, n_packets=0, n_bytes=0, priority=5,ip,in_port=\"eno2.102\" actions=output:\"inje-vms_11-8\"\n cookie=0x0, duration=4348.310s, table=0, n_packets=13, n_bytes=980, priority=5,ipv6,in_port=\"eno2.102\" actions=output:\"inje-vms_11-8\"\n\n```\n\nRemoving these flows makes the ping with large packet size pass.\n\n**Describe the results you received:**\nPing with large packet size between the VMs does not work\n\n**Describe the results you expected:**\nPing with large packet size between the VMs should work\n\n**Additional information you deem important:**\n\n    **Output of `show version`:**\n\n    ```\n    (paste your output here)\n    ```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```"
+  },
+  "resolution": {
+    "pr_number": 5485,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/5485",
+    "title": "Set MTU to 9124 on interfaces of ceos neighbors and allow fragmented packets to neighbors",
+    "merged_at": "2022-04-10T05:01:55Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #5372\nThe issue was caused by fragmented packets dropped by current openflow rules configured on ovs bridges between EOS neighbors and DUT.\nThe fix includes two parts:\n1. Allow fragmented packets to EOS neighbors, add one more rule to allow frag tag packets to the interfaces of EOS neighbors.\n```\nVMTopology.cmd(\"ovs-ofctl add-flow %s table=0,priority=8,ip,in_port=%s,nw_frag=yes,action=output:%s,%s\" % (br_name, dut_iface_id, vm_iface_id, injected_iface_id))\nVMTopology.cmd(\"ovs-ofctl add-flow %s table=0,priority=8,ipv6,in_port=%s,nw_frag=yes,action=output:%s,%s\" % (br_name, dut_iface_id, vm_iface_id, injected_iface_id))\n```\nFragmented ICMPv6 packets can be matched by this rule, ping success.\n```\n cookie=0x0, duration=183.746s, table=0, n_packets=1, n_bytes=75, priority=8,ipv6,in_port=\"p4p1.410\",nw_frag=yes actions=output:\"VM12009-t0\",output:\"inje-v12-11-17\"\n```\n\n2. Our default MTU is 9216 for all cEOS devices, the config is `fp_mtu_size: 9216` in `ansible/roles/vm_set/vars/main.yml`,\nDuring `add-topo` stage, it will call `add_ceos_list.yml` and then call `ceos_network.py`, here all interfaces in ceos will be configured with MTU 9216. Then later it will load startup-config for all cEOS in `ceos_config.yml` , in their config j2 file, if there is any config for interface, after configuration, MTU is set to default 1500.\nThat's why MTU of Ethernet1 or Port-channel which have ip address configuration is 1500, in this change, set MTU 9214 on these data interfaces.\nWhy 9214, because supported max MTU is 9214. So far, large packets whose size is less than 9214 will not be fragmented.\n\n```\nARISTA01T0(config-if-Et1)#mtu 9216\n% Max MTU for Ethernet1 is 9214\n```\n\nSigned-off-by: Zhaohui Sun <<EMAIL>>\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n- [ ] 202012\n\n### Approach\n#### What is the motivation for this PR?\nFixes #5372\n\n#### How did you do it?\n1. add one more rule to allow fragmented packet to EOS neighbors.\n2. Set MTU to 9214 for all data interfaces of cEOS neighbors.\n\n#### How did you verify/test it?\nRedeploy one t1-lag testbed and ping large ICMP or ICMPv6 packets from one T0 to another T0.\n`sudo ping -c1 fc00::46  -W 3 -I fc00::42 -s 1453 -t 225`\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "ansible/roles/eos/templates/t0-backend-leaf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t0-leaf-lag-2.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t0-leaf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t0-mclag-leaf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t1-64-lag-tor.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t1-8-lag-spine.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t1-8-lag-tor.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t1-backend-tor.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t1-lag-spine.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t1-lag-tor.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t2-core.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t2-leaf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t2-vs-core.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/eos/templates/t2-vs-leaf.j2",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/vm_set/library/vm_topology.py",
+        "additions": 3,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

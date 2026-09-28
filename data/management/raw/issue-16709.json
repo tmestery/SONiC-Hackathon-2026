@@ -1,0 +1,72 @@
+{
+  "number": 16709,
+  "title": "[Bug]: `tacacs/test_authorization.py::test_authorization_tacacs_only_then_server_down_after_login` fails with `Failed: Not found aaa config update log: sudo config aaa authorization tacacs+`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16709",
+  "createdAt": "2025-01-29T19:19:16Z",
+  "closedAt": "2025-02-06T18:04:43Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "chassis",
+    "Triaged"
+  ],
+  "assignees": [
+    "arista-nwolfe"
+  ],
+  "milestone": null,
+  "body": "### Issue Description\n\n```\n    def change_and_wait_aaa_config_update(duthost, command, last_timestamp=None, timeout=10):\n        if not last_timestamp:\n            last_timestamp = get_auditd_config_reload_timestamp(duthost)\n\n        duthost.shell(command)\n\n        # After AAA config update, hostcfgd will modify config file and notify auditd reload config\n        # Wait auditd reload config finish\n        def log_exist(duthost):\n            latest_timestamp = get_auditd_config_reload_timestamp(duthost)\n            return latest_timestamp != last_timestamp\n\n        exist = wait_until(timeout, 1, 0, log_exist, duthost)\n>       pytest_assert(exist, \"Not found aaa config update log: {}\".format(command))\nE       Failed: Not found aaa config update log: sudo config aaa authorization tacacs+\n```\n\nThe test grabs the last instance of the log returned by `sudo journalctl -u auditd --boot --no-pager | grep 'audisp-tacplus re-initializing configuration'`\n\nThen enables `sudo config aaa authorization tacacs+`\n\nAnd confirms there is a newer instance of the `audisp-tacplus re-initializing configuration` log.\n\nHowever, the issue is it checks for this newer instance based on the timestamp, but the timestamp is at a per-second granularity.\nSo if the new log is within the same second the test will fail.\n\nE.G. from our output:\n```\n29/01/2025 00:26:55 base._run                                L0071 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-4] AnsibleModule::shell, args=[\"sudo journalctl -u auditd --boot --no-pager | grep 'audisp-tacplus re-initializing configuration'\"], kwargs={}\n29/01/2025 00:26:56 base._run                                L0108 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-4] AnsibleModule::shell Result => {\"changed\": true, \"stdout\":\n   \"Jan 28 10:02:12 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\\n\n   ...\n   \"Jan 29 00:26:54 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\",\n   \"Jan 29 00:26:55 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\",\n   \"Jan 29 00:26:56 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\"]\n\n29/01/2025 00:26:56 base._run                                L0071 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-4] AnsibleModule::shell, args=[\"sudo config aaa authorization tacacs+\"], kwargs={}\n\n29/01/2025 00:26:56 base._run                                L0071 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-4] AnsibleModule::shell, args=[\"sudo journalctl -u auditd --boot --no-pager | grep 'audisp-tacplus re-initializing configuration'\"], kwargs={}\n29/01/2025 00:26:57 base._run                                L0108 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-4] AnsibleModule::shell Result => {\"changed\": true, \"stdout\":\n   \"Jan 28 10:02:12 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\\n\n   ...\n   \"Jan 29 00:26:54 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\",\n   \"Jan 29 00:26:55 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\",\n   \"Jan 29 00:26:56 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\",\n   \"Jan 29 00:26:56 cmp227-4 audisp-tacplus[773]: audisp-tacplus re-initializing configuration\"]\n```\n\nNote that there is a new entry but because it has the same timestamp `Jan 29 00:26:56` as the previous entry the test will hit a string match and cause the test to fail:\n```\ndef log_exist(duthost):\n    latest_timestamp = get_auditd_config_reload_timestamp(duthost)\n    return latest_timestamp != last_timestamp\n```\n\n### Results you see\n\nTest failing when back to back logs are within the same second.\n\n### Results you expected to see\n\nTest should pass if it sees a new log, we shouldn't rely on the timestamp.\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 16723,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16723",
+      "title": "Use number of logs instead of timestamp in `change_and_wait_aaa_config_update`",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-02-06T18:04:41Z",
+      "createdAt": "2025-01-30T00:13:20Z",
+      "author": "arista-nwolfe",
+      "body": "`change_and_wait_aaa_config_update` validates that the `auditd` service publishes the log `audisp-tacplus re-initializing configuration` after executing the passed in `command`.\r\n\r\nHowever, it did this by checking that the timestamp in the log message was different than the previously emitted log.\r\nAs shown in https://github.com/sonic-net/sonic-mgmt/issues/16709 these message can appear within the same second and cause the test to fail.\r\n\r\nInstead this PR changes the approach to look at how many logs have been emitted before and after the command rather than the timestamp changes.\r\n\r\nSummary:\r\nFixes #16709 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n- [x] 202411\r\n",
+      "files": [
+        {
+          "path": "tests/tacacs/test_accounting.py",
+          "additions": 3,
+          "deletions": 3
+        },
+        {
+          "path": "tests/tacacs/utils.py",
+          "additions": 7,
+          "deletions": 10
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-30T00:13:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-30T00:13:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-02-03T22:58:24Z",
+          "body": "@wenyiz2021 "
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-02-03T23:22:37Z",
+          "body": "Thanks for looking @wenyiz2021 I only changed the `last_timestamp` keyword argument in the function signature.\r\n`test_ro_disk.py` and `test_authorization.py` don't pass that keyword argument so they don't need updating"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-04-22T18:43:25Z",
+          "body": "@arlakshm should we cast this to msft-202503?"
+        }
+      ]
+    }
+  ]
+}

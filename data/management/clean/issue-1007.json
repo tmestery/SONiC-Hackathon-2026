@@ -1,0 +1,43 @@
+{
+  "id": "management-1007",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 1007,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/1007",
+    "title": "[CRM] crm_test_fdb_entry.yml test fails as syslog is missing",
+    "created_at": "2019-07-15T12:05:47Z",
+    "closed_at": "2020-04-15T17:00:06Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "x86_64",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "<!--\nDescription\n\nSteps to reproduce the issue:\n1. Run the test crm.yml with testcase in T0 topology\n- name: Run test case \"CRM FDB entry resource\"\n     include: roles/test/tasks/crm/crm_test_fdb_entry.yml\n     when: testbed_type == \"t0\"\n\n2.Observe the failure :\n\nTASK [test : Read loganalyzer summary file.] ***********************************\ntask path: /var/johnar/sonic-mgmt/ansible/roles/test/tasks/run_command_with_log_analyzer.yml:31\nMonday 15 July 2019  <IPV6> +0000 (<IPV6>.161)       <IPV6>.402 ***********\n<<IP>> ESTABLISH SSH CONNECTION FOR USER: admin\n<<IP>> SSH: EXEC sshpass -d15 ssh -C -q -o ControlMaster=auto -o ControlPersist=120s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o User=admin -o ConnectTimeout=10 -o ControlPath=/root/.ansible/cp/ansible-ssh-%h-%p-%r <IP> 'LANG=C LC_ALL=C LC_MESSAGES=C /usr/bin/python'\n\nchanged: [sonic-s5232f-9364] => {\"changed\": true, \"cmd\": \"cat \\\"/tmp/crm.2019-07-15-<IPV6>/summary.loganalysis.crm.2019-07-15-<IPV6>.log\\\"\", \"delta\": \"<IPV6>.004248\", \"end\": \"2019-07-15 <IPV6>.023314\", \"invocation\": {\"module_args\": {\"_raw_params\": \"cat \\\"/tmp/crm.2019-07-15-<IPV6>/summary.loganalysis.crm.2019-07-15-<IPV6>.log\\\"\", \"_uses_shell\": true, \"chdir\": null, \"creates\": null, \"executable\": null, \"removes\": null, \"warn\": true}, \"module_name\": \"command\"}, \"rc\": 0, \"start\": \"2019-07-15 <IPV6>.019066\", \"stderr\": \"\", \"stdout\": \"\\nLOG ANALYSIS SUMMARY\\nFILE:    /tmp/syslog    MATCHES    0\\nFILE:    /tmp/syslog    EXPECTED MATCHES    0\\n-----------------------------------\\nTOTAL MATCHES:                  0\\nTOTAL EXPECTED MATCHES:         0\\nTOTAL EXPECTED MISSING MATCHES: 1\\n-----------------------------------\", \"stdout_lines\": [\"\", \"LOG ANALYSIS SUMMARY\", \"FILE:    /tmp/syslog    MATCHES    0\", \"FILE:    /tmp/syslog    EXPECTED MATCHES    0\", \"-----------------------------------\", \"TOTAL MATCHES:                  0\", \"TOTAL EXPECTED MATCHES:         0\", \"TOTAL EXPECTED MISSING MATCHES: 1\", \"-----------------------------------\"], \"warnings\": []}\n\nTASK [test : Print loganalyzer summary file.] **********************************\ntask path: /var/johnar/sonic-mgmt/ansible/roles/test/tasks/run_command_with_log_analyzer.yml:35\nMonday 15 July 2019  <IPV6> +0000 (<IPV6>.251)       <IPV6>.653 ***********\nok: [sonic-s5232f-9364] => {\n    \"log_summary.stdout_lines\": [\n        \"\",\n        \"LOG ANALYSIS SUMMARY\",\n        \"FILE:    /tmp/syslog    MATCHES    0\",\n        \"FILE:    /tmp/syslog    EXPECTED MATCHES    0\",\n        \"-----------------------------------\",\n        \"TOTAL MATCHES:                  0\",\n        \"TOTAL EXPECTED MATCHES:         0\",\n        \"TOTAL EXPECTED MISSING MATCHES: 1\",\n        \"-----------------------------------\"\n    ]\n}\n\nshow version :\n\nSONiC Software Version: SONiC.HEAD.29-bd672000\nDistribution: Debian 9.9\nKernel: 4.9.0-9-2-amd64\nBuild commit: bd672000\nBuild date: Tue Jul  9 <IPV6> UTC 2019\nBuilt by: johnar@jenkins-worker-4\n\nPlatform: x86_64-dellemc_s5232f_c3538-r0\nHwSKU: DellEMC-S5232f-C32\nASIC: broadcom\nSerial Number: CN01WJVTCES0094Q0020\nUptime: <IPV6> up  3:59,  1 user,  load average: 0.11, 0.23, 0.25\n\n[crm-fdb.docx](https://github.com/Azure/sonic-mgmt/files/3392150/crm-fdb.docx)"
+  },
+  "resolution": {
+    "pr_number": 1559,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/1559",
+    "title": "Stop arp_update before crm test to prevent DUT learning mac address unexpectly, which caused the fdb test fail.",
+    "merged_at": "2020-04-15T17:00:06Z",
+    "description": "### Description of PR\nI run the crm test and it occationlly failed on the fdb testcase.\nThen I modified crm.yml and run fdb testcase muliple times to reproduce the issue and check the log.\nAccording to the log, DUT somehow learned another mac address and increase the fdb, which is unexpected and resulted in test fail.\nI captured the packets and find out the packet which DUT learned from is ICMP REPLY packet sent from server.\nThe reason is DUT keeps IPv6 ping request every 300 seconds, and the server just responsed.\nThe following is some log capture from DUT.\n\nApr 10 <IPV6>.444043 as7726-32x-2 ERR swss#orchagent: :- update: SAI_FDB_EVENT_LEARNED: mac <IPV6> port 2 alias Ethernet4\nApr 10 <IPV6>.444043 as7726-32x-2 ERR swss#orchagent: :- storeFdbEntryState: FdbOrch notification: mac <IPV6> was inserted into bv_id 0x260000000005b4\nApr 10 <IPV6>.444247 as7726-32x-2 ERR swss#orchagent: :- incCrmResUsedCounter: Increment used for FDB_ENTRY CRM: 2 .\n\nSummary:\nFixes #1007\n\n### Type of change\n- [+] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Approach\n#### How did you do it?\n\nStop arp_update before crm test, and restart it after finishing the test.\n\n#### How did you verify/test it?\nModify the test ansible crm.yml, test crm_test_fdb_entry.yml for than 10 times, and get all the result \"PASSED\".\n\n#### Any platform specific information?\nn/a",
+    "files": [
+      {
+        "path": "ansible/roles/test/tasks/crm/crm_test_fdb_entry.yml",
+        "additions": 9,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

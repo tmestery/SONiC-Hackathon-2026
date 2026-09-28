@@ -1,0 +1,222 @@
+{
+  "number": 21168,
+  "title": "Enhancement: [sflow] wait_for conditions rather than use sleep() for test orchestration",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/21168",
+  "createdAt": "2025-11-02T19:58:54Z",
+  "closedAt": "2026-02-26T09:00:50Z",
+  "author": "anders-nexthop",
+  "labels": [
+    "Enhancement",
+    "Pending Triage :medical_symbol:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the enhancement\n\nsflow/test_sflow.py currently makes liberal use of `sleep()` calls to ensure timing coordination between the various components of the sflow path. This is very brittle; timing changes in unrelated code paths can cause these coordination pauses to become insufficient, and conversely improvements in timing would lead to lots of wasted time waiting for nothing. Further, the timing might be different depending on the device. To make this a more general test, we should identify what the actual conditions are that need to be satisfied at each stage and add explicit `wait_for()` logic in those places.\n\n### Current Behavior\n\nThe test uses `sleep()` in the main test as well as in the PTF script to ensure that everything has been set up correctly before traffic is sent.\n\n### Proposed Behavior\n\nThe test uses `wait_for()` with an appropriate condition instead.",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2025-11-12T16:58:17Z",
+      "body": "This issue/PR is where all SFLOW test enhancement started. Let's work on the spin-off issue/PRs first so that this issue will have smaller scope and the matching PR will has less diff over time to make review easier."
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2026-02-26T18:24:03Z",
+      "body": "@StormLiangMS please review the original PR that was linked to this issue, it contains more extensive revisions and fixes for this test. While I appreciate the attention to this issue, bypassing open PRs to merge AI-generated ones is probably not the best use of our resources."
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2026-02-26T18:35:01Z",
+      "body": "This test is currently disabled:\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/0655d4408c7f01e0d5247e45afd15aced39d6a31/tests/common/plugins/conditional_mark/tests_mark_conditions.yaml#L4435\n\nThe PR that was merged to complete this issue does not re-enable the test, and the test result shows that all test cases were skipped. So the accepted change is untested.\n\n<img width=\"1467\" height=\"713\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/78ea271c-d0cb-45d3-a1eb-8c503000e287\" />"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 21195,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/21195",
+      "title": "Issue 21168: [sflow] wait_for() instead of time.sleep()",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2025-11-04T07:08:29Z",
+      "author": "anders-nexthop",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\ntest_sflow.py uses sleep() to orchestrate test steps, which is flaky and prone to timing issues. Replace sleep() coordination with wait_for() where relevant. Use thread events to wait for collector threads to be ready.\r\n\r\nCloses #21168 \r\n\r\nAlso, there's an issue with SYSTEM_READY status not being set correctly, which is causing hsflowd to wait around for 180s before sending any samples. This causes intermittent failures in the first few test cases, and is presumably the issue for which this test is being skipped in [Issue 21701](https://github.com/sonic-net/sonic-mgmt/issues/21701). This PR addresses that problem by adding an explicit wait_until for that condition, so that if the condition is never met we will just match the timeout being used by hsflowd and the test will run as normal.\r\n\r\nCloses #21701 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nI was having problems getting this test to pass on our testing infrastructure. I ended up having to increase several sleep() call durations to get it working, which was not something we wanted to upstream and was also just kicking the can down the road. Due to the nature of the feature under test, there will always be some variability, but a lot of that can be reduced by figuring out what actual conditions we need to wait on. The result should be a little faster too, since we don't end up waiting when we don't have to.\r\n\r\n#### How did you do it?\r\n\r\nI changed the main test cases to wait_for the results of the PTF script, so that if sample hits outside the accepted bounds it has a chance to retry (since the sampling is non-deterministic, we expect to occasionally have test runs which fall outside the accepted bounds).\r\n\r\nI added logic to verify that the sflow container is up, and that  `hsflowd` is up, after configuring the feature (so that the PTF script is guaranteed to run after the sflow feature on the test device is up and running).\r\n\r\nI added thread synchronization to the collector threads, so that the main thread will wait for the collectors to start up before sending traffic.\r\n\r\nFor the flow sample case, I added logic to count the number of samples seen so far and wait dynamically based on whether sample packets are arriving or not. If no packets ever arrive (if the device is not responding, for instance) the test times out and fails. As long as packets are arriving the collectors will keep waiting indefinitely. If the expected number of packets is seen, and more packets keep arriving, the test will wait for a short period to try and catch cases where too many packets are being sent.\r\n\r\n#### How did you verify/test it?\r\n\r\nVerified that the test passes successfully with the changes, and that no unexpected log messages are seen. Stepped through the new logic in a debugger to manually verify that the codepaths are working as intended.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/ptftests/py3/sflow_test.py",
+          "additions": 138,
+          "deletions": 59
+        },
+        {
+          "path": "tests/sflow/test_sflow.py",
+          "additions": 220,
+          "deletions": 78
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-04T07:08:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-04T07:08:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-17T19:01:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-17T19:01:10Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-17T19:08:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-17T19:09:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-11-17T21:33:26Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-17T21:33:29Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-17T21:33:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-11-18T16:33:25Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-18T16:33:27Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-18T16:33:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-18T22:33:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-18T22:33:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-17T22:06:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-17T22:07:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T06:08:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T06:09:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T06:32:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T06:32:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    },
+    {
+      "number": 22450,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22450",
+      "title": "[sflow] Replace time.sleep with wait_until for deterministic test orchestration",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-26T09:00:49Z",
+      "createdAt": "2026-02-18T02:10:43Z",
+      "author": "rustiqly",
+      "body": "## Description\n\nReplace all `time.sleep()` calls in `test_sflow.py` with `wait_until()` polling on actual conditions, making tests deterministic and resilient to timing variations across platforms.\n\n### Changes\n\n| Sleep | Replaced with |\n|-------|--------------|\n| `time.sleep(5)` after interface IP config | `wait_until` checking IP appears on interface |\n| `time.sleep(2)` after `config sflow enable/disable` | `wait_until` checking `show sflow` admin state |\n| `time.sleep(2)` after feature enable | `wait_until` checking feature status |\n| `time.sleep(2-10)` before PTF traffic tests | `wait_until` checking SAI samplepacket config in Redis |\n| `time.sleep(2)` after collector add/del | `wait_until` checking collector config reflected |\n\nAll 14 `time.sleep()` calls removed. The `time` import is no longer needed.\n\nFixes #21168",
+      "files": [
+        {
+          "path": "tests/sflow/test_sflow.py",
+          "additions": 26,
+          "deletions": 15
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-02-18T02:10:51Z",
+          "body": " <a href=\"https://api.easycla.lfx.linuxfoundation.org/v2/repository-provider/github/sign/39820104/52558133/22450/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-not-signed.svg?v=2\" alt=\"CLA Not Signed\" align=\"left\" height=\"28\" width=\"328\"></a><br/><br /><ul><li><a href='https://api.easycla.lfx.linuxfoundation.org/v2/repository-provider/github/sign/39820104/52558133/22450/#/?version=2' target='_blank'>:x:</a> - login: @sonicly1g / name: sonicly1g . The commit (2da5f375ae2f56afe967bcd0be29d678a00f692b) is not authorized under a signed CLA. <a href='https://api.easycla.lfx.linuxfoundation.org/v2/repository-provider/github/sign/39820104/52558133/22450/#/?version=2' target='_blank'>Please click here to be authorized</a>. For further assistance with EasyCLA, <a href='https://jira.linuxfoundation.org/servicedesk/customer/portal/4' target='_blank'>please submit a support request ticket</a>.</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T02:10:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T02:11:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-25T02:24:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-25T02:25:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-02-26T19:30:05Z",
+          "body": "test_sflow.py is currently disabled (see https://github.com/sonic-net/sonic-mgmt/issues/21701) so the test check for this PR was not valid."
+        },
+        {
+          "author": "vkjammala-arista",
+          "createdAt": "2026-03-11T09:37:07Z",
+          "body": "@StormLiangMS Can we please get this backported to 202511 branch as well"
+        },
+        {
+          "author": "vkjammala-arista",
+          "createdAt": "2026-03-26T07:16:19Z",
+          "body": "> @StormLiangMS Can we please get this backported to 202511 branch as well\r\n\r\n@StormLiangMS"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-26549",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26549,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26549",
+    "title": "Bug: dualtor_io: mux/pmon container checks fail with Ansible 2.18 due to Docker Go-template parsing",
+    "created_at": "2026-07-24T06:52:17Z",
+    "closed_at": "2026-07-27T07:40:33Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\ndualtor_io/test_tor_failure.py fails while waiting for mux/pmon containers after ToR reboot.\n\n  This was seen with: _ansible: 2.18.16_\n\n  The failure is caused by Docker Go-template syntax in tests/common/dualtor/tor_failure_utils.py:\n\n  `docker inspect -f '{{ .State.Status }}' mux`\n\n  With Ansible 2.18/Jinja, {{ .State.Status }} is parsed before the command reaches the shell and fails with:\n\n  template error while templating string: unexpected '.'\n\n### Steps to Reproduce\n\nrun the same test file through run_tests.sh:\n\n  ```\nsudo ./run_tests.sh -n dt -m individual -r \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -c dualtor_io/test_tor_failure.py\n\n```\n  The failing test cases observed were:\n\n1.   dualtor_io/test_tor_failure.py::test_active_tor_reboot_upstream[active-standby]\n2.   dualtor_io/test_tor_failure.py::test_active_tor_reboot_downstream_standby[active-standby]\n3.   dualtor_io/test_tor_failure.py::test_standby_tor_reboot_upstream[active-standby]\n4.   dualtor_io/test_tor_failure.py::test_standby_tor_reboot_downstream_active[active-standby]\n\n### Actual Behavior and Expected Behavior\n\n **Actual:**\n\n  The mux/pmon container status check fails before Docker is queried, so the wait loop never sees the container running. The test eventually fails with:\n\n  Exception: Mux container is not up after 100 seconds\n\n  **Expected:**\n\n  The test should correctly read the Docker container state and continue once mux/pmon is running.\n\n### Relevant log output\n\n```shell\nplatform linux -- Python 3.12.3, pytest-9.0.3, pluggy-1.6.0\n  ansible: 2.18.16\n\n  File \"/var/src/sonic-mgmt_bjw2-can-dual-t0-7260-1/tests/common/dualtor/tor_failure_utils.py\", line 167, in check_mux_container\n    output = duthost.shell(\"docker inspect -f '{{ .State.Status }}' mux\")['stdout_lines']\n\n  tests.common.errors.RunAnsibleModuleFail: run module shell failed, Ansible Results =>\n  failed = True\n  msg = template error while templating string: unexpected '.'. String: docker inspect -f '{{ .State.Status }}' mux. unexpected '.'\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure_output.log](https://github.com/user-attachments/files/30335908/6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure_output.log)\n\n[6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure.xml](https://github.com/user-attachments/files/30335907/6a5b1660b421dc0b9909e8e1_dualtor_io_test_tor_failure.xml)"
+  },
+  "resolution": {
+    "pr_number": 26550,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26550",
+    "title": "Fix mux container status check for Ansible compatibility",
+    "merged_at": "2026-07-27T07:40:32Z",
+    "description": "### Description of PR\n\n  Fix DualToR mux/pmon container status checks to avoid Docker\n  Go-template parsing by Ansible/Jinja.\n\n  The current check uses Docker Go-template syntax in an Ansible shell\n  command. With Ansible 2.18.16, the Go-template expression can be parsed\n  as a Jinja template before the command reaches the shell, causing:\n\n`  template error while templating string: unexpected '.'`\n\n  This PR uses docker inspect --type container and parses the returned\n  JSON in Python.\n\nSummary:\n  Fixes #26549\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: regression from https://github.com/sonic-net/sonic-mgmt/pull/26007 ( Fix did not make it backward compatible with Ansible < 2.19 )\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n202605 Results\n\nAnsible 2.21 :\n[console.log](https://github.com/user-attachments/files/30338666/console.log)\n[summary.txt](https://github.com/user-attachments/files/30338667/summary.txt)\n[test_tor_failure.log](https://github.com/user-attachments/files/30338668/test_tor_failure.log)\n[test_tor_failure.xml](https://github.com/user-attachments/files/30338673/test_tor_failure.xml)\n\nAnsible 2.18 :\n[test_tor_failure.log](https://github.com/user-attachments/files/30340001/test_tor_failure.log)\n[test_tor_failure.xml](https://github.com/user-attachments/files/30340020/test_tor_failure.xml)\n[runtime.txt](https://github.com/user-attachments/files/30340023/runtime.txt)\n[summary.txt](https://github.com/user-attachments/files/30340024/summary.txt)\n\n### Approach\n\n#### What is the motivation for this PR?\n DualToR ToR failure tests can fail with Ansible 2.18 while waiting for\n  mux/pmon containers after reboot. The existing helper uses Docker\n  Go-template syntax in an Ansible shell command:\n\n`  docker inspect -f '{{ .State.Status }}' mux`\n\n  With Ansible/Jinja, this can be parsed before the command reaches the\n  shell and fail with:\n`template error while templating string: unexpected '.'`\n\n#### How did you do it?\nAdded a small helper that reads container status from Docker JSON output\n  instead of using Docker Go-template syntax.\n  The mux and pmon checks now use:\n  docker inspect --type container <container>\n  and parse State.Status in Python.\n\n#### How did you verify/test it?\n\nTested on kvm003 with the sonic_mgmt_202605 container.\n\n  Default container environment:\n\n1.   Python 3.12.3\n2.   pytest 9.1.1\n3.   Ansible 2.21.2\n4.   pytest-ansible 26.6.0\n\n  Command:\n ```\n sudo ./run_tests.sh -n dt -m individual -r \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -c dualtor_io/test_tor_failure.py\n\n```\n  Result:\n\n  `4 passed, 6 skipped, 537 warnings in 1915.49s (<IPV6>)`\n\n  Also installed Ansible 2.18.16 as an overlay in the same container:\n\n  /opt/ansible-core-2.18.16-overlay\n\n  and ran:\n\n  ```\nsudo env PYTHONPATH=/opt/ansible-core-2.18.16-overlay ./run_tests.sh \\\n    -n dt -m individual -r \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -p logsansible218_tor_failure \\\n    -c dualtor_io/test_tor_failure.py\n```\n1.   Python 3.12.3\n2.   pytest 9.1.1\n3.   Ansible 2.18.16\n4.   pytest-ansible 26.6.0\n\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/common/dualtor/tor_failure_utils.py",
+        "additions": 9,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

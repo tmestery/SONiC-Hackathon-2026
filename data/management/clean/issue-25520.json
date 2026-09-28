@@ -1,0 +1,47 @@
+{
+  "id": "management-25520",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25520,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25520",
+    "title": "iface_namingmode/test_iface_namingmode: cSONiC neighbor LLDP not repopulated within 90s after port toggle",
+    "created_at": "2026-06-21T06:59:32Z",
+    "closed_at": "2026-07-08T15:54:50Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "KVM Testing",
+      "Test gap",
+      "csonic"
+    ]
+  },
+  "failure": {
+    "body": "## Summary\n\nAfter a DUT port toggle, `tests/iface_namingmode/test_iface_namingmode.py` waits a fixed 90s for the neighbor's LLDP info to be repopulated. A cSONiC neighbor's lldpd takes longer than 90s to re-advertise, so `test_config_interface_state[default]` and `[alias]` fail.\n\n## Topology/Testbed\n\n- **Topology:** t0\n- **Testbed:** vms-kvm-t0-csonic\n- **Neighbors:** cSONiC (docker-sonic-vs) neighbors\n\n## Symptom/Error\n\n`test_config_interface_state[default]` / `[alias]` fails \u2014 neighbor LLDP info not present within the 90s wait after a port toggle.\n\n## Root cause\n\nAfter the DUT port is toggled, the cSONiC neighbor's lldpd takes longer than the hard-coded 90s to re-advertise; EOS repopulates faster. Timing/neighbor-behavior divergence.\n\n## Proposed fix\n\nIn `tests/iface_namingmode/test_iface_namingmode.py`, make the LLDP-repopulation wait a poll-with-timeout (configurable, longer ceiling) instead of a fixed 90s, applied for SONiC/cSONiC neighbors.\n\nFound via cSONiC PR-CI parity validation (full t0 run 2026-06-18)."
+  },
+  "resolution": {
+    "pr_number": 25542,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25542",
+    "title": "[iface_namingmode] Increase LLDP repopulation timeout for SONiC/cSONiC neighbors",
+    "merged_at": "2026-07-08T15:54:49Z",
+    "description": "#### Why I did it\n\n`tests/iface_namingmode/test_iface_namingmode.py::test_config_interface_state` toggles a DUT port and then waits for the neighbor's LLDP entry to be repopulated:\n\n```python\nESTABLISH_LLDP_NEIGHBOR_TIMEOUT = 90\n...\npytest_assert(wait_until(ESTABLISH_LLDP_NEIGHBOR_TIMEOUT, 2, 0, _lldp_exists, True),\n              \"LLDP neighbor should exist for interface {}\".format(test_intf))\n```\n\nOn a `vms-kvm-t0-csonic` testbed the neighbor is a `CsonicHost` (docker-sonic-vs). Its lldpd is configured with a **30s transmit delay** and **transmit hold 4** (120s TTL):\n\n```\nTransmit delay: 30\nTransmit hold: 4\n```\n\nAfter a port flap the worst-case re-advertisement (next tx cycle plus expiry of the stale entry) can exceed the hard-coded 90s \u2014 slower than EOS \u2014 so `test_config_interface_state[default]` / `[alias]` can fail even though LLDP eventually recovers.\n\nFixes #25520.\n\n#### How I did it\n\nRaised `ESTABLISH_LLDP_NEIGHBOR_TIMEOUT` from 90 to 180. The check is already a `wait_until` poll, so this only raises the ceiling: fast neighbors (EOS) return as soon as LLDP reappears and are unaffected; only the slow cSONiC worst case gets the extra headroom. 180s comfortably covers the documented 30s tx-delay + 120s TTL worst case.\n\n#### How to verify it\n\nRun on a `vms-kvm-t0-csonic` testbed:\n```\npytest tests/iface_namingmode/test_iface_namingmode.py -k test_config_interface_state\n```\n\nManual verification on a live testbed: toggled a DUT port (`config interface shutdown/startup Ethernet112`) and timed LLDP repopulation for the cSONiC neighbor. In a fast run it returned in ~27s; the lldpd config (`Transmit delay: 30`, `Transmit hold: 4` \u2192 120s TTL) shows the worst case can approach/exceed 90s, which the new 180s ceiling absorbs without slowing the fast path.\n\n#### Description for the changelog\n\nIncrease the LLDP-repopulation timeout in `test_config_interface_state` from 90s to 180s so SONiC/cSONiC neighbors (30s lldpd tx-delay, 120s TTL) have enough time to re-advertise after a port toggle; the change is a `wait_until` ceiling and does not slow down faster neighbors.",
+    "files": [
+      {
+        "path": "tests/iface_namingmode/test_iface_namingmode.py",
+        "additions": 7,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

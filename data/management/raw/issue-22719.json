@@ -1,0 +1,65 @@
+{
+  "number": 22719,
+  "title": "[Bug] Issue in memory_utilization.py if the reported memory utilization threshold is configured as percentage.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22719",
+  "createdAt": "2026-03-04T03:44:59Z",
+  "closedAt": "2026-03-25T23:57:59Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n### File:\ntests/common/plugins/memory_utilization/memory_utilization.py\n\n### Code:\n```\n        if is_increase:\n            val_str, th_str = format_threshold_and_value(threshold, value)\n            message = (\n                \"[ALARM]: {}:{} memory usage increased by {}, exceeds increase threshold {} (previous: {}, current: {})\"\n                .format(name, mem_item, val_str, th_str, fmt(prev_val, threshold_type), fmt(curr_val, threshold_type))\n            )\n```\n\n### Issue:\nHere value is the raw increase in MB (current_value - previous_value), e.g. 50 (MB).\n- If the increase threshold is percentage (e.g. \u201cmax 10% increase\u201d), format_threshold_and_value will treat that number as a percentage and format it as \"50%\".\n- So, the alarm would say something like: \u201cmemory usage increased by 50%, exceeds increase threshold 10%\u201d even when the real increase was 50 MB, which might be only 10% of the previous value.\n\nSo, for percentage increase thresholds, the existing code is:\n- Using absolute increase (MB) as if it were percentage.\n- Showing a wrong \u201cincreased by X%\u201d in the message (e.g. 50% instead of 10%).\n\n### Fix:\n```\n        if is_increase:\n            val_str, th_str = format_threshold_and_value(threshold, value)\n            # For percentage threshold, display actual % increase; otherwise display raw increase (e.g. MB)\n            prev_f = float(prev_val)\n            if threshold_type == 'percentage' and prev_f > 0:\n                display_value = (float(curr_val) - prev_f) / prev_f * 100\n            else:\n                display_value = value\n            val_str, th_str = format_threshold_and_value(threshold, display_value)\n            message = (\n                \"[ALARM]: {}:{} memory usage increased by {}, exceeds increase threshold {} (previous: {}, current: {})\"\n                .format(name, mem_item, val_str, th_str, fmt(prev_val, threshold_type), fmt(curr_val, threshold_type))\n            )\n\n```\n\nExplanation:\nPercentage threshold: display_value = actual % increase \u2192 message shows correct \u201cincreased by X%\u201d.\nAbsolute (value) threshold: display_value = raw increase in MB \u2192 message shows \u201cincreased by X MB\u201d.\nThe bug was: for percentage increase thresholds, the before code passed the raw MB increase to format_threshold_and_value, hence the alarm shows a wrong \u201cincreased by\u201d value (e.g. 50% instead of the real percentage). \n\nThe fix is to pass the computed percentage when threshold_type == 'percentage', and the raw value otherwise.\n\n@rawal01 , @vmittal-msft , @sdszhang @deepak-singhal0408  for viz.\n\n### Steps to Reproduce\n\n- Change the percentage threshold of any process to lower value so that threshold is exceeded immediately.\nExample:\ntests/common/plugins/memory_utilization/memory_utilization_dependence.json\n    {\n      \"name\": \"free\",\n      \"cmd\": \"free -m\",\n      \"memory_params\": {\n        \"used\": {\n          \"memory_increase_threshold\": {\n            \"type\": \"percentage\",\n            \"value\": \"20%\"  >> change this to lower value like 1% or so to reproduce the issue.\n          },\n          \"memory_high_threshold\": null\n        }\n      },\n      \"memory_check\": \"parse_free_output\"\n    },\n\n- Run any snappi BGP convergence test which calls memory_utilization before and after test.\n\n- Look for ALARM exceeded threshold. Something similar to show up:\n```\n['[ALARM]: free:used memory usage increased by 877.0%, exceeds increase threshold 20%% (previous: 3555.0 MB, current: 4432.0 MB)']\n```\n\nWith fix:\n```\n[ALARM]: free:used memory usage increased by 22.8%, exceeds increase threshold 20%% (previous: 3498.0 MB, current: 4297.0 MB)\n```\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\n```\n['[ALARM]: free:used memory usage increased by 877.0%, exceeds increase threshold 20%% (previous: 3555.0 MB, current: 4432.0 MB)']\n```\n\nExpected behavior:\n```\n[ALARM]: free:used memory usage increased by 22.8%, exceeds increase threshold 20%% (previous: 3498.0 MB, current: 4297.0 MB)\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22726,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22726",
+      "title": "fix for memory_utilization ALARM log when memory utilization threshold is configured as percentage.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-25T23:57:58Z",
+      "createdAt": "2026-03-04T14:14:46Z",
+      "author": "amitpawar12",
+      "body": "\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #22719 \r\n\r\nFile - tests/common/plugins/memory_utilization/memory_utilization.py\r\n\r\nRelevant code:\r\n```\r\n                if increase > increase_threshold:\r\n                    self._handle_memory_threshold_exceeded(\r\n                        name, mem_item, increase, increase_threshold_raw,\r\n                        previous_values, current_values, is_increase=True\r\n                    )\r\n```\r\n\r\n```\r\n        if is_increase:\r\n            val_str, th_str = format_threshold_and_value(threshold, value)\r\n            message = (\r\n                \"[ALARM]: {}:{} memory usage increased by {}, exceeds increase threshold {} (previous: {}, current: {})\"\r\n                .format(name, mem_item, val_str, th_str, fmt(prev_val, threshold_type), fmt(curr_val, threshold_type))\r\n            )\r\n```\r\n\r\n```\r\n        def format_threshold_and_value(threshold, value):\r\n            if isinstance(threshold, dict) and 'type' in threshold:\r\n                threshold_type = threshold['type']\r\n                if threshold_type == 'percentage':\r\n                    return f\"{value:.1f}%\", f\"{threshold['value']}%\"\r\n                elif threshold_type == 'percentage_points':\r\n                    return f\"{value:.1f}%\", f\"{threshold['value']}%\"\r\n                else:  # 'value' type\r\n                    return fmt(value), fmt(float(threshold['value']))\r\n            elif isinstance(threshold, list):\r\n                for t in threshold:\r\n                    if isinstance(t, dict) and 'type' in t:\r\n                        return format_threshold_and_value(t, value)\r\n                return str(value), str(threshold)\r\n            else:\r\n                return fmt(value), str(threshold)\r\n```\r\nIn memory_utilization_dependence.json:\r\n```\r\n    {\r\n      \"name\": \"free\",\r\n      \"cmd\": \"free -m\",\r\n      \"memory_params\": {\r\n        \"used\": {\r\n          \"memory_increase_threshold\": {\r\n            \"type\": \"percentage\",\r\n            \"value\": \"20%\"\r\n          },\r\n          \"memory_high_threshold\": null\r\n        }\r\n      },\r\n      \"memory_check\": \"parse_free_output\"\r\n    },\r\n```\r\n\r\nIssue:\r\nHere value is the raw increase in MB (current_value - previous_value), e.g. 50 (MB).\r\n- If the increase threshold is percentage (e.g. \u201cmax 10% increase\u201d), format_threshold_and_value will treat that number as a percentage and format it as \"50%\".\r\n- The alarm would say something like: \u201cmemory usage increased by 50%, exceeds increase threshold 10%\u201d even when the real increase was 50 MB, which might be only 10% of the previous value.\r\n\r\nFor percentage increase thresholds, the existing code is:\r\n- Using absolute increase (MB) as if it were percentage.\r\n- Showing a wrong \u201cincreased by X%\u201d in the message (e.g. 50% instead of 10%).\r\n\r\n@rawal01 , @vmittal-msft , @sdszhang for review.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [X] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThe ALARM showed wrong info when threshold type is percentage. It computes the difference between current value and previous value and shows it as percentage, if the threshold type is percentage.\r\n\r\nPercentage threshold: display_value = actual % increase \u2192 message shows correct \u201cincreased by X%\u201d.\r\nAbsolute (value) threshold: display_value = raw increase in MB \u2192 message shows \u201cincreased by X MB\u201d.\r\nThe bug was: for percentage increase thresholds, the before code passed the raw MB increase to format_threshold_and_value, hence the alarm shows a wrong \u201cincreased by\u201d value (e.g. 50% instead of the real percentage).\r\n\r\nThe fix is to pass the computed percentage when threshold_type == 'percentage', and the raw value otherwise.\r\n\r\n#### How did you do it?\r\nIf the type is percentage, then computes percentage increase in utilization and displays ALARM. If type is value, then existing code is used:\r\n\r\n```\r\n            val_str, th_str = format_threshold_and_value(threshold, value)\r\n            # For percentage threshold, display actual % increase; otherwise display raw increase (e.g. MB)\r\n            prev_f = float(prev_val)\r\n            if threshold_type == 'percentage' and prev_f > 0:\r\n                display_value = (float(curr_val) - prev_f) / prev_f * 100\r\n            else:\r\n                display_value = value\r\n            val_str, th_str = format_threshold_and_value(threshold, display_value)\r\n            message = (\r\n                \"[ALARM]: {}:{} memory usage increased by {}, exceeds increase threshold {} (previous: {}, current: {})\"\r\n                .format(name, mem_item, val_str, th_str, fmt(prev_val, threshold_type), fmt(curr_val, threshold_type))\r\n            )\r\n```\r\n#### How did you verify/test it?\r\nTested it on local master repo\r\n\r\nPrevious alarm:\r\n```\r\n['[ALARM]: free:used memory usage increased by 877.0%, exceeds increase threshold 20%% (previous: 3555.0 MB, current: 4432.0 MB)']\r\n```\r\n\r\nWith the fix:\r\n```\r\n[ALARM]: free:used memory usage increased by 22.8%, exceeds increase threshold 20%% (previous: 3498.0 MB, current: 4297.0 MB)\r\n```\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/plugins/memory_utilization/memory_utilization.py",
+          "additions": 7,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-04T14:14:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-04T14:15:09Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-17T16:03:18Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-17T16:03:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-27T15:42:02Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/23385"
+        }
+      ]
+    }
+  ]
+}

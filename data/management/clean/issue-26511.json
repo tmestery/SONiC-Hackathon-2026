@@ -1,0 +1,51 @@
+{
+  "id": "management-26511",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26511,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26511",
+    "title": "Bug: testbed_renumber_vm_topology validation fails for BMC family topologies",
+    "created_at": "2026-07-23T06:35:06Z",
+    "closed_at": "2026-07-26T23:11:26Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "bmc",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbmc\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n### Motivation\nWhen adding or managing testbeds with BMC-family topologies (e.g., `bmc-dual-mgmt`, `bmc`), the PTF restart step fails with a validation error, preventing testbed initialization.\n\n### Problem Statement\nThe `testbed_renumber_vm_topology.yml` playbook contains a validation check that requires the `topo` variable to be explicitly passed via `-e topo=<name>` on the command line. However, for BMC-family topologies, this validation is overly strict and fails even when the topology is valid and defined in `testbed.yaml`.\n\n### Reproduction Steps\n1. Add a new testbed entry with a BMC-family topology (e.g., `topo: bmc-dual-mgmt`) to testbed.yaml\n2. Run: `./testbed-cli.sh restart-ptf <testbed-name> password.txt -e ptf_imagetag=latest -vv`\n3. Observe the failure on host running `testbed_renumber_vm_topology.yml`\n\n### Expected Behavior\n- The playbook should recognize BMC-family topologies as valid\n- The PTF restart should complete successfully without requiring explicit `-e topo=...` parameter for BMC topologies\n\n### Actual Behavior\n```\nTASK [Check that variable topo is defined]\ntask path: /var/src/sonic-mgmt_<testbed>/ansible/testbed_renumber_vm_topology.yml:74\nfatal: [ACS-SERV]: FAILED! => {\n  \"changed\": false,\n  \"msg\": \"Define topo variable with -e topo=something\"\n}\n```\n\nThe validation task of `testbed_renumber_vm_topology.yml` fails unconditionally when `topo` is not in the `topologies` list, even though `bmc` is a valid base topology.\n\n### Root Cause\nThe validation logic in `testbed_renumber_vm_topology.yml` (lines 73-75) checks if `base_topo` is in the `topologies` list, but doesn't account for BMC-family topologies which may not be enumerated in that list. The playbook fails whenever the condition `base_topo not in topologies` is true, without distinguishing between unsupported topologies and BMC-family topologies.\n\n### Suggested Solution\nModify the validation check to allow BMC-family topologies to proceed even if they're not in the `topologies` list, while still validating non-BMC topologies:\n\n**File:** testbed_renumber_vm_topology.yml"
+  },
+  "resolution": {
+    "pr_number": 26602,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26602",
+    "title": "[ansible]: add bmc topology to veos inventories",
+    "merged_at": "2026-07-29T03:33:12Z",
+    "description": "### Description of PR\n\nSummary:\nAdd BMC topology support to sonic-mgmt test infrastructure by adding bmc topologies to `veos` inventory file for proper topology validation. It is to enable testbed automation to properly support BMC topologies (portless SONiC switches).\n\nFixes https://github.com/sonic-net/sonic-mgmt/issues/26511\n\n### Type of change\n\n- [x] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [x] 202608\n\n### Test result\n\nTopology validation passes with 'bmc' recognized in inventory. PTF container successfully created with management bridge networking.\n\n### Approach\n#### What is the motivation for this PR?\n\nBMC topologies (portless SONiC switches) were not properly recognized in the testbed automation framework, causing playbooks to fail during topology validation. Additionally, PTF container networking was not properly configured for portless topologies, leading to SSH reachability timeouts.\n\n#### How did you do it?\n\n**Inventory topology list updates**: Added bmc topologies to the topology list in `ansible/veos` inventory file. This allows playbooks to pass topology validation checks that verify the topology is in the supported list.\n\n#### How did you verify/test it?\n\nTestbed renumbering playbook execution on BMC topology (bmc-dual-mgmt) completed successfully:\n- Topology validation passed with 'bmc' in inventory. This task is skipped, which means the topo variable is defined.\n```\nTASK [Check that variable topo is defined] *************************************\ntask path: /var/src/sonic-mgmt_<testbed>/ansible/testbed_renumber_vm_topology.yml:64\nskipping: [ACS-SERV] => {\"changed\": false, \"false_condition\": \"topo is not defined\", \"skip_reason\": \"Conditional result was False\"}\n```\n- PTF container created and reachable via SSH\n- Playbook execution continued through all necessary topology renumbering stages\n\n#### Any platform specific information?\n\nPortless design means no data-plane interfaces are configured on the PTF container, requiring special network handling.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A - This is an infrastructure change supporting existing BMC topology definitions.\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/veos",
+        "additions": 3,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 26541,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26541",
+      "title": "[ansible]: add bmc topology to veos inventories",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

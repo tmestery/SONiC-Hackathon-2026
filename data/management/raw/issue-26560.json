@@ -1,0 +1,69 @@
+{
+  "number": 26560,
+  "title": "Bug:drop_packets test can fail ARP population after transient responder readiness miss",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26560",
+  "createdAt": "2026-07-25T22:05:33Z",
+  "closedAt": "2026-07-27T07:40:55Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n` drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down` can\n  fail during setup while populating the mock server ARP/NDP entry.\n\n  The mock_server fixture sends one ping to populate ARP/NDP, then waits by\n  only polling `show arp/show ndp`. If the initial ping misses a transient\n  arp_responder or mux readiness window, no later wait iteration sends another\n  ARP/NDP request. The neighbor entry never gets populated and setup fails with:\n\n ` ARP/NDP entry for <server_ip> was not populated`\n\n  The test should actively retry neighbor resolution inside the existing wait\n  loop before checking `show arp/show ndp.`\n\n\n### Steps to Reproduce\n\n  Run the affected test on a dualtor testbed:\n\n ```\n sudo ./run_tests.sh -n dt -m individual -r \\\n    -t t0,any,dualtor \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -p logs_drop_packets \\\n    -c \"drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down[PORT_INGRESS_DROPS-L3_EGRESS_LINK_DOWN]\"\n\n```\n  The issue is timing-dependent. It was reproduced deterministically by briefly\n  bouncing PTF arp_responder immediately after the arp_responder fixture setup,\n  then restarting it before the wait loop completed.\n\n\n\n### Actual Behavior and Expected Behavior\n\n **Actual:**\n  The first setup ping can fail with Destination Host Unreachable. The test then\n  only polls show arp/show ndp and fails setup with:\n\n  ARP/NDP entry for <server_ip> was not populated\n\n  **Expected:**\n  The wait loop should actively retry ping/ping6 before checking show arp/show\n  ndp, so transient responder or mux readiness timing can recover. The test\n  should still fail if the neighbor entry never becomes reachable.\n\n  ***Relevant log output***\n\n```\n  Creating mock server with IP 192.168.1.56; dut port = 80,\n  dut intf = Ethernet176\n```\n\n```\n  ping 192.168.1.56 -c 3\n  PING 192.168.1.56 (192.168.1.56) 56(84) bytes of data.\n  From 192.168.0.1 icmp_seq=1 Destination Host Unreachable\n  From 192.168.0.1 icmp_seq=2 Destination Host Unreachable\n  From 192.168.0.1 icmp_seq=3 Destination Host Unreachable\n```\n\n ```\n show arp 192.168.1.56\n  show arp 192.168.1.56\n  show arp 192.168.1.56\n```\n\n\n  Failed: ARP/NDP entry for 192.168.1.56 was not populated\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[msft_1379_drop_packets_test_configurable_drop_counters.log](https://github.com/user-attachments/files/30379653/msft_1379_drop_packets_test_configurable_drop_counters.log)\n[msft_1379_drop_packets_test_configurable_drop_counters.xml](https://github.com/user-attachments/files/30379654/msft_1379_drop_packets_test_configurable_drop_counters.xml)",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26561,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26561",
+      "title": "[drop_packets] Retry neighbor population during wait",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-27T07:40:54Z",
+      "createdAt": "2026-07-25T22:54:33Z",
+      "author": "pdam-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #26560 \r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n `test_neighbor_link_down` sends one setup ping to populate the DUT\r\n  ARP/NDP entry, then waits by polling `show arp` or `show ndp`.\r\n\r\n  If that initial ping misses a transient responder or mux readiness\r\n  window, the wait loop only polls the neighbor table and does not\r\n  generate another ARP/NDP request. In that case setup can fail with:\r\n\r\n  ARP/NDP entry for <server-ip> was not populated\r\n\r\n  Retry `ping` / `ping6` inside the existing wait condition before\r\n  checking `show arp` / `show ndp`. This lets transient setup timing\r\n  recover while still failing if the neighbor entry never becomes\r\n  reachable.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n- [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: day-one issue /flaky test \r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n**202605 :** \r\n***Failure :***\r\n[msft_1379_drop_packets_test_configurable_drop_counters.log](https://github.com/user-attachments/files/30380094/msft_1379_drop_packets_test_configurable_drop_counters.log)\r\n[msft_1379_drop_packets_test_configurable_drop_counters.xml](https://github.com/user-attachments/files/30380099/msft_1379_drop_packets_test_configurable_drop_counters.xml)\r\n***After Fix :*** \r\n[pass_log_kvm003_fixed_test_neighbor_link_down_summary.txt](https://github.com/user-attachments/files/30380104/pass_log_kvm003_fixed_test_neighbor_link_down_summary.txt)\r\n[pass_log_kvm003_fixed_test_neighbor_link_down.log](https://github.com/user-attachments/files/30380105/pass_log_kvm003_fixed_test_neighbor_link_down.log)\r\n\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n The MSFT run failed during setup because the DUT ARP/NDP entry for the\r\n  mock server IP was not populated. The test sent only one setup ping and\r\n  then waited by polling the neighbor table. If that first ping missed a\r\n  transient responder or mux readiness window, the wait loop could not\r\n  recover because it did not generate another ARP/NDP request.\r\n\r\n#### How did you do it?\r\nKept the existing setup ping unchanged and added a retry ping inside the\r\n  existing `_check_arp_populated()` wait condition. For IPv4 the test runs\r\n  `ping -c 1 -W 1` before `show arp`; for IPv6 it runs `ping6 -c 1 -W 1`\r\n  before `show ndp`.\r\n\r\n#### How did you verify/test it?\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\nReproduced on kvm003 by stopping `arp_responder` in the PTF container\r\n  after mock server fixture setup, waiting for the DUT setup ping window\r\n  to pass, and then restarting `arp_responder`. With the unfixed code, the\r\n  test failed because the wait loop only polled `show arp` / `show ndp`.\r\n\r\n  Verified on kvm003 with the same trigger after applying the fix. The\r\n  test retried ping during the wait loop, populated the neighbor entry,\r\n  and passed.\r\n\r\n  Run command:\r\n\r\n  ```\r\ncd /data/tests\r\n  sudo ./run_tests.sh -n dt -m individual -r \\\r\n      -t t0,any,dualtor \\\r\n      -f ../ansible/testbed.yaml \\\r\n      -u \\\r\n      -p logs_drop_packets_trigger_fixed \\\r\n      -c \"drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down[PORT_INGRESS_DROPS-L3_EGRESS_LINK_DOWN]\"\r\n\r\n```\r\n**Trigger used for reproduction:**\r\n\r\n  A watcher was started on test server  before launching the test. It tailed the\r\n  per-test log and waited until the mock server setup began. When the log\r\n  showed either `fixture arp_responder setup ends` or `Creating mock\r\n  server`, the watcher stopped `arp_responder` in the PTF container,\r\n  waited 6 seconds, and then restarted it.\r\n\r\n  This made the initial DUT setup ping miss the responder window while\r\n  leaving `arp_responder` running again before the wait loop completed.\r\n\r\n  Watcher command:\r\n\r\n```\r\n  timeout 900 bash -lc '\r\n  log=\"/data/tests/logs_drop_packets_trigger_fixed/drop_packets/test_configurable_drop_counters.py::test_neighbor_link_down[PORT_INGRESS_DROPS-L3_EGRESS_LINK_DOWN].log\"\r\n\r\n  until docker exec sonic_mgmt_202605 test -f \"$log\"; do\r\n      sleep 0.5\r\n  done\r\n\r\n  docker exec sonic_mgmt_202605 tail -n 0 -F \"$log\" | while IFS= read -r line; do\r\n      case \"$line\" in\r\n          *\"fixture arp_responder setup ends\"*|*\"Creating mock server\"*)\r\n              echo \"WATCHER_TRIGGER: $line\"\r\n              docker exec ptf_dt supervisorctl stop arp_responder || true\r\n              docker exec ptf_dt supervisorctl status arp_responder || true\r\n              sleep 6\r\n              docker exec ptf_dt supervisorctl start arp_responder || true\r\n              docker exec ptf_dt supervisorctl status arp_responder || true\r\n              exit 0\r\n              ;;\r\n      esac\r\n  done\r\n```\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/drop_packets/test_configurable_drop_counters.py",
+          "additions": 2,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-25T22:54:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-25T22:54:42Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-25T22:54:58Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-26T00:14:55Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-26T00:14:59Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-27T07:45:19Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26579"
+        }
+      ]
+    }
+  ]
+}

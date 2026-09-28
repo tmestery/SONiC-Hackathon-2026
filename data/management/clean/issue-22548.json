@@ -1,0 +1,48 @@
+{
+  "id": "management-22548",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22548,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22548",
+    "title": "Bug:memozy_utilization fixture is affected by routeCheck process",
+    "created_at": "2026-02-23T16:16:26Z",
+    "closed_at": "2026-03-10T22:00:59Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWe see test failures in the `memory_utilization` fixture during RAM usage comparison for the zebra process.\nThese failures are caused by the routeCheck process running in the background every 5 minutes.\n\nIf the routeCheck is executing at the same time as we measure the memory usage, it will affect the calculations.\n\nWe can await until routeCheck is finished before measuring the memory usage or retry the measurement if the routeCheck is a reason of exceeding the expectations.\n\n### Steps to Reproduce\n\n- Have a big number of routes(~500k)\n- Measure zebra memory usage\n- Trigger routeCheck\n- Measure zebra memory usage again\n\n### Actual Behavior and Expected Behavior\n\nWe see that routeCheck affects measurement dramatically, while we expect to have similar results for stable conditions\n\n### Relevant log output\n\n```shell\n===== 2026-02-19T02:52:30+00:00 =====\nSystem allocator statistics:\n  Total heap allocated:  34 MiB\n  Holding block headers: 31 MiB\n  Used small blocks:     0 bytes\n  Used ordinary blocks:  16 MiB\n\nBuffer data                   :        1   4120        4120    20227  83335352\n\nto\n\n===== 2026-02-19T02:52:30+00:00 =====\nSystem allocator statistics:\n  Total heap allocated:  102 MiB\n  Holding block headers: 31 MiB\n  Used small blocks:     0 bytes\n  Used ordinary blocks:  95 MiB\n\nBuffer data                   :    20068   4120    82680256    20227  83335352\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22786,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22786",
+    "title": "[memory_utilization] Add two-tier threshold for frr_zebra memory monitoring",
+    "merged_at": "2026-03-10T22:00:58Z",
+    "description": "### Description of PR\n\nSummary:\nIntroduce a two-tier memory increase threshold system for the `memory_utilization` plugin to handle transient memory spikes (e.g., from `route_check.py`) without failing tests.\n\nFixes #22548\n\n### Type of change\n\n- [ ] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\nThe `route_check.py` script (run by monit every 5 minutes) causes temporary zebra memory spikes (~34 MB \u2192 ~102 MB, a ~68 MB increase). The existing `memory_increase_threshold` for `frr_zebra` is max(50%, 64 MB), so a 68 MB spike exceeds it and fails tests \u2014 even though this is a transient spike, not a real memory leak.\n\nThe original approach (PR v1) tried to wait for `route_check.py` to finish before measuring memory, but this had issues:\n1. **Performance**: 120s wait timeout per test \u00d7 setup + teardown = 240s overhead per test, causing CI timeouts\n2. **Race condition**: `route_check.py` could start between the wait and memory collection\n3. **Self-matching bug**: Ansible shell module wraps commands in `/bin/sh -c \"...\"`, causing `pgrep` to match the wrapper process\n\n#### How did you do it?\n\nReplaced the wait-based approach with a two-tier threshold system:\n\n- **`memory_increase_threshold`** (existing): now acts as a **warning** level \u2014 logs a warning but does NOT fail the test\n- **`memory_increase_fail_threshold`** (new): a higher **fail** level \u2014 stores an error and fails the test\n\nWhen `memory_increase_fail_threshold` is not configured, the existing `memory_increase_threshold` acts as the fail level (fully backward compatible).\n\nFor `frr_zebra`:\n- Warning at max(50%, 64 MB) \u2014 catches spikes for visibility\n- Fail at 128 MB \u2014 only real memory leaks trigger test failure\n\n#### How did you verify/test it?\n\n1. Local KVM test runs on both master and fix branch confirmed identical test results (no regressions)\n2. Verified via Ansible that the `pgrep` self-matching bug exists (Ansible shell module uses `/bin/sh -c`, not `bash`)\n3. Confirmed route_check.py spike (~68 MB) falls between warning (64 MB) and fail (128 MB) thresholds\n\n#### Any platform specific information?\n\nNone \u2014 the two-tier threshold is generic and can be applied to any monitor. Only `frr_zebra` uses it in this PR.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A (framework change)\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/common/plugins/memory_utilization/memory_utilization.py",
+        "additions": 50,
+        "deletions": 6
+      },
+      {
+        "path": "tests/common/plugins/memory_utilization/memory_utilization_dependence.json",
+        "additions": 4,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

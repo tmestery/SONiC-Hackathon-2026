@@ -1,0 +1,43 @@
+{
+  "id": "management-19165",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 19165,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/19165",
+    "title": "Bug: excessive debug logging in parse_routes_process() causes 10+ Gig log files in T2 topologies",
+    "created_at": "2025-06-24T11:55:09Z",
+    "closed_at": "2026-02-20T00:56:52Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen you run these BGP tests on the T2 topology device\n```\nbgp/test_traffic_shift.py\nbgp/test_seq_idf_isolation.py\nbgp/test_startup_tsa_tsb_service.py\nbgp/reliable_tsa/test_reliable_tsa_stable.py\nbgp/reliable_tsa/test_reliable_tsa_flaky.py\n```\nyou may notice that the log files produced by these test has an enormous size, individual log file could be 10+ Gigs.\n\nThe root cause of the excessive logs:\n\n```\nsonic@sonic-server:~/test_logs/23341_nightly/bgp/reliable_tsa$ head -n 5700 test_reliable_tsa_flaky_2025-04-11-08-35-32.log |less\n11/04/2025 <IPV6> parallel.parallel_run                    L0153 DEBUG  | Started process 13915 running target \"parse_routes_process--<EosHost VM0106>\"\n11/04/2025 <IPV6> base._run                                L0071 DEBUG  | /data/tests/bgp/route_checker.py::parse_routes_process#104: [VM0105] AnsibleModule::eos_command, args=[], kwargs={\"commands\": [\"show ip bgp neighbors <IP> received-routes detail | grep -E \\\"BGP routing table entry for |Community: \\\n\"\"], \"module_ignore_errors\": true}\n11/04/2025 <IPV6> base._run                                L0071 DEBUG  | /data/tests/bgp/route_checker.py::parse_routes_process#104: [VM0103] AnsibleModule::eos_command, args=[], kwargs={\"commands\": [\"show ip bgp neighbors <IP> received-routes detail | grep -E \\\"BGP routing table entry for |Community: \\\"\"], \"module_ignore_errors\": true}\n11/04/2025 <IPV6> base._run                                L0071 DEBUG  | /data/tests/bgp/route_checker.py::parse_routes_process#104: [VM0106] AnsibleModule::eos_command, args=[], kwargs={\"commands\": [\"show ip bgp neighbors <IP> received-routes detail | grep -E \\\"BGP routing table entry for |Community: \\\n\"\"], \"module_ignore_errors\": true}\n11/04/2025 <IPV6> base._run                                L0108 DEBUG  | /data/tests/bgp/route_checker.py::parse_routes_process#104: [VM0107] AnsibleModule::eos_command Result => {\"changed\": false, \"stdout\": [\"BGP routing table entry for <IP>/32\\nBGP routing table entry for <IP>/32\\nBGP routing table\n entry for <IP>/32\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\n\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\n      Community: 5060:12345\\nBGP routing table entry for <IP>/32\\\n````\n\nthe [sonic-mgmt/tests/bgp/route_checker.py::parse_routes_process#104](https://github.com/sonic-net/sonic-mgmt/blob/a7c41d976c33ee99bb0b3a19f831daecaa95bde3/tests/bgp/route_checker.py#L104) printing the received routes (the output of received routes for one VM is very large) for every ARISTA VM BGP neighbor, the output is very large - 10+ Gigs.\n\nWhy it is so large for T2 topology:\n\n- There are 72 BGP neighbors.\n\n- There are 10 testcases in the bgp/reliable_tsa/test_reliable_tsa_flaky.py.\n\n- For every testcase the `verify_route_on_neighbors_when_duts_on_tsb` function is called which is using the `bgp/route_checker.py::parse_routes_process#104` function for the IPv4 and IPv6 routes.\n\n- The `verify_route_on_neighbors_when_duts_on_tsb` also called for every linecard.\n\nI\u2019ve calculated, there are 52 calls of bgp/route_checker.py::parse_routes_process#104 only for one BGP neighbor VM0100:\n\n```\nsonic@sonic-server:~/test_logs/23341_nightly/bgp/reliable_tsa$ rg -e \"Started process .* running target \\\"parse_routes_process--<EosHost VM0100>\\\"\" test_reliable_tsa_flaky_2025-04-11-08-35-32.log |wc -l\n52\n```\n\n### Steps to Reproduce\n\nRun one of these testcases and check the log file size.\n```\nbgp/test_traffic_shift.py\nbgp/test_seq_idf_isolation.py\nbgp/test_startup_tsa_tsb_service.py\nbgp/reliable_tsa/test_reliable_tsa_stable.py\nbgp/reliable_tsa/test_reliable_tsa_flaky.py\n```\n\n### Actual Behavior and Expected Behavior\n\nThe log files shout not be 10+ Gigs.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22401,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22401",
+    "title": "[bgp] Suppress verbose logging in route_checker to prevent 10+ GB log files",
+    "merged_at": "2026-02-20T00:56:51Z",
+    "description": "**Summary:**\nThis PR fixes excessive debug logging in `route_checker.py` that produces 10+ GB log files on T2 topologies, filling disks and slowing down test infrastructure.\n\n**Context:** The `parse_routes_process()` and `parse_routes_process_vsonic()` functions call `eos_command()` and `shell()` with the default `verbose=True`. The Ansible debug logger then dumps both the full command arguments AND the complete results (thousands of BGP routing table entries per neighbor) into the log file. On T2 topologies with many VMs and large routing tables, this produces individual log files exceeding 10 GB.\n\n**Fix:** Pass `verbose=False` to the `eos_command()` and `shell()` calls in the route parsing functions. This follows the existing pattern used by `parse_rib()` in `bgp_helpers.py` which already uses `verbose=False` for the same reason. Route data is parsed programmatically \u2014 there is no diagnostic value in logging the raw output. Errors are still properly reported via `pytest_assert`.\n\nFixes #19165\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\nTo prevent test log files from growing to 10+ GB, which fills disks and degrades test infrastructure on T2 topologies.\n\n#### How did you do it?\nAdded `verbose=False` to three call sites in `tests/bgp/route_checker.py`:\n1. `host.eos_command(commands=[cmd], module_ignore_errors=True, verbose=False)` \u2014 primary route query\n2. `host.eos_command(commands=[cmd_backup], module_ignore_errors=True, verbose=False)` \u2014 fallback route query\n3. `host.shell(bgp_nbr_cmd, verbose=False)` \u2014 vsonic route query\n\nThis matches the existing pattern in `parse_rib()` (`bgp_helpers.py:183`) which already uses `verbose=False`.\n\n#### How did you verify/test it?\n- Code review confirmed that `verbose=False` suppresses the DEBUG-level logging of command arguments and results in `AnsibleHostBase._run()` (`tests/common/devices/base.py:73-89, 119-128`)\n- The `verbose=False` parameter is an established pattern already used in `parse_rib()` for the same reason\n- Error handling via `pytest_assert` and `res['failed']` checks remains unchanged\n\n#### Any platform specific information?\nMost impactful on T2 topologies with many BGP neighbors, but the fix is generic.\n\n#### Supported testbed topology if it is a new test case?\nN/A \u2014 existing infrastructure fix.\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/bgp/route_checker.py",
+        "additions": 3,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

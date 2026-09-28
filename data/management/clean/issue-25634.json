@@ -1,0 +1,45 @@
+{
+  "id": "management-25634",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25634,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25634",
+    "title": "[snappi][infra] get_addrs_in_subnet does not check case for IPv6 addresses.",
+    "created_at": "2026-06-24T16:36:55Z",
+    "closed_at": "2026-09-04T09:40:43Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "SNAPPI_IXIA"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/d513d50bf66febb880fb626b714cc676b543f11a/tests/common/snappi_tests/common_helpers.py#L189\n\nCode:\n```\ndef get_addrs_in_subnet(subnet, number_of_ip, exclude_ips=None):\n    \"\"\"\n    Efficiently yield N IPs from a subnet, skipping excluded IPs.\n    Handles large IPv6 subnets quickly.\n    \"\"\"\n    net = ipaddress.ip_network(subnet, strict=False)\n    exclude_set = set(exclude_ips) if exclude_ips else set()\n    results = []\n\n    # Calculate the first usable host (for IPv4, skip network & broadcast)\n    hosts = net.hosts() if net.version == 4 else net.hosts()\n    for addr in hosts:\n        if str(addr) not in exclude_set:\n            results.append(str(addr))\n            if len(results) == number_of_ip:\n                break\n    return results\n```\n\nThis function is extensively used in common/snappi_tests/snappi_fixtures.py:\n- __vlan_intf_config\n- _tgen_ports_from_portchannel\n- __intf_config\n- __intf_config_macsec\n\n**1. IPv6 and exclude_ips (case/spelling)**\n\nExclusions were stored as raw strings; comparison was str(addr) not in exclude_set.\nstr(IPv6Address('2001:db8::1')) \u2192 \"2001:db8::1\" does not match \"2001:DB8::1\" in a string set.\nSame issue for compressed vs expanded forms.\n\n### Steps to Reproduce\n\nEasiest way to reproduce this is to configure IPv6 addresses on the DUT in upper case.\n\nRun one of the snappi_testcase using the above functions.\n\n### Actual Behavior and Expected Behavior\n\nIf the IPv6 addresses on DUT are in UPPER case, the function treats its as different address. Example -  \"2001:db8::1\" does not match \"2001:DB8::1\" causing same IPv6 to be returned.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25700,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25700",
+    "title": "[snappi] fix in get_addr_in_subnet function in common_helpers to fix case-sensitive IPv6 addresses",
+    "merged_at": "2026-09-04T09:40:42Z",
+    "description": "### Description of PR\n\nThe function get_addr_in_subnet receives network-subnet, number of IPs to be returned back and exclude IPs list.\n\n**Why /31 prefix-length could fail:**\nOlder Python: /31 hosts() could return empty \u2192 function returns [] \u2192 callers like [0] raise IndexError.\nPolicy mismatch: some labs treat the \u201cnetwork\u201d side of /31 as non-assignable.\nShort/empty results: at most 2 addresses on /31; exclusions or large number_of_ip can yield fewer than requested.\n\nNote - Since the latest Python versions already handle this, this is not an issue anymore.\n\n**IPv6 and exclude_ips (case/spelling):**\nExclusions were stored as raw strings; comparison was str(addr) not in exclude_set.\nstr(IPv6Address('2001:db8::1')) \u2192 \"2001:db8::1\" does not match \"2001:DB8::1\" in a string set.\nSame issue for compressed vs expanded forms.\n\nSummary:\nFixes #25634\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request:\nFailure type:\n\n### Approach\n#### What is the motivation for this PR?\nWith IPv6 addresses if minigraph.xml had upper-case IPv6 addresses, then function would sometimes return the same address as next-hop address (configured on IXIA end-point).\n```\nstr(IPv6Address('2001:db8::1')) \u2192 \"2001:db8::1\" does not match \"2001:DB8::1\" in a string set.\n```\nHowever, in this case function could return the same address, thus DUT configuration failed (in case where it tried to configure next-hop BGP endpoint and ended up with same address as local-address).\n\n#### How did you do it?\n\nChanges in get_addrs_in_subnet:\n - exclude_ips as real addresses \u2014 parse each entry with ipaddress.ip_address() (strip strings); store in a set of address objects.\n - IPv6 case/spelling \u2014 addr not in exclude_set instead of string comparison.\n - hosts() \u2014 removed redundant if net.version == 4 else; both use net.hosts().\n - Docstring \u2014 documents list return, IPv6 normalization, RFC 3021 /31, and possible shorter results.\n\n#### How did you verify/test it?\nTested with case different IPv6 addresses on local clone.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/snappi_tests/common_helpers.py",
+        "additions": 35,
+        "deletions": 8
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-26965",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26965,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26965",
+    "title": "Bug: UT2 golden_config uses stale port_config on deploy-mg",
+    "created_at": "2026-08-11T20:30:29Z",
+    "closed_at": "2026-08-19T00:58:06Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nFor UT2 during deploy-mg when we generate a new golden_config we do not use the port config from the generated minigraph.xml because we do not load the minigraph. This can result in errors where admin_status does not match expected config\n\nRelated to:\nhttps://github.com/sonic-net/sonic-mgmt/pull/24415\nhttps://github.com/sonic-net/sonic-mgmt/pull/24157\n\n### Steps to Reproduce\n\nRun deploy-mg on UT2 dut with topology t2_single_node_min or t2_single_node_max\n```\n./testbed-cli.sh deploy-mg <testbed-name> lab password.txt -vvv\n```\n\n### Actual Behavior and Expected Behavior\n\nAfter running deploy-mg observe in the log that minigraph is never applied before golden_config_db is generated\n```\nTASK [saved original minigraph file in SONiC DUT(ignore errors when file does not exist)] ***\n...\nTASK [create new minigraph file for SONiC device] ******************************\n...\nTASK [Apply minigraph prior to generating golden_config_db.json] ***************\nskipped\n...\nTASK [Generate golden_config_db.json] ******************************************\n...\n    \"msg\": \"Success to generate golden_config_db.json for ut2 device\"\n...\n```\nThen see after deploy-mg that unexpected ports from old minigraph ports are admin_status up. Also re-running `sudo config load_minigraph` will change the admin_status of these ports back to down.\n\nNote that `generate_ut2_golden_config_db` in generate_golden_config is actually calling `sonic-cfggen -H -m -j /etc/sonic/init_cfg.json --print-data`, but sonic-cfggen does not get port config from the xml, but the running-config:\nhttps://github.com/sonic-net/sonic-buildimage/blob/202605/src/sonic-config-engine/minigraph.py#L2064\nSince the running-config at this moment is not the new generated minigraph, but the original minigraph we get the port config of the older minigraph into the golden config.\n\nExpected that the golden_config_db.json will not have admin_status up on these ports and `sudo config load_minigraph` will be not change admin_status for any ports, because the port_config should be the same\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26967,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26967",
+    "title": "UT2 golden_config uses stale port_config on deploy-mg",
+    "merged_at": "2026-08-19T00:58:05Z",
+    "description": "Load minigraph before golden_config generation on UT2 to prevent stale port_config being set in golden_config\n\n### Description of PR\n\nSummary:\nFixes #26965 (issue)\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\nAfter this change we no longer see stale ports admin_status set to up.\nIssue is not observable on 202511, as it does not have this issue until this PR is merged:\nhttps://github.com/sonic-net/sonic-mgmt/pull/26241\n\n### Approach\n#### What is the motivation for this PR?\nFor UT2 config reload needs to run before creating the golden_config to prevent stale port_config being set in golden_config.\n\nThis is because `generate_ut2_golden_config_db` in generate_golden_config is actually calling `sonic-cfggen -H -m -j /etc/sonic/init_cfg.json --print-data`, but sonic-cfggen does not get port config from the xml, but the running-config:\nhttps://github.com/sonic-net/sonic-buildimage/blob/202605/src/sonic-config-engine/minigraph.py#L2064\nSince the running-config at this moment is not the new generated minigraph, but the original minigraph we get the port config of the older minigraph into the golden config.\n\n#### How did you do it?\nSimilar to LT2, let config reload run before generating the golden_config.\n\n#### How did you verify/test it?\n\nRe-ran deploy-mg on 202605 UT2 ctn dut\n```\n./testbed-cli.sh deploy-mg <testbedname> lab password.txt -vvv\n```",
+    "files": [
+      {
+        "path": "ansible/config_sonic_basedon_testbed.yml",
+        "additions": 3,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

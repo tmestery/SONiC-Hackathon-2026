@@ -1,0 +1,58 @@
+{
+  "number": 25524,
+  "title": "vlan/test_vlan_ping: cSONiC neighbor PortChannel uses SONiC netdev name (PortChannel1) not EOS po1",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25524",
+  "createdAt": "2026-06-21T06:59:41Z",
+  "closedAt": "2026-07-08T15:57:47Z",
+  "author": "securely1g",
+  "labels": [
+    "KVM Testing :test_tube:",
+    "Test gap",
+    "bug",
+    "csonic"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Summary\n\nSetup in `tests/vlan/test_vlan_ping.py` resolves the neighbor PortChannel to the EOS netdev name `po1` and runs `ip addr show dev po1` on the cSONiC neighbor. SONiC teamd names the netdev `PortChannel1`, so the device does not exist, output is empty, and the subsequent indexing crashes.\n\n## Topology/Testbed\n\n- **Topology:** t0\n- **Testbed:** vms-kvm-t0-csonic\n- **Neighbors:** cSONiC (docker-sonic-vs) neighbors\n\n## Symptom/Error\n\n```\nIndexError: list index out of range\n```\n\n(after `ip addr show dev po1` returns empty)\n\n## Root cause\n\nSetup resolves the neighbor PortChannel to the EOS netdev name `po1` and runs `ip addr show dev po1` on the cSONiC neighbor. SONiC teamd names the netdev `PortChannel1`, so the device does not exist, output is empty, and indexing crashes.\n\n## Proposed fix\n\nIn `tests/vlan/test_vlan_ping.py`, derive the neighbor PortChannel netdev name per neighbor type (`PortChannel<N>` for SONiC/cSONiC, `po<N>` for EOS).\n\nFound via cSONiC PR-CI parity validation (full t0 run 2026-06-18).\n",
+  "comments": [
+    {
+      "author": "securely1g",
+      "createdAt": "2026-06-21T23:28:18Z",
+      "body": "### Identified \u2014 draft fix (not yet verified)\n\n**Root cause:** the test references the neighbor PortChannel by the EOS netdev name `po1`, but a cSONiC (SONiC) neighbor names the interface `PortChannel1` (from CONFIG_DB). As a result `ip addr show dev po1` fails on the neighbor.\n\n**Draft fix:** map the neighbor PortChannel device name to the SONiC name (`PortChannel1`) when the neighbor is cSONiC.\n\n**Status:** drafted, **not yet verified** on the testbed. Will update once confirmed on the live cSONiC testbed.\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25541,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25541",
+      "title": "[test_vlan_ping] Use correct PortChannel netdev name for SONiC/cSONiC neighbors",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-08T15:57:46Z",
+      "createdAt": "2026-06-22T05:30:57Z",
+      "author": "securely1g",
+      "body": "#### Why I did it\n\n`tests/vlan/test_vlan_ping.py::vlan_ping_setup` resolves the neighbor PortChannel to the EOS netdev name and queries it:\n\n```python\ninterface_name = 'Port-Channel1'\ndev_name = 'po1'\n...\noutput = vm_info['host'].command(\"ip addr show dev {}\".format(dev_name))\nvm_host_info[\"mac\"] = output['stdout_lines'][1].split()[1]\n```\n\nOn a `vms-kvm-t0-csonic` testbed the neighbor is a `CsonicHost` (docker-sonic-vs). SONiC teamd names the LAG netdev `PortChannel1`, not `po1`, so `ip addr show dev po1` returns nothing and `output['stdout_lines'][1]` raises:\n\n```\nIndexError: list index out of range\n```\n\nFixes #25524.\n\n#### How I did it\n\nAdded a small helper that maps the topology config interface `Port-Channel<N>` to the correct kernel netdev name per neighbor type:\n- EOS: `po<N>`\n- SONiC/cSONiC: `PortChannel<N>`\n\nand used it for both the `Port-Channel1` and dualtor-aa `Port-Channel2` cases. EOS behavior is unchanged.\n\n#### How to verify it\n\nRun on a `vms-kvm-t0-csonic` testbed:\n```\npytest tests/vlan/test_vlan_ping.py\n```\n\nManual verification against a live cSONiC neighbor:\n```\n# new path\nip addr show dev PortChannel1   -> 8 lines, MAC da:8e:8b:d9:66:53 extracted (no IndexError)\n# old path\nip addr show dev po1            -> \"Device po1 does not exist\" -> 0 lines -> IndexError on [1]\n```\n\n#### Description for the changelog\n\nFix `test_vlan_ping` setup on SONiC/cSONiC neighbors by deriving the PortChannel kernel netdev name per neighbor type (`PortChannel<N>` vs EOS `po<N>`), preventing an IndexError when the EOS-style `po1` device does not exist.\n",
+      "files": [
+        {
+          "path": "tests/vlan/test_vlan_ping.py",
+          "additions": 16,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-22T05:31:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-22T05:31:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

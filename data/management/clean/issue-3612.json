@@ -1,0 +1,70 @@
+{
+  "id": "management-3612",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 3612,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/3612",
+    "title": "Need new test: BGP-Update Replication",
+    "created_at": "2021-06-04T07:44:55Z",
+    "closed_at": "2025-03-19T05:52:36Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P1",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Test gap"
+    ]
+  },
+  "failure": {
+    "body": "Test steps:\n\n1. Connect DUT to a route injector.\n2. Establish 33 eBGP IPv4 and IPv6 sessions between the devices, with first session used to inject routes and remaining 32 to receive routes.\n3. Generate 10000 BGP paths (10000 UPDATE messages) on the injecting session, followed by route removal.\n4. Repeat this operation at least 1000 times with interval of 3/1/0.5 seconds respectively. Continually measure CPU load on DUT during the test.\n5. Does the router operate normally? Does it remain responsive to telnet, SNMP, and console?\n6. Time series graph of the CPU utilization on the DUT.     \u2022Time series graph of the number of routes present in the router.     \u2022Fraction of available routing table space consumed at the end of the test.     \u2022Fraction of available memory consumed at the end of the tes"
+  },
+  "resolution": {
+    "pr_number": 17281,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/17281",
+    "title": "[BGP Testgap] Add BGP Update Replication",
+    "merged_at": "2025-03-19T05:52:35Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #3612\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [X] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [X] 202411\n\n### Approach\n#### What is the motivation for this PR?\nFocuses on addressing the BGP update replication testgap.\n\n#### How did you do it?\n##### Setup\n1. Sets up 16 connections (using the DUT's physical interfaces)\n    * Issue recommends using 33, but I found that 16 allows for a much greater proportion of testbeds to be able to run the test (as it is skipped on devices with not enough physical interfaces)\n2. Uses connections to create BGP neighbours (1 for route injection, 15 for route receiving)\n\n##### Test\n1. Three nested loops are run (totalling 90000 announcements and 90000 withdrawals):\n  a. Outer loop: Intervals (3 sec, 1 sec, 0.5 sec)\n  b. First inner loop: 20 iterations (instead of 1000 suggested in the testgap issue, primarily for performance reasons)\n  c. Second inner loops: 10000 route announcements + withdrawals (between each announcement loop, measurements are taken)\n2. When measurements are taken, the following is checked:\n  a. Session responsiveness (if command timeout is exceeded, fail)\n  b. CPU utilisation (if total CPU usage is above 90%, fail)\n  c. Memory utilisation (if total memory usage is above 90%, fail)\n  d. RIB entry validation (expected number of routes should match routes present on the DUT exactly, after each loop of announcements, and each loop of withdrawals)\n  e. Following these validations, a row of device statistics is appended to the results list\n4. Results list is collated into a table at the end of the test, allowing for trends to be investigated if need be\n\n#### How did you verify/test it?\nRunning on multiple DUTs (primarily T0 and T1), we can observe passing tests taking roughly 30 minutes:\n<img width=\"860\" alt=\"image\" src=\"https://github.com/user-attachments/assets/cdd5e9ab-7a49-4b8d-b8b8-d034eaaa88e9\" />\nAnd the table produced by a successful run is as follows:\n```\n<IPV6> test_bgp_update_replication.test_bgp_upd L0257 INFO   | Results:\ntimestamp          av1    av2    av3    cpu_usage    cpu_system    mem_total    mem_free    mem_used    mem_cache    mem_swap_total    mem_swap_free    mem_swap_used    mem_swap_avail    num_rib    mem_rib    num_peers    mem_peers    num_group    mem_group    cpu_usage         mem_usage\n---------------  -----  -----  -----  -----------  ------------  -----------  ----------  ----------  -----------  ----------------  ---------------  ---------------  ----------------  ---------  ---------  -----------  -----------  -----------  -----------  -----------------  -----------------\n<IPV6>.332508   1.51   1.43   1.56         11.1           0        15152.9      3720.1      4988.7       6949.4                 0                0                0           10164.2      12851    1644928           40       823680            4          256               11.1            75.4496\n<IPV6>.914403   1.92   1.52   1.58         12.5          12.5      15152.9      3697.9      5005.8       6954.4                 0                0                0           10147        32851    4204928           40       823680            4          256               25              75.5961\n<IPV6>.008111   1.48   1.47   1.56         12.5          12.5      15152.9      3679.4      5021.4       6957.3                 0                0                0           10131.4      12851    1644928           40       823680            4          256               25              75.7182\n<IPV6>.833455   1.47   1.47   1.55         30             0        15152.9      3638        5057.6       6962.5                 0                0                0           10095.2      32851    4204928           40       823680            4          256               30              75.9914\n<IPV6>.588974   1.26   1.4    1.53          0            22.2      15152.9      3696.4      4997.3       6964.5                 0                0                0           10155.5      12851    1644928           40       823680            4          256               22.2            75.606\n<IPV6>.867207   1.36   1.43   1.53         12.5          12.5      15152.9      3676.9      5011.2       6970.1                 0                0                0           10141.6      32851    4204928           40       823680            4          256               25              75.7347\n<IPV6>.301012   1.74   1.53   1.56         12.5          12.5      15152.9      3691.5      4993.9       6972.8                 0                0                0           10159        12851    1644928           40       823680            4          256               25              75.6383\n<IPV6>.307567   2.03   1.66   1.6          11.1          11.1      15152.9      3677.5      5002.4       6978.2                 0                0                0           10150.4      32851    4204928           40       823680            4          256               22.2            75.7307\n<IPV6>.932148   2.56   1.82   1.66         22.2          11.1      15152.9      3688.2      4989.3       6980.7                 0                0                0           10163.6      12851    1644928           40       823680            4          256               33.3            75.6601\n<IPV6>.818253   2.14   1.8    1.66         10            10        15152.9      3663.2      5008.8       6986.3                 0                0                0           10144.1      32851    4204928           40       823680            4          256               20              75.8251\n<IPV6>.581059   2.33   1.9    1.7          10            20        15152.9      3656.9      5012.4       6989                   0                0                0           10140.5      12851    1644928           40       823680            4          256               30              75.8667\n<IPV6>.933808   2.56   2.03   1.75         20            10        15152.9      3613.1      5050.4       6994.7                 0                0                0           10102.4      32851    4204928           40       823680            4          256               30              76.1557\n<IPV6>.093317   2.95   2.2    1.83         11.1          11.1      15152.9      3660.7      4999.7       6997.8                 0                0                0           10153.1      12851    1644928           40       823680            4          256               22.2            75.8416\n<IPV6>.087672   2.69   2.24   1.86         11.1          11.1      15152.9      3650        5005.3       7002.9                 0                0                0           10147.5      32851    4204928           40       823680            4          256               22.2            75.9122\n<IPV6>.762000   2.43   2.25   1.88         11.1          11.1      15152.9      3692.1      4998.6       6967.6                 0                0                0           10154.2      12851    1644928           40       823680            4          256               22.2            75.6344\n<IPV6>.439855   2.52   2.3    1.92         20            10        15152.9      3692.3      4993.6       6972.4                 0                0                0           10159.3      32851    4204928           40       823680            4          256               30              75.633\n<IPV6>.269988   2.5    2.31   1.94         10            10        15152.9      3681.6      5001.5       6975.2                 0                0                0           10151.4      12851    1644928           40       823680            4          256               20              75.7037\n<IPV6>.380161   2.75   2.41   2             0            14.3      15152.9      3670.1      5009.2       6978.9                 0                0                0           10143.7      32851    4204928           40       823680            4          256               14.3            75.7796\n<IPV6>.979800   2.3    2.35   2            12.5           0        15152.9      3683.6      4991.8       6982.9                 0                0                0           10161.1      12851    1644928           40       823680            4          256               12.5            75.6905\n<IPV6>.378287   2.28   2.34   2            12.5          12.5      15152.9      3655.1      5020         6983.2                 0                0                0           10132.9      12851    1644928           40       823680            4          256               25              75.8785\n```\nAs the management container doesn't contain the necessary packages for charting via the command line output, this tabulated set of timeseries results allow for further investigation and external visual charting, for a given testbed/hwsku.\n\n#### Any platform specific information?\nN/A\n\n#### Supported testbed topology if it's a new test case?\nT0 and T1 support confirmed, others likely\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/bgp/bgp_helpers.py",
+        "additions": 16,
+        "deletions": 0
+      },
+      {
+        "path": "tests/bgp/templates/bgp_summary_extended.textfsm",
+        "additions": 11,
+        "deletions": 0
+      },
+      {
+        "path": "tests/bgp/templates/show_proc_extended.textfsm",
+        "additions": 19,
+        "deletions": 0
+      },
+      {
+        "path": "tests/bgp/test_bgp_update_replication.py",
+        "additions": 270,
+        "deletions": 0
+      },
+      {
+        "path": "tests/bgp/test_bgp_update_timer.py",
+        "additions": 5,
+        "deletions": 17
+      },
+      {
+        "path": "tests/common/helpers/bgp.py",
+        "additions": 44,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

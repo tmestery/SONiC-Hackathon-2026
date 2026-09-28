@@ -1,0 +1,68 @@
+{
+  "number": 24023,
+  "title": "[loganalyzer] Broadcom syncd PORT_PHY_ATTR collectData ERR syslog causes teardown failures on 7260CX3",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24023",
+  "createdAt": "2026-04-17T10:37:19Z",
+  "closedAt": "2026-07-13T14:29:16Z",
+  "author": "ZhaohuiS",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Description\n\nAfter sonic-swss [#4407](https://github.com/sonic-net/sonic-swss/pull/4407) (cherry-pick of [#4223](https://github.com/sonic-net/sonic-swss/pull/4223)) landed on 202511 on Apr 6, Broadcom platforms generate ERR-level syslog entries every ~10 seconds from syncd:\n\n`\nsyncd#syncd: SAI_API_PORT:brcm_sai_get_port_attribute_cmn:10440 RX signal detect status get N attrib 149 failed with error Feature unavailable (0xfffffff0)\nsyncd#syncd: :- collectData: Failed to get port attr for VID 0x10000000000XX, RID:0x1000000XX: -2\n`\n\nThis causes **all tests using loganalyzer** to fail at teardown on Arista-7260CX3 and other Broadcom platforms. On 202511 image 20251110.20 this produced **8,700+ test failures**.\n\n## Root Cause - Two-PR Activation Pattern\n\n| Component | Master PR | 202511 Cherry-pick | Role |\n|-----------|-----------|-------------------|------|\n| sonic-sairedis | [#1674](https://github.com/sonic-net/sonic-sairedis/pull/1674) (Jan 30) | [#1785](https://github.com/sonic-net/sonic-sairedis/pull/1785) (Mar 9) | Adds PORT_PHY_ATTR polling in syncd FlexCounter |\n| sonic-swss | [#4223](https://github.com/sonic-net/sonic-swss/pull/4223) (Mar 26) | [#4407](https://github.com/sonic-net/sonic-swss/pull/4407) (Apr 6) | **ACTIVATOR** - writes PORT_PHY_ATTR entries to FLEX_COUNTER_DB |\n\nsonic-sairedis [#1799](https://github.com/sonic-net/sonic-sairedis/pull/1799) / [#1815](https://github.com/sonic-net/sonic-sairedis/pull/1815) partially fixed PORT_PHY_SERDES_ATTR but **missed** PORT_PHY_ATTR (FlexCounter.cpp line 1987 - initAttrData return value not checked).\n\n## Affected Platforms\n\n- Arista-7260CX3-C64 (confirmed)\n- Arista-7060X6-64PE (confirmed)\n- Likely all Broadcom ASIC platforms where SAI_PORT_ATTR_RX_SIGNAL_DETECT is not supported\n\n## Fix PRs\n\n- **syncd fix (proper):** [sonic-sairedis #1855](https://github.com/sonic-net/sonic-sairedis/pull/1855) - Check initAttrData return value in PORT_PHY_ATTR::collectData\n- **loganalyzer workaround:** [sonic-mgmt #24017](https://github.com/sonic-net/sonic-mgmt/pull/24017) - Add collectData failure pattern to loganalyzer ignore list\n\n## Failure Timeline\n\n| Date | Image | Platform | Failures | Trigger |\n|------|-------|----------|----------|---------|\n| Mar 21-27 | 20251110.17 | 7060X6 | 14-56/day | #1785 only |\n| Mar 28 | internal.158470515 | 7260CX3 | 1,240 | #4223 synced from master |\n| Apr 14-16 | 20251110.20 | All Broadcom | 8,707 | #4407 + SAI upgrade #26625 |\r\n",
+  "comments": [
+    {
+      "author": "pandurangan-arista",
+      "createdAt": "2026-04-23T05:39:47Z",
+      "body": "https://github.com/sonic-net/sonic-mgmt/pull/24018 (202511) and https://github.com/sonic-net/sonic-mgmt/pull/23871 (master) should address this problem (both area already merged)"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26077,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26077",
+      "title": "[loganalyzer] Ignore rsyslog-collapsed \"collectData: Failed to get port attr\" logs",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-13T14:29:15Z",
+      "createdAt": "2026-07-10T20:45:37Z",
+      "author": "deerao02",
+      "body": "### Description of PR\n\nSummary:\nFixes #24023\n\nThe LogAnalyzer ignore rule for the benign syncd `collectData: Failed to get port attr for VID ... RID ...: -<code>` error anchored on the literal substring `#syncd: :- collectData`. rsyslog deduplicates repeated identical lines into a summary of the form:\n\n```\nERR syncd#syncd: message repeated N times: [ :- collectData: Failed to get port attr for VID 0x..., RID:0x...: -8]\n```\n\nBecause `message repeated N times: [ ` sits between `#syncd:` and `:- collectData`, the rigid anchor does not match the collapsed line. LogAnalyzer then flags it and QoS SAI cases error on teardown (observed on Broadcom 7060x6 ft2/lt2 nightlies, e.g. `str4-7060x6-512-4`, image `20251110.38` \u2014 14 QoS SAI teardown errors in a single nightly).\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [x] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request: #24023\nFailure type: day-one issue (test infrastructure \u2014 the collapsed-log form was never covered by the ignore rule)\n\n### Approach\n#### What is the motivation for this PR?\nEliminate false-positive LogAnalyzer teardown failures on Broadcom 7060x6 nightlies. A previous fix generalized the error code (`-2` -> `-\\d+`), but the rule still only matched the un-collapsed line, so rsyslog's `message repeated N times: [ ... ]` summary continued to trip LogAnalyzer and error the QoS SAI cases at teardown.\n\n#### How did you do it?\nReplaced the rigid `#syncd: :- collectData` anchor with `#syncd:.*collectData` in `loganalyzer_common_ignore.txt`, so both the direct and the rsyslog-collapsed forms are ignored. The rest of the pattern (VID/RID hex and `-\\d+` error code) is unchanged, keeping the rule scoped to this specific benign error.\n\n#### How did you verify/test it?\nValidated the new regex against the exact lines from the failing nightly: it matches both the direct line and the `message repeated N times: [ ... ]` collapsed line, matches multi-asic `syncd0`, and does not match unrelated `collectData` errors.\n\n#### Any platform specific information?\nBroadcom 7060x6 (ft2/lt2 topologies). The SAI return code observed on this platform is `-8`; the log volume triggers rsyslog message collapsing.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 not a new test case.\n\n### Documentation\nN/A \u2014 no documentation change required.\n",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/tools/loganalyzer/loganalyzer_common_ignore.txt",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-10T20:45:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-10T20:46:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2026-07-10T20:50:02Z",
+          "body": "The change LGTM. Please update PR description to follow PR template"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-13T14:30:10Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/26109"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-13T14:30:16Z",
+          "body": "Cherry-pick PR to msft-202512: https://github.com/Azure/sonic-mgmt.msft/pull/1303"
+        }
+      ]
+    }
+  ]
+}

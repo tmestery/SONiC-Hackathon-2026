@@ -1,0 +1,140 @@
+{
+  "number": 18317,
+  "title": "Bug: `fib/test_fib.py::test_ecmp_group_member_flap` fails on fixed box t2s",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/18317",
+  "createdAt": "2025-05-09T19:05:19Z",
+  "closedAt": "2025-07-16T17:50:55Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nWhen running `fib/test_fib.py::test_ecmp_group_member_flap` with the `t2-single-node-min` topology it fails with:\n```\nE           ======================================================================\nE           ERROR: fib_test.FibTest\nE           @summary: Send packet for each range of both IPv4 and IPv6 spaces and\nE           ----------------------------------------------------------------------\nE           Traceback (most recent call last):\nE             File \"ptftests/py3/fib_test.py\", line 623, in runTest\nE               self.check_ip_ranges()\nE             File \"ptftests/py3/fib_test.py\", line 196, in check_ip_ranges\nE               self.check_ip_range(ip_range, dut_index, ipv4)\nE             File \"ptftests/py3/fib_test.py\", line 243, in check_ip_range\nE               src_port, exp_port_lists, _ = self.get_src_and_exp_ports(dst_ip)\nE             File \"ptftests/py3/fib_test.py\", line 203, in get_src_and_exp_ports\nE               src_port = int(random.choice(self.src_ports))\nE             File \"/usr/lib/python3.9/random.py\", line 347, in choice\nE               return seq[self._randbelow(len(seq))]\nE           IndexError: list index out of range\nE\nE           ----------------------------------------------------------------------\n```\n\nThe problem here is that in the PTF runner it passes all valid ports as `skip_src_ports`.\n```\n(Pdb) p cmd\n'/usr/local/bin/ptf --test-dir ptftests/py3 fib_test.FibTest --platform-dir ptftests --qlen=20000 --platform remote -t \\'fib_info_files=[\\'\"\\'\"\\'/root/fib_info_all_duts.txt\\'\"\\'\"\\'];ptf_test_port_map=\\'\"\\'\"\\'/root/ptf_test_port_map.json\\'\"\\'\"\\';ipv4=True;ipv6=False;testbed_mtu=1514;test_balancing=True;ignore_ttl=False;single_fib_for_duts=\\'\"\\'\"\\'multiple-fib\\'\"\\\n'\"\\';switch_type=\\'\"\\'\"\\'voq\\'\"\\'\"\\';asic_type=\\'\"\\'\"\\'broadcom\\'\"\\'\"\\';skip_src_ports=[2, 4, 6, 20, 23, 31]\\' --relax --debug info --log-file /tmp/fib_test.ecmp_member_flap.ipv4.True.ipv6.False.2025-05-09-00:13:55.log --socket-recv-size 16384'\n```\n\nThis is because the test assumes the device it's running against has an upstream_LC and a downstream_LC:\n```\n# --- Identify the DUT and ports from the minigraph facts ---\nupstream_lc = duthosts[0].hostname\nlogging.info(\"upstream_lc: {}\".format(upstream_lc))\n\nall_port_indices = get_all_ptf_port_indices_from_mg_facts(duts_minigraph_facts[upstream_lc])\nnh_dut_ports = map_ptf_ports_to_dut_port(nh_ptf_ports, all_port_indices)\nfiltered_ports = filter_ports(all_port_indices, tbinfo)\n\n...\n\n\"skip_src_ports\": filtered_ports\n```\n\n`all_port_indicies` ends up being all 6 ports in the topology:\n```\n(Pdb) p all_port_indices\n{2: (0, 'Ethernet16'), 4: (0, 'Ethernet32'), 6: (0, 'Ethernet48'), 20: (0, 'Ethernet160'), 23: (0, 'Ethernet184'), 31: (0, 'Ethernet248')}\n```\n\n### Steps to Reproduce\n\nRun `fib/test_fib.py::test_ecmp_group_member_flap` on a `t2-single-node-min` topology\n\n### Actual Behavior and Expected Behavior\n\n`fib/test_fib.py::test_ecmp_group_member_flap` shouldn't include all ports in the system in the `skip_src_ports` ptf_runner argument\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "rlhui",
+      "createdAt": "2025-05-14T17:37:49Z",
+      "body": "WG: might be better to have another test case for fixed box"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 18420,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/18420",
+      "title": "Fix `fib/test_fib.py::test_ecmp_group_member_flap` to not filter ports on `t2_single_node`",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-07-16T17:50:54Z",
+      "createdAt": "2025-05-14T23:16:00Z",
+      "author": "arista-nwolfe",
+      "body": "Extended condition in `filter_ports` to avoid filtering ports on `t2_single_node` topologies as they will be fixed systems as well.\r\n\r\nConfirmed the test passes on a `t2_single_node` box:\r\n`sudo ./run_tests.sh -n ardut -u -c fib/test_fib.py::test_ecmp_group_member_flap -x -e '--pdb'`\r\n```\r\nfib/test_fib.py::test_ecmp_group_member_flap[True-False-1514] PASSED\r\n```\r\n\r\nSummary:\r\nFixes #18317 \r\n\r\n### Type of change\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n- [x] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [x] 202505\r\n",
+      "files": [
+        {
+          "path": "tests/fib/test_fib.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-14T23:16:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-14T23:16:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "kenneth-arista",
+          "createdAt": "2025-05-16T20:30:01Z",
+          "body": "@arlakshm "
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2025-05-17T04:19:52Z",
+          "body": "/Azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-17T04:20:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-06-11T17:13:34Z",
+          "body": "/azpw run Azure.sonic-mgmt"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-11T17:13:38Z",
+          "body": "/AzurePipelines run Azure.sonic-mgmt"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-11T17:13:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2025-06-18T16:49:23Z",
+          "body": "@arista-nwolfe  - do you know what's failing?"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-06-23T18:19:10Z",
+          "body": "/azpw run Azure.sonic-mgmt"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-23T18:19:12Z",
+          "body": "/AzurePipelines run Azure.sonic-mgmt"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-23T18:19:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2025-07-02T16:54:53Z",
+          "body": "@arista-nwolfe, the testcase \"test_ecmp_group_member_flap\" is generic and is applicable to pizzabox platforms as well..\r\n\r\nPasting the snippet from the original test PR..\r\n![image](https://github.com/user-attachments/assets/6e861437-0331-496b-9790-7c7367fad392)\r\n\r\nIt essentially validates load balancing ECMP member flap scenario.. For VOQ chassis, it additionally verifies our remote ECMP acceleration feature functionality..\r\nDisagg T2 should fall under pizza box case, where we dont have remote linecard, so we should just have empty filtered_ports..\r\nCould you add DT2 case here  https://github.com/sonic-net/sonic-mgmt/blob/master/tests/fib/test_fib.py#L164 to return empty list?  Thanks!"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-07-03T18:31:52Z",
+          "body": "> @arista-nwolfe, the testcase \"test_ecmp_group_member_flap\" is generic and is applicable to pizzabox platforms as well..\r\n> \r\n> Pasting the snippet from the original test PR.. ![image](https://private-user-images.githubusercontent.com/115033986/461635319-6e861437-0331-496b-9790-7c7367fad392.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTE1NjcwNjAsIm5iZiI6MTc1MTU2Njc2MCwicGF0aCI6Ii8xMTUwMzM5ODYvNDYxNjM1MzE5LTZlODYxNDM3LTAzMzEtNDk2Yi05NzkwLTdjNzM2N2ZhZDM5Mi5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjUwNzAzJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI1MDcwM1QxODE5MjBaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT0wYzdmMDE2YThlNmQxOWVkNjg3MGFjMzk3YTdiMmNiZTEwNTY4Y2I2ZGJmMDAxMWZlZWM3ZGY3OGQ0YzRmNDM5JlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.gOry7DZ0paHXTNdzjmVo-vTnrAKtG8eTsGxsckUfav0)\r\n> \r\n> It essentially validates load balancing ECMP member flap scenario.. For VOQ chassis, it additionally verifies our remote ECMP acceleration feature functionality.. Disagg T2 should fall under pizza box case, where we dont have remote linecard, so we should just have empty filtered_ports.. Could you add DT2 case here https://github.com/sonic-net/sonic-mgmt/blob/master/tests/fib/test_fib.py#L164 to return empty list? Thanks!\r\n\r\nThanks @deepak-singhal0408 this change resulted in the test now passing on disagg-t2. I'll update this PR with that change instead."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-07-03T18:43:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-07-03T18:44:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-07-03T18:44:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-07-03T18:44:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-08-08T00:24:54Z",
+          "body": "Cherry-pick PR to 202505: https://github.com/sonic-net/sonic-mgmt/pull/20128"
+        }
+      ]
+    }
+  ]
+}

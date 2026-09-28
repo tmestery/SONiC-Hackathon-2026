@@ -1,0 +1,198 @@
+{
+  "number": 24680,
+  "title": "[Enhancement] Require infra to capture memory and CPU footprint during the test.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24680",
+  "createdAt": "2026-05-16T13:29:02Z",
+  "closedAt": "2026-06-30T21:26:25Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Enhancement",
+    "Triaged"
+  ],
+  "assignees": [
+    "amitpawar12"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the enhancement\n\nMost of the tests, especially the performance and scale tests require some **_kind of mechanism for memory and CPU monitoring of the processes_** during peak/important phase of the test. Similarly with various optimization techniques, it is best practice to see if the memory and CPU footprints see improvement as well.\n\nUseful for **_memory and CPU profiling_** for:\n- _Performance and scale tests._\n- Comparison of various optimization in _specific areas on same platform_.\n- Comparison on _different platforms_.\n\nThese memory and CPU profiles will help to understand which **processes utilize most memory**, which **part of test causes memory to spike or release memory**, and **by what factor**, and if the **memory is released at the end** of the test.\n\n**_Graphs_** are usually best to summarize the utilization over a period of time. Some kind of mechanism should exist to plot the data.\n\n**_Raw data_** should be captured for future reference or one-on-one comparison with similar data captured with some fine-tuning or different platform.\n\nIt is imperative to have some mechanism to indicate the **memory utilization taken at some important points** during the test. As an example of link-flap test, user should be able to indicate the memory and CPU utilization taken during let's say link down and link up events for better readability and comparison.\n\n### Current Behavior\n\nExisting memory utilization plugin captures memory before and after the test. It compares the utilization with a given threshold marker and raises an ALARM if threshold marker is crossed.\n\n\n### Proposed Behavior\n\n- The memory and CPU utilization should be captured during the entire test for defined processes. \n- If possible, test should capture top 5 or 10 processes CPU and memory utilization. \n- There should be some mechanism to capture the utilization in either raw data or JSON/CSV format. \n- There should be flexibility to plot this utilization over period of time",
+  "comments": [
+    {
+      "author": "amitpawar12",
+      "createdAt": "2026-05-16T13:30:50Z",
+      "body": "@deepak-singhal0408 , @rawal01  for viz.\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 24681,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24681",
+      "title": "Infra to capture cpu and memory utilization of processes during test, take snapshots and plot the data.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-30T21:26:24Z",
+      "createdAt": "2026-05-16T13:29:57Z",
+      "author": "amitpawar12",
+      "body": "\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\nMemory and CPU utilization infrastructure is added with following features:\r\n- Disabled by default and will be enabled with either pytest marker or a flag.\r\n- Infra allows defining capturing memory and CPU utilization for various processes using '**_top_**' command output. Optionally, free and used memory can be captured using '**_free -m_**\" command on the box. Similarly, the docker CPU and memory utilization can also be captured using '**_docker stats_**' command. \r\n- The default interval of capturing data is set to **1secs** by default.\r\n- User can define various **_snapshot points_** to capture memory and CPU footprint on significant milestones in the test.\r\n- The infra takes care of stopping the capture if there is no explicit stop defined.\r\n- Along with user defined processes, infra capture top 5 processes having significant jump in memory utilization during the test.\r\n- Data is captured in three formats - **_raw, JSON and CSV_**.\r\n- Optionally, this data can be plotted. As an example, we are plotting three different graphs with CPU utilization, Memory % utilization and Memory utilization (MiB) for the processes and time on X-axis.\r\n- The graphs are plotted with various **_snapshot point indicators_**, thus improving readability to correlate memory/CPU utilization at various points during the test.\r\n- Memory_leak_check event captures the memory snapshot at the defined point and compares it with first reading taken during the test.\r\n\r\nAs part of example and integration, the route download test is integrated with this infrastructure. README and HLD is also available.\r\n\r\nSummary:\r\nFixes #24680 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [X] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [X] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nIn the existing test infrastructure, the memory_utilization functionality captures the memory utilization before and after the test.\r\n\r\nThe test infrastructure was required to capture the CPU and memory utilization run-time during the tests of pre-defined processes (by the user) and also top-memory utilizing processes. \r\n\r\n- **Scale**: Full host top every tick is too heavy to store and plot everything; keep bounded, meaningful rows (top RSS \u00b1 user interest) while still allowing mem_cpu_monitor on long runs.\r\n- **Debuggability**: Parsed rows and truncated COMMAND are not enough; full raw top (and optional all-command raw log) helps verify DUT output and parser behavior.\r\n- **Readability**: Plots should be easier to read (grids, time on all panels, compact title) and artifacts should log paths clearly in CI logs.\r\n- **Maintainability**: HLD/README and small unit tests document behavior and guard regressions.\r\n\r\n#### How did you do it?\r\n**top_parser.py**: parse_top_host_all, parse_free_m_used, strict/loose parse_top helpers.\r\n**controller.py**:  ProcMemCpuMonitor \u2014 start() builds targets, optional raw logs, _probe_host_num_cores_once(), immediate _poll_tick() + daemon _loop with _stop_event.wait(interval); _host_top_capture_names filters host-wide rows before append; plot() / export_samples() matplotlib + JSON/CSV; MemCpuMonitorResult extended where needed.\r\n**__init__.py / pytest_addoption / marker**: opt-in fixture; disabled stub when off.\r\n**test_top_parser.py**: parser and capture-helper tests; typo fix on len(bgpds).\r\n**docs/HLD.md, README.md**: API, capture rules, interval, raw logs, plot notes, document control.\r\n\r\nThe tests/snappi_tests/bgp/test_bgp_rib_route_optimztn_perf.py is integrated with these changes. The files/bgp_convergence_helper.py file captures snapshots during the test.\r\n\r\n#### How did you verify/test it?\r\nTested it on local master repo with BGP convergence route download test.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/README.md",
+          "additions": 139,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/__init__.py",
+          "additions": 86,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/constants.py",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/controller.py",
+          "additions": 1316,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/EXAMPLE_PLOTS.md",
+          "additions": 75,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/HLD.md",
+          "additions": 224,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/example_plots/cpu_example.png",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/example_plots/memory_example.png",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/tcmalloc_parser.py",
+          "additions": 49,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/test_top_parser.py",
+          "additions": 163,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/proc_mem_cpu_monitor/top_parser.py",
+          "additions": 268,
+          "deletions": 0
+        },
+        {
+          "path": "tests/conftest.py",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/snappi_tests/bgp/files/bgp_convergence_helper.py",
+          "additions": 126,
+          "deletions": 68
+        },
+        {
+          "path": "tests/snappi_tests/bgp/test_bgp_rib_route_optimztn_perf.py",
+          "additions": 40,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-16T13:30:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-16T13:30:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-05-16T13:30:27Z",
+          "body": "@deepak-singhal0408 , @rawal01 for viz"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-16T14:09:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-16T14:09:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-20T15:04:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-20T15:05:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T17:51:46Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T17:52:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T19:49:47Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T19:50:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-06-17T04:58:51Z",
+          "body": "**\ud83d\udfe1 New finding: 300s hardcoded post-test delay with no automated leak validation**\n\nFile: `bgp_convergence_helper.py` line 20\n\nThe post-convergence delay on success is hardcoded to 300 seconds, but there's no automated validation afterward:\n\n```python\nMEM_CPU_MONITOR_RIB_IN_POST_SUCCESS_SEC = 300  # 5 minutes!\n```\n\n**Issues:**\n1. **Not configurable** \u2014 Every successful test waits 5 minutes, regardless of scale (10-route vs 1M-route test)\n2. **No automated check** \u2014 If memory stays elevated after 300s, the test still passes. The plugin supports `snapshot(MEM_LEAK_EVENT, threshold=\"10%\")` for validation, but it's never called.\n\n**Questions:**\n\n1. **Can we make the delay configurable?** Add a test parameter so different tests can override:\n   ```python\n   def test_bgp_rib_route_optimztn_perf(..., mem_cpu_monitor_post_delay_sec=60):\n       run_rib_in_convergence_test(..., mem_cpu_monitor_post_delay_sec=mem_cpu_monitor_post_delay_sec)\n   ```\n   Default to 60s for most tests, override to 300s only for tests that need it?\n\n2. **Is there scope for automated leak detection?** After the delay:\n   ```python\n   mem_cpu_monitor.snapshot(event=MEM_LEAK_EVENT, threshold=\"15%\", strict=False)\n   ```\n   This would validate memory returned to baseline (logged warning if failed, not hard failure).\n\nBoth would improve test efficiency while keeping the leak detection capability. Thoughts?"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-06-17T04:59:11Z",
+          "body": "**\ud83d\udfe1 DEBUG log noise makes `--log-cli-level DEBUG` unusable**\n\nFile: `controller.py` line 363\n\nEach `duthost.command()` call logs full Ansible args + JSON result at DEBUG level. With 2s polling \u00d7 2 commands per DUT:\n\n- **~1200 DEBUG lines per 10-minute test**\n- Each line contains full SSH output (50+ process lines from `top`)\n- The raw output is **already saved** to `_raw_log_path` and `_top_raw_log_path`\n\n**Impact:** Developers debugging other issues cannot use DEBUG level when this plugin is active \u2014 the SSH logs bury all other output.\n\n**Request:** Please suppress the devices.base logger during polling:\n\n```python\ndef _dut_command_raw(self, duthost, cmd, ...):\n    with self._dut_ssh_lock:\n        # Suppress DEBUG noise - raw output already in dedicated log files\n        devices_logger = logging.getLogger('tests.common.devices.base')\n        old_level = devices_logger.level\n        devices_logger.setLevel(logging.INFO)\n        try:\n            with _suppress_devices_base_debug():\n                out = duthost.command(cmd, module_ignore_errors=True)\n        finally:\n            devices_logger.setLevel(old_level)\n```\n\nThis restores DEBUG usability while preserving all data (already in log files)."
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-06-24T23:11:25Z",
+          "body": "> **\ud83d\udfe1 DEBUG log noise makes `--log-cli-level DEBUG` unusable**\r\n> \r\n> File: `controller.py` line 363\r\n> \r\n> Each `duthost.command()` call logs full Ansible args + JSON result at DEBUG level. With 2s polling \u00d7 2 commands per DUT:\r\n> \r\n> * **~1200 DEBUG lines per 10-minute test**\r\n> * Each line contains full SSH output (50+ process lines from `top`)\r\n> * The raw output is **already saved** to `_raw_log_path` and `_top_raw_log_path`\r\n> \r\n> **Impact:** Developers debugging other issues cannot use DEBUG level when this plugin is active \u2014 the SSH logs bury all other output.\r\n> \r\n> **Request:** Please suppress the devices.base logger during polling:\r\n> \r\n> ```python\r\n> def _dut_command_raw(self, duthost, cmd, ...):\r\n>     with self._dut_ssh_lock:\r\n>         # Suppress DEBUG noise - raw output already in dedicated log files\r\n>         devices_logger = logging.getLogger('tests.common.devices.base')\r\n>         old_level = devices_logger.level\r\n>         devices_logger.setLevel(logging.INFO)\r\n>         try:\r\n>             with _suppress_devices_base_debug():\r\n>                 out = duthost.command(cmd, module_ignore_errors=True)\r\n>         finally:\r\n>             devices_logger.setLevel(old_level)\r\n> ```\r\n> \r\n> This restores DEBUG usability while preserving all data (already in log files).\r\n\r\nthis is Addressed \u2014 thanks. The current head implements exactly this: _suppress_devices_base_debug() raises tests.common.devices.base to INFO around each sampled duthost.command() (via _dut_command_raw()), so --log-cli-level DEBUG is usable again while the raw top output is still preserved in the dedicated log files. No further change needed on this one."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-26T15:05:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-26T15:05:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-06-26T15:25:12Z",
+          "body": "Raised enhancement request #25699 for multi-asic support."
+        }
+      ]
+    }
+  ]
+}

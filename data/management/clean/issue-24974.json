@@ -1,0 +1,43 @@
+{
+  "id": "management-24974",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24974,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24974",
+    "title": "[generate_golden_config_db] is_bmc_device() also matches switch-host-with-BMC, will disable swss/syncd on real switches",
+    "created_at": "2026-05-29T08:42:55Z",
+    "closed_at": "2026-06-05T07:47:53Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Summary\n\n`is_bmc_device()` in `ansible/library/generate_golden_config_db.py` (introduced in #24585) uses the presence of `/etc/sonic/bmc.json` as the BMC sentinel. That file is created on **both** Switch-BMC devices (`switch_bmc=1`) and Switch-Host-with-BMC devices (`switch_host=1`), so the helper cannot distinguish a real BMC from a normal switch that happens to ship next to one.\n\nThe consequence is that on any future Switch-Host-with-BMC platform running through `deploy-mg`, `swss` / `syncd` / `bmp` / `frr_bmp` will be forced to `disabled` in `golden_config_db`, even though that host actually owns the front-panel ASIC and BGP sessions.\n\n### Where the ambiguity comes from\n\n`files/image_config/config-setup/config-setup` (sonic-buildimage):\n\n```bash\nif [[ \"${switch_bmc}\" == \"1\" || \"${switch_host}\" == \"1\" ]]; then\n    # copies bmc.json to /etc/sonic/\nfi\n```\n\nSo `/etc/sonic/bmc.json` is a \"BMC link exists\" marker, not a \"I am the BMC\" marker.\n\n### References\n\n- PR that introduced the helper: #24585\n- `sonic-buildimage:src/sonic-py-common/sonic_py_common/device_info.py`\n- `bmc.json` creation logic: `sonic-buildimage:files/image_config/config-setup/config-setup`"
+  },
+  "resolution": {
+    "pr_number": 25021,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25021",
+    "title": "[BMC] Fix is_bmc_device() to use DEVICE_METADATA.type instead of bmc.json presence",
+    "merged_at": "2026-06-05T07:47:52Z",
+    "description": "### Description of PR\n\nFixes the bug introduced by #24585 that caused the swss/syncd FEATURE to be disabled on real switches (Switch-Host side of switch-with-BMC platforms), not just on standalone BMC devices.\n\nThe previous implementation used `device_info.get_bmc_data() is not None`. `get_bmc_data()` returns truthy whenever `/etc/sonic/bmc.json` exists, and that file is provisioned on **both** sides of a switch-with-BMC platform (the Switch-Host has it so it can reach the BMC's Redis; the Switch-BMC has it so it can reach the host's Redis). So `is_bmc_device()` mistakenly flagged switch hosts as BMC devices.\n\nFix: use `DEVICE_METADATA.localhost.type == 'NetworkBmc'`, which is the same strict marker that `tests/common/devices/sonic.py:285` (`SonicHost.is_bmc()`) and `ansible/library/sonic_basic_facts.py` already rely on. Only standalone BMC instances carry that type.\n\nFixes #24974\n\n### Summary\nFixes # (issue) 24974\n\n### Type of change\n- [x] Bug fix\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n### Approach\n#### What is the motivation for this PR?\nPR #24585 introduced `is_bmc_device()` to gate the BMC-only behavior of disabling the swss/syncd FEATURE during deployment. The helper as written wrongly matches Switch-Host devices that have a BMC attached, which then disables swss/syncd on real switches and breaks NVIDIA's switch-with-BMC deployments.\n\n#### How did you do it?\nReplaced `device_info.get_bmc_data() is not None` with `device_info.get_localhost_info('type') == 'NetworkBmc'`. That field is only set on standalone BMC ConfigDB and is what the rest of the codebase already uses to identify BMC devices.\n\n#### How did you verify/test it?\nStatic review against the existing BMC detection patterns in:\n- `tests/common/devices/sonic.py:285` (`SonicHost.is_bmc()`)\n- `ansible/library/sonic_basic_facts.py:441` (populates `router_type` from the same `DEVICE_METADATA.type`)\n\nCI will exercise the deployment flow on both BMC and non-BMC platforms.\n\n#### Any platform specific information?\nAffects deployment of any platform that has a `bmc.json` provisioned on the switch host side (i.e., switch-with-BMC SKUs such as NVIDIA's). Standalone BMC platforms continue to behave as intended by #24585.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u256c\u00f4\u251c\u00e7\u251c\u2562 bugfix to the deployment helper.\n\n### Documentation\nN/A\n\n### Empirical confirmation on Komodo BMC (2026-06-02)\n\nVerified the new condition on a live Komodo BMC running SONiC.master.1125559-f9827de19:\n\n```\nadmin@host1-komodo-bmc:~$ sonic-cfggen -d -v \"DEVICE_METADATA['localhost']['type']\"\nNetworkBmc\n```\n\nSo `device_info.get_localhost_info('type') == 'NetworkBmc'` evaluates as expected on a real BMC device, and the same call returns a different role (`ToRRouter`, `LeafRouter`, etc.) on switches \u0393\u00c7\u00f6 including switches that have a BMC attached, which is the exact scenario this PR fixes.\n\nWorkitem link: https://dev.azure.com/msazure/One/_workitems/edit/38207843",
+    "files": [
+      {
+        "path": "ansible/library/generate_golden_config_db.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

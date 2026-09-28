@@ -1,0 +1,138 @@
+{
+  "id": "management-26174",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26174,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26174",
+    "title": "Enhancement: [snappi] pfcQueueGroupSize defaults to 8 with no validation against tgen port capability \u2014 silent PFC honoring failures on 4-queue-group load modules",
+    "created_at": "2026-07-14T21:58:14Z",
+    "closed_at": "2026-07-28T23:39:45Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Is it platform specific:** generic\n\n**Importance or Severity:** Medium\n\n### Description of the enhancement\n\nThe snappi test framework assumes the traffic generator port supports 8 PFC TX queue groups unless a per-testbed override is set:\n\n- `tests/common/snappi_tests/variables.py` \u2014 `pfcQueueGroupSize = get_pfcQueueGroupSize(default=8)`\n- `tests/common/snappi_tests/snappi_fixtures.py` \u2014 programs L1 `flow_control.ieee_802_1qbb.pfc_class_0..7` from this value (1:1 mapping for 8, folded via `pfcQueueValueDict` for 4)\n- `tests/common/snappi_tests/traffic_generation.py` and per-test helpers (e.g. `tests/snappi_tests/pfcwd/files/pfcwd_basic_helper.py`) \u2014 assign each flow's `eth.pfc_queue` from the same value\n\nNewer high-speed Keysight load modules (e.g. 400G port modes) support only **4** PFC TX queue groups per port. When such a port runs with the default of 8, PFC classes are mapped to TX queues that do not exist on the hardware. The configuration is accepted without error, and the mismatch only surfaces later as test-level symptoms: the tgen does not honor PFC pause frames for the affected priorities, so pause-storm-based tests (pfcwd, pfc) see traffic flowing through a storm and fail loss-rate assertions intermittently \u2014 e.g. only on runs where the randomly selected lossless priority maps above the physical queue count. Nothing in the logs points at the queue-group mismatch, making root cause very hard to find.\n\n### Current Behavior\n\n`pfcQueueGroupSize` silently defaults to 8. There is no detection of, or validation against, the tgen port's actual queue-group capability, and no log output indicating which mapping is in effect. A mismatch produces misleading intermittent test failures instead of a configuration error.\n\n### Proposed Behavior\n\nThe framework should resolve or validate `pfcQueueGroupSize` against the connected tgen port's capability (or at minimum fail/warn loudly on mismatch) instead of silently applying the default."
+  },
+  "resolution": {
+    "pr_number": 26221,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26221",
+    "title": "snappi: auto-detect the PFC TX queue-group size from the tgen ports",
+    "merged_at": "2026-07-28T23:39:44Z",
+    "description": "### Description of PR\n\nSummary:\nThe snappi framework assumes tgen ports honor 8 PFC TX queue groups unless a per-testbed override says otherwise (`pfcQueueGroupSize` in `tests/common/snappi_tests/variables.py`, default 8). On load modules that honor only 4 (e.g. high-speed Keysight AresOne-family port modes), the default silently maps PFC classes to non-existent TX queues: the tgen does not honor pause frames for the affected priorities, and pause-storm tests (pfcwd, pfc) fail intermittently with loss-rate assertions \u2014 nothing in the logs points at the queue-group mismatch. This PR makes the framework resolve the size automatically from the connected ports, with explicit logging of which source decided the value and why.\n\nFixes #26174\n\n### Type of change\n\n- [ ] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\n### Approach\n#### What is the motivation for this PR?\n\nDebugging intermittent PFCWD basic test failures on a 400G testbed, we found the tgen transmitting straight through PFC pause storms for some priorities: the port honors 4 PFC TX queue groups, the framework had programmed the 8-group identity class map, so class-N pause frames paused queues that don't exist on the hardware. The configuration is accepted without error and the mismatch only surfaces as unexplained test failures (details in #26174).\n\n#### How did you do it?\n\n- `snappi_helpers.fetch_pfc_queue_group_size(api, config)`: reads the queue-group size every session vport honors via `L1Config.<CardType>.Fcoe.PfcQueueGroupSize`, deriving the card-type object the same way snappi_ixnetwork's own `_set_vport_type` does (strip the `Fcoe` suffix from `CurrentType`); verified against all 12 Fcoe-eligible card families in ixnetwork_restpy 1.10.0. Non-IxNetwork OTG backends return None and keep today's behavior. If ports report different sizes, the folded size 4 is used (every port honors the folded mapping; only 4-group ports break on the identity one).\n- `common_helpers.pfc_queue_group_size()`: resolves once per session \u2014 testbed override > detected size > default 8 \u2014 caches the result, and logs the deciding source. Detection runs from the base-config fixtures (vports exist only after the first set_config); consumer calls just read the cached value.\n- `snappi_fixtures._config_pfc_classes()`: collapses the three duplicated 20-line L1 `pfc_class` programming blocks into one helper that resolves then programs (this also fixes an indentation issue in the multidut block where the class programming sat outside the port-match loop).\n- All consumers (traffic_generation and the pfcwd/pfc/dataplane helpers) move from the import-time `variables.pfcQueueGroupSize` constant \u2014 frozen before any tgen session exists, so it can never reflect hardware \u2014 to the accessor. The constant remains as a deprecated shim for out-of-tree users. The existing per-testbed override keeps highest precedence, so current testbeds are unaffected.\n\n#### How did you verify/test it?\n\nOn a 4x400G AresOne-M snappi testbed with a Broadcom-DNX DUT, PFCWD basic tests at full traffic rate pass with:\n\n- Detection path (no override configured):\n  `fetch_pfc_queue_group_size: {'Port 0': 4, 'Port 1': 4, 'Port 2': 4, 'Port 3': 4}`\n  `pfcQueueGroupSize: selecting 4 over default 8 \u2014 the tgen port honors 4 PFC TX queue groups; with 8, pause frames for priorities mapped above queue 3 would not be honored`\n- Override path: `pfcQueueGroupSize=4 from testbed override (auto-detect skipped)` \u2014 detection bypassed, existing testbed behavior unchanged.\n- flake8 clean on all changed files with the repo pre-commit flags.\n\n#### Any platform specific information?\n\nTgen-side only; no DUT-side changes. Detection is IxNetwork-specific (`api._ixnetwork`, same access pattern as the existing capture configuration code), guarded so other OTG backends fall back to the override/default resolution used today.\n\n#### Supported testbed topology if it's a new test case?\n\nNot a new test case.\n\n### Documentation\n\nDeprecation note added on `variables.pfcQueueGroupSize` pointing to the accessor.",
+    "files": [
+      {
+        "path": "tests/common/snappi_tests/common_helpers.py",
+        "additions": 47,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/snappi_tests/snappi_fixtures.py",
+        "additions": 21,
+        "deletions": 62
+      },
+      {
+        "path": "tests/common/snappi_tests/snappi_helpers.py",
+        "additions": 63,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/snappi_tests/traffic_generation.py",
+        "additions": 6,
+        "deletions": 5
+      },
+      {
+        "path": "tests/common/snappi_tests/variables.py",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "tests/snappi_tests/README.md",
+        "additions": 6,
+        "deletions": 4
+      },
+      {
+        "path": "tests/snappi_tests/dataplane/files/helper.py",
+        "additions": 7,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/dataplane/imports.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/lossless_response_to_external_pause_storms_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/lossless_response_to_throttling_pause_storms_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/m2o_fluctuating_lossless_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_lossy_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfc/test_lossless_response_to_throttling_pause_storms.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/snappi_tests/pfc/test_m2o_oversubscribe_lossless_lossy.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/snappi_tests/pfcwd/files/pfcwd_basic_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfcwd/files/pfcwd_burst_storm_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfcwd/files/pfcwd_multi_node_helper.py",
+        "additions": 3,
+        "deletions": 2
+      },
+      {
+        "path": "tests/snappi_tests/pfcwd/files/pfcwd_runtime_traffic_helper.py",
+        "additions": 3,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

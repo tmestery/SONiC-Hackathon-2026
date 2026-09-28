@@ -1,0 +1,167 @@
+{
+  "number": 26748,
+  "title": "Bug: snappi PFC pause tests fail \"Flows do not stop in 20 seconds\" when the test flow is backpressured by its own pause storm",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26748",
+  "createdAt": "2026-08-03T22:17:15Z",
+  "closedAt": "2026-08-27T21:59:58Z",
+  "author": "atul-nexthop",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "atul-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n_(Observed on Broadcom DNX. The root cause is test-framework sequencing logic and is not vendor-specific \u2014 it will affect any platform whose lossless buffer fills fast enough to backpressure the traffic generator.)_\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nTests under `tests/snappi_tests/pfc/` that pass `test_traffic_pause=True` drive a continuous PFC pause storm to hold DUT egress paused, then verify the lossless test flow is paused (`tx > 0, rx == 0`).\n\nIn `run_traffic` (`tests/common/snappi_tests/traffic_generation.py`), after in-flight stats are collected, a loop waits up to 20s for the data flows to reach `stopped` before reading final metrics. But the test flow is backpressured *at the source* by the DUT's own PFC: on a port whose lossless buffer fills quickly, the DUT pauses the traffic generator, the fixed-duration flow never finishes transmitting its packet budget, and it therefore never transitions to `stopped` on its own. The wait loop exhausts its retries and the test fails.\n\nA second, related failure hits the valid-PFC-frame capture tests. `run_pfc_test` reconfigures the pause flow to `traffic_flow_mode.FIXED_DURATION`, and that duration expires during DUT polling and capture retrieval \u2014 the DUT unpauses, drains its buffered lossless frames, and `verify_basic_test_flow` fails with `<flow> should be paused` because `rx_frames` is no longer 0.\n\nBoth are test-framework sequencing bugs, not DUT bugs.\n\n### Steps to Reproduce\n\n1. Testbed with a snappi/TGEN port pair on a high-speed port with a small lossless buffer (observed on 400G, Broadcom DNX).\n2. `pytest snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py::test_pfc_pause_single_lossless_prio`\n3. For the second failure: `pytest snappi_tests/pfc/test_valid_pfc_frame_with_snappi.py`\n\n### Actual Behavior and Expected Behavior\n\n**Actual** \u2014 `Failed: Flows do not stop in 20 seconds`, raised by the `pytest_assert` after the wait loop in `run_traffic`. For the capture tests, `<flow> should be paused` from `verify_basic_test_flow`.\n\n**Expected** \u2014 a flow deliberately held under PFC flow control should still be brought to `stopped` before final metrics are read, and the pause storm should remain active until those metrics have been collected. Both tests should pass.\n\n### Relevant log output\n\n> Reconstructed from source; the assertion strings are exact.\n\n```shell\n# Wait loop in run_traffic (traffic_generation.py:858-889), one line per second:\nINFO  tests.common.snappi_tests.traffic_generation: Checking if all flows have stopped. Attempt #1\nINFO  tests.common.snappi_tests.traffic_generation: Checking if all flows have stopped. Attempt #2\n...\nINFO  tests.common.snappi_tests.traffic_generation: Checking if all flows have stopped. Attempt #20\n\n# then, from the pytest_assert at traffic_generation.py:888-889:\nFailed: Flows do not stop in 20 seconds\n\n# The capture-test variant, from verify_basic_test_flow (traffic_generation.py:1011):\nFailed: <flow name> should be paused\n```\n\n### Output of `show version`\n\nNot included \u2014 the failure is in `sonic-mgmt` test sequencing logic and reproduces independently of the image under test. Happy to provide it if useful.\n\n### Attach files (if any)\n\nA fix is in progress and will be linked here as a PR.\n",
+  "comments": [
+    {
+      "author": "atul-nexthop",
+      "createdAt": "2026-08-03T22:18:27Z",
+      "body": "@YatishSVC, @vmittal-msft "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26751,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26751",
+      "title": "snappi/pfc: stop data flows explicitly so paused-traffic tests can finish",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-27T21:59:57Z",
+      "createdAt": "2026-08-04T00:02:41Z",
+      "author": "atul-nexthop",
+      "body": "### Description of PR\n\nSummary:\nFixes #26748\n\nTwo false failures in the snappi PFC pause tests, both caused by a continuous PFC pause storm interacting badly with `run_traffic`'s end-of-run sequencing. Both are test-framework sequencing bugs, not DUT bugs.\n\n**`Flows do not stop in 20 seconds`** \u2014 after in-flight stats are collected, `run_traffic` waits for the data flows to reach `stopped` before reading final metrics. In a pause test the lossless test flow is backpressured *at the source* by the DUT's own PFC: the DUT's lossless buffer fills, it pauses the traffic generator, and the fixed-duration flow never finishes transmitting its packet budget \u2014 so it never reaches `stopped` and the wait loop exhausts its retries.\n\n**`<flow> should be paused`** \u2014 the valid-PFC-frame tests hold DUT egress paused while they capture and validate the PFC frames the DUT emits. `run_pfc_test` reconfigured that pause flow to `FIXED_DURATION`, sized from nominal traffic duration only. Real runtime also includes the DUT poll loop's device round-trips, up to 20 s of wait loop, and the pcap retrieval \u2014 none of it in the budget. The pause expired mid-teardown, the DUT drained its buffered frames, and `rx_frames` was no longer 0.\n\nThese two are mutually exclusive under *any* fixed pause duration. Short enough for the flow to self-stop means the pause has lapsed and `rx_frames > 0`; long enough to keep `rx_frames == 0` means the flow is still backpressured and never stops. It is not a tuning problem, which is why this changes the sequencing rather than the duration.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\nNo backport requested.\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A\nFailure type: day-one issue\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n\nValidated on Broadcom DNX (400G, 4x400G AresOne-M tgen), DUT image `202511.Nexthop.137667`.\n\n**`snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py`** - 11 collected, **7 passed, 0 failed, 4 skipped** (2299s). The 4 skips are the warm/fast reboot variants, which the SKU does not support (`Reboot type warm/fast is not supported on hwsku ...`).\n\n```\nPASSED   test_pfc_pause_single_lossless_prio[3]\nPASSED   test_pfc_pause_single_lossless_prio[4]\nPASSED   test_pfc_pause_counter_check[3]\nPASSED   test_pfc_pause_counter_check[4]\nPASSED   test_pfc_pause_multi_lossless_prio\nPASSED   test_pfc_pause_single_lossless_prio_reboot[cold]\nPASSED   test_pfc_pause_multi_lossless_prio_reboot[cold]\nSKIPPED  ..._reboot[warm] x2, ..._reboot[fast] x2   (SKU does not support)\n```\n\nAcross all 7 `run_traffic` cycles the data-flow stop fired and the wait loop broke on the **first check**; previously it ran all 20 attempts and asserted. Zero occurrences of `Flows do not stop in 20 seconds` or `<flow> should be paused`.\n\n**`snappi_tests/pfc/test_valid_pfc_frame_with_snappi.py::test_valid_pfc_frame`** - **PASSED** (584s). This is the test that exercises the continuous pause storm, the metrics-before-capture-teardown reordering, and the resulting capture window together:\n\n```\nValidating PFC frames in capture file 'PFC_Capture.pcapng' (sample size 15000, util threshold 0.8)\nFirst PFC frame with non-zero class enable vector at packet 0\nScanned 15000 packets, found 15000 valid PFC frame(s); non-zero class enable vector seen: True\nPFC frame validation passed: 15000 valid PFC frame(s), utilization 1.00 (threshold 0.8)\n```\n\nThe capture filled the entire 15000-packet sample (utilization 1.00 against the 0.8 threshold), so reading the final metrics before capture teardown leaves the capture window comfortably sufficient.\n\n**`snappi_tests/pfc/test_pfc_pause_lossy_with_snappi.py`** - 12 collected, **8 passed, 0 failed, 4 skipped** (2573s; the 4 skips are again the warm/fast reboot variants). These tests pass `test_traffic_pause=False`, so they cover the derive's negative branch:\n\n```\nrun_traffic cycles                                      : 8\n\"Stopping transmit on data flows after in-flight stats\"  : 0    <- flag correctly stayed False\n\"Stopping transmit on all remaining flows\"               : 8    <- unchanged end-of-run path\n```\n\nTaken together the derive is confirmed in both directions: the data-flow stop fired on 8/8 cycles where `test_traffic_pause=True` (pause-lossless plus the capture test) and on 0/8 cycles where it is `False`.\n\n### Approach\n\n#### What is the motivation for this PR?\n\nNine PFC pause tests fail with `Flows do not stop in 20 seconds` on high-speed ports whose lossless buffer fills fast enough to backpressure the traffic generator, and the two valid-PFC-frame capture tests fail with `<flow> should be paused`.\n\n#### How did you do it?\n\n`run_traffic` now stops the data flows explicitly after in-flight collection, so they reach `stopped` without the pause having to expire. The stop is **scoped to `data_flow_names`** \u2014 stopping every flow would also stop the pause storm, letting the DUT drain to the receiver and turning the first failure into the second. Gated behind `SnappiTestParams.stop_data_flows_before_final_stats`, default `False`, so ECN, pfcwd and every other `run_traffic` caller is unchanged.\n\n`run_pfc_test` derives the flag from `test_traffic_pause`, a parameter it already receives, rather than each test opting in:\n\n```python\nif test_traffic_pause and not (valid_pfc_frame_test and is_cisco_device(egress_duthost)):\n    snappi_extra_params.stop_data_flows_before_final_stats = True\n```\n\nEvery `test_traffic_pause=True` caller needs the stop and no `test_traffic_pause=False` caller does, so this covers pause-lossless, zero-src-MAC, headroom and the two capture tests with nothing to forget. A future paused test gets the behavior by construction instead of hitting the timeout until someone remembers a flag.\n\nThe capture path keeps its pause storm continuous and reads the final TGEN metrics **before** the capture is stopped and retrieved, since that teardown is slow enough to outlast the pause window. Non-capture callers still read metrics after the (skipped) capture block, exactly as before.\n\nTransmit control is routed through two new helpers in `snappi_helpers.py`:\n\n```python\nset_flow_transmit_state(api, operation, flow_names=None)\nare_flows_stopped(api, flow_names)\n```\n\nso the scoped stop states its constraint at the call site rather than in an assignment that is easy to miss. Behavior is identical \u2014 with `flow_names` empty the helper emits exactly the previous control state, and `are_flows_stopped` keeps both the length guard and the all-`stopped` check. The macsec (`ptype`) branch is untouched, as are the `flow_transmit` sites in `run_basic_traffic` and `run_traffic_and_collect_stats`.\n\nFinally, `validate_pfc_frame` gains diagnostics: the first frame with a non-zero class-enable vector, scan totals, and actual utilization against the threshold, with per-frame detail at `debug` so a 15k-packet sample does not flood the log. No behavior change \u2014 this is the instrumentation for the capture-window question noted above.\n\n#### How did you verify/test it?\n\nSee **Test result**.\n\n#### Any platform specific information?\n\nObserved on Broadcom DNX at 400G. The root cause is framework sequencing and is not vendor-specific \u2014 it affects any platform whose lossless buffer fills fast enough to backpressure the traffic generator. Cisco's valid-PFC-frame path is explicitly excluded from the derive so its behavior is unchanged; that same `valid_pfc_frame_test and not is_cisco_device(...)` guard previously kept Cisco out of the `FIXED_DURATION` reconfiguration.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 existing tests.\n\n### Documentation\n\nNo documentation change. The behavior of these tests is unchanged; only their reliability.\n",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/read_pcap.py",
+          "additions": 21,
+          "deletions": 2
+        },
+        {
+          "path": "tests/common/snappi_tests/snappi_helpers.py",
+          "additions": 54,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/snappi_tests/snappi_test_params.py",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/snappi_tests/traffic_generation.py",
+          "additions": 30,
+          "deletions": 16
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/helper.py",
+          "additions": 5,
+          "deletions": 5
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T00:02:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-04T00:02:50Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-04T00:03:05Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-08-04T00:08:54Z",
+          "body": "@yatishkoul @vmittal-msft \u2014 could you take a look when you get a chance?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T00:14:06Z",
+          "body": "This PR has backport request for branch(es): 202511,202605.<br>Added label(s) for branch(es) 202511,202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T00:14:08Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511,202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-08-05T06:14:22Z",
+          "body": "Thanks @yatishkoul \u2014 hardware validation is done and the description now has the full results. Answering your three points:\r\n\r\n**1. Is the pause flow CONTINUOUS by default once the FIXED_DURATION override is removed?**\r\n\r\nYes. `run_pfc_test` builds the default `pause_flow_config` with `\"flow_traffic_type\": traffic_flow_mode.CONTINUOUS` (`tests/snappi_tests/pfc/files/helper.py:198`), and the block this PR removes was the *only* thing that reconfigured it to `FIXED_DURATION`. So dropping the override doesn't change the mode \u2014 it stops overriding it. The nine non-capture pause tests were already running a continuous storm before this change; only the two valid-PFC-frame tests were being switched to fixed-duration.\r\n\r\nConfirmed on hardware: `test_valid_pfc_frame` passes with the continuous storm, and the capture is healthy \u2014\r\n\r\n```\r\nScanned 15000 packets, found 15000 valid PFC frame(s); non-zero class enable vector seen: True\r\nPFC frame validation passed: 15000 valid PFC frame(s), utilization 1.00 (threshold 0.8)\r\n```\r\n\r\n**2. Does the Cisco valid-PFC-frame path still pass unchanged?**\r\n\r\nIt is unchanged by construction, though I should be straight that I have no Cisco hardware to run it on.\r\n\r\nThe old guard was `valid_pfc_frame_test and not is_cisco_device(...)`, so Cisco never got the `FIXED_DURATION` reconfiguration in the first place. Its pause storm was already continuous, with no data-flow stop.\r\n\r\nThe new condition keeps the flag `False` for that same Cisco + capture combination, so `run_traffic` skips both the data-flow stop and the metrics reordering. Same pause mode, same sequencing, same code path as today.\r\n\r\nI walked all six combinations of `test_traffic_pause` / capture / vendor; Cisco is the one that deliberately stays `False`. A Cisco run would still be welcome confirmation if anyone has the hardware.\r\n\r\n**3. Hardware validation**\r\n\r\nThree runs on Broadcom DNX (400G), DUT image `202511.Nexthop.137667`:\r\n\r\n| test file | result |\r\n|---|---|\r\n| `test_pfc_pause_lossless_with_snappi.py` | 11 collected \u2014 **7 passed, 0 failed**, 4 skipped |\r\n| `test_valid_pfc_frame_with_snappi.py` | **1 passed** |\r\n| `test_pfc_pause_lossy_with_snappi.py` | 12 collected \u2014 **8 passed, 0 failed**, 4 skipped |\r\n\r\nAll 12 skips are warm/fast reboot variants that the SKU doesn't support (`Reboot type warm/fast is not supported on hwsku ...`).\r\n\r\nThe derive is confirmed in both directions: the data-flow stop fired on **8/8** `run_traffic` cycles where `test_traffic_pause=True`, and **0/8** where it is `False`. Across all cycles the wait loop broke on the first check, where it previously ran all 20 attempts and asserted. Zero occurrences of `Flows do not stop in 20 seconds` or `<flow> should be paused`."
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-08-05T21:40:08Z",
+          "body": "@vmittal-msft Please review this and if this looks good - LGTM."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T18:19:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T18:19:29Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-08-06T18:19:39Z",
+          "body": "@vmittal-msft both review comments are addressed in 69893e728 \u2014 empty `flow_names` list now raises instead of silently acting on all flows, and the duplicate `sum(cev)` is hoisted. Could you please take another look?"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-08-13T21:09:44Z",
+          "body": "@sdszhang Please help merge this."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-08-19T05:12:23Z",
+          "body": "Merge recommendation: CI passed and approved by 2 reviewers.\n\nAI-assisted review, reviewed by Ying Xie (@yxieca)."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-08-19T05:15:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-19T05:15:58Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-08-24T21:14:41Z",
+          "body": "@rlhui , could you please help merge?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T00:15:48Z",
+          "body": "This PR has backport request label(s) for branch(es): msft-202512, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202512: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-26T17:20:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-26T17:20:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-08-27T17:31:56Z",
+          "body": "@vmittal-msft @sdszhang Could you please help check this ?"
+        }
+      ]
+    }
+  ]
+}

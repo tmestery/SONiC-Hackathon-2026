@@ -1,0 +1,95 @@
+{
+  "id": "management-24052",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24052,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24052",
+    "title": "Bug:  [dhcp_relay] agent_relay_mode value set is inconsistent across YANG schema, dhcp_relay CLI, and dhcp4relay daemon",
+    "created_at": "2026-04-20T02:25:34Z",
+    "closed_at": "2026-04-28T07:12:41Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n ## Summary\n\n The `agent_relay_mode` field of the `DHCPV4_RELAY` table is declared\n with one set of enum values in the YANG schema, accepted with a\n different set by the `dhcp_relay` CLI, and honored with yet another\n set by the `dhcp4relay` daemon. Filing this for the dhcp_relay /\n sonic-dhcpv4-relay owners to track and fix; I hit it as a downstream\n side-effect while triaging an unrelated test failure and don't have\n the area expertise to drive the cleanup.\n\n ## Symptom (where I tripped over it)\n\n Running `tests/dhcp_relay/test_dhcpv4_relay.py::test_dhcp_relay_agent_mode`\n on a 720dt testbed produces a libyang validation error during the\n post-test config snapshot / teardown phase:\n\nlibyang[0]: Invalid value \"append\" in \"agent_relay_mode\" element.\n\n The test itself parametrizes `agent_relay_mode` with `discard`,\n `replace`, `append` (the values the CLI accepts and the daemon\n honors), but the YANG typedef does not list any of those \u2014 it lists\n `forward_and_append`, `forward_and_replace`, `forward_untouched`,\n `discard`. So writing the CLI's value into CONFIG_DB makes the next\n `config save` / sonic-cfggen pass fail YANG validation.\n\n I attempted a minimal additive fix in\n sonic-net/sonic-buildimage#26886 (now closed \u2014 see \"Why I'm not\n fixing this myself\" below).\n\n ## Where each layer stands today\n\n | Layer | File | Accepted / honored values |\n |---|---|---|\n | CLI plugin | `sonic-buildimage/dockers/docker-dhcp-relay/cli/config/plugins/dhcp_relay.py` | `click.Choice([\"discard\", \"append\", \"replace\"])` (\u00d74) |\n | Daemon | `sonic-dhcp-relay/dhcp4relay/src/dhcp4relay.cpp` ~L593-610 | hard-coded `strcmp` against `\"append\"` and `\"replace\"`; **everything else** (incl. `\"discard\"`, the `forward_*` strings, an unset/empty field, or any typo) falls through to the else-branch and the packet is dropped |\n | YANG schema | `sonic-buildimage/src/sonic-yang-models/yang-templates/sonic-types.yang.j2` typedef `relay-agent-mode` | `forward_and_append`, `forward_and_replace`, `forward_untouched`, `discard` (default `forward_untouched`) |\n | HLD doc | `SONiC/doc/DHCPv4_relay/DHCPv4-relay-agent-High-Level-Design.md` | uses the YANG (long-form) values throughout \u2014 typedef snippet, sample CONFIG_DB, CLI help, example commands, show output |\n | Test docstring | `sonic-mgmt/tests/dhcp_relay/test_dhcpv4_relay.py::test_dhcp_relay_agent_mode` | docstring lists long-form values; `@pytest.mark.parametrize` actually uses `discard`/`replace`/`append` |\n\n The schema-allowed set and the daemon-honored set are disjoint on the\n values that matter (`append`, `replace`).\n\n ## Important nuance: when `agent_relay_mode` is consulted at all\n\n The daemon consults `agent_relay_mode` **only for relay-of-relay\n traffic** \u2014 DHCP packets that already carry an Option 82 from another\n upstream relay agent. For ordinary client packets (no Option 82), the\n daemon always forwards and adds its own Option 82 regardless of\n `agent_relay_mode`.\n\n For relay-of-relay traffic specifically:\n\n | `agent_relay_mode` value | Daemon behaviour |\n |---|---|\n | `\"append\"` | Forward + append our own Option 82 |\n | `\"replace\"` | Strip existing Option 82, add our own, forward |\n | `\"discard\"` | Drop |\n | unset / `\"forward_untouched\"` / `\"forward_and_append\"` / `\"forward_and_replace\"` / typo | Drop (else-branch fall-through) |\n\n Two consequences worth flagging:\n\n 1. The YANG default `forward_untouched` is misleading \u2014 the name\n    implies \"forward unchanged\" but the daemon actually *drops* such\n    packets. The daemon's true no-config behaviour falls into the\n    *discard* branch.\n 2. The three `forward_*` enums are dead values: nothing in the\n    codebase ever sets them and the daemon never honored them.\n\n Source: [`dhcp4relay.cpp` ~L593-610](https://github.com/sonic-net/sonic-dhcp-relay/blob/master/dhcp4relay/src/dhcp4relay.cpp#L593-L610).\n\n ## Suggested fix (for the dhcp_relay owners)\n\n Pick `discard` / `append` / `replace` as the single source of truth\n across YANG, CLI, daemon, HLD doc, and test docstring, and change the\n YANG default to `discard` to match the daemon's actual no-config\n behaviour. Org-wide grep shows zero production references to the\n `forward_*` values (no daemon, CLI, orchagent, dbmigrator,\n golden-config, ansible playbook, or YAML fixture sets them) \u2014 they\n exist only in the YANG typedef itself, the YANG sample CONFIG_DB,\n the HLD doc, and the test docstring above. So removing them from the\n typedef is safe.\n\n cc / FYI: dhcpv4-relay maintainers (please re-assign as needed).\n\n### Steps to Reproduce\n\nOn any switch running an image with the new SONiC DHCPv4 relay (has_sonic_dhcpv4_relay=true):\n\n # 1. Pick any VLAN that has a DHCPV4_RELAY entry (or create one).\n VLAN=Vlan1000\n DHCP_SERVER=<IP>\n\n # 2. Use the dhcp_relay CLI to set agent_relay_mode to a value the CLI accepts.\n sudo config dhcp_relay ipv4 helper add ${VLAN} ${DHCP_SERVER}\n sudo config dhcp_relay ipv4 helper update ${VLAN} --agent-relay-mode append\n\n # 3. Confirm the value landed in CONFIG_DB.\n sonic-db-cli CONFIG_DB HGET \"DHCPV4_RELAY|${VLAN}\" agent_relay_mode\n # -> \"append\"\n\n # 4. Trigger any YANG validation pass.\n sudo config save -y\n #   - or -\n sudo config reload -y\n #   - or -\n sonic-cfggen -d -y /etc/sonic/init_cfg.json -t /usr/share/sonic/templates/...\n\nEquivalent reproducer via the existing test:\n\n cd sonic-mgmt\n ./run_tests.sh -n <testbed-name> -c \"dhcp_relay/test_dhcpv4_relay.py::test_dhcp_relay_agent_mode\"\n # Observe libyang error during the post-test config snapshot / teardown phase.\n\n### Actual Behavior and Expected Behavior\n\nActual behavior\n\nThe YANG schema rejects the CLI's value, so step 4 above (or the post-test config snapshot) fails with:\n\n libyang[0]: Invalid value \"append\" in \"agent_relay_mode\" element.\n\nThe same error occurs for replace. Symmetrically, the schema accepts forward_and_append, forward_and_replace, and forward_untouched, but the daemon does not honor any of them \u2014 they all silently fall into the discard else-branch (dhcp4relay.cpp ~L593-610), so even setting one of those \"valid\" values does not produce the behaviour its name suggests.\n\nIn a sonic-mgmt test context this surfaces as a teardown-time YANG validation failure (observed in test_dhcp_relay_agent_mode and adjacent tests on 720dt testbeds), with PRs #24043 / #24044 needing additional cleanup workarounds purely to keep the YANG validator happy.\n\nExpected behavior\n\nYANG should accept exactly the values the CLI emits and the daemon implements:\n\n - discard \u2014 drop relay-of-relay packets (also the daemon's actual no-config default, so this should be the YANG default as well).\n - append \u2014 forward + append our own Option\n  82.\n - replace \u2014 strip existing Option 82, add ours, forward.\n\nconfig save, config reload, and sonic-cfggen should all complete without libyang errors after any CLI-driven --agent-relay-mode change. The legacy forward_and_append / forward_and_replace / forward_untouched strings should either be removed or, at minimum, documented as deprecated aliases that map to the daemon-honored values (preferably the former \u2014 they\nare dead values today, with zero references in any production code path across the sonic-net org).\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27029,
+    "repository": "sonic-net/sonic-buildimage",
+    "url": "https://github.com/sonic-net/sonic-buildimage/pull/27029",
+    "title": "[dhcp_relay] Fix agent_relay_mode: align YANG and CLI with ISC behavior",
+    "merged_at": "2026-05-11T19:39:48Z",
+    "description": "#### Why I did it\n\nThe YANG typedef `relay-agent-mode` used long-form ISC internal enum names\n(`forward_and_append`, `forward_and_replace`, `forward_untouched`, `discard`)\nwhile the CLI accepted short-form ISC CLI aliases (`append`, `replace`, `discard`).\nThis caused `config save` / `config reload` to fail with:\n\n```\nlibyang[0]: Invalid value \"append\" in \"agent_relay_mode\" element.\n```\n\nAdditionally, the fourth ISC mode (`forward` / forward untouched) was missing\nfrom the CLI entirely, with no way to configure pass-through behavior.\n\nFixes sonic-net/sonic-mgmt#24052.\nDepends on sonic-net/sonic-dhcp-relay#106 (daemon fix, submodule bump to follow once that merges).\n\n#### How I did it\n\n- `sonic-types.yang.j2`: rename `relay-agent-mode` typedef enums to short-form (`append`, `replace`, `forward`, `discard`) \u2014 strict 1:1 mapping from long-form ISC names; `discard` remains the default (SONiC's ISC template always passed `-m discard` explicitly, preserving existing behavior)\n- `sonic-dhcpv4-relay.yang`: update `agent_relay_mode` leaf default to `discard`\n- `dhcp_relay.py`: add `forward` to `click.Choice` in all four `--agent-relay-mode` declarations\n- CLI plugin tests: add `forward` to the `agent_relay_modes` test list\n- YANG model tests: add fixtures for all four valid values\n\n#### How to verify it\n\n```\nsudo config dhcp_relay ipv4 helper update Vlan1000 --agent-relay-mode append\nsudo config save -y\n# No libyang validation error\n```\n\n#### Which release branch to backport\n\nNone\n\n#### Description for the changelog\n\nFix `agent_relay_mode` YANG enum names: rename long-form ISC internal names to short-form CLI aliases (`append`, `replace`, `forward`, `discard`), add missing `forward` mode to CLI, and set default to `discard` (preserving existing SONiC behavior).\n\n#### Link to config_db schema for YANG module changes\n\nNo external schema link needed; changes are self-contained in `sonic-types.yang.j2` and `sonic-dhcpv4-relay.yang`.\n\n#### Supported devices and platforms\n\nAll platforms using `sonic-dhcp-relay`.",
+    "files": [
+      {
+        "path": "dockers/docker-dhcp-relay/cli-plugin-tests/test_dhcpv4_relay.py",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "dockers/docker-dhcp-relay/cli/config/plugins/dhcp_relay.py",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "src/sonic-yang-models/tests/files/sample_config_db.json",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests/dhcpv4_relay.json",
+        "additions": 10,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-yang-models/tests/yang_model_tests/tests_config/dhcpv4_relay.json",
+        "additions": 45,
+        "deletions": 0
+      },
+      {
+        "path": "src/sonic-yang-models/yang-models/sonic-dhcpv4-relay.yang",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/sonic-yang-models/yang-templates/sonic-types.yang.j2",
+        "additions": 7,
+        "deletions": 7
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 2313,
+      "repository": "sonic-net/SONiC",
+      "url": "https://github.com/sonic-net/SONiC/pull/2313",
+      "title": "[dhcp_relay] Fix HLD: align agent_relay_mode values with ISC CLI aliases",
+      "merged": true
+    },
+    {
+      "pr_number": 106,
+      "repository": "sonic-net/sonic-dhcp-relay",
+      "url": "https://github.com/sonic-net/sonic-dhcp-relay/pull/106",
+      "title": "[dhcp4relay] Fix agent_relay_mode: add forward mode, align with ISC behavior",
+      "merged": true
+    },
+    {
+      "pr_number": 24266,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24266",
+      "title": "[dhcp_relay] Fix agent_relay_mode: align test docstring with short-form enum values",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

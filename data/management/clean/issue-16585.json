@@ -1,0 +1,58 @@
+{
+  "id": "management-16585",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 16585,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/16585",
+    "title": "[Bug]: Random ptf verify packet failures caused by PR#15349",
+    "created_at": "2025-01-20T03:24:56Z",
+    "closed_at": "2025-02-11T09:39:48Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\nWe observe random ptf verify packet failures recently, and after the RCA, it was found that PR(#15349) introduced the issue in:\nhttps://github.com/sonic-net/sonic-mgmt/blob/af0c5c81fde5466217eb3182e9414497662b3584/tests/common/plugins/ptfadapter/__init__.py#L95-L99\nThis change added the ptf backplane interface to an unused index of the ptf adapter port list. This causes issue in the methods like ptf.testutils.verify_packet_any_port()\nMethods like verify_packet_any_port() not only validate the packet is received by the expected ports, but also validate it's not received by the unexpected ports.\nThe problem is, when the test packet dst IP matches the IP prefix advertised by the exabgp, the ptf backplane interface will receive the test packet from the neighbor VM. The reason is the routes are advertised by exabgp to VM through the ptf backplane interface.\n\nptf backplane interface:\n```\nroot@70229c21e672:~# ifconfig\nbackplane: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\n        inet <IP>  netmask <IP>  broadcast <IP>\n        inet6 fc0a::ff  prefixlen 64  scopeid 0x0<global>\n        inet6 fc0a::ff  prefixlen 64  scopeid 0x0<global>\n        ether <IPV6>  txqueuelen 1000  (Ethernet)\n        RX packets 248605  bytes 162615977 (155.0 MiB)\n        RX errors 0  dropped 282  overruns 0  frame 0\n        TX packets 214828  bytes 38056135 (36.2 MiB)\n        TX errors 0  dropped 20 overruns 0  carrier 0  collisions 0\n```\n\nExabgp route in VM:\n```\nARISTA01T0(config)#show ip route <IP>\n\nVRF: default\nCodes: C - connected, S - static, K - kernel,\n       O - OSPF, IA - OSPF inter area, E1 - OSPF external type 1,\n       E2 - OSPF external type 2, N1 - OSPF NSSA external type 1,\n       N2 - OSPF NSSA external type2, B - BGP, B I - iBGP, B E - eBGP,\n       R - RIP, I L1 - IS-IS level 1, I L2 - IS-IS level 2,\n       O3 - OSPFv3, A B - BGP Aggregate, A O - OSPF Summary,\n       NG - Nexthop Group Static Route, V - VXLAN Control Service,\n       DH - DHCP client installed default route, M - Martian,\n       DP - Dynamic Policy Route, L - VRF Leaked,\n       G  - gRIBI, RC - Route Cache Route\n\n B I      <IP>/25 [200/0] via <IP>, Ethernet5\n```\nEthernet5 is the interface of Arista VM connecting to ptf backplane interface.\nThis issue can be reproduced easily by running the acl test  tests/acl/test_acl.py.\n\n### Results you see\n\nWhen the test case fails due to this issue, you will see error like this:\n\n```\nAssertionError: Received expected packet on port 32 for device 0, but it should have arrived on one of these ports: [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31].\n========== RECEIVED ==========\n0000  AE 03 1D 2B FC EB E2 CF E6 ED 0D 8B 86 DD 60 00  ...+..........`.\n0010  00 00 00 2E 7E 3E 60 C0 A8 00 00 00 00 00 00 00  ....~>`.........\n0020  00 00 00 00 00 05 20 C0 A8 00 00 00 00 00 00 00  ...... .........\n0030  00 00 00 00 00 14 43 21 00 51 00 00 00 00 00 00  ......C!.Q......\n0040  00 00 50 02 20 00 5D A2 00 00 74 65 73 74 5F 61  ..P. .]...test_a\n0050  63 6C 20 74 65 73 74 5F 61 63 6C 20 74 65 73 74  cl test_acl test\n0060  5F 61 63 6C                                      _acl\n==============================\n```\n\nHere the testbed has only 32 dataplane interfaces mapping to ptf index 0-31, the 32 is the ptf backplane interface.\nWhen running the function ptf.testutils.verify_packet_any_port(), if the packet received by the expected port is before the one received by the backplane interface, the test can pass. But if the packet received by the backplane interface arrives first, the test fails.\n\n### Results you expected to see\n\nAll the affected tests, which are using methods like testutils.verify_packet_any_port/verify_packet_any_port, should pass.\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 16669,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/16669",
+    "title": "fix(tests): add backplane port only in srv6 tests",
+    "merged_at": "2025-02-11T09:39:47Z",
+    "description": "### Description of PR\n\nupdate to configure the backplane port only in the srv6 test.\nfix #16585\n\nSummary:\nFixes #16585\n\n### Type of change\n\n- [X ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n\n### Approach\n#### What is the motivation for this PR?\n\nBackplane port is necessary in our srv6 tests, but it will cause random failure in other tests.  When the test packet dst IP matches the IP prefix advertised by the exabgp, the ptf backplane interface will receive the test packet from the neighbor VM. The reason is the routes are advertised by exabgp to VM through the ptf backplane interface. And methods like verify_packet_any_port() not only validate the packet is received by the expected ports, but also validate it's not received by the unexpected ports.\n\n#### How did you do it?\n\nAdded configuration options in ptf initial to limite the configuration scenarios of backplane ports only in srv6 tests\n\n#### How did you verify/test it?\nwe tested it via daily jenkins run\n<img width=\"1007\" alt=\"image\" src=\"https://github.com/user-attachments/assets/f80ac242-e0ae-4341-91a0-4c8d48aacd5b\" />\n![image](https://github.com/user-attachments/assets/825e8430-402b-4190-b8f6-3d9f76542a7f)\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/ptftests/remote.py",
+        "additions": 7,
+        "deletions": 3
+      },
+      {
+        "path": "tests/common/plugins/ptfadapter/__init__.py",
+        "additions": 7,
+        "deletions": 3
+      },
+      {
+        "path": "tests/iface_loopback_action/conftest.py",
+        "additions": 6,
+        "deletions": 1
+      },
+      {
+        "path": "tests/srv6/test_srv6_basic_sanity.py",
+        "additions": 7,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

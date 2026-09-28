@@ -1,0 +1,196 @@
+{
+  "number": 26295,
+  "title": "[fdb/test_fdb_churn] test_fdb_mac_ping_pong fails - Expected at least 50 LRU pushes but got 3",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26295",
+  "createdAt": "2026-07-17T14:13:56Z",
+  "closedAt": "2026-08-13T17:53:55Z",
+  "author": "prabhataravind",
+  "labels": [],
+  "assignees": [
+    "eswaran-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Description\n\n`fdb/test_fdb_churn.py::test_fdb_mac_ping_pong` is failing randomly in SONiC nightly runs on several platforms.\n\nThe test bounces a single MAC (`00:11:22:33:44:04`) between two ports (Ethernet0 / PTF port 0 and Ethernet2 / PTF port 1) for 50 cycles with 20ms inter-cycle delays, then asserts that at least 50 LRU pushes are recorded in `NOTIFICATION_CONSUMER_STATS:FdbOrch:fdb_event` (COUNTERS_DB). However, only 3 pushes are observed, causing the assertion to fail.\n\n**The functional behavior is correct** - the MAC consistently ends up on the last-LEARNed port (Ethernet2) in STATE_DB. Only the counter-based assertion on `lru_pushed` fails.\n\n### Failure Details\n\n`\nE       Failed: Expected at least 50 LRU pushes; got pushed=3, hits=0\n`\n\n**NOTIFICATION_CONSUMER_STATS before test:**\n`\nreceived=1587, admitted=1467, lru_pushed=1467, lru_dedup_hits=0,\nadmit_ratio_pct=92, lru_high_watermark=209, queue_policy=LruDedup\n`\n\n**NOTIFICATION_CONSUMER_STATS after test:**\n`\nreceived=1590, admitted=1470, lru_pushed=1470, lru_dedup_hits=0,\nadmit_ratio_pct=92, lru_high_watermark=209, queue_policy=LruDedup\n`\n\n**Key observation:** The `received` counter only increased by 3 (1587 -> 1590). This confirms the ASIC hardware itself only generated 3 `fdb_event` notifications to SAI/orchagent out of 55 MAC MOVE frames injected (50 cycles + 5 trailing).\n\n### Root Cause Analysis\n\nThe test injects all 50 alternating ARP frames within approximately 1 second (timestamps show 11:40:29 to 11:40:30). Despite the 20ms `time.sleep(0.02)` between cycles, the ASIC's built-in MAC move rate limiter coalesces the rapid flaps and suppresses most intermediate notifications. Only 3 of the 55 frames result in SAI fdb_event callbacks to orchagent.\n\nThe `lru_dedup_hits=0` in both before/after confirms orchagent's software-level LRU dedup never engaged - the events appear to have been already suppressed by hardware before reaching orchagent.\n\n### Steps to Reproduce\n\nRun `test_fdb_mac_ping_pong` on a t0 topology:\n\n`bash\npytest fdb/test_fdb_churn.py::test_fdb_mac_ping_pong \\\n    --inventory=../ansible/veos --host-pattern=all \\\n    --testbed=<testbed> --testbed_file=../ansible/testbed.yaml \\\n    --topology t0,any -rav\n`\n\n### Test Environment\n\n- **Topology**: t0\n- **SONiC build**: 20260510.xx",
+  "comments": [
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-07-17T14:19:47Z",
+      "body": "hi @eswaran-nexthop, I am not able to assign to Senthil. Could you please take a look and re-assign as appropriate?"
+    },
+    {
+      "author": "fzjalfred",
+      "createdAt": "2026-09-18T02:49:05Z",
+      "body": "Hi, since https://github.com/sonic-net/sonic-mgmt/pull/27737 is still pending. Could we reopen the issue and close it once fixed?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26559,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26559",
+      "title": "[fdb/test_fdb_churn] fix flaky test_fdb_mac_ping_pong caused by wait_for_stat_increase race",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-13T17:53:54Z",
+      "createdAt": "2026-07-25T19:54:04Z",
+      "author": "senthil-nexthop",
+      "body": "### Description of PR\r\nFix an intermittent test failure in test_fdb_churn where wait_for_stat_increase races with orchagent stats publish interval and pulls partial data resulting in a test failure.\r\n\r\nSummary:\r\nFixes #26295\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\n`fdb/test_fdb_churn.py::test_fdb_mac_ping_pong` fails intermittently on real-ASIC platforms (issue #26295: 50 injected MOVEs \u2192 observed `pushed=3`). Root cause is a race between the test's stat-polling helper and the `NotificationConsumerStatsOrch` publisher on the orchagent side.\r\n\r\n`NotificationConsumerStatsOrch` flushes counters to `COUNTERS_DB` on a 10 s `SelectableTimer` (`kPublishIntervalSec`, `orchagent/notificationconsumerstatsorch.{h,cpp}` in sonic-swss). The old helper `wait_for_stat_increase` returned on the first sample where the counter exceeded baseline by any amount. When the publisher's tick landed mid-burst, it captured a *partial* count and the helper returned that partial value \u2014 even though orchagent's in-memory counter continued to climb.\r\n\r\nInstrumentation on a failing run confirmed the race:\r\n\r\n- A wire-level `redis PSUBSCRIBE 'NOTIFICATIONS'` probe observed **99 envelopes** on the channel during the ping-pong window.\r\n- `FdbOrch:fdb_event.lru_pushed` advanced from `7221 \u2192 7320` (**+99**) in orchagent's memory, which matched the wire.\r\n- But `get_consumer_stats()` was called at the exact instant a publisher tick had captured only 3 events into `COUNTERS_DB`, so `wait_for_stat_increase` saw `+3` and returned. The assertion then read `pushed=3` and failed.\r\n\r\n\r\n#### How did you do it?\r\n\r\nTwo-part fix in `tests/fdb/test_fdb_churn.py`:\r\n\r\n1. **Replace `wait_for_stat_increase` with `wait_for_stat_stable`.** The new helper polls at `STATS_PUBLISH_SEC + 2` (guaranteeing every sample sits after a fresh publisher tick) and returns when the target field is unchanged across two consecutive polls. That guarantees at least one publisher tick has fired *after* all producer-side activity has settled, so the returned value is the true post-burst total. Timeout budget scales with the settle time. \r\n\r\n2. **Relax `pushed >=` per-event bounds to `pushed >= 1`** in `test_fdb_mac_ping_pong` and `test_fdb_distinct_macs_bulk_learn`. Even with the timing race fixed, these bounds were non-portable:\r\n   - Broadcom Tomahawk/Trident silicon runs an L2 station-move rate limiter that suppresses rapid MAC MOVEs at the ASIC layer.\r\n   - Batching SAI adapters on certain vendor implementations pack multiple sub-events into one envelope, so `lru_pushed` counts envelopes rather than events.\r\n\r\n   STATE_DB is the correctness signal in all four tests and remains unchanged. `pushed` and `hits` are still logged for triage.\r\n\r\n#### How did you verify/test it?\r\n\r\nWith this fix in place, ran the same suite:\r\n\r\n```\r\ntest_fdb_repeated_learn_dedup         PASSED\r\ntest_fdb_learn_delete_relearn         PASSED\r\ntest_fdb_port_move_not_deduped        PASSED\r\ntest_fdb_mac_ping_pong                PASSED   \u2190 was FAILING\r\ntest_fdb_distinct_macs_bulk_learn     PASSED\r\ntest_fdb_flush_during_learn           PASSED\r\ntest_fdb_churn_storm[...]             SKIPPED  (FDB_CHURN_RUN_STORM=1 not set)\r\n\r\nstatus: SKIP_PASS  (6 passed, 1 skipped, 0 failed)\r\n```\r\n\r\n#### Any platform specific information?\r\n\r\nNone\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nNot a new test case. Test module already supports `t0` (VLAN-bearing) topology and skips cleanly elsewhere via `vlan_topology` fixture. Behavior unchanged by this PR.",
+      "files": [
+        {
+          "path": "tests/fdb/test_fdb_churn.py",
+          "additions": 60,
+          "deletions": 41
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-25T19:54:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-25T19:54:13Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-25T19:54:28Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-25T20:06:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-25T20:06:53Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-25T20:07:00Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-27T12:24:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-27T12:24:49Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-07-31T20:31:37Z",
+          "body": "@senthil-nexthop The wait_for_stat_stable() change looks like a good fix for the stats publish race, but the new pushed >= 1 assertions in the MAC ping-pong and bulk-learn tests feel too relaxed compared to the original expectations. Since these tests are primarily validating FDB churn behavior, could we keep a conservative lower bound that still reflects the burst being exercised, while relying on STATE_DB for the exact functional check?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-02T19:05:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-02T19:05:27Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "senthil-nexthop",
+          "createdAt": "2026-08-02T19:13:11Z",
+          "body": "> @senthil-nexthop The wait_for_stat_stable() change looks like a good fix for the stats publish race, but the new pushed >= 1 assertions in the MAC ping-pong and bulk-learn tests feel too relaxed compared to the original expectations. Since these tests are primarily validating FDB churn behavior, could we keep a conservative lower bound that still reflects the burst being exercised, while relying on STATE_DB for the exact functional check?\r\n\r\n@prabhataravind thanks for the review. There are couple of reasons why the check on `pushed` stats was relaxed. There are some ASIC platforms which could suppress rapid MOVEs at the ASIC layer. And there are SAI adapters that batch multiple notifications into a single PUBLISH event. So a 50 cycles generating 100 notifications could be batched into 3 PUBLISH calls, each with multiple notifications. This is seen and reported on some Cisco platforms.\r\n\r\nSo the `pushed >= cycles` check is not portable and instead of checking for a really low bar (of 1), I've raised the floor to  `min_pushed` that accounts for both types of platforms mentioned above."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-02T19:16:19Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-02T19:16:34Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-08-05T15:36:51Z",
+          "body": "@prabhataravind gentle ping, please check the author's response."
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-08-06T20:50:59Z",
+          "body": "hi @yxieca could you help merge?"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-08-06T20:52:00Z",
+          "body": "I can also confirm that the test now passes with 202605 as well on platforms where it was previously failing."
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-08-13T17:57:00Z",
+          "body": "@StormLiangMS @vaibhavhd I have tested this on 202605 and this helps address the failures we see on certain platforms for this test. Could you please approve for 202605? This is a newly added test for 202605."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-14T05:52:49Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/27059"
+        }
+      ]
+    },
+    {
+      "number": 27737,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27737",
+      "title": "[fdb]: Make bulk learn validation independent of SAI batching",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-09-04T04:17:08Z",
+      "author": "Sourabh-Kumar7",
+      "body": "Validate all injected MACs in STATE_DB and require only one notification envelope, avoiding vendor-specific assumptions about SAI event batching.\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/26295 https://github.com/sonic-net/sonic-mgmt/issues/28049\r\nFix \u00a0`test_fdb_distinct_macs_bulk_learn`\u00a0 false failures on SAI implementations that batch many FDB events into a small number of notification envelopes.\r\n\r\nThis is a follow-up to sonic-net/sonic-mgmt#26559, backported to 202605 through #27059.\r\n\r\nFailure: https://elastictest.org/scheduler/testplan/6a9a37a8f1937a379ef4fd6c\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nPR #26559 fixed a race between the test and orchagent\u2019s periodic publication of notification-consumer statistics. It introduced \u00a0wait_for_stat_stable()\u00a0 and recognized that \u00a0lru_pushed\u00a0 counts Redis notification envelopes rather than individual FDB events.\r\n\r\nHowever, the merged implementation retained a proportional lower bound:\r\n\r\n`min_pushed = max(1, count // 10)`\r\n\r\nFor 1,000 injected MAC addresses, the test therefore required at least 100 notification envelopes.\r\n\r\nOn a `Mellanox SN4700` testbed, the test failed with:\r\n\r\nExpected at least 100 pushes; got 15\r\n\r\nThe first, middle, and last sampled MAC addresses were all present in `STATE_DB`, \u00a0`lru_dedup_hits`\u00a0 was zero, and the other FDB churn tests passed. This indicates that FDB learning worked, but the SAI implementation batched the 1,000 FDB events into only 15 notification envelopes.\r\n\r\nThe 10% envelope threshold is not portable because SONiC does not define how many FDB events a vendor SAI implementation may place in one notification envelope.\r\n\r\nSimply changing the threshold to \u00a0pushed >= 1\u00a0 would address the batching issue, but it would weaken the existing test because only three of the 1,000 injected MAC addresses were previously checked in STATE_DB. This PR therefore strengthens the functional validation while removing the vendor-specific batching assumption.\r\n\r\n#### How did you do it?\r\nAdded a helper that retrieves all FDB MAC addresses for the test VLAN from STATE_DB using a single Redis \u00a0SCAN\u00a0 operation.\r\n\r\nThe bulk-learning test now:\r\n\r\n1. Injects 1,000 distinct MAC addresses as before.\r\n2. Waits until all 1,000 injected MAC addresses are present in STATE_DB.\r\n3. Checks representative entries to confirm they are associated with the expected port.\r\n4. Requires at least one \u00a0lru_pushed\u00a0 notification envelope to confirm that the notification pipeline was active.\r\n5. Retains the existing dedup and orchagent health checks.\r\n\r\nThe new validation separates two different concerns:\r\n\r\n\u2022 FDB correctness: All injected MAC addresses must be present in STATE_DB.\r\n\u2022 Notification pipeline health: At least one notification envelope must have been processed.\r\n\r\nThis avoids assuming a fixed relationship between the number of learned MAC addresses and the number of vendor-generated notification envelopes.\r\n\r\n#### How did you verify/test it?\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\nThe original failing run on a `Mellanox SN4700` reported:\r\n\r\nInjected MACs: 1000\r\nlru_pushed: 15\r\nlru_dedup_hits: 0\r\n\r\nThe run successfully found all three previously sampled MAC addresses in `STATE_DB` but failed only because the test required at least 100 envelopes. With this change, 15 envelopes satisfy the platform-independent pipeline-health requirement, while the test now additionally requires all 1,000 injected MAC addresses to be present in `STATE_DB`.\r\n\r\nhttps://elastictest.org/scheduler/testplan/6a9a3e8e0f7c07c20a9b5113\r\n\r\n#### Any platform specific information?\r\nThe failure was observed on:\r\n\r\nPlatform: `Mellanox SN4700`\r\nHWSKU: `Mellanox-SN4700-O8V48`\r\nTopology: `t0`\r\n\r\nThe implementation is not limited to Mellanox or SN4700. It removes a vendor-specific assumption and supports SAI implementations that batch multiple FDB events into a single notification envelope.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nNA\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/fdb/test_fdb_churn.py",
+          "additions": 38,
+          "deletions": 7
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-04T04:17:17Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-04T04:17:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-04T04:17:45Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Sourabh-Kumar7",
+          "createdAt": "2026-09-04T04:18:06Z",
+          "body": "@prabhataravind  @senthil-nexthop could you pls help review this PR? thanks"
+        },
+        {
+          "author": "fzjalfred",
+          "createdAt": "2026-09-21T06:38:41Z",
+          "body": "Hi @Sourabh-Kumar7 \r\n\r\nSince #26295 is closed, I create another ticket tracking this issue.\r\n\r\nPlease link and close it once the fix is merged. https://github.com/sonic-net/sonic-mgmt/issues/28049"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-09-21T13:53:34Z",
+          "body": "@senthil-nexthop @eswaran-nexthop please help review"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-22947",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22947,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22947",
+    "title": "Bug: `test_everflow_ipv6`'s first testlets can fail due to `AssertionError: Did not receive expected packet`",
+    "created_at": "2026-03-13T17:10:28Z",
+    "closed_at": "2026-03-25T17:59:51Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen running `everflow/test_everflow_ipv6.py` we sometimes see the first testlest fail with `AssertionError: Did not receive expected packet`\n\nThis is because the `setup_info` fixture shuts down bgp via `sudo config bgp shutdown all` but doesn't wait for it to complete, it just sleeps for 60s hoping it's enough time:\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/everflow/everflow_test_utilities.py#L434-L445\n```\n    # Disable BGP so that we don't keep on bouncing back mirror packets\n    # If we send TTL=1 packet we don't need this but in multi-asic TTL > 1\n\n    if 't2' in topo and 'lt2' not in topo and 'ft2' not in topo:\n        for dut_host in duthosts.frontend_nodes:\n            dut_host.command(\"sudo config bgp shutdown all\")\n            dut_host.command(\"mkdir -p {}\".format(DUT_RUN_DIR))\n    else:\n        duthost.command(\"sudo config bgp shutdown all\")\n        duthost.command(\"mkdir -p {}\".format(DUT_RUN_DIR))\n\n    time.sleep(60)\n```\n\nI tried this out on a 64-port Q3D device and I can see the OA is busy for ~2.5minutes when shutting down bgp:\n```\n> sudo config bgp shutdown all\n\n2026 Mar 11 <IPV6>.929273 ctn101 DEBUG bgp#bgpcfgd: Received message : '('<IP>', 'SET', (('admin_status', 'down')\n...\n2026 Mar 11 <IPV6>.960720 ctn101 NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group\n```\n\nIf we move onto the next test steps (setting up mirror session and ACL) while routes are still being removed we can see that the Mirror session comes up and ACLs come up momentarily against the routes that are disappearing:\n```\n2026 Mar 11 <IPV6>.863493 ctn101 INFO python3.13[179622]: ansible-ansible.legacy.command Invoked with _raw_params=config mirror_session add test_session_1 <IP> <IP> 8 4 35006\n2026 Mar 11 <IPV6>.648351 ctn101 INFO python3.13[180533]: ansible-ansible.legacy.command Invoked with _raw_params=acl-loader update full /tmp/everflow/acl-erspan.json --table_name EVERFLOWV6 --session_name test_session_1\n\n...\n\n2026 Mar 11 <IPV6>.935205 ctn101 NOTICE swss#orchagent: :- updateNextHop: Updating mirror session test_session_1 with route <IP>/0\n2026 Mar 11 <IPV6>.935205 ctn101 NOTICE swss#orchagent: :- updateNextHop:     next hop IPs: <IP>@PortChannel108,<IP>@PortChannel110,<IP>@PortChannel158,<IP>@PortChannel160,<IP>@PortChannel162,<IP>@PortChannel164\n2026 Mar 11 <IPV6>.935205 ctn101 NOTICE swss#orchagent: :- updateNextHop: Updated mirror session state db test_session_1 nexthop to <IP>@PortChannel108\n2026 Mar 11 <IPV6>.935238 ctn101 NOTICE swss#orchagent: :- getNeighborInfo: Mirror session test_session_1 neighbor is PortChannel108\n\n...\n\n2026 Mar 11 <IPV6>.557394 ctn101 NOTICE swss#orchagent: :- add: Successfully created ACL rule RULE_1 in table EVERFLOWV6\n\u2026\n2026 Mar 11 <IPV6>.127981 ctn101 NOTICE swss#orchagent: :- add: Successfully created ACL rule RULE_26 in table EVERFLOWV6\n```\n\nThe mirror session coming up and ACLs being programmed trick the test into moving to the next step of injecting the packets, but because routes are still being removed eventually the mirror session and ACLs will go down:\n```\n2026 Mar 11 <IPV6>.799680 ctn101 NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group <IP>@PortChannel108,<IP>@PortChannel110,<IP>@PortChannel154,<IP>@PortChannel156,<IP>@PortChannel158,<IP>@PortChannel160,<IP>@PortChannel162,<IP>@PortChannel164\n2026 Mar 11 <IPV6>.272831 ctn101 NOTICE swss#orchagent: :- updateNextHop: Updating mirror session test_session_1 with route <IP>/0\n2026 Mar 11 <IPV6>.272831 ctn101 NOTICE swss#orchagent: :- updateNextHop: Updated mirror session state db test_session_1 nexthop to <IP>@\n2026 Mar 11 <IPV6>.681114 ctn101 NOTICE swss#orchagent: :- deactivateSession: Deactivated mirror session test_session_1\n```\n\nAfter route churn completes and our test installed route is installed successfully the mirror session and ACLs will come back up:\n```\n2026 Mar 11 <IPV6>.718796 ctn101 INFO python3.13[179770]: ansible-ansible.legacy.command Invoked with _raw_params=vtysh -c \"configure terminal\" -c \"ip route <IP>/24 <IP> tag 1\"\n\n...\n\n2026 Mar 11 <IPV6>.650085 ctn101 NOTICE swss#orchagent: :- updateNextHop: Updating mirror session test_session_1 with route <IP>/24\n2026 Mar 11 <IPV6>.650085 ctn101 NOTICE swss#orchagent: :- updateNextHop:     next hop IPs: <IP>@Ethernet156\n2026 Mar 11 <IPV6>.650112 ctn101 NOTICE swss#orchagent: :- updateNextHop: Updated mirror session state db test_session_1 nexthop to <IP>@Ethernet156\n2026 Mar 11 <IPV6>.650112 ctn101 NOTICE swss#orchagent: :- getNeighborInfo: Mirror session test_session_1 neighbor is Ethernet156\n```\n\nBut any test that is injecting packets during the window where the mirror session went back down will fail because no packet is mirrored.\n\n### Steps to Reproduce\n\nRun `everflow/test_everflow_ipv6.py` on a topology with lots of ports (64) and lots of routes (32k per upstream neighbor)\n\n### Actual Behavior and Expected Behavior\n\nThe correct solution here would be to wait for the route removal to complete after `sudo config bgp shutdown all` before proceeding with the rest of the test/fixtures.\n\nThankfully we already have a fixture which handles this in `shutdown_ebgp`:\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/fixtures/duthost_utils.py#L257-L302\nI think we should probably just switch to using this fixture.\n\nWhen using this fixture I can see the appropriate amount of time is being waited before proceeding with the rest of the test(~2.5min):\n```\n2026 Mar 13 <IPV6>.801950 ctn101 INFO python3.13[1125272]: ansible-ansible.legacy.command Invoked with _raw_params=sudo config bgp shutdown all\n...\n2026 Mar 13 <IPV6>.480736 ctn101 INFO python3.13[1126346]: ansible-ansible.legacy.command Invoked with _raw_params=show ip route sum\n...\n2026 Mar 13 <IPV6>.715999 ctn101 INFO python3.13[1132508]: ansible-ansible.legacy.command Invoked with _raw_params=show ip route sum\n2026 Mar 13 <IPV6>.284513 ctn101 INFO python3.13[1132848]: ansible-ansible.legacy.command Invoked with _raw_params=COLUMNS=512 show processes cpu | grep orchagent | awk '{print $9}'\n...\n2026 Mar 13 <IPV6>.748837 ctn101 INFO python3.13[1144399]: ansible-ansible.legacy.command Invoked with _raw_params=COLUMNS=512 show processes cpu | grep orchagent | awk '{print $9}'\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22949,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22949",
+    "title": "[Everflow] Use `shutdown_ebgp` to fix interlocking",
+    "merged_at": "2026-03-25T17:59:49Z",
+    "description": "Details in: https://github.com/sonic-net/sonic-mgmt/issues/22947\n\nOn high scale systems (ports & routes) `test_everflow_ipv6.py` would see initial testlets failing because the `config shutdown bgp all` command hasn't completed removing all it's routes before the test went ahead with injecting packets.\nThe `shutdown_ebgp` function already has interlocks to wait for the routes to be removed from all neighbors and the OA process to complete it's transactions before completing.\n\nSummary:\nFixes #22947\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511",
+    "files": [
+      {
+        "path": "tests/everflow/everflow_test_utilities.py",
+        "additions": 3,
+        "deletions": 12
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

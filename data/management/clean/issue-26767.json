@@ -1,0 +1,63 @@
+{
+  "id": "management-26767",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26767,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26767",
+    "title": "[dut_console] Console stress output times out with Netmiko 4",
+    "created_at": "2026-08-04T11:20:55Z",
+    "closed_at": "2026-08-06T01:11:04Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\n`dut_console/test_console_stress.py::test_console_stress_output` consistently fails on 9600-baud serial consoles with:\n\n```\nnetmiko.exceptions.ReadTimeout: Pattern not detected: '[#$]\\\\s*$'\n```\n\nExample failure: https://elastictest.org/scheduler/testplan/6a7066a0c738d690ad9c2270?testcase=dut_console%2Ftest_console_stress.py&type=console&searchTestCase=test_console_stress\n\n## Regression\n\nPR #25904 fixed this test by using `read_timeout=300` and `cmd_verify=False`. PR #26490 replaced those arguments with `max_loops=300` for conserver compatibility, and the same change was backported by PR #26601.\n\nWith Netmiko 4, `max_loops` does not extend `send_command()`'s effective default 10-second `read_timeout`. The test emits about 110 KB over a 9600-baud console, so the read times out near `LINE_0084` and leaves unread output that contaminates the following input-integrity test.\n\nComparable nightly runs changed from passing to failing without an image change, confirming a sonic-mgmt test regression.\n\n## Expected fix\n\nMake the conserver `send_command()` interface accept Netmiko-compatible `read_timeout` and `cmd_verify` arguments, then restore the long read timeout and disabled echo verification in the stress test.\n\nFailure type: regression\nBackport target: 202605"
+  },
+  "resolution": {
+    "pr_number": 26768,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26768",
+    "title": "[dut_console] Restore console stress read timeout",
+    "merged_at": "2026-08-06T01:11:03Z",
+    "description": "### Description of PR\n\nSummary:\nRestore the explicit long read timeout and disabled command-echo verification required by the large serial-console output test. Make the pexpect-backed conserver and linecard console implementations accept the same command arguments, and add the timing API required by the linecard input-stress path.\n\nFixes #26767\n\n### Type of change\n\n- [x] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): #26767\nFailure type: regression\n\n### Tested branch\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n- master: 4 targeted console-connection unit tests passed; changed files passed flake8 and syntax checks.\n- 202605: `SONiC.20260510.09`, Arista-7260CX3-C64 / t1-64-lag \u2014 [Elastictest plan 6a71e47af481df03c4e5a7ab](https://elastictest.org/scheduler/testplan/6a71e47af481df03c4e5a7ab): `dut_console/test_console_stress.py` 2/2 passed; full run 19 passed, 2 skipped, 0 failed/errors.\n\n### Approach\n#### What is the motivation for this PR?\n\nPR #25904 fixed the 9600-baud console stress test with `read_timeout=300` and `cmd_verify=False`. PR #26490 replaced those arguments with `max_loops=300` for conserver compatibility, but Netmiko 4 no longer uses `max_loops` to extend the effective 10-second read timeout. The test emits about 110 KB, times out near `LINE_0084`, and leaves unread output that contaminates the following input-integrity test.\n\n#### How did you do it?\n\n- Restore `read_timeout=300` and `cmd_verify=False` in the output-stress command.\n- Accept Netmiko-compatible `read_timeout` and `cmd_verify` arguments in `ConserverConsoleConn.send_command()` and `LinecardConsoleConn.send_command()` while retaining `max_loops` compatibility.\n- Add `LinecardConsoleConn.send_command_timing()` so the input-stress test is supported by every backend returned by `duthost_console`.\n- Add targeted unit coverage for timeout mapping, output preservation, legacy `max_loops`, and the linecard timing path.\n\n#### How did you verify/test it?\n\nThe targeted unit tests pass with the real pexpect 4.9.0 implementation. Physical validation on internal-202605 passed both console stress cases on a 9600-baud Arista 7260 console; pretest and posttest also completed without failures.\n\n#### Any platform specific information?\n\nReproduced and validated on Arista-7260CX3-C64 with Broadcom ASIC. The compatibility changes apply to Netmiko, conserver, and modular linecard console backends.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 existing test coverage.\n\n### Documentation\n\nN/A \u2014 no user-facing documentation changes.",
+    "files": [
+      {
+        "path": "tests/common/connections/conserver_console_conn.py",
+        "additions": 19,
+        "deletions": 5
+      },
+      {
+        "path": "tests/common/connections/linecard_console_conn.py",
+        "additions": 43,
+        "deletions": 3
+      },
+      {
+        "path": "tests/common/unit_tests/connections/unit_test_conserver_console_conn.py",
+        "additions": 80,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/unit_tests/connections/unit_test_linecard_console_conn.py",
+        "additions": 100,
+        "deletions": 0
+      },
+      {
+        "path": "tests/dut_console/test_console_stress.py",
+        "additions": 3,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

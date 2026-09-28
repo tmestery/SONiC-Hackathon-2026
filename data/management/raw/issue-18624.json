@@ -1,0 +1,103 @@
+{
+  "number": 18624,
+  "title": "Bug: `crm/test_crm.py` fails with `[Errno 7] Argument list too long: '/bin/sh` when neighbor add command is too long",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/18624",
+  "createdAt": "2025-05-26T22:46:57Z",
+  "closedAt": "2025-07-02T16:49:00Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "bingwang-ms"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nFailure:\n```\n  File \"/data/tests/crm/test_crm.py\", line 793, in test_crm_neighbor\n    configure_neighbors(amount=neighbours_num, interface=crm_interface[0], ip_ver=ip_ver,\n  File \"/data/tests/crm/test_crm.py\", line 423, in configure_neighbors\n    asichost.shell(add_neighbors_template.render(\n  File \"/data/tests/common/devices/sonic_asic.py\", line 580, in shell\n    return self.sonichost.shell(*module_args, **complex_args)\n  File \"/data/tests/common/devices/base.py\", line 131, in _run\n    raise RunAnsibleModuleFail(\"run module {} failed\".format(self.module_name), res)\ntests.common.errors.RunAnsibleModuleFail: run module shell failed, Ansible Results =>\nfailed = True\nrc = 7\ncmd = for s in 2.0.0.1 2.0.0.2 <snip>  2.0.126.78 2.0.126.79 do ip neigh replace '${s}' lladdr 11:22:33:44:55:66 dev PortChannel2001 echo added - '${s}' done\nmsg = [Errno 7] Argument list too long: '/bin/sh\n```\n\n\nIn `crm/test_crm.py::test_crm_neighbor` the test tries to add 1% of the available IPv4 neighbors.\nOn systems with very large number of neighbors:\n```\n> sonic-db-cli  COUNTERS_DB HMGET CRM:STATS crm_stats_ipv4_neighbor_used crm_stats_ipv4_neighbor_available\n5\n3233468\n```\nJust 1% of this is `((5 + 3233468) // 100) + 1 = 32335` neighbors.\n\nThis results in a very long command in the form of:\n```\nfor s in 2.0.0.1 2.0.0.2 <snip> 2.0.126.78 2.0.126.79 do ip neigh replace '${s}' lladdr 11:22:33:44:55:66 dev PortChannel2001\n```\n\nBecause there is a 128KB character limit in the command this ends up going beyond our limit:\n```\n(Pdb) len(ip_addr_list)\n345913\n```\n\nHence the error:\n```\nmsg = [Errno 7] Argument list too long: '/bin/sh\n```\n\n### Steps to Reproduce\n\nRun `crm/test_crm.py::test_crm_neighbor` on a device that supports a large number of IPv4 neighbors (> 900000)\n\n### Actual Behavior and Expected Behavior\n\nThe test shouldn't fail because of a character limit issue due to our command length.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2025-05-28T15:48:14Z",
+      "body": "Comment left on the PR."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 18625,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/18625",
+      "title": "Batch neighbor add/del commands in `test_crm_neighbor`",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-07-02T16:48:59Z",
+      "createdAt": "2025-05-26T23:22:29Z",
+      "author": "arista-nwolfe",
+      "body": "On certain platforms `test_crm_neighbor` can create commands that go beyond our character limit, resulting in errors like:\r\n`[Errno 7] Argument list too long: '/bin/sh`\r\n\r\nThis change will chunk up the long commands into smaller batches that don't go beyond the character limit to avoid hitting these failures.\r\n\r\nDetails in: https://github.com/sonic-net/sonic-mgmt/issues/18624\r\n\r\nA similar issue and solution has been seen in this test in the past, used the same approach:\r\nIssue: https://github.com/sonic-net/sonic-mgmt/issues/8125\r\nSolution: https://github.com/sonic-net/sonic-mgmt/pull/8126\r\n\r\nSummary:\r\nFixes #18624 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [x] 202505\r\n",
+      "files": [
+        {
+          "path": "tests/crm/test_crm.py",
+          "additions": 19,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-26T23:22:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-26T23:22:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2025-05-28T15:49:23Z",
+          "body": "The change logic looks good to me. One minor suggestion, why not put the commands into a bash script and run the script instead of running it in batches? If there are too many ip addr in the list, that can result in multiple SSH and multiple calls."
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-05-28T16:46:50Z",
+          "body": "> The change logic looks good to me. One minor suggestion, why not put the commands into a bash script and run the script instead of running it in batches? If there are too many ip addr in the list, that can result in multiple SSH and multiple calls.\r\n\r\nIs your suggestion to create a file with the batched up commands on the duthost first and then make one call to `shell` to execute that file? I figured this would be overkill as more than likely this will only execute the `shell` command 1-4 times.\r\n\r\nAlso there is already a precedent of doing it this way here: https://github.com/sonic-net/sonic-mgmt/pull/8126\r\n\r\nUpdate: I checked the timestamps of the calls in the test, all the time is spent in orchagent updating the routes, so I don't think removing the multiple shell calls will save us much time:\r\n\r\nTest triggers first batch\r\n```\r\n28/05/2025 17:31:44 base._run                                L0071 DEBUG  | /data/tests/common/devices/sonic_asic.py::shell#580: [qzq203] AnsibleModule::shell, args=[\"\\n    \\n    \\n    \\n    \\n    for s in 2.0.0.1 <snip>\r\n```\r\n\r\nDuthost receives ansible request and spends time processing neighbors:\r\n```\r\n2025 May 28 17:31:44.218468 qzq203 INFO python[20541]: ansible-ansible.legacy.command Invoked with _raw_params=#012    #012    #012    #012    #012    for s in 2.0.0.1 <snip>\r\n2025 May 28 17:31:44.225972 qzq203 NOTICE swss#orchagent: :- addNeighbor: Created neighbor ip 2.0.0.1, 11:22:33:44:55:66 on PortChannel2001\r\n2025 May 28 17:31:44.226678 qzq203 NOTICE swss#orchagent: :- addNextHop: Created next hop 2.0.0.1 on PortChannel2001\r\n<snip>\r\n2025 May 28 17:32:01.416682 qzq203 NOTICE swss#orchagent: :- addNeighbor: Created neighbor ip 2.0.35.40, 11:22:33:44:55:66 on PortChannel2001\r\n2025 May 28 17:32:01.417084 qzq203 NOTICE swss#orchagent: :- addNextHop: Created next hop 2.0.35.40 on PortChannel2001\r\n```\r\n\r\nTest triggers next batch:\r\n```\r\n28/05/2025 17:32:01 base._run                                L0071 DEBUG  | /data/tests/common/devices/sonic_asic.py::shell#580: [qzq203] AnsibleModule::shell, args=[\"\\n    \\n    \\n    \\n    \\n    for s in 2.0.35.41 <snip>\r\n```\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-28T18:41:40Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-28T18:41:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-06-09T13:53:49Z",
+          "body": "/azpw run Azure.sonic-mgmt"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-09T13:53:51Z",
+          "body": "/AzurePipelines run Azure.sonic-mgmt"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-09T13:54:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2025-06-25T17:34:52Z",
+          "body": "@arlakshm  please help merge"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-07-03T13:57:43Z",
+          "body": "Cherry-pick PR to 202505: https://github.com/sonic-net/sonic-mgmt/pull/19386"
+        }
+      ]
+    }
+  ]
+}

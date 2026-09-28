@@ -1,0 +1,45 @@
+{
+  "id": "management-24126",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24126,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24126",
+    "title": "[Chassis] Bug: Intermittent failures in tests_tsa_b_c_no_neighbors on Chassis systems",
+    "created_at": "2026-04-22T14:52:53Z",
+    "closed_at": "2026-06-29T03:01:41Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": [
+      "chassis"
+    ]
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`test_tsa_b_c_with_no_neighbors` fails on VoQ chassis systems where the upstream and downstream linecards have different HWSKUs. The test reports additional routes\" per T1 neighbor after BGP restoration on the downstream linecard.\n\n### Analysis\nThe test's route snapshot (`parse_routes_on_neighbors`) and BGP neighbor removal (`remove_bgp_neighbors`) are in the same per-hwsku loop. If the upstream linecard is processed first: its `ASIC0` neighbors are removed and BGP is restarted. This bounces the iBGP session between the upstream and downstream linecards.\n\nOn VoQ chassis, the `FROM_VOQ_CHASSIS_V4_PEER` inbound policy on upstream linecards denies routes with `DEVICE_INTERNAL_FALLBACK_COMMUNITY`, so upstream `ASIC0` and `ASIC1` have different route sets (asymmetry).\n\nWhen the upstream `bgp0` restarts, the downstream linecard loses routes that were exclusively sourced from upstream ASIC0. The downstream linecard's baseline is then captured with fewer routes per T1 neighbor. After the test restores everything, the routes recover and the diff reports multiple routes as \"additional.\"\n\nIf upstream and downstream linecards share the same HWSKU, `get_frontend_nodes_per_hwsku` selects only one linecard per HWSKU, so the issue does not occur.\n\n### Steps to Reproduce\n\n- Run `tests/bgp/tests_traffic_shif_lc.py::test_tsa_b_c_with_no_neighbors` on a VoQ chassis with different HWSKUs on upstream and downstream linecards\n- The upstream linecard must be iterated before the downstream linecard in `frontend_nodes_per_hwsku`\n\n### Actual Behavior and Expected Behavior\n\n#### Expected Behavior:\nTest passes for all chassis configurations, regardless of HWSKU combinations or linecard processing order.\n#### Actual Behavior:\nTest fails intermittently with assertion errors showing additional routes per T1 neighbor on the downstream linecards\n\n### Relevant log output\n\n```shell\nNormal state -- downstream board192-ASIC0 advertising 51,211 routes to T1 neighbors:\nboard192-ASIC0:\n  ARISTA01T1  PfxSnt=51211\n  ARISTA03T1  PfxSnt=51211\n\nAfter upstream board191-ASIC0 BGP restart, the downstream baseline is captured with reduced routes (iBGP session to board191-ASIC0 is only 5 seconds old, PfxRcd=4):\nBGP summary ASIC0:\n  ARISTA01T1  PfxSnt=34441   (deficit of 16770)\n  ARISTA03T1  PfxSnt=34441   (deficit of 16770)\n  ixre-egl-board191-ASIC0  Up/Down=<IPV6>  PfxRcd=4\n\nAfter restoration, routes recover and the diff fires:\n01/04/2026 <IPV6> check_and_log_routes_diff WARNING|\n  Additional route on host ARISTA01T1: <IP>/25\n  Additional route on host ARISTA01T1: <IP>/25\n  Additional route on host ARISTA01T1: <IP>/25\n  ... (16771 additional routes per T1 neighbor)\n```\n\n### Output of `show version`\n\n```shell\n202511 and master\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24127,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24127",
+    "title": "[Chassis] Fix route baseline capture in test_tsa_b_c_with_no_neighbors",
+    "merged_at": "2026-06-29T03:01:40Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #24126\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\n`test_tsa_b_c_with_no_neighbors` intermittently fails on VoQ chassis when upstream and downstream linecards have different HWSKUs. The route baseline capture and BGP neighbor removal were in the same per-hwsku loop, so removing neighbors on the upstream linecard (processed first) bounced the iBGP session and caused the downstream linecard to lose routes\nbefore its baseline was captured. The test then reported these as \"additional routes\" after restoration.\n\n#### How did you do it?\n- Split into two loops: snapshot all baselines first, then remove the neighbors\n#### How did you verify/test it?\n\n#### Any platform specific information?\nRun `tests/bgp/traffic_shift_lc.py` on T2 Chassis\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/bgp/test_traffic_shift_lc.py",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

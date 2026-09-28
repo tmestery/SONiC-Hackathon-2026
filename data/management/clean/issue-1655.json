@@ -1,0 +1,50 @@
+{
+  "id": "management-1655",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 1655,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/1655",
+    "title": "advanced-reboot tests failed due to the significant number of BGP routes",
+    "created_at": "2020-05-08T16:36:22Z",
+    "closed_at": "2020-05-28T19:43:43Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Pytest"
+    ]
+  },
+  "failure": {
+    "body": "**Description**\nAfter changes in the testbed routing https://github.com/Azure/sonic-mgmt/blob/master/ansible/doc/README.testbed.Routing.md routes, that ware statically configured on vEOS VM's, now are announced by ExaBGP from ptf container. That significantly increased the time need to check peer state, especially to receive and parse `show ip/ipv6 route bgp | json` command, as now all 6400 routes are received by BGP. And caused advanced-reboot tests fails with error `FAILED:dut:SSH threads haven\\'t finished for 300 seconds`.\n\nSo before changes in testbed routing one iteration of this loop https://github.com/Azure/sonic-mgmt/blob/master/ansible/roles/test/files/ptftests/arista.py#L114 takes less than 0.2 sec, now it takes around of 45 sec.  As a result, the state is not updated frequently enough, the queue with commands to update the state or quit grows, and in the end, quit command was not consumed during a timeout here https://github.com/Azure/sonic-mgmt/blob/3d2f4909e978f6a5785bd9a2f7861a88b83f8569/ansible/roles/test/files/ptftests/advanced-reboot.py#L860\n\n**Steps to reproduce the issue:**\n1. Run Fast-reboot test on the latest sonic-mgmt\n\n**Describe the results you received:**\nTests failed with error `FAILED:dut:SSH threads haven\\'t finished for 300 seconds`.\n\n**Describe the results you expected:**\nTest passed\n\n**Additional information you deem important:**\nThe output of `show ipv6 route bgp` before test:\n- on the setup with old routing configuration:\n```\nARISTA04T1>show ipv6 route bgp\nDisplaying 0 of 6404 IPv6 routing table entries\nCodes: C - connected, S - static, K - kernel, O - OSPF, B - BGP, R - RIP, A B - BGP Aggregate, A O - OSPF Summary, I L1 - ISIS level 1, I L2 - ISIS level 2, NG - Nexthop Group Static Route\n\nARISTA04T1>\n```\n- on the setup with new routing configuration:\n```\nDisplaying 6400 of 6410 IPv6 routing table entries\nCodes: C - connected, S - static, K - kernel, O - OSPF, B - BGP, R - RIP, A B - BGP Aggregate, A O - OSPF Summary, I L1 - ISI\nS level 1, I L2 - ISIS level 2, NG - Nexthop Group Static Route\n\n B    20c0:a808::/64 [200/0]\n       via fc0a::ff, Ethernet5\n B    <IPV6>::/64 [200/0]\n       via fc0a::ff, Ethernet5\n B    20c0:a810::/64 [200/0]\n       via fc0a::ff, Ethernet5\n  * * *\n```"
+  },
+  "resolution": {
+    "pr_number": 1661,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/1661",
+    "title": "[advanced-reboot] Refactored BGP state checking ",
+    "merged_at": "2020-05-28T19:43:43Z",
+    "description": "### Description of PR\n\nSummary:\nAfter changes in routing configuration for topology arista module takes to much time to check BGP state, so refactored logic to check the best route match instead of checking all BGP routes.\nFixes # (#1655)\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Approach\n#### How did you do it?\n- refactored BGP state check to dump the best match instead of parsing all BGP routes\n- refactored advanced reboot test to avoid queue growing\n#### How did you verify/test it?\nPass fast-reboot test\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/ptftests/advanced-reboot.py",
+        "additions": 10,
+        "deletions": 6
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/arista.py",
+        "additions": 14,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

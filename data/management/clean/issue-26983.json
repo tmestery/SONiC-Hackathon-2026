@@ -1,0 +1,43 @@
+{
+  "id": "management-26983",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26983,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26983",
+    "title": "[BMC] process_monitoring/test_monitoring_critical_processes crashes BMC boards (no swss/orchagent)",
+    "created_at": "2026-08-12T02:15:27Z",
+    "closed_at": "2026-08-12T15:31:34Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\n`test_monitoring_critical_processes` in `process_monitoring/test_critical_process_monitoring.py` kills critical processes across all containers and relies on auto-restart to recover. On BMC platforms, this test is destructive and unrecoverable:\n\n1. **No swss/orchagent/syncd** \u2014 BMC platforms run a reduced container set (database, gnmi, lldp, pmon, redfish, sysmgr, telemetry). The test attempts to iterate over containers that do not exist.\n2. **Database container death** \u2014 When the test kills processes in the database container, supervisord exhausts its 3 restart retries for Redis, leaving the container \"Up\" but hollow (Redis dead).\n3. **No PDU controller** \u2014 Without physical power cycle capability, the board cannot recover from a dead Redis. Load average spikes to 12+ as all containers fail health checks.\n4. **SPL boot loop** \u2014 If forced reboot is attempted after Redis death, the board often enters an SPL boot loop requiring physical power cycle.\n\n### Evidence\n\n- **Jul 28 batch run**: `test_monitoring_critical_processes` ran as XFAIL (still executed), killed database container. Error log: `\"No PDU controller available for host1-komodo-bmc, cannot recover from database container test\"`. Redis became unreachable (`Connection refused`). Board required force reboot.\n- **Aug 10 batch run**: Same pattern \u2014 test ran, killed containers, triggered cascading failures (86 errors from 115 passed), board entered SPL boot loop requiring physical power cycle by team member.\n\n### Root Cause\n\n`test_orchagent_heartbeat` already has a BMC topology skip condition in `tests_mark_conditions.yaml`, but `test_monitoring_critical_processes` does not. The existing `xfail` marker (for issue #10336) does NOT prevent execution \u2014 it still runs the destructive test logic.\n\n### Fix\n\nAdd a `skip` condition for BMC topology to `test_monitoring_critical_processes` in `tests_mark_conditions.yaml`.\n\n### Environment\n- Platform: `arm64-nexthop_b27-r0` (NH-B27), 4GB RAM\n- Image: `SONiC.20260810.04` / `.05`\n- Topology: `bmc-dual-mgmt`\n- Testbed: `testbed-host1-komodo-bmc`"
+  },
+  "resolution": {
+    "pr_number": 26984,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26984",
+    "title": "[test] Skip process_monitoring tests on BMC topology",
+    "merged_at": "2026-08-12T15:31:32Z",
+    "description": "### Description of PR\n\nSummary:\nSkip `test_monitoring_critical_processes` on BMC topology via `conditional_mark` in `tests_mark_conditions.yaml`.\n\nBMC platforms do not have swss/orchagent/syncd containers. This test kills critical processes and relies on container auto-restart to recover. On BMC:\n\n1. Most containers tested (bgp, syncd, swss, etc.) do not exist\n2. The test kills the database container as part of its sweep\n3. Without a PDU controller, the board cannot recover from database container death (supervisord exhausts restart retries)\n4. This leads to Redis being unreachable, cascading failures, and often an unrecoverable SPL boot loop requiring physical power cycle\n\n`test_orchagent_heartbeat` already has a BMC skip condition. This adds the same for `test_monitoring_critical_processes`.\n\nFixes #26983\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A\nFailure type: day-one issue\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n\n- master: SONiC.20260810.05 (internal-202608 aspeed-arm64 build) \u2014 full 44-module test suite run on Komodo BMC board (`bmc-test-local` branch with this fix cherry-picked). `process_monitoring` module completed with all tests properly SKIPPED due to the conditional_mark. No container kills, no Redis failures. Board survived the entire run (11+ hours).\n\n### Approach\n#### What is the motivation for this PR?\n\nRunning `test_monitoring_critical_processes` on BMC boards crashes the DUT. The test sweeps through all critical processes and kills them expecting auto-restart. On BMC:\n- `set_owner: kube` without Kubernetes means no auto-restart mechanism\n- supervisord inside the database container exhausts 3 restart retries for Redis\n- The container stays \"Up\" but is hollow (Redis dead)\n- This cascades into high load, unreachable DUT, and SPL boot loops\n\nThis has caused multiple unrecoverable boot loops in our testbed (Jul 28, Aug 10) requiring physical power cycles.\n\n#### How did you do it?\n\nAdded a skip condition in `tests/common/plugins/conditional_mark/tests_mark_conditions.yaml`:\n\n```yaml\nprocess_monitoring/test_critical_process_monitoring.py::test_monitoring_critical_processes:\n  skip:\n    reason: \"BMC platforms lack swss/orchagent/syncd; test kills database container causing unrecoverable state\"\n    conditions:\n      - \"'bmc' in topo_type\"\n```\n\nThis matches the existing pattern used by `test_orchagent_heartbeat`.\n\n#### How did you verify/test it?\n\nFull test suite run (44 modules, 11+ hours) on Komodo BMC board (SONiC.20260810.05):\n- `process_monitoring` module: all tests SKIPPED with correct reason message\n- No container kills, no Redis failures\n- DUT remained healthy throughout the run (109 passed, 12 failed, 589 skipped)\n\n#### Any platform specific information?\n\nBMC platforms only: `arm64-nexthop_b27-r0` (Komodo), `arm64-aspeed_ast2700_evb-r0` (DVT)\n\n#### Supported testbed topology if it's a new test case?\n\nN/A (existing test, adding skip condition)\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 6,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

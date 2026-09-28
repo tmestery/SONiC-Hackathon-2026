@@ -1,0 +1,235 @@
+{
+  "number": 24001,
+  "title": "Bug: test_qos_sai.py::updateTestPortIdIp selects invalid ports",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24001",
+  "createdAt": "2026-04-16T21:34:49Z",
+  "closedAt": "2026-05-05T18:49:13Z",
+  "author": "peterbailey-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nupdateTestPortIdIp replaces the dutConfig's chosen src and dest ports with valid ports that are actually connected on the dut, but it has 2 major problems:\n\n1. on multi-asic it does not separate ports between asics, meaning it may replace a src port on the src asic with a port that is on the dest asic. The same goes with dest ports and the src asic.\n2. It will replace src ports with ports that do not have the same portspeed-cablelength QoS profile. This means that if the src port is replaced with a port of a different profile then the test will fail. \n  The qos tests read params from tests/qos/files/qos_params.<ASIC>.yaml and indexes by the SPEED_LENGTH profile of the chosen source port. Meaning that if updateTestPortIdIp replaces the src port with a new port that has a different profile, then the stored values read from qos_params.<ASIC>.yaml are incorrect for the test being run and the test will fail.\n\n### Steps to Reproduce\n\nThese 2 problems require semi-specific scenarios but this leads to flakiness in the tests.\n\n#### Example for problem 1:\nA multi asic system only one interface connected on asic0, if src and dest asic are chosen to be asic1 ( [single_asic] parametrized test) but the src port chosen is invalid, it will pick a new src port from those which are connected and it could pick the port from asic0 (which is NOT the src asic in this case).\n\n#### Example for problem 2:\nThe chosen src port has a pg_profile like so:\n```\n\"BUFFER_PG|Ethernet<A>|3-4\"\n{'profile': 'pg_lossless_400000_120000m_profile'}\n```\nbut all other connections have a pg profile like so:\n```\n\"BUFFER_PG|Ethernet<B-Z>|3-4\"\n{'profile': 'pg_lossless_400000_50m_profile'}\n```\nIf the src port is invalid then the qosConfig test values will have already been picked using the 400000_120000m key, and when a new src port is found by `updateTestPortIdIp` that new port can/will have `pg_lossless_400000_50m_profile` configurations. The test will then fail because the qos params computed for `400000_120000m` will not pass for ports using the `400000_50m` profile.\n\n### Actual Behavior and Expected Behavior\n\n`updateTestPortIdIp` should intelligently choose src and dest ports from the correct asic and with the correct pg profile. It currently does not.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23962,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23962",
+      "title": "Fix qos test port re-selection on multi-asic and disagg chassis",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-05-05T18:49:12Z",
+      "createdAt": "2026-04-15T23:05:21Z",
+      "author": "peterbailey-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\n1. Currently the testQosSaiHeadroomPoolSize will skip if the chosen port for the qos test is not 120000m plus 400 or 800G. This is not needed on disaggregated T2 skus.\r\n2. The test_qos_sai.py tests validate and replace chosen src and dest ports with ports that exist, but this selection was flawed. It could replace ports with those found on different asics, and it could replace ports with those that did not have the same qos profiles.\r\n\r\nThis PR fixes both problems.\r\n\r\nSummary:\r\nFixes #24001\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511: https://github.com/sonic-net/sonic-mgmt/pull/23963 manual backport\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nFix the issues mentioned above.\r\n\r\n#### How did you do it?\r\n**Problem 1:**\r\nI changed the testQosSaiHeadroomPoolSize logic so it only reduces the src ports and skips for non 120000m profiles on modular chassis.\r\n\r\n**Problem 2:**\r\n1. I fixed `updateTestPortIdIp` so that any replaced src ports should be from the src asic (same with dest) \r\n2. I fixed `updateTestPortIdIp` so that any replaced src ports must use the same portSpeedCableLength profile as the chosen src port for the test. This is to solve flakiness of these tests where the original src port was invalid, but the new src port is of a different profile and so has different pg headroom values. The qos params would not apply to the new src port and the test would fail.\r\n\r\n\r\n#### How did you verify/test it?\r\nRan testQosSaiHeadroomPoolSize[single_asic], testQosSaiHeadroomPoolSize[single_dut_multi_asic] on q3d and j2c+ skus to verify.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/qos/qos_sai_base.py",
+          "additions": 181,
+          "deletions": 72
+        },
+        {
+          "path": "tests/qos/test_qos_sai.py",
+          "additions": 8,
+          "deletions": 7
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-15T23:05:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-15T23:05:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-15T23:09:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-15T23:09:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-16T20:56:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-16T20:56:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T17:52:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T17:52:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-22T17:06:40Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-22T17:06:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-24T22:19:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-24T22:19:58Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-24T22:26:10Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-24T22:26:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-24T22:49:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-24T22:49:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-24T23:01:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-24T23:02:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "peterbailey-arista",
+          "createdAt": "2026-04-27T21:44:50Z",
+          "body": "/azpw run Azure.sonic-mgmt"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-27T21:44:54Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        }
+      ]
+    },
+    {
+      "number": 24622,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24622",
+      "title": "qos: use unfiltered port pool for qosParams in updateTestPortIdIp",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-05-14T07:49:52Z",
+      "author": "XuChen-MSFT",
+      "body": "### Description of PR\nSummary:\nPR#23962 added `portSpeedCableLength` filtering to `updateTestPortIdIp()` to ensure\nreplaced `dutConfig[\"testPorts\"]` use the same speed/cable profile. This correctly prevents\nflakiness on multi-asic/disagg chassis where cross-speed port substitution caused headroom\nvalue mismatches.\n\nHowever, the speed-filtered port pool was also used for `qosParams` port replacement\n(e.g., `hdrm_pool_size.src_port_ids`). On DUTs with mixed-speed port configs (e.g.,\n10\u00d7100G + 108\u00d750G in t0-118 topology), the filtering reduces the available pool to only\n2 ports, but `qosParams` needs 10 \u2014 causing failure:\n\n```\nqos/test_qos_sai.py::TestQosSai::testQosSaiHeadroomPoolWatermark[single_asic] FAILED\nE   Failed: Not enough src test ports in qosParams for src_port_ids\n```\n\nThe root cause is that `qosParams` ports (selected by `qos_param_generator` from YAML\nconfig) already exist in the test port map and don't need speed-based replacement. Speed\nfiltering should only constrain `dutConfig[\"testPorts\"]` replacement, not `qosParams` ports.\n\nThis fix saves the unfiltered port pool before speed filtering and uses it for `qosParams`\nport replacement, while preserving speed filtering for `dutConfig[\"testPorts\"]` replacement.\n\nNightly results on the same Broadcom TH2 testbed (t0-118):\n\n| Date | OS Version | sonic-mgmt | Result |\n|------|------------|------------|--------|\n| 2026-03-29 | .18 | pre-PR#23962 | \u2705 pass |\n| 2026-04-12 | .19 | pre-PR#23962 | \u2705 pass |\n| 2026-04-26 | .22 | pre-PR#23962 | \u2705 pass |\n| 2026-05-10 | .25 | post-PR#23962 | \u274c fail |\n| 2026-05-22 | .29 | with this fix | \u2705 pass (verified on testbed-bjw2-can-t0-7260-10) |\n\nFixes #24001\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\nPR#23962 introduced a regression on single-ASIC DUTs with mixed-speed port configs.\n`updateTestPortIdIp()` uses a single port pool (`src_testPortIds`) for two different\npurposes:\n\n1. **`dutConfig[\"testPorts\"]`** replacement \u2014 the generic src/dst port pair randomly\n   selected by the fixture. These **do** need speed filtering (PR#23962's original goal).\n2. **`qosParams`** replacement \u2014 test-specific multi-port parameters (e.g.,\n   `hdrm_pool_size.src_port_ids=[31,...,40]`) selected by `qos_param_generator` from YAML\n   config. These ports **already exist** in the test port map and **don't need** speed\n   filtering.\n\nPR#23962 applied speed filtering to the shared pool, which correctly constrains\n`dutConfig[\"testPorts\"]` but incorrectly reduces the pool for `qosParams` replacement.\n\n#### How did you do it?\nSaved the unfiltered port pool before speed filtering:\n\n```python\nsrc_testPortIds_unfiltered = list(src_testPortIds)\ndst_testPortIds_unfiltered = list(dst_testPortIds)\n```\n\nThen in the `qosParams` section, used the unfiltered pool (`src_qosPortIds`) instead\nof the speed-filtered pool (`src_testPortIds`):\n\n```python\nif qosParams is not None:\n    src_qosPortIds = list(src_testPortIds_unfiltered)\n    dst_qosPortIds = list(dst_testPortIds_unfiltered)\n    # Remove ports already consumed by dutConfig[\"testPorts\"]\n    if sameSrcDestDutAndAsic:\n        src_qosPortIds = list(set(src_qosPortIds) - set(src_portIds))\n        dst_qosPortIds = list(set(dst_qosPortIds) - set(dst_portIds) - set(src_portIds))\n```\n\nThis preserves PR#23962's speed filtering for `dutConfig[\"testPorts\"]` while avoiding\nthe regression on `qosParams` ports.\n\n#### How did you verify/test it?\n1. **Reproduced failure** on `testbed-bjw2-can-t0-7260-10` (t0-118, Broadcom TH2,\n   `SONiC.20251110.29`) without fix \u2014 confirmed `FAILED: Not enough src test ports`\n2. **Applied fix** and reran \u2014 `testQosSaiHeadroomPoolWatermark[single_asic]` **PASSED**\n3. `py_compile` + `flake8` clean\n4. Code path analysis: all 14 callers of `updateTestPortIdIp` reviewed \u2014 the unfiltered\n   pool only affects the `qosParams` replacement path\n\n#### Any platform specific information?\nRegression observed on Broadcom TH2 platforms with mixed-speed port configs (100G + 50G)\nin t0-118 topology. Fix applies to any platform where the test port map has fewer ports\nof the target speed than `qosParams` requires.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 bug fix.\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "tests/qos/qos_sai_base.py",
+          "additions": 24,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-14T07:50:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-14T07:50:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-14T11:20:54Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "peterbailey-arista",
+          "createdAt": "2026-05-15T16:16:32Z",
+          "body": "```\r\nBehavior matrix:\r\nspeed filter + not enough ports \u2192 SKIP (new)\r\nno speed filter + not enough ports \u2192 FAIL (unchanged)\r\nspeed filter + enough ports \u2192 runs normally (unchanged)\r\n```\r\n\r\nThis gives me pause, should we skip or is there a different problem at play that this change will hide? \r\n\r\n\"`hdrm_pool_size needs 10 src ports`\" I'm not convinced this is true, 2 ports I believe is sufficient for this test to run - that is the case on DNX T2 topos at least. \r\n\r\nI would need to look further but \"`After portSpeedCableLength=100000_300m filtering, src_testPortIds shrinks from 110 to 2 [ports]`\" doesn't seem right to me either. \r\n\r\nI find it more likely that the params being generated ahead of time (or which live in the selected qos_params file) is not accounting for there only being 2 valid ports available and it picks 10 (arbitrarily) instead. But when we go to update those 10 ports to valid ports by using `updateTestPortIdIp` then the test fails because it can't find 10 usable test ports (they likely belong to LAGs).\r\n\r\nAgain, this requires more investigation."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-05-17T10:05:26Z",
+          "body": "Review note (non-blocking):\n- Potential test skip/disable logic detected; please confirm intent and necessity.\n\nReviewed by AI agent on behalf of Ying.\n<!-- AI_AGENT_REVIEW:c6329dedcf833cd64a18abbf10e85ebe2ec50592 -->"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-22T04:45:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-22T04:45:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "XuChen-MSFT",
+          "createdAt": "2026-05-22T04:51:51Z",
+          "body": "Thanks for the feedback, Peter. You were right \u2014 skip was the wrong approach, and there was indeed a different problem at play.\n\nI've completely replaced the fix. The root cause: PR#23962 applies speed filtering to `src_testPortIds`, which is then used as the available pool for both `dutConfig[\"testPorts\"]` replacement and `qosParams` replacement. The speed filtering is correct for `dutConfig[\"testPorts\"]` (your original goal), but `qosParams` ports (e.g., `hdrm_pool_size.src_port_ids=[31,...,40]`) are selected by `qos_param_generator` from YAML config and already exist in the test port map \u2014 they don't need speed-based replacement at all.\n\nThe new fix saves the unfiltered port pool before speed filtering and uses it for `qosParams` replacement only, while preserving speed filtering for `dutConfig[\"testPorts\"]`. No test is skipped. Verified passing on `testbed-bjw2-can-t0-7260-10` (t0-118, TH2, `20251110.29`)."
+        },
+        {
+          "author": "XuChen-MSFT",
+          "createdAt": "2026-05-22T04:51:58Z",
+          "body": "Thanks Ying. The skip logic from the previous version has been completely removed. The new approach fixes the root cause \u2014 `qosParams` ports now use the unfiltered port pool instead of the speed-filtered one, so no test is skipped or disabled. Verified passing on hardware."
+        },
+        {
+          "author": "XuChen-MSFT",
+          "createdAt": "2026-05-22T04:52:05Z",
+          "body": "Thanks for the review, Zhaohui. The approach has been updated \u2014 the previous skip/return-False pattern is no longer used. The new fix addresses the root cause by separating the port pools: speed-filtered for `dutConfig[\"testPorts\"]`, unfiltered for `qosParams`. Please re-review when you get a chance."
+        },
+        {
+          "author": "XuChen-MSFT",
+          "createdAt": "2026-05-22T04:52:43Z",
+          "body": "@peterbailey-arista could you please to have a look at latest changes?"
+        },
+        {
+          "author": "peterbailey-arista",
+          "createdAt": "2026-05-22T17:55:46Z",
+          "body": "This new change lifts the assumption from out of `updateTestPortIdIp` and into the qos param generator or qos_params.XYZ.yaml files to have correctly identified valid source ports first - which I'm not convinced they always do.\r\n\r\nYour PR was created to handle this line\r\n`pytest_assert(self.replaceNonExistentPortId(src_testPortIds, port_list), f\"Not enough src test ports in qosParams for {idName}\")` causing failures.\r\n\r\nSo the specific failure situation is port_list (from qos params) > src_testPortIds (real valid up src ports with the correct speed). If qos params had already had a smaller list of ports, from proper filtering prior to `updateTestPortIdIp` then this filtering should be a no-op and the test would pass.\r\n\r\nBut I still expect this fix to hide the real problem - qos param generators need to look for valid src ports first or they need to be given the correct list of valid src ports from the get-go. I don't know that we want to remove this filtering, because it reveals the exact issue I believe you're running into."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-05-26T06:13:52Z",
+          "body": "Review note (non-blocking):\n- Nit: Add inline comments explaining why two pools exist and why `qosParams` uses the unfiltered pool.\n- Nit: Consider logging pool sizes / warning when falling back to unfiltered pool.\n- Nit: If `replaceN()` mutates inputs, ensure unfiltered pool is copied before reuse.\n- Nit: Add a brief validation or assertion that `qosParams` ports are compatible where required.\n\nReviewed by AI agent on behalf of Ying.\n\n<!-- AI_AGENT_REVIEW:3c89017b3dd581104e38e6737343e295eb011eec -->"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-06-19T23:32:46Z",
+          "body": "@peterbailey-arista I think we can merge this change, and open a follow up for the more general generator fix. If that works for you, please approve this PR I will merge it."
+        }
+      ]
+    }
+  ]
+}

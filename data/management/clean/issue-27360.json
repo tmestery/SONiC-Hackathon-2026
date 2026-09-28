@@ -1,0 +1,43 @@
+{
+  "id": "management-27360",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27360,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27360",
+    "title": "[system_health] test_service_checker fails on platforms without system status LED support (Nokia-7220 BMC)",
+    "created_at": "2026-08-26T01:07:12Z",
+    "closed_at": "2026-09-01T23:51:22Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Description\n\n`system_health/test_system_health.py::test_service_checker` and `test_service_checker_with_process_exit` fail on platforms that do not implement the system status LED chassis APIs (e.g. BMC topology).\n\nThe failure occurs inside `check_system_health_led_info`, which runs `show system-health summary`. On these platforms the command exits non-zero:\n\n```\nstdout: chassis.set_status_led is not implemented\nstderr: AttributeError: 'Chassis' object has no attribute 'initizalize_system_led'\n```\n\nBecause the test invokes `duthost.shell('show system-health summary')` without `module_ignore_errors`, the raised `RunAnsibleModuleFail` fails the whole test even though the LED simply isn't implemented on the platform.\n\n### Steps to reproduce\n\n```\npython3 -m pytest system_health/test_system_health.py \\\n    --inventory=../ansible/veos,../ansible/str4 --host-pattern=all \\\n    --testbed=<bmc-testbed> --testbed_file=../ansible/testbed.yaml \\\n    --topology bmc,any\n```\n\n### Expected behavior\n\nOn platforms that don't implement the system status LED APIs, the LED portion of the check should be skipped gracefully (with a warning) instead of failing the test.\n\n### Actual behavior\n\n```\ntests.common.errors.RunAnsibleModuleFail: run module shell failed\nrc = 1\ncmd = show system-health summary\nAttributeError: 'Chassis' object has no attribute 'initizalize_system_led'\n```\n\nAffected test cases:\n- `test_service_checker`\n- `test_service_checker_with_process_exit`\n\n### Notes\n\n`test_external_checker` also fails on this testbed (`External checker does not work`), but that appears to be an unrelated issue and is not covered here."
+  },
+  "resolution": {
+    "pr_number": 27361,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27361",
+    "title": "[system_health]: Skip LED check on BMC platforms without system status LED support",
+    "merged_at": "2026-09-01T23:51:20Z",
+    "description": "### Description of PR\nSummary:\nFixes #27360\n\n`test_service_checker` and `test_service_checker_with_process_exit` fail on BMC platforms (e.g. `Nokia-7220-Th6p` BMC topology) because BMC devices do not implement the system status LED chassis APIs. On those platforms `show system-health summary` exits non-zero (`chassis.set_status_led is not implemented` / `AttributeError: 'Chassis' object has no attribute 'initizalize_system_led'`), causing `check_system_health_led_info` to raise `RunAnsibleModuleFail`.\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [x] 202608\n\n### Approach\n#### What is the motivation for this PR?\nBMC devices don't implement the system status LED APIs. The LED check should be skipped on BMC platforms rather than failing the whole test, while behavior on all other platforms stays unchanged.\n\n#### How did you do it?\n`check_system_health_led_info` now returns early (with a warning) when `duthost.is_bmc()` is `True`. Non-BMC platforms are unaffected.\n\n#### How did you verify/test it?\nVerified the module compiles (`python -m py_compile`). On BMC platforms the LED check is skipped with a warning; on all other platforms the existing LED verification runs as before.\n\n#### Any platform specific information?\nScoped to BMC devices (detected via `DEVICE_METADATA.localhost.type == 'NetworkBmc'`), e.g. `Nokia-7220-Th6p` BMC topology. No behavior change for non-BMC platforms.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 existing test cases.\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/system_health/test_system_health.py",
+        "additions": 8,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

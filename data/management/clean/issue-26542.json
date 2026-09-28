@@ -1,0 +1,48 @@
+{
+  "id": "management-26542",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26542,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26542",
+    "title": "Bug: BMC topo add-topo fails at PTF container creation: Docker network \"br0\" is never created (regression from #26405)",
+    "created_at": "2026-07-24T04:39:37Z",
+    "closed_at": "2026-09-16T02:43:12Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nSince #26405 ([vm_set]: enable ptf_use_docker_network automatically for BMC topology), deploying a BMC topology (bmc-dual-mgmt) fails during add-topo at the \"Create ptf container\" step on VM servers that are provisioned with a Linux management bridge (the standard setup).\n\n#26405 unconditionally turns on ptf_use_docker_network for every topology whose name contains bmc. In that mode the PTF container is attached directly to a Docker network named after mgmt_bridge (e.g. br0). On a server that only has a Linux bridge called br0 (which is the normal management bridge), Docker cannot find a network of that name and the task fails.\n\nNote that a Linux bridge and a Docker network are two different namespaces: having a Linux bridge br0 does not provide a Docker network br0.\n\nError\n```\nTASK [vm_set : Create ptf container ptf_<vm_set_name>]\nfatal: [<vm_host>]: FAILED! =>\n  msg: \"Parameter error: network named br0 could not be found. Does it exist?\"\n```\nOrigin: ansible/roles/vm_set/tasks/add_topo.yml\n\n### Steps to Reproduce\n\nadd-topo for bmc-mgmt-dual\n\n### Actual Behavior and Expected Behavior\n\nadd-topo for bmc-mgmt-dual pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27669,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27669",
+    "title": "[vm_set]: Enable ptf_use_docker_network for BMC topology only when the docker network exists",
+    "merged_at": "2026-09-16T02:43:11Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #26542\n\n#26405 sets `ptf_use_docker_network` to true for every BMC topology. In that mode the PTF container is created with `network_mode: {{ mgmt_bridge }}` plus a static IP on a docker network of that name, and the `Bind topology` step that would otherwise give the PTF a veth on the Linux management bridge is skipped. On servers whose `mgmt_bridge` is a Linux bridge there is no docker network of that name, so `add-topo` fails at `Create ptf container` with `Parameter error: network named br0 could not be found`.\n\nThis change probes for the docker network with `docker network inspect {{ mgmt_bridge }}` and enables the mode only when the network exists. Servers that have it keep the docker network path introduced by #23813 and #26405. Servers without it keep the Linux-bridge path, where the bind step attaches a veth into the PTF netns. An explicit `ptf_use_docker_network` setting from group_vars or host_vars still wins, since both new tasks skip when the variable is already defined.\n\n### Type of change\n\n- [x] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): #26542\nFailure type: regression\n\n### Tested branch\n- [x] master\n\n### Test result\n\n- master: `bmc-shared-mgmt` topology on a test server where `mgmt_bridge` is a Linux bridge and no docker network of that name exists. Before the change, `add-topo` fails at `Create ptf container` as reported in #26542. With the change, `Check whether a docker network named \"br0\" exists` returns rc 1, the enable task is skipped, `Create ptf container` and `Bind topology bmc-shared-mgmt to VMs` both report changed, and the play ends with `failed=0`.\n\n### Approach\n#### What is the motivation for this PR?\n\nRestore `add-topo` for BMC topologies on servers that use a Linux management bridge, which #26405 broke by assuming a docker network named after `mgmt_bridge` is present.\n\n#### How did you do it?\n\nIn `add_topo.yml` and `renumber_topo.yml`, replace the unconditional `set_fact: ptf_use_docker_network: true` for BMC topologies with a `docker network inspect {{ mgmt_bridge }}` probe (`failed_when: false`, `changed_when: false`) followed by the same `set_fact`, now conditioned on the probe returning rc 0. Both tasks run only when `'bmc' in topo` and `ptf_use_docker_network` is not already defined.\n\n#### How did you verify/test it?\n\nSee Test result. The probe-positive branch (docker network present, docker mode enabled) is the same code path #26405 exercised.\n\n#### Any platform specific information?\n\nApplies to BMC topologies only. No change for other topologies.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/roles/vm_set/tasks/add_topo.yml",
+        "additions": 13,
+        "deletions": 2
+      },
+      {
+        "path": "ansible/roles/vm_set/tasks/renumber_topo.yml",
+        "additions": 13,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

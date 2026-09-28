@@ -1,0 +1,63 @@
+{
+  "id": "management-24726",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24726,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24726",
+    "title": "Bug: wait_until does not properly handle exceptions raised by failed pytest_assert",
+    "created_at": "2026-05-19T21:27:49Z",
+    "closed_at": "2026-06-18T18:25:06Z"
+  },
+  "metadata": {
+    "severity": "low",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nFound while debugging a different issue:\n\n  - pytest_assert (tests/common/helpers/assertions.py) calls pytest.fail() on\n    failure.\n  - pytest.fail() raises _pytest.outcomes.Failed, which inherits from\n    OutcomeException -> BaseException (NOT Exception).\n  - wait_until (tests/common/utilities.py:125) catches only `except Exception`,\n    so Failed propagates straight through and aborts the test on the first\n    attempt.\n  - The wait_until window is therefore effectively dead for mismatch cases.\n    Only genuine Exception subclasses are handled correctly and get retried.\n\nThe fix appears to be to use a more targeted try/except handler here:\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/utilities.py#L151\n\n### Steps to Reproduce\n\nThis was found while debugging generic_config_updater/test_dynamic_acl.py.  In the case I was investigating, the status output of `show acl table DYNAMIC_ACL` was initially reported as \"NA\".  This was causing the wait_until wrapping the check to be skipped and the test to be failed outright.\n\nLib in question is here:\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/gu_utils.py#L531\n\n### Actual Behavior and Expected Behavior\n\nFailures due to pytest_assert invoked from within a wait_until should not cause an immediate test failure (as they do today).  The exception should be handled and the retry mechanism continued.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24902,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24902",
+    "title": "Handle pytest.fail.Exception in wait_until",
+    "merged_at": "2026-06-18T18:25:05Z",
+    "description": "Allow pytest_assert to trigger wait_until retries.\n\n### Description of PR\n\nSummary:\nFixes #24726\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\n### Approach\n#### What is the motivation for this PR?\nwait_until already handles Exception, and multiple places in the code assume pytest.fail.Exception is handled as well.  pytest.fail.Exception actually derives from BaseException, which means it is currently unhandled by wait_until, and so will not trigger retries (and immediately fail tests).\n\n#### How did you do it?\nAdded pytest.fail.Exception to the list of handled exception classes in wait_until.\n\n#### How did you verify/test it?\nManual test run.\n\n#### Any platform specific information?\nN/A\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/bmp/test_frr_bmp_sanity.py",
+        "additions": 3,
+        "deletions": 1
+      },
+      {
+        "path": "tests/common/helpers/monit.py",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/utilities.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/monit/test_monit_status.py",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "tests/show_techsupport/test_techsupport.py",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

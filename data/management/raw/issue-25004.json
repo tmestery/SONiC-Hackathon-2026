@@ -1,0 +1,62 @@
+{
+  "number": 25004,
+  "title": "Bug: test_dequeue_ecn fails on Broadcom 7050CX3: last-packet ECN assertion is platform-dependent",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25004",
+  "createdAt": "2026-06-01T01:56:05Z",
+  "closedAt": "2026-06-23T03:41:29Z",
+  "author": "ediwibowo-msft",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "ediwibowo-msft"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n### Summary\n\n`tests/snappi_tests/ecn/test_dequeue_ecn_with_snappi.py::test_dequeue_ecn` fails on Broadcom 7050CX3 SKUs\n\n```python\npytest_assert(not is_ecn_marked(ip_pkts[-1]),\n              \"The last packet should not be marked\")\n```\n\nThe test passes on Mellanox SKUs and fails on Broadcom 7050CX3 not because of any DUT/WRED defect, but because the assertion is implicitly tied to per-SKU buffer geometry.\n\n\n\n### Steps to Reproduce\n\n### Reproduction\n\n- Testbed: any Broadcom 7050CX3-based RDMA testbed\n- Command: `pytest tests/snappi_tests/ecn/test_dequeue_ecn_with_snappi.py::test_dequeue_ecn`\n- Test parameters (current defaults): `kmin=50000`, `kmax=51000`, `pmax=100`, `data_flow_pkt_size=1024`, `data_flow_pkt_count=101`\n\n\n\n### Actual Behavior and Expected Behavior\n\n### Observed failure\n\n```\nAssertionError: The last packet should not be marked\n```\n\n<img width=\"1315\" height=\"822\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/aec6427d-243a-4e55-a0f4-ab5e3bae0ad8\" />\n\n### Root cause\n\nThere are two problems:\n\n1. WRED threshold quantization. On Tomahawk(/Trident) the WRED min/max are programmed in bytes but quantized internally to MMU cells / threshold units (256-byte cells on TH/TH2/TH3, plus an additional power-of-2/index quantization). 50000 and 51000 round to the same internal threshold bucket, so you effectively get kmin == kmax. There's no marking-probability ramp \u2014 once depth \u2265 that value, marking probability is 100%, and below it, 0%. There is no \"tail\" where pmax linearly falls.\n\n2. MMU/buffer accounting unit and dequeue rate. Tomahawk accounts queue occupancy at the egress queue in MMU cells; with shared-pool dynamics + PFC release behavior, the queue stays at or above the (single) threshold bucket for essentially the whole 101-packet dequeue window. So every packet \u2014 including ip_pkts[-1] \u2014 sees depth \u2265 kmax and is CE-marked. \u2192 assertion not is_ecn_marked(ip_pkts[-1]) fails.\n\nYou can see this directly in the failure log: original Broadcom WRED profile had green_min=1,048,576 / green_max=2,097,152 (1\u20132 MB), confirming the platform expects threshold values orders of magnitude larger and well-separated.\n\n### Affected files\n- test_dequeue_ecn_with_snappi.py\n\n### Affected platforms\n- Broadcom 7050CX3 (confirmed)\n\n### Related PR\n\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25573,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25573",
+      "title": "Adjust Broadcom ECN kmax threshold with 500-cell distance from kmin",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-23T03:41:28Z",
+      "createdAt": "2026-06-23T02:48:12Z",
+      "author": "ediwibowo-msft",
+      "body": "### Description of PR\r\n\r\nSummary: Adjust Broadcom ECN kmax threshold with 500-cell distance from kmin\r\n\r\nFixes: https://github.com/sonic-net/sonic-mgmt/issues/25004\r\n\r\nThis PR improves the ECN dequeue test for Broadcom Trident 3 platforms by setting the kmax threshold to create a precise 500-cell gap from kmin. This aligns with cell-based queue accounting where:\r\n- Trident 3 uses 256-byte cells\r\n- Test packets are 1024 bytes (4 cells each)\r\n- A 500-cell gap provides adequate hysteresis between marking and non-marking regions\r\n\r\n**Previous values:**\r\n- kmin: 50,000 bytes (default)\r\n- kmax: 51,000 bytes (default, only 1,000 byte gap)\r\n\r\n**New values for Broadcom:**\r\n- kmin: 40,000 bytes (~156 cells)\r\n- kmax: 168,000 bytes (~656 cells)\r\n- Gap: 128,000 bytes (500 cells)\r\n\r\nThis change makes the ECN dequeue test more reliable on Broadcom hardware by ensuring packets sent during the test properly transition from marked (when queue above kmax) to unmarked (when queue below kmin).\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nThe ECN test was using the same threshold parameters for all ASIC types, but Broadcom Trident 3 devices have different queue depth behavior and cell-based accounting. The original 1,000-byte gap (50-51KB) was insufficient, leading to flaky test results on Broadcom platforms.\r\n\r\n#### How did you do it?\r\n\r\nCalculated ECN thresholds based on Trident 3 hardware characteristics:\r\n1. Identified cell size: 256 bytes (TD3 default)\r\n2. Computed cells per packet: ceil(1024 / 256) = 4 cells\r\n3. Selected target gap: 500 cells (conservative margin for timing jitter)\r\n4. Calculated thresholds:\r\n   - Gap in bytes: 500 \u00d7 256 = 128,000 bytes\r\n   - kmin: 40,000 bytes\r\n   - kmax: kmin + gap = 40,000 + 128,000 = 168,000 bytes\r\n5. Updated packet count to 301 (increased from 101 for non-Broadcom) to ensure sufficient packets for ECN marking verification\r\n\r\n#### How did you verify/test it?\r\n\r\n- Verified 256-byte cell size for Trident 3 in existing SONiC codebase ([tests/qos/test_tunnel_qos_remap.py](tests/qos/test_tunnel_qos_remap.py))\r\n- Confirmed threshold gap calculation: (168,000 - 40,000) / 256 = 500 cells exactly\r\n- Change is isolated to Broadcom platform via ASIC type check in test\r\n\r\n#### Any platform specific information?\r\n\r\n- **Broadcom Trident 3**: 256-byte cells, updated thresholds in ECN_PARAMS_BY_ASIC['broadcom']\r\n- **Other ASICs**: Unchanged; continue using default parameters (50KB kmin, 51KB kmax)\r\n- Tested on: Arista 7050CX3 (Broadcom Trident 3)\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nN/A - This is an improvement to existing `test_dequeue_ecn` test which supports multidut-tgen topology.\r\n\r\n### Documentation\r\n\r\nThe min (104,000 bytes) and max (208,000 bytes) thresholds in the standard line-rate profile are derived by mapping SONiC byte configurations to the 208-byte cell constraints of the Broadcom Trident ASIC. These values ensure a 500-cell slope for optimal WRED/ECN operation.\r\n```\r\n~$ show ecn\r\nProfile: AZURE_LOSSLESS\r\n-----------------------  -------\r\necn                      ecn_all\r\ngreen_drop_probability   5\r\ngreen_max_threshold      2097152\r\ngreen_min_threshold      1048576\r\nred_drop_probability     5\r\nred_max_threshold        2097152\r\nred_min_threshold        1048576\r\nwred_green_enable        true\r\nwred_red_enable          true\r\nwred_yellow_enable       true\r\nyellow_drop_probability  5\r\nyellow_max_threshold     2097152\r\nyellow_min_threshold     1048576\r\n-----------------------  ------\r\n```\r\n",
+      "files": [
+        {
+          "path": "tests/snappi_tests/ecn/test_dequeue_ecn_with_snappi.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T02:48:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-23T02:48:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-24T02:49:42Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/25611"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-24T02:49:53Z",
+          "body": "@ediwibowo-msft PR conflicts with 202605 branch"
+        }
+      ]
+    }
+  ]
+}

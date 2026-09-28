@@ -1,0 +1,45 @@
+{
+  "id": "management-16289",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 16289,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/16289",
+    "title": "[Bug][T2?]: REBOOT_TYPE_POWEROFF reboot causes test failures on T2 as NTP slew doesn't recover for a while",
+    "created_at": "2025-01-02T04:10:12Z",
+    "closed_at": "2025-01-15T18:48:54Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [
+      "202405"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\nWhen the chassis is rebooted through REBOOT_TYPE_POWEROFF (through PDUs), the internal clock gets stuck at the time it reboots (e.g., if it takes 5 minutes to boot and is restarted at 00:00, the clock would show 00:00 (or slightly before) when it comes back up at 00:05. This could be caused by RTC (?)).\n\nThe time will slowly correct itself by ntp slew as designed, but due to the length of time it takes for a chassis to reboot, it takes very long (and much longer than the `wait_until` time defined for this case in the reboot function)\n\nSnippet responsible for handling this in reboot.py reboot function:\n```\n    # some device does not have onchip clock and requires obtaining system time a little later from ntp\n    # or SUP to obtain the correct time so if the uptime is less than original device time, it means it\n    # is most likely due to this issue which we can wait a little more until the correct time is set in place.\n    if float(dut_uptime.strftime(\"%s\")) < float(dut_datetime.strftime(\"%s\")):\n        logger.info('DUT {} timestamp went backwards'.format(hostname))\n        wait_until(120, 5, 0, positive_uptime, duthost, dut_datetime)\n\n    dut_uptime = duthost.get_up_time()\n\n    assert float(dut_uptime.strftime(\"%s\")) > float(dut_datetime.strftime(\"%s\")), \"Device {} did not reboot\". \\\n        format(hostname)\n```\nWhere `dut_uptime` is the DUTs latest reported startup time, and `dut_datetime` is the DUT reported time collected before the reboot\n\nAny test using this reboot type should pass UNLESS this is a safeguard that DUTs shouldn't behave this way, in this case the image needs to be fixed.\n\nOn the test side:\nWe could either increase the wait_until time (will be very long), sync the datetime using `sudo ntpdate <NTP_SERVER_IP>` manually in the test after reboot, or skip this check for T2 devices\n\n### Results you see\n\nSample `test_power_off_reboot.py` failure:\nBefore test fails: (made sure to sync ntp before this)\n```\nActual time: 2025-01-02 <IPV6>.744581\n\ntimedatectl:\n               Local time: Thu 2025-01-02 <IPV6> UTC\n           Universal time: Thu 2025-01-02 <IPV6> UTC\n                 RTC time: Thu 2025-01-02 <IPV6>\n                Time zone: Etc/UTC (UTC, +0000)\nSystem clock synchronized: yes\n              NTP service: n/a\n          RTC in local TZ: no\n\nshow ntp:\nMGMT_VRF_CONFIG is not present.\nsynchronised to unspecified at stratum 4\n   time correct to within 150 ms\n   polling server every 64 s\n     remote           refid      st t when poll reach   delay   offset   jitter\n===============================================================================\n*<IP>   <IP>    3 u    3   64  377   0.2086  -0.3139   0.0731\n```\nAfter test fails:\n```\nActual time: 2025-01-02 <IPV6>.520614\n\ntimedatectl:\n               Local time: Thu 2025-01-02 <IPV6> UTC\n           Universal time: Thu 2025-01-02 <IPV6> UTC\n                 RTC time: Thu 2025-01-02 <IPV6>\n                Time zone: Etc/UTC (UTC, +0000)\nSystem clock synchronized: yes\n              NTP service: n/a\n          RTC in local TZ: no\n\nshow ntp:\nMGMT_VRF_CONFIG is not present.\nsynchronised to unspecified at stratum 4\n   time correct to within 65062 ms\n   polling server every 64 s\n     remote           refid      st t when poll reach   delay   offset   jitter\n===============================================================================\n*<IP>   <IP>    3 u   47   64   17   0.2465 64907.24  88.1042\n```\n\n### Results you expected to see\nAs stated before:\n\nAny test using this reboot type should pass UNLESS this is a safeguard that DUTs shouldn't behave this way, in this case the image needs to be fixed.\n\nOn the test side:\nWe could either increase the wait_until time (will be very long), sync the datetime using `sudo ntpdate <NTP_SERVER_IP>` manually in the test after reboot, or skip this check for T2 devices\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n```shell\nN/A\n```\n\n### Output of `show version`\n\n```shell\nN/A\n```\n\n### Attach files (if any)\n\nN/A"
+  },
+  "resolution": {
+    "pr_number": 16348,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/16348",
+    "title": "Use alternate check for reboot for T2 after reboot with REBOOT_TYPE_POWEROFF",
+    "merged_at": "2025-01-15T18:48:53Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #16289\nNeeds to be merged alongside #16581\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [x] 202405\n\n### Approach\n#### What is the motivation for this PR?\nREBOOT_TYPE_POWEROFF reboot causes test failures on T2 as NTP slew doesn't recover for a while\n#### How did you do it?\nSkip dut uptime check on reboot for REBOOT_TYPE_POWEROFF reboot on T2\n#### How did you verify/test it?\nWas previously casing test_power_off_reboot.py to fail, no longer causing it to fail\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/reboot.py",
+        "additions": 16,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

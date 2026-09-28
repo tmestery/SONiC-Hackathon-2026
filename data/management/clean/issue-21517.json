@@ -1,0 +1,48 @@
+{
+  "id": "management-21517",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 21517,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/21517",
+    "title": "Bug: robust CPU-loading tests with \"yes\" on weak-per-core platforms",
+    "created_at": "2025-12-03T10:33:54Z",
+    "closed_at": "2026-03-25T17:27:13Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nPTF tests using CPU stress (yes) leak CPU hogs when DUT is slow, because cleanup does not run in pytest teardown.\n\nOn Weak-per-core platforms (for Example -- Nokia-7215/armhf) PTF tests with construction\n    for i in range(host_vcpus):   duthost.shell(\"nohup yes > /dev/null 2>&1 & sleep 1\")\nare ABORTED by timeout before achieving   duthost.shell(\"killall yes\"),\nleaving \"yes\" processes forever.\n\nMake these tests robust to keep the board/platform alive with possibility to continue test-sequence\nRequires these tests should start a watchdog protector before starting\n     duthost.shell(\"nohup yes > /dev/null 2>&1 & sleep 1\"):\n------------------------------------------------------------------\nWATCHDOG_TIMEOUT = ?????   # seconds depending upon the test\n# Start watchdog that guarantees cleanup even if test aborts\nduthost.shell(\n    \"nohup sh -c 'sleep {0}; pkill -9 yes' >/dev/null 2>&1 &\".format(WATCHDOG_TIMEOUT)\n)\n# Start CPU hog\nfor i in range(host_vcpus):\n    duthost.shell(\"nohup yes > /dev/null 2>&1 &\")\n-------------------------------------------------------------------\nTests to be expanded\ntests/pc/test_po_cleanup.py\ntests/pc/test_po_update.py\ntests/qos/test_cpu_storm.py\ntests/qos/test_buffer_storm.py\ntests/cacl/test_control_plane_acl.py\ntests/pc/test_lacp_stress.py\ntests/common/helpers/cpu_stress.py\ntests/common/helpers/storm.py\n\n### Steps to Reproduce\n\nOn Nokia-7215(armhf)-board with TRIXE-image\nrun 202511 PTF test test_po_cleanup.py.\nThe test failed upon timeout, aborted and exited before calling for the\n\n### Actual Behavior and Expected Behavior\n\nActual: test fail-and-exited but all Cores/CPU s are 100% busy\nExpected: test fail but board returns to normal CPU loading\n\n### Relevant log output\n\n```shell\n-\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22968,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22968",
+    "title": "[snmp][pc] Add watchdog for CPU stress cleanup on test abort",
+    "merged_at": "2026-03-25T17:27:11Z",
+    "description": "### Description of PR\n[agent]\nAdd a background watchdog process that kills `yes` CPU hogs after a timeout, even if the test is aborted before reaching the `finally` block.\n\nOn weak-per-core platforms (e.g. Nokia-7215/armhf), PTF tests using `yes` for CPU stress can be killed by pytest timeout before cleanup runs, leaving `yes` processes running forever and making the platform unusable for subsequent tests.\n\n**Affected tests:**\n- `tests/snmp/test_snmp_cpu.py` \u2014 watchdog timeout: 300s (5 min)\n- `tests/pc/test_po_cleanup.py` \u2014 watchdog timeout: 600s (10 min, accounts for config_reload wait)\n\nThe watchdog uses `nohup sh -c 'sleep N; pkill -9 yes'` to guarantee cleanup regardless of test outcome. The existing `finally` block still handles normal cleanup; the watchdog is a safety net for abnormal termination.\n\nFixes: #21517\n\n### Type of change\n- [x] Bug fix\n\n### How did you test it?\n```\nAST parse verification: OK (both files)\nVerified watchdog command spawns before CPU hog processes\nVerified existing finally blocks are preserved unchanged\n```",
+    "files": [
+      {
+        "path": "tests/pc/test_po_cleanup.py",
+        "additions": 15,
+        "deletions": 0
+      },
+      {
+        "path": "tests/snmp/test_snmp_cpu.py",
+        "additions": 13,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

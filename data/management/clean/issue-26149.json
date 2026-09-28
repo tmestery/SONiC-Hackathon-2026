@@ -1,0 +1,56 @@
+{
+  "id": "management-26149",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26149,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26149",
+    "title": "HFT status checks can restart a healthy SWSS container",
+    "created_at": "2026-07-14T03:18:50Z",
+    "closed_at": "2026-07-28T07:17:27Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [
+      "202511",
+      "202605"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Problem\n\nThe HFT `ensure_swss_ready` fixture treats container inspection failures as zero uptime and automatically runs `systemctl restart swss`. This conflates an unavailable/malformed status result with a stopped container and can disrupt a healthy DUT.\n\nThe original human-readable `docker ps` parser triggered this on a valid `Up About an hour` status in [Elastictest plan 6a51739b4a4c0e59051ee4aa](https://elastictest.org/scheduler/testplan/6a51739b4a4c0e59051ee4aa?searchTestCase=high&testcase=high_frequency_telemetry%2Ftest_high_frequency_telemetry.py%7C%7C%7C1&type=console). The fixture restarted SWSS at `2026-07-12 <IPV6> UTC`; syncd was stopped, the Nvidia SDK reported an ungraceful termination and SDK watchdog, and 514 ports had to be recreated.\n\nPR #23162 replaced the human-readable parser with `docker inspect`, but the fixture still has two unsafe behaviors:\n\n- It does not inspect `.State.Running`; a stopped container can be considered ready from its old `StartedAt` value.\n- Any inspect, timestamp parsing, or command failure returns uptime `0` and still restarts SWSS.\n\nThe HFT tests also disable and restore every `FLEX_COUNTER_TABLE` entry around each case. This global state churn is unnecessary for HFT validation, generates substantial SDK/syslog traffic, and can leave a field changed when its original value was empty.\n\n### Expected behavior\n\n- Read structured Docker state and explicitly require `State.Running=true`.\n- Fail test setup if the state cannot be verified; never restart SWSS as a side effect of observation.\n- Use DUT time when calculating container uptime.\n- Leave unrelated flex-counter state unchanged.\n\n### Scope\n\n- Failure type: day-one test issue.\n- Observed platform: Mellanox-SN5640-C512S2, Nvidia SPC5.\n- Observed branch/image: internal-202511 / SONiC.20251110.38.\n- 202605 contains the affected public HFT fixture and needs the fix.\n- Internal 202511 runs the affected HFT tests. Public 202511 does not currently contain these HFT files, so the fix must accompany the HFT test synchronization/backport rather than be cherry-picked independently."
+  },
+  "resolution": {
+    "pr_number": 26151,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26151",
+    "title": "[HFT] Avoid disruptive SWSS recovery in tests",
+    "merged_at": "2026-07-28T07:17:25Z",
+    "description": "### Description of PR\n\nSummary:\nMake HFT SWSS readiness checks observational and remove unnecessary global flex-counter state changes.\n\nFixes #26149\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request: #26149\nFailure type: day-one issue\n\n### Approach\n#### What is the motivation for this PR?\n\nThe HFT `ensure_swss_ready` fixture automatically restarted SWSS whenever it could not calculate container uptime. This treated an inspection or parsing error as proof that SWSS was stopped. In the linked 202511 run, a healthy `Up About an hour` container was restarted, syncd was terminated, and the Nvidia SDK emitted an SDK watchdog while all 514 ports were recreated.\n\nPR #23162 replaced the original `docker ps` text parser with `docker inspect`, but it retained the unsafe recovery behavior and did not verify `State.Running`. HFT tests also disabled every flex counter before each case even though HFT uses separate configuration tables and does not require global flex-counter state changes.\n\n#### How did you do it?\n\n- Use the existing structured `is_service_fully_started(\"swss\")` helper to require `State.Running=true`.\n- Calculate uptime entirely on the DUT, avoiding runner/DUT clock differences.\n- Fail setup when Docker state or uptime cannot be verified instead of restarting SWSS.\n- Keep the complete `disable_flex_counters` fixture implementation available for future use, but stop requesting it from the current HFT tests.\n- Make the existing module-scoped OTEL logging suppression autouse so removing the flex-counter fixture dependency does not remove that protection.\n\n#### How did you verify/test it?\n\n- `pre-commit run --files tests/high_frequency_telemetry/conftest.py tests/high_frequency_telemetry/test_high_frequency_telemetry.py tests/high_frequency_telemetry/test_hft_end_to_end.py`\n- `python3 -m compileall -q tests/high_frequency_telemetry`\n- `python3 -m flake8 --select=F,E999` on the three changed files\n- `git diff --check`\n- Validated the parser against live `docker inspect swss` JSON from the affected Mellanox-SN5640 DUT; it reported `State.Running=true` and a positive stable uptime without changing DUT state.\n\nFull pytest collection was not run on the development host because that host Python environment does not provide pytest. No DUT test was triggered to avoid changing the shared testbed during this fix.\n\n#### Any platform specific information?\n\nThe failure was observed on Mellanox-SN5640-C512S2 (Nvidia SPC5), but the fixture is platform-independent.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/high_frequency_telemetry/conftest.py",
+        "additions": 9,
+        "deletions": 30
+      },
+      {
+        "path": "tests/high_frequency_telemetry/test_hft_end_to_end.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/high_frequency_telemetry/test_high_frequency_telemetry.py",
+        "additions": 10,
+        "deletions": 10
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

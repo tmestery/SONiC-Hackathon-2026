@@ -1,0 +1,79 @@
+{
+  "number": 25523,
+  "title": "test_nbr_health/test_neighbors_health: cSONiC neighbors classified as unknown (CsonicHost not recognized)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25523",
+  "createdAt": "2026-06-21T06:59:41Z",
+  "closedAt": "2026-09-15T11:03:51Z",
+  "author": "securely1g",
+  "labels": [
+    "KVM Testing :test_tube:",
+    "Test gap",
+    "Triaged",
+    "bug",
+    "csonic"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Summary\n\nThe neighbor-health check in `tests/test_nbr_health.py` / `test_neighbors_health` dispatches only on `EosHost`/`SonicHost`. A `CsonicHost` is neither, so it falls through and the cSONiC neighbors are reported as unknown/unhealthy.\n\n## Topology/Testbed\n\n- **Topology:** t0\n- **Testbed:** vms-kvm-t0-csonic\n- **Neighbors:** cSONiC (docker-sonic-vs) neighbors\n\n## Symptom/Error\n\nNeighbor health dispatch only handles `EosHost`/`SonicHost`; `CsonicHost` falls through \u2192 neighbors reported unknown/unhealthy.\n\n## Root cause\n\nThe neighbor-health check dispatches on `EosHost`/`SonicHost` only; `CsonicHost` is neither, so it is not recognized.\n\n## Proposed fix\n\nAdd `CsonicHost` handling to the neighbor health check (treat like SONiC: check bgp/teamd/container health via the `CsonicHost` shell interface).\n\nFound via cSONiC PR-CI parity validation (full t0 run 2026-06-18).\n",
+  "comments": [
+    {
+      "author": "securely1g",
+      "createdAt": "2026-06-21T23:28:17Z",
+      "body": "### Identified \u2014 draft fix (not yet verified)\n\n**Root cause:** the neighbor health-check dispatch does not recognize `CsonicHost`, so cSONiC neighbors are classified as `unknown` and their BGP facts are never gathered.\n\n**Draft fix:** add a `CsonicHost` branch (a `check_csonic_bgp_facts` helper) so neighbor BGP facts are collected through the cSONiC path.\n\n**Status:** drafted and compiles, but **not yet run** on the testbed. Will update once verified on the live cSONiC testbed.\n"
+    },
+    {
+      "author": "yyynini",
+      "createdAt": "2026-09-15T10:57:48Z",
+      "body": "### Closure recommendation and implementation evidence\n\n**Recommendation: close this test gap as implemented.** The original failure was that `CsonicHost` was not recognized by the neighbor-health dispatch, so cSONiC neighbors were reported as unknown/unhealthy.\n\n**Implementation evidence**\n- [PR #26144](https://github.com/sonic-net/sonic-mgmt/pull/26144), merged **2026-08-28**, adds the explicit `CsonicHost` branch and routes it through the existing `check_sonic_bgp_facts` helper.\n- [Reviewed source: cSONiC dispatch and final failure assertion](https://github.com/sonic-net/sonic-mgmt/blob/21ee7658f262f94760ec3a5a14b90a380ccb85e5/tests/test_nbr_health.py#L149-L166).\n- [Reviewed source: BGP-summary health check](https://github.com/sonic-net/sonic-mgmt/blob/21ee7658f262f94760ec3a5a14b90a380ccb85e5/tests/test_nbr_health.py#L90-L98).\n- The PR reports a live docker-sonic-vs run in which the new branch passed for the cSONiC neighbors that previously failed as unknown. The reviewer concern about the guarded import was resolved with a plain import before approval.\n\nThis addresses the core recognition/health-check integration requested here. The existing EOS and SonicHost branches remain unchanged. Management-IP/SNMP checks are intentionally not applied to docker-exec cSONiC neighbors; this does not claim new exhaustive teamd/container-health coverage.\n\nThis review checked the merged implementation and current source; it did not perform a new physical-testbed run. **This comment records the closure rationale only; the issue is being left open at this step.**\n\n<!-- core-closure-review-2026-09-15-25523 -->"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25540,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25540",
+      "title": "[test_nbr_health] Recognize CsonicHost neighbors in health check",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-06-22T05:27:57Z",
+      "author": "securely1g",
+      "body": "#### Why I did it\n\n`tests/test_nbr_health.py::test_neighbors_health` dispatches neighbor health checks only on `EosHost` and `SonicHost`:\n\n```python\nif isinstance(nbrhost, EosHost):\n    ...\nelif isinstance(nbrhost, SonicHost):\n    ...\nelse:\n    failmsg = \"neighbor type {} is unknown\".format(k)\n    fails.append(failmsg)\n```\n\nA cSONiC (`docker-sonic-vs`) neighbor is a `CsonicHost`, which extends `NeighborDevice` and is **not** a `SonicHost` subclass. So on a `vms-kvm-t0-csonic` testbed every cSONiC neighbor falls through to the `else` branch and the test fails with \"neighbor type ... is unknown\", even when the neighbor is perfectly healthy.\n\nFixes #25523.\n\n#### How I did it\n\nAdded a `CsonicHost` branch before the `SonicHost` branch. cSONiC neighbors are reached via `docker exec` (no SSH/SNMP mgmt path), so the new `check_csonic_health()`:\n- verifies the container is reachable through the `CsonicHost` shell interface, and\n- reuses `check_sonic_bgp_facts()` to confirm BGP is up via `vtysh -c \"show ip bgp sum\"`.\n\nThe SNMP and mgmt-facts checks used for EOS/SONiC are intentionally not run for cSONiC, because those neighbors have no SNMP/mgmt-IP surface.\n\n#### How to verify it\n\nRun on a `vms-kvm-t0-csonic` testbed:\n```\npytest tests/test_nbr_health.py::test_neighbors_health\n```\n\nManual verification of the health logic against a live testbed (4 cSONiC neighbors) \u2014 each returns healthy where it previously reported \"unknown\":\n```\ncsonic_vms6-1_VM0100: HEALTHY\ncsonic_vms6-1_VM0101: HEALTHY\ncsonic_vms6-1_VM0102: HEALTHY\ncsonic_vms6-1_VM0103: HEALTHY\n```\n\n#### Description for the changelog\n\nRecognize cSONiC (`docker-sonic-vs`) neighbors in `test_neighbors_health` by adding a `CsonicHost` branch that checks container reachability and BGP health, instead of reporting them as an unknown neighbor type.\n",
+      "files": [
+        {
+          "path": "tests/test_nbr_health.py",
+          "additions": 23,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-22T05:28:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-22T05:28:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "securely1g",
+          "createdAt": "2026-06-22T08:44:41Z",
+          "body": "CI triage (automated):\n\nThe \\`impacted-area-kvmtest-t1-lag\\` Elastictest leg failed on \\`autorestart/test_container_autorestart.py\\` (2 cases, \\`RUN_TEST_CASE_FAILED\\`), which halted the rest of the plan (\\`stop_on_failure=True\\`). Test plan: 6a38cb17f98539cb1462b29d (buildId 1145463).\n\nThis module is unrelated to this PR (which only touches \\`tests/test_nbr_health.py\\` for CsonicHost neighbor recognition). All other legs passed (dpu, dualtor, t0, t0-2vlans, t0-sonic, t1-lag-vpp, multi-asic-t1, t2). Classifying as flaky/infra in an unrelated test; retriggering.\n\n/azpw retry"
+        },
+        {
+          "author": "securely1g",
+          "createdAt": "2026-06-22T09:44:26Z",
+          "body": "CI triage (automated, follow-up): The previous `/azpw retry` (08:44Z) did not appear to queue a new Azure build after ~1h. Re-triggering. Recap: only the `impacted-area-kvmtest-t1-lag` leg failed (buildId 1145463), on `autorestart/test_container_autorestart.py` (2 cases, `RUN_TEST_CASE_FAILED`), which halted the plan via `stop_on_failure=True`. This PR only modifies `tests/test_nbr_health.py` (CsonicHost neighbor recognition) \u2014 the autorestart container test is unrelated. All other legs passed (dpu, dualtor, t0, t0-2vlans, t0-sonic, t1-lag-vpp, multi-asic-t1, t2). Classifying as flaky/infra.\n\n/azpw retry"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-07-08T16:00:29Z",
+          "body": "@yejianquan can you take a look at this one please?"
+        }
+      ]
+    }
+  ]
+}

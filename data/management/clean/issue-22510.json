@@ -1,0 +1,43 @@
+{
+  "id": "management-22510",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22510,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22510",
+    "title": "[Bug] test_retry_count.py failure in KVM CI due to PORT_PHY_ATTR ERR logs",
+    "created_at": "2026-02-20T18:57:50Z",
+    "closed_at": "2026-02-21T00:15:19Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": null,
+    "platform": "vs/kvm",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nVS/KVM\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`tests/pc/test_retry_count.py::test_retry_count` is failing in KVM CI test runs. The failure is triggered by ERR-level syslog messages from orchagent's new PORT_PHY_ATTR flex counter feature (sonic-swss#3957, sonic-swss#4017):\n\n```\nERR swss#orchagent: :- verifyPortSupportsAllPhyAttr: PORT_PHY_ATTR: Port Ethernet0 does not support RX_SIGNAL_DETECT attribute (status=-15)\nERR swss#orchagent: :- verifyPortSupportsAllPhyAttr: PORT_PHY_ATTR: Port Ethernet1 does not support RX_SIGNAL_DETECT attribute (status=-15)\n```\n\nThe VS SAI doesn't implement PHY attributes (`RX_SIGNAL_DETECT`, `FEC_ALIGNMENT_LOCK`, `RX_SNR`), so every port triggers this ERR log. The log analyzer picks these up as unexpected errors, causing test failures.\n\n### Steps to Reproduce\n\nRun `tests/pc/test_retry_count.py` on a VS/KVM testbed after sonic-swss submodule includes #3957/#4017.\n\n### Elastictest Reference\n\n- Test plan: https://elastictest.org/scheduler/testplan/6997eef5184b36a9b4fb45b6?testcase=pc%2Ftest_retry_count.py%7C%7C%7C2&type=console\n- PR triggering the failure: sonic-net/sonic-buildimage#25552 (unrelated change \u2014 build hooks fix)\n\n### Related Issues\n\n- sonic-net/sonic-swss#4242 \u2014 Root cause: orchagent logs ERR for unsupported PHY attributes on VS\n- #19400 \u2014 Pre-existing test_retry_count setup fixture issue (may be related or compounding)\n\n### Suggested Fix\n\nShort-term: Add `verifyPortSupportsAllPhyAttr` ERR messages to the log analyzer's expected errors list for VS/KVM platforms.\n\nLong-term: Fix in sonic-swss to downgrade the log level from ERR to WARNING/INFO when SAI returns `SAI_STATUS_NOT_SUPPORTED` (tracked in sonic-swss#4242)."
+  },
+  "resolution": {
+    "pr_number": 22511,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22511",
+    "title": "[loganalyzer] Ignore PORT_PHY_ATTR ERR on VS/KVM platforms (fixes #22510)",
+    "merged_at": "2026-02-21T00:15:18Z",
+    "description": "## What\nAdd `verifyPortSupportsAllPhyAttr` ERR pattern to `loganalyzer_common_ignore.txt`.\n\n## Why\nVS SAI does not implement PHY attributes (`RX_SIGNAL_DETECT`, `FEC_ALIGNMENT_LOCK`, `RX_SNR`), so orchagent logs ERR for every port after sonic-swss#3957/#4017. The log analyzer picks these up as unexpected errors, causing test failures (e.g., `test_retry_count`).\n\n## How\nSingle regex in the common ignore list:\n```\nr, \".*ERR swss#orchagent.*verifyPortSupportsAllPhyAttr.*PORT_PHY_ATTR.*does not support.*attribute.*\"\n```\n\n## Long-term fix\nTracked in sonic-net/sonic-swss#4242 \u2014 downgrade the log level from ERR to WARNING/INFO when SAI returns `SAI_STATUS_NOT_SUPPORTED`.\n\nFixes #22510",
+    "files": [
+      {
+        "path": "tests/common/plugins/loganalyzer/__init__.py",
+        "additions": 20,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

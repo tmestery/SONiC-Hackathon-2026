@@ -1,0 +1,73 @@
+{
+  "number": 16270,
+  "title": "[Snappi]: Replace the dut.shell with dut.command for clear_counter function in common_helpers.py file.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16270",
+  "createdAt": "2024-12-31T18:31:10Z",
+  "closedAt": "2025-01-16T02:52:30Z",
+  "author": "amitpawar12",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\n\nFunction clear_counter has dut.shell used to clear the counters. The shell, however, has in-built sudo usage, and hence needs to be replaced with dut.command to ensure counters with and without sudo are cleared.\r\n\n\n### Results you see\n\nThe SUDO counters are cleared using this function. Needs to be replaced with dut.command.\n\n### Results you expected to see\n\nThe normal counters (without sudo) and sudo counters needs to be cleared. Right now, only sudo counters are getting cleared.\r\n\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2025-01-08T16:16:41Z",
+      "body": "@sdszhang @developfast for viz.\r\n\r\n@yejianquan @wangxin @StormLiangMS  can we prevent these scenarios from infrastructure unit tests?\r\n"
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2025-01-08T16:19:18Z",
+      "body": "@prsunny @qiluo-msft I am feeling that there might be a gap between the design and test infrastructure. How do we find a way to close/prevent such gap going forward?"
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2025-01-08T19:33:31Z",
+      "body": "@amitpawar12 Could you explain more details about \"The normal counters (without sudo) and sudo counters needs to be cleared\". Are you able to reproduce the difference by 2 commands on sonic directly? not by any sonic-mgmt testcase."
+    },
+    {
+      "author": "sdszhang",
+      "createdAt": "2025-01-14T06:23:12Z",
+      "body": "@amitpawar12  @qiluo-msft looks like these counters are per-user based.  'sonic-clear counters' will only clear the counter for current user:\r\n\r\nInitial output:\r\n```\r\nadmin@sonic:$ show interface count -i Ethernet480\r\n      IFACE    STATE        RX_OK    RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR          TX_OK     TX_BPS    TX_UTIL    TX_ERR         TX_DRP    TX_OVR\r\n-----------  -------  -----------  --------  ---------  --------  --------  --------  -------------  ---------  ---------  --------  -------------  --------\r\nEthernet480        U  771,861,837  0.00 B/s      0.00%         0         0         0  6,966,040,621  13.01 B/s      0.00%         0  4,057,099,397         0\r\nadmin@sonic:~$ sudo show interface count -i Ethernet480\r\n      IFACE    STATE        RX_OK    RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR          TX_OK     TX_BPS    TX_UTIL    TX_ERR         TX_DRP    TX_OVR\r\n-----------  -------  -----------  --------  ---------  --------  --------  --------  -------------  ---------  ---------  --------  -------------  --------\r\nEthernet480        U  771,861,837  0.00 B/s      0.00%         0         0         0  6,966,040,622  12.35 B/s      0.00%         0  4,057,099,397         0\r\n```\r\n\r\nsonic-clear as `admin`  user. \r\ncounter stays same for sudo commands after `sonic-clear`\r\n```\r\nadmin@sonic:~$ sonic-clear count\r\nCleared counters\r\n\r\nadmin@sonic:~$ show interface count -i Ethernet480\r\nLast cached time was 2025-01-14T06:11:50.691572\r\n      IFACE    STATE    RX_OK     RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR    TX_OK     TX_BPS    TX_UTIL    TX_ERR    TX_DRP    TX_OVR\r\n-----------  -------  -------  ---------  ---------  --------  --------  --------  -------  ---------  ---------  --------  --------  --------\r\nEthernet480        U        1  21.96 B/s      0.00%         0         0         0        1  31.82 B/s      0.00%         0         0         0\r\nadmin@sonic:~$ sudo show interface count -i Ethernet480\r\n      IFACE    STATE        RX_OK     RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR          TX_OK      TX_BPS    TX_UTIL    TX_ERR         TX_DRP    TX_OVR\r\n-----------  -------  -----------  ---------  ---------  --------  --------  --------  -------------  ----------  ---------  --------  -------------  --------\r\nEthernet480        U  771,861,840  41.59 B/s      0.00%         0         0         0  6,966,040,656  510.26 B/s      0.00%         0  4,057,099,397         0\r\n```\r\nsudo sonic-clear as `root`  user\r\n```\r\nadmin@sonic:~$ sudo sonic-clear count\r\nCleared counters\r\n\r\nadmin@sonic:~$ sudo show interface count -i Ethernet480\r\nLast cached time was 2025-01-14T06:12:28.917031\r\n      IFACE    STATE    RX_OK    RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR    TX_OK     TX_BPS    TX_UTIL    TX_ERR    TX_DRP    TX_OVR\r\n-----------  -------  -------  --------  ---------  --------  --------  --------  -------  ---------  ---------  --------  --------  --------\r\nEthernet480        U        0  1.26 B/s      0.00%         0         0         0        0  16.45 B/s      0.00%         0         0         0\r\nadmin@sonic:~$ \r\n```\r\n\r\nCounter stays the same if switching to another user.\r\n```\r\nadmin@sonic:~$ sudo su test_louser\r\n$ show interface count -i Ethernet480\r\n      IFACE    STATE        RX_OK    RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR          TX_OK    TX_BPS    TX_UTIL    TX_ERR         TX_DRP    TX_OVR\r\n-----------  -------  -----------  --------  ---------  --------  --------  --------  -------------  --------  ---------  --------  -------------  --------\r\nEthernet480        U  771,861,855  0.00 B/s      0.00%         0         0         0  6,966,040,860  0.81 B/s      0.00%         0  4,057,099,397         0\r\n$ exit\r\nadmin@sonic:~$ \r\n```\r\n\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16272,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16272",
+      "title": "[Snappi] Replacing dut.shell with dut.command for clearing counters in snappi clear_counter function",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-16T02:52:28Z",
+      "createdAt": "2024-12-31T19:54:39Z",
+      "author": "amitpawar12",
+      "body": "\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\nThe clear_counter function in tests/common/snappi_tests/common_helper.py used dut.shell to clear the sonic counters.\r\n\r\nHowever, the dut.shell inherently uses sudo, thus sonic clear counters in non-sudo mode were not getting cleared.\r\n\r\nReplacing dut.shell with dut.command to ensure that sonic-clear counters works in both SUDO and non-SUDO mode.\r\n\r\nSummary:\r\nFixes #16270 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [X] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [X] 202405\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nReplacing dut.shell with dut.command to clear the counters in both SUDO and non-SUDO mode.\r\n\r\n#### How did you do it?\r\nReplaced dut.shell with dut.command.\r\n\r\n#### How did you verify/test it?\r\nLocal clone.\r\n\r\n```\r\nAzDevOps@68684a43ec9e:/data/tests$ date;python3 -m pytest --inventory ../ansible/ixia-sonic --host-pattern ixre-egl-board71,ixre-egl-board72 --testbed ixre-chassis17-t2 --testbed_file ../ansible/testbed.csv --log-cli-level info --log-file-level info --kube_master unset --showlocals -ra --show-capture stdout --junit-xml=/tmp/test.xml --skip_sanity --log-file=/tmp/test.log  --topology multidut-tgen --cache-clear --disable_loganalyzer snappi_tests/pfc/test_pfc_no_congestion_throughput.py -k test_multiple_prio_diff_dist\r\nsnappi_tests/pfc/test_pfc_no_congestion_throughput.py::test_multiple_prio_diff_dist[multidut_port_info0-port_map0] \r\n19:31:48 test_pfc_no_congestion_throughput.test_m L0096 INFO   | Running test for testbed subtype: multi-dut-single-asic\r\n19:31:51 snappi_fixtures.__intf_config_multidut   L0933 INFO   | Configuring Dut: ixre-egl-board71 with port Ethernet0 with IP 20.10.1.2/31\r\n19:31:52 snappi_fixtures.__intf_config_multidut   L0933 INFO   | Configuring Dut: ixre-egl-board72 with port Ethernet0 with IP 20.10.1.0/31\r\n19:31:53 test_pfc_no_congestion_throughput.test_m L0129 INFO   | Selected lossless :[3, 4] and lossy priorities:[0, 2, 1] for the test\r\n19:31:53 snappi_fixtures.clear_fabric_counters    L1504 INFO   | Clearing fabric counters for DUT:ixre-egl-board71\r\n19:31:56 snappi_fixtures.clear_fabric_counters    L1504 INFO   | Clearing fabric counters for DUT:ixre-egl-board72\r\n19:33:23 traffic_generation.run_traffic_and_colle L1026 INFO   | Clearing PFC, dropcounters, queuecounters and stats\r\nPASSED                                                                                                                                                                                                          [ 33%]\r\nsnappi_tests/pfc/test_pfc_no_congestion_throughput.py::test_multiple_prio_diff_dist[multidut_port_info1-port_map0] \r\n19:40:41 test_pfc_no_congestion_throughput.test_m L0096 INFO   | Running test for testbed subtype: single-dut-multi-asic\r\n19:40:44 snappi_fixtures.__intf_config_multidut   L0933 INFO   | Configuring Dut: ixre-egl-board71 with port Ethernet8 with IP 20.10.1.0/31\r\n19:40:46 snappi_fixtures.__intf_config_multidut   L0933 INFO   | Configuring Dut: ixre-egl-board71 with port Ethernet152 with IP 20.10.1.2/31\r\n19:40:47 test_pfc_no_congestion_throughput.test_m L0129 INFO   | Selected lossless :[3, 4] and lossy priorities:[6, 1, 5] for the test\r\n19:40:47 snappi_fixtures.clear_fabric_counters    L1504 INFO   | Clearing fabric counters for DUT:ixre-egl-board71\r\n19:40:49 snappi_fixtures.clear_fabric_counters    L1504 INFO   | Clearing fabric counters for DUT:ixre-egl-board72\r\n19:42:00 traffic_generation.run_traffic_and_colle L1026 INFO   | Clearing PFC, dropcounters, queuecounters and stats\r\nPASSED                                                                                                                                                                                                          [ 66%]\r\nsnappi_tests/pfc/test_pfc_no_congestion_throughput.py::test_multiple_prio_diff_dist[multidut_port_info2-port_map0] \r\n19:49:13 test_pfc_no_congestion_throughput.test_m L0096 INFO   | Running test for testbed subtype: single-dut-single-asic\r\n19:49:16 snappi_fixtures.__intf_config_multidut   L0933 INFO   | Configuring Dut: ixre-egl-board72 with port Ethernet8 with IP 20.10.1.0/31\r\n19:49:18 snappi_fixtures.__intf_config_multidut   L0933 INFO   | Configuring Dut: ixre-egl-board72 with port Ethernet16 with IP 20.10.1.2/31\r\n19:49:19 test_pfc_no_congestion_throughput.test_m L0129 INFO   | Selected lossless :[3, 4] and lossy priorities:[2, 6, 0] for the test\r\n19:49:19 snappi_fixtures.clear_fabric_counters    L1504 INFO   | Clearing fabric counters for DUT:ixre-egl-board71\r\n19:49:21 snappi_fixtures.clear_fabric_counters    L1504 INFO   | Clearing fabric counters for DUT:ixre-egl-board72\r\n19:50:32 traffic_generation.run_traffic_and_colle L1026 INFO   | Clearing PFC, dropcounters, queuecounters and stats\r\nPASSED                                                                                                                                                                                                          [100%]\r\n```\r\n\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/common_helpers.py",
+          "additions": 10,
+          "deletions": 10
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-31T19:54:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-12-31T19:54:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-16T03:13:59Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-mgmt/pull/16543"
+        }
+      ]
+    }
+  ]
+}

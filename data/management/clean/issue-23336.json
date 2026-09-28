@@ -1,0 +1,43 @@
+{
+  "id": "management-23336",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 23336,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/23336",
+    "title": "Bug: test_bgp_update_timer.py fails due to TSA maintenance mode",
+    "created_at": "2026-03-26T03:22:39Z",
+    "closed_at": "2026-04-04T16:09:20Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\ntest_bgp_update_timer.py teardown calls config_reload, which restarts swss. If the platform is enabled with startup_tsa_tsb.service in services.conf, swss.sh restarts this service on every non-warm-boot, putting the DUT into TSA maintenance mode with a 15-minute TSB timer. That causes the tests that run before the timer fires to fail because PfxSnt: 1 (only loopback advertised).\n\n### Steps to Reproduce\n\ntest_bgp_update_timer.py run in 202511 on NH-5010 or similar platforms where TSA is enabled via startup-tsa-tsb.conf and services.conf in the /usr/share/sonic/platform directory.\n\n### Actual Behavior and Expected Behavior\n\nThe test passes when TSA maintenance mode doesn't kick in during the test's config reload.\n\n### Relevant log output\n\n```shell\ndef test_bgp_update_timer_single_route(\n        common_setup_teardown,\n        constants,\n        duthosts,\n        enum_rand_one_per_hwsku_frontend_hostname,\n        request,\n        toggle_all_simulator_ports_to_enum_rand_one_per_hwsku_frontend_host_m,  # noqa:F811\n        validate_active_active_dualtor_setup,  # noqa:F811\n        tbinfo\n    ):\n        duthost = duthosts[enum_rand_one_per_hwsku_frontend_hostname]\n        is_v6_topo = is_ipv6_only_topology(tbinfo)\n\n        (n0, n1), _ = common_setup_teardown\n        try:\n            n0.start_session()\n            n1.start_session()\n\n            # ensure new sessions are ready\n            if not wait_until(\n                WAIT_TIMEOUT,\n                5,\n                20,\n                lambda: is_neighbor_sessions_established(duthost, (n0, n1)),\n            ):\n                pytest.fail(\"Could not establish bgp sessions\")\n\n            announce_intervals = []\n            withdraw_intervals = []\n            for i, route in enumerate(constants.routes):\n                bgp_pcap = BGP_LOG_TMPL % i\n                with capture_bgp_packages_to_file(duthost, \"any\", bgp_pcap, n0.namespace):\n                    n0.announce_route(route)\n                    time.sleep(constants.sleep_interval)\n                    duthost.shell(\n                        \"vtysh -c 'show {} neighbors {} received-routes' | grep '{}'\".format(\n                            \"bgp ipv6\" if is_v6_topo else \"ip bgp\", n0.ip, route[\"prefix\"]\n                        ),\n                        module_ignore_errors=True,\n                    )\n                    duthost.shell(\n                        \"vtysh -c 'show {} neighbors {} advertised-routes' | grep '{}'\".format(\n                            \"bgp ipv6\" if is_v6_topo else \"ip bgp\", n1.ip, route[\"prefix\"]\n                        ),\n                        module_ignore_errors=True,\n                    )\n                    n0.withdraw_route(route)\n                    duthost.shell(\n                        \"vtysh -c 'show {} neighbors {} received-routes' | grep '{}'\".format(\n                            \"bgp ipv6\" if is_v6_topo else \"ip bgp\", n0.ip, route[\"prefix\"]\n                        ),\n                        module_ignore_errors=True,\n                    )\n                    duthost.shell(\n                        \"vtysh -c 'show {} neighbors {} advertised-routes' | grep '{}'\".format(\n                            \"bgp ipv6\" if is_v6_topo else \"ip bgp\", n1.ip, route[\"prefix\"]\n                        ),\n                        module_ignore_errors=True,\n                    )\n                    time.sleep(constants.sleep_interval)\n\n                local_pcap_filename = fetch_and_delete_pcap_file(bgp_pcap, constants.log_dir, duthost, request)\n                bgp_updates = bgp_update_packets(local_pcap_filename, is_v6_topo)\n\n                announce_from_n0_to_dut = []\n                announce_from_dut_to_n1 = []\n                withdraw_from_n0_to_dut = []\n                withdraw_from_dut_to_n1 = []\n                for bgp_update in bgp_updates:\n                    if match_bgp_update(bgp_update, n0.ip, n0.peer_ip, \"announce\", route, is_v6_topo):\n                        announce_from_n0_to_dut.append(bgp_update)\n                        continue\n                    if match_bgp_update(bgp_update, n1.peer_ip, n1.ip, \"announce\", route, is_v6_topo):\n                        announce_from_dut_to_n1.append(bgp_update)\n                        continue\n                    if match_bgp_update(bgp_update, n0.ip, n0.peer_ip, \"withdraw\", route, is_v6_topo):\n                        withdraw_from_n0_to_dut.append(bgp_update)\n                        continue\n                    if match_bgp_update(bgp_update, n1.peer_ip, n1.ip, \"withdraw\", route, is_v6_topo):\n                        withdraw_from_dut_to_n1.append(bgp_update)\n\n                err_msg = \"no bgp update %s route %s from %s to %s\"\n                no_update = False\n                if not announce_from_n0_to_dut:\n                    err_msg %= (\"announce\", route, n0.ip, n0.peer_ip)\n                    no_update = True\n                elif not announce_from_dut_to_n1:\n                    err_msg %= (\"announce\", route, n1.peer_ip, n1.ip)\n                    no_update = True\n                elif not withdraw_from_n0_to_dut:\n                    err_msg %= (\"withdraw\", route, n0.ip, n0.peer_ip)\n                    no_update = True\n                elif not withdraw_from_dut_to_n1:\n                    err_msg %= (\"withdraw\", route, n1.peer_ip, n1.ip)\n                    no_update = True\n                if no_update:\n>                   pytest.fail(err_msg)\nE                   Failed: no bgp update announce route {'prefix': '<IP>/27', 'nexthop': '<IP>'} from <IP> to <IP>\n\n_          = False\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 23350,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/23350",
+    "title": "[bgp] Clear TSA maintenance mode after config reload in test_bgp_update_timer",
+    "merged_at": "2026-04-04T16:09:19Z",
+    "description": "## Description\nOn platforms with `startup_tsa_tsb` service enabled in `services.conf`, `config_reload` (from `setup_interfaces`) restarts swss which triggers TSA maintenance mode with a 15-minute TSB timer. Tests running before the timer fires fail because the DUT only advertises its loopback route (PfxSnt: 1).\n\n### Fix\nCheck for TSA maintenance mode in `common_setup_teardown` before yielding to tests, and run `TSB` to clear it if active. Uses `TSC` to check current maintenance state.\n\n### Changes\n- `tests/bgp/test_bgp_update_timer.py`: Add TSA check/clear in `common_setup_teardown` fixture setup\n\nFixes: #23336",
+    "files": [
+      {
+        "path": "tests/bgp/test_bgp_update_timer.py",
+        "additions": 15,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

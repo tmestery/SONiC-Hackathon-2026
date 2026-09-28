@@ -1,0 +1,56 @@
+{
+  "id": "management-24738",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24738,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24738",
+    "title": "[test/qos] Validate pg_drop and port_buffer_drop counter support on Broadcom and Mellanox platforms",
+    "created_at": "2026-05-20T04:45:09Z",
+    "closed_at": "2026-06-03T11:58:07Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "enhancement",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Background\n\nThe ingress drop probe now supports 3-level counter fallback:\n- Level 1: pg_drop (PG drop counter, most precise)\n- Level 2: port_buffer_drop (Port buffer drop counter)\n- Level 3: port_drop (Port ingress drop counter, includes noise)\n\nCurrently only Cisco-8000 is configured to use pg_drop (verified on physical testbed vms28-t1-8102-02).\n\n## Action needed\n\nValidate whether Broadcom and Mellanox platforms support:\n1. sai_thrift_read_pg_drop_counters (pg_drop mode)\n2. INGRESS_PORT_BUFFER_DROP counter accuracy (port_buffer_drop mode)\n\nOnce validated, update test_qos_probe.py to set the appropriate ingress_drop_counter_mode for each platform."
+  },
+  "resolution": {
+    "pr_number": 25066,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25066",
+    "title": "[mmu probing] pr20.fix: Fix positional arg and lossy_queue fallback bugs for Mellanox",
+    "merged_at": "2026-06-04T10:38:43Z",
+    "description": "### Description of PR\n\nSummary:\nFix two probe bugs affecting Mellanox platforms:\n\n1. **HeadroomPoolProbe positional arg bug**: `updateTestPortIdIp()` was called with `qosConfig[\"hdrm_pool_size\"]` as the 3rd positional argument, which binds to `portSpeedCableLength` instead of `qosParams`. Fixed by using the keyword argument `qosParams=qosConfig[\"hdrm_pool_size\"]`.\n\n2. **EgressDropProbe lossy_queue fallback**: On Mellanox, `lossy_queue_1` is defined at the `dutQosConfig[\"param\"]` level (sibling of the `\"profile\"` key in `qos_params.mellanox.yaml`), not inside the per-speed sub-dict. The probe skipped with \"lossy_queue_1 is not defined\" instead of falling back. Added a 2-level lookup matching legacy `testQosSaiLossyQueue` behavior (`test_qos_sai.py` L1213-1216).\n\nFixes https://github.com/sonic-net/sonic-mgmt/issues/24738\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\n### Approach\n#### What is the motivation for this PR?\n\n**Bug 1 \u2014 positional arg**: `updateTestPortIdIp(self, dutConfig, get_src_dst_asic_and_duts, portSpeedCableLength=None, qosParams=None)` has two optional keyword parameters. The HeadroomPoolProbe call site passed `qosConfig[\"hdrm_pool_size\"]` positionally as the 3rd arg, so it was silently assigned to `portSpeedCableLength` instead of `qosParams`. This caused incorrect port-ID resolution during headroom pool probing.\n\n**Bug 2 \u2014 lossy fallback**: On Mellanox platforms, the QoS YAML structure places `lossy_queue_1` at the `dutQosConfig[\"param\"]` level rather than inside the per-speed-cable-length sub-dict (e.g., `param[\"100000_3m\"]`). The EgressDropProbe only checked the speed sub-dict and would `pytest.skip` instead of probing. The legacy `testQosSaiLossyQueue` test already handles this with a fallback (`test_qos_sai.py` L1213-1216).\n\n#### How did you do it?\n\n1. Changed line 510: `self.updateTestPortIdIp(dutConfig, get_src_dst_asic_and_duts, qosConfig[\"hdrm_pool_size\"])` \u2192 `self.updateTestPortIdIp(dutConfig, get_src_dst_asic_and_duts, qosParams=qosConfig[\"hdrm_pool_size\"])`\n\n2. Added fallback at line 332-338: if `lossyProfile` is not in the speed-specific `qosConfig`, retry lookup at `dutQosConfig[\"param\"]` level before skipping.\n\n3. Added 13 unit tests in `test_probe_bugfixes.py` covering:\n   - Positional arg: verifies buggy vs fixed call binding behavior\n   - Lossy fallback: Broadcom direct lookup, Mellanox fallback, missing-skip, precedence, edge cases\n\n#### How did you verify/test it?\n\n1. **New Unit Tests**: 13 tests all pass\n2. **Existing UT regression**: 496 passed (1 pre-existing failure \u2014 Unicode `\u2713` char on Windows, unrelated)\n3. **Existing IT regression**: 99 passed (no regression)\n\n#### Any platform specific information?\n\n- **Mellanox SPC1/SPC3**: Both bugs affect Mellanox platforms. The lossy fallback is specifically needed because Mellanox YAML places `lossy_queue_1` at the param level.\n- **Broadcom/Cisco-8000**: No impact \u2014 these platforms define lossy profiles in the speed sub-dict.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 bug fix for existing probe tests. Works on any topology that runs QoS probe tests (t0, t1).\n\n### Documentation\n\nNo documentation changes needed.",
+    "files": [
+      {
+        "path": "tests/qos/test_qos_probe.py",
+        "additions": 7,
+        "deletions": 2
+      },
+      {
+        "path": "tests/saitests/mock/ut/test_probe_bugfixes.py",
+        "additions": 219,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 25064,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25064",
+      "title": "[mmu probing] pr19.fix: Enable pg_drop counter mode for Mellanox IngressDrop probing",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

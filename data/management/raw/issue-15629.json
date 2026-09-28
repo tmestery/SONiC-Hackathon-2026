@@ -1,0 +1,51 @@
+{
+  "number": 15629,
+  "title": "[Bug][T2]: `gnmi/test_gnmi_configdb.py` fails on modular systems if supervisor is selected `duthost`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/15629",
+  "createdAt": "2024-11-19T23:00:05Z",
+  "closedAt": "2024-12-14T04:45:16Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "arista-nwolfe"
+  ],
+  "milestone": null,
+  "body": "### Issue Description\r\n\r\n`gnmi/test_gnmi_configdb.py` has a couple of tests which rely on ports existing on the `duthost`\r\nTEST1 - `test_gnmi_configdb_incremental_01`\r\n```\r\n  File \"/data/tests/gnmi/test_gnmi_configdb.py\", line 57, in test_gnmi_configdb_incremental_01\r\n    assert interface is not None, \"Invalid interface\"\r\nAssertionError: Invalid interface\r\n```\r\nIt's fetching the interface from `CONFIG_DB` of the `duthost`:\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/gnmi/test_gnmi_configdb.py#L48\r\n```\r\ndef get_interface_status(duthost, field, interface='Ethernet0'):\r\n    cmds = 'sonic-db-cli CONFIG_DB hget \"PORT|{}\" {}'.format(interface, field)\r\n```\r\n\r\nTEST2 - `test_gnmi_configdb_full_01`\r\n```\r\n  File \"/data/tests/gnmi/test_gnmi_configdb.py\", line 117, in test_gnmi_configdb_full_01\r\n    assert \"PORT\" in dic, \"Failed to read running config\"\r\nAssertionError: Failed to read running config\r\n```\r\nIt's getting the port data from `sonic-cfggen` on the `duthost`:\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/gnmi/test_gnmi_configdb.py#L227\r\n```\r\noutput = duthost.shell(\"sonic-cfggen -d --print-data\")\r\nassert (not output['rc']), \"No output\"\r\ndic = json.loads(output[\"stdout\"])\r\nassert \"PORT\" in dic, \"Failed to read running config\"\r\n```\r\n\r\nThe problem is the fixture used by these tests is `rand_one_dut_hostname` which includes the supervisor which won't have any ports on it in modular systems.\r\n\r\nWe could update the tests to instead use `rand_one_dut_front_end_hostname` but this will require updating all the `autouse=True` fixtures in `gnmi/conftest` and will therefor impact the other `gnmi` tests like `gnmi/test_gnmi.py` and `gnmi/test_gnmi_appldb.py`\r\n\r\n\r\n### Results you see\r\n\r\n`gnmi/test_gnmi_configdb.py` is being run on supervisor `duthost` but the test requires PORTs on the `duthost`\r\n\r\n### Results you expected to see\r\n\r\n`gnmi/test_gnmi_configdb.py` should likely only run against the LC `duthosts`\r\n\r\n### Is it platform specific\r\n\r\ngeneric\r\n\r\n### Relevant log output\r\n\r\n_No response_\r\n\r\n### Output of `show version`\r\n\r\n_No response_\r\n\r\n### Attach files (if any)\r\n\r\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 15653,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/15653",
+      "title": "[gnmi] skip tests which require ports when sup is selected",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-12-14T04:45:14Z",
+      "createdAt": "2024-11-20T21:29:08Z",
+      "author": "arista-nwolfe",
+      "body": "### Description of PR\r\nSkip runs of `test_gnmi_configdb_incremental_01 ` and `test_gnmi_configdb_full_01 ` where the selected dut to host the gnmi_server is the supervisor.\r\nThis is because these tests require port data which isn't present on the supervisor.\r\n\r\nSummary:\r\nFixes #15629 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405",
+      "files": [
+        {
+          "path": "tests/gnmi/test_gnmi_configdb.py",
+          "additions": 4,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2024-11-21T05:12:15Z",
+          "body": "> Would it be better to roll a frontend node rather than skip the test?\r\n\r\nWe discussed this in the community meeting today.\r\nBecause the `setup_gnmi_server` is a `module` fixture it's done once for the entire `gnmi` module of tests.\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/gnmi/conftest.py#L38\r\nSo if we restrict these 2 tests to only run on a frontend node we're forcing all tests in the `gnmi` module to run on a frontend node and this could result in a loss of coverage (some tests can run on the supervisor)"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-17T00:16:41Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-mgmt/pull/16100"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "number": 25829,
+  "title": "Bug: pfcwd/test_pfcwd_function.py  tests to fail with no PFC storm detected",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25829",
+  "createdAt": "2026-07-01T20:21:28Z",
+  "closedAt": "2026-07-09T11:53:16Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nMost tests in pfcwd/test_pfcwd_function.py failed on branch 202605 with:\n\n  ```\nFailed: No port matching EthernetXX detected storm!\n  BUG897504: Tests failed as no pfc storm was detected on selected port\n```\n\n### Steps to Reproduce\n\n Run PFCWD functional tests on affected 202605 dualtor testbeds:\n\n  ```\nsudo ./run_tests.sh -n dtAA56  -m individual -p pfcwdlogs \\\n      -r -t any,util,dualtor,t0 \\\n      -f ../ansible/testbed.yaml -u \\\n      -c \"pfcwd/test_pfcwd_function.py\"\n```\n\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behavior**\n  The test fails because no storm is detected:\n\n  pfcwd/test_pfcwd_function.py::TestPfcwdFunc::test_pfcwd_multi_port[IPv6-gd426]\n  Failed: No port matching Ethernet160 detected storm!\n\n  On the fanout, pfc_gen_brcm_xgs.py is not started by Ansible.\n\n  **Expected Behavior**\n  The fanout action should render the EOS PFC storm template correctly and launch:\n\n  sudo python3 pfc_gen_brcm_xgs.py ...\n\n  Then the DUT should detect the PFC storm on the selected port, and the PFCWD tests should pass.\n\n### Relevant log output\n\n```shell\ntest_pfcwd_actions[IPv6-gd223]\n  Failed: No port matching Ethernet80 detected storm!\n\ntest_pfcwd_multi_port[IPv6-gd223]\n  Failed: No port matching Ethernet80 detected storm!\n```\n\n### Output of `show version`\n\n```shell\nsonic-mgmt  202605\n```\n\n### Attach files (if any)\n\n[test_pfcwd_function.log](https://github.com/user-attachments/files/29572259/test_pfcwd_function.log)\n[test_pfcwd_function.xml](https://github.com/user-attachments/files/29572258/test_pfcwd_function.xml)",
+  "comments": [
+    {
+      "author": "peterbailey-arista",
+      "createdAt": "2026-08-11T21:30:10Z",
+      "body": "This issue is now seen on 202511 too because of https://github.com/sonic-net/sonic-buildimage/pull/28537/changes"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25830,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25830",
+      "title": "Fix apswitch template rendering",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-09T11:53:15Z",
+      "createdAt": "2026-07-01T21:15:59Z",
+      "author": "pdam-arista",
+      "body": "\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #25829 \r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n- [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request:\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nWith latest Ansible ( 2.19+) behavior , arbitrary strings passed to `Templar` are\r\nnot rendered as templates unless they are marked trusted.\r\n\r\nRefer: \r\nhttps://docs.ansible.com/projects/ansible/latest/porting_guides/porting_guide_core_2.19.html#template-trust-model-inversion\r\n\r\nUnder `Template trust model inversion`, Ansible documents the new behavior:\r\nOnly strings marked as loaded from a trusted source are eligible to be \r\nrendered as templates.\r\n\r\nThe same section also states that custom plugins sourcing template strings\r\n must use public APIs to apply trust where appropriate. That is the case here:\r\n `ansible/plugins/action/apswitch.py` is a custom action plugin that reads the\r\n EOS PFC storm template from disk and passes the raw string to `Templar`.\r\nWith latest Ansible, that string is left unrendered unless it is wrapped with\r\n`trust_as_template()`.\r\n\r\n`apswitch.py` reads the EOS PFC storm template from disk and passes the raw\r\nfile content to `Templar`. Since the content was not trusted, Jinja variables\r\nwere not rendered before sending the command to the fanout. As a result, raw\r\nJinja content was sent to EOS and `pfc_gen_brcm_xgs.py` was not launched.\r\n\r\nThis caused PFCWD tests to fail with no PFC storm detected on the selected\r\nDUT port.\r\n\r\n#### How did you do it?\r\nImported `trust_as_template` from `ansible.template` and wrapped the file\r\ncontent read from the EOS fanout template before passing it to\r\n`self._templar.template()`.\r\n\r\n#### How did you verify/test it?\r\n##### Before the fix:\r\n\r\n  - pfc_gen_brcm_xgs.py was not started on the fanout.\r\n  - PFCWD tests failed with No port matching EthernetXX detected storm.\r\n\r\n##### After the fix:\r\n\r\n  - pfc_gen_brcm_xgs.py started correctly on the fanout.\r\n  - Example passing test:\r\n\r\n#### Any platform specific information?\r\nNo\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nNo \r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nN/A",
+      "files": [
+        {
+          "path": "ansible/plugins/action/apswitch.py",
+          "additions": 9,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-01T21:16:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-01T21:16:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-07-02T05:24:11Z",
+          "body": "@pdam-arista - Reviewed the PR. The fix looks correct to me: `apswitch.py` reads a repo template file itself, and Ansible 2.19 requires custom plugins that create template strings to mark them trusted before rendering. Wrapping the file content with `trust_as_template` before `self._templar.template(...)` is minimal and matches the documented API.\n\nCI is green, and the 202605 backport request is linked to #25829 with failure details. No blockers from my side.\n\n@auspham could you also review this change?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-02T06:08:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-02T06:08:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-07-02T06:20:06Z",
+          "body": "Thanks @auspham for the review and approval."
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-07-02T10:52:44Z",
+          "body": "Hi @StormLiangMS can this merged now ?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-02T11:15:49Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T11:53:54Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26021"
+        },
+        {
+          "author": "peterbailey-arista",
+          "createdAt": "2026-08-11T21:29:27Z",
+          "body": "@vmittal-msft can we please get a request for 202511 and msft-202601 on here too? \r\n\r\nThe breaking change this PR fixes exists on both branches and causes pfcwd mgmt tests to fail because of the ansible bump up\r\n202511: https://github.com/sonic-net/sonic-buildimage/pull/28537\r\nmsft-202601: https://github.com/Azure/sonic-buildimage-msft/pull/2865"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-12T00:17:51Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-12T17:32:27Z",
+          "body": "The label `Approved for msft-202601 Branch` can only be added by a member of the @sonic-net/release-manager-202601 team. Removing the label. Please contact one of the release managers: @rlhui to approve the cherry pick."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-12T17:32:48Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/27008"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-12T18:18:54Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511,msft-202601, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

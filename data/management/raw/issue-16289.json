@@ -1,0 +1,87 @@
+{
+  "number": 16289,
+  "title": "[Bug][T2?]: REBOOT_TYPE_POWEROFF reboot causes test failures on T2 as NTP slew doesn't recover for a while",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16289",
+  "createdAt": "2025-01-02T04:10:12Z",
+  "closedAt": "2025-01-15T18:48:54Z",
+  "author": "Javier-Tan",
+  "labels": [
+    "issue for 202405"
+  ],
+  "assignees": [
+    "Javier-Tan"
+  ],
+  "milestone": null,
+  "body": "### Issue Description\n\nWhen the chassis is rebooted through REBOOT_TYPE_POWEROFF (through PDUs), the internal clock gets stuck at the time it reboots (e.g., if it takes 5 minutes to boot and is restarted at 00:00, the clock would show 00:00 (or slightly before) when it comes back up at 00:05. This could be caused by RTC (?)). \n\nThe time will slowly correct itself by ntp slew as designed, but due to the length of time it takes for a chassis to reboot, it takes very long (and much longer than the `wait_until` time defined for this case in the reboot function)\n\nSnippet responsible for handling this in reboot.py reboot function:\n```\n    # some device does not have onchip clock and requires obtaining system time a little later from ntp\n    # or SUP to obtain the correct time so if the uptime is less than original device time, it means it\n    # is most likely due to this issue which we can wait a little more until the correct time is set in place.\n    if float(dut_uptime.strftime(\"%s\")) < float(dut_datetime.strftime(\"%s\")):\n        logger.info('DUT {} timestamp went backwards'.format(hostname))\n        wait_until(120, 5, 0, positive_uptime, duthost, dut_datetime)\n\n    dut_uptime = duthost.get_up_time()\n\n    assert float(dut_uptime.strftime(\"%s\")) > float(dut_datetime.strftime(\"%s\")), \"Device {} did not reboot\". \\\n        format(hostname)\n```\nWhere `dut_uptime` is the DUTs latest reported startup time, and `dut_datetime` is the DUT reported time collected before the reboot\n\nAny test using this reboot type should pass UNLESS this is a safeguard that DUTs shouldn't behave this way, in this case the image needs to be fixed.\n\nOn the test side:\nWe could either increase the wait_until time (will be very long), sync the datetime using `sudo ntpdate <NTP_SERVER_IP>` manually in the test after reboot, or skip this check for T2 devices\n\n### Results you see\n\nSample `test_power_off_reboot.py` failure:\nBefore test fails: (made sure to sync ntp before this)\n```\nActual time: 2025-01-02 03:51:10.744581\n\ntimedatectl:\n               Local time: Thu 2025-01-02 03:51:11 UTC\n           Universal time: Thu 2025-01-02 03:51:11 UTC\n                 RTC time: Thu 2025-01-02 03:51:10\n                Time zone: Etc/UTC (UTC, +0000)\nSystem clock synchronized: yes\n              NTP service: n/a\n          RTC in local TZ: no\n\nshow ntp:\nMGMT_VRF_CONFIG is not present.\nsynchronised to unspecified at stratum 4 \n   time correct to within 150 ms\n   polling server every 64 s\n     remote           refid      st t when poll reach   delay   offset   jitter\n===============================================================================\n*10.150.22.222   10.221.236.34    3 u    3   64  377   0.2086  -0.3139   0.0731\n```\nAfter test fails:\n```\nActual time: 2025-01-02 03:57:48.520614\n\ntimedatectl:\n               Local time: Thu 2025-01-02 03:56:44 UTC\n           Universal time: Thu 2025-01-02 03:56:44 UTC\n                 RTC time: Thu 2025-01-02 03:56:44\n                Time zone: Etc/UTC (UTC, +0000)\nSystem clock synchronized: yes\n              NTP service: n/a\n          RTC in local TZ: no\n\nshow ntp:\nMGMT_VRF_CONFIG is not present.\nsynchronised to unspecified at stratum 4 \n   time correct to within 65062 ms\n   polling server every 64 s\n     remote           refid      st t when poll reach   delay   offset   jitter\n===============================================================================\n*10.150.22.222   10.221.236.34    3 u   47   64   17   0.2465 64907.24  88.1042\n```\n\n### Results you expected to see\nAs stated before:\n\nAny test using this reboot type should pass UNLESS this is a safeguard that DUTs shouldn't behave this way, in this case the image needs to be fixed.\n\nOn the test side:\nWe could either increase the wait_until time (will be very long), sync the datetime using `sudo ntpdate <NTP_SERVER_IP>` manually in the test after reboot, or skip this check for T2 devices\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n```shell\nN/A\n```\n\n\n### Output of `show version`\n\n```shell\nN/A\n```\n\n\n### Attach files (if any)\n\nN/A",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2025-01-04T01:23:42Z",
+      "body": "@Javier-Tan, can you skip the check for T2 for now?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16348,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16348",
+      "title": "Use alternate check for reboot for T2 after reboot with REBOOT_TYPE_POWEROFF",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-15T18:48:53Z",
+      "createdAt": "2025-01-06T05:14:48Z",
+      "author": "Javier-Tan",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #16289\r\nNeeds to be merged alongside #16581\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nREBOOT_TYPE_POWEROFF reboot causes test failures on T2 as NTP slew doesn't recover for a while\r\n#### How did you do it?\r\nSkip dut uptime check on reboot for REBOOT_TYPE_POWEROFF reboot on T2\r\n#### How did you verify/test it?\r\nWas previously casing test_power_off_reboot.py to fail, no longer causing it to fail\r\n#### Any platform specific information?\r\nN/A\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/reboot.py",
+          "additions": 16,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-06T05:14:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-06T05:15:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T12:32:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-08T12:32:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Javier-Tan",
+          "createdAt": "2025-01-08T12:36:18Z",
+          "body": "@gechiang @arlakshm instead of skipping I have added an alternative check that reboot has happened for the specific scenario. Could you please review? Thanks"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T23:08:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-08T23:08:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Javier-Tan",
+          "createdAt": "2025-01-19T07:09:01Z",
+          "body": "If including this in other branches please include #16581 as well, apologies"
+        }
+      ]
+    }
+  ]
+}

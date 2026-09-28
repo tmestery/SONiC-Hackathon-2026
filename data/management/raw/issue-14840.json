@@ -1,0 +1,60 @@
+{
+  "number": 14840,
+  "title": "[Bug]: Reboot shouldn't always force min 900s wait on T2 devices",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/14840",
+  "createdAt": "2024-10-04T06:56:21Z",
+  "closedAt": "2024-10-09T01:35:20Z",
+  "author": "Javier-Tan",
+  "labels": [],
+  "assignees": [
+    "Javier-Tan"
+  ],
+  "milestone": null,
+  "body": "### Issue Description\n\nCurrently, using reboot function from `tests/common/reboot.py` forces `wait` variable to be at least 900s when called from T2 device, through:\r\n```\r\n        if duthost.get_facts().get(\"modular_chassis\"):\r\n            wait = max(wait, 900)\r\n            timeout = max(timeout, 600)\r\n```\r\n\r\nThis may cause tests that rely on a `wait` being shorter than 900s to fail. e.g. `bgp/test_startup_tsa_tsb_service.py` calls `reboot(suphost, localhost, wait=240)` and must check for a certain condition before 900s has passed due to a timer `STARTUP_TSB_TIMER=900` or it will fail.\r\n\r\nProposed solution:\r\nAdd safe reboot as a flag\r\n```\r\n        if duthost.get_facts().get(\"modular_chassis\") and safe_reboot:\r\n            wait = max(wait, 900)\r\n            timeout = max(timeout, 600)\r\n```\r\nThis change may cause changes in other tests calling reboot e.g.:\r\n- A cold reboot when safe reboot is off, default values would be `wait = 120; timer = 300` defined from `reboot_ctrl_dict[REBOOT_TYPE_COLD]`, `wait` value would be respected if defined in `reboot` function.\n\n### Results you see\n\nReboot `wait` variable must be at least 900s for reboot from chassis DUTs.\n\n### Results you expected to see\n\nReboot `wait` variable should be respected if defined without `safe_reboot` flag.\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n```shell\nN/A\n```\n\n\n### Output of `show version`\n\n```shell\nVersion agnostic issue\n```\n\n\n### Attach files (if any)\n\nN/A",
+  "comments": [
+    {
+      "author": "Javier-Tan",
+      "createdAt": "2024-10-04T06:57:17Z",
+      "body": "@arlakshm for vis"
+    },
+    {
+      "author": "Javier-Tan",
+      "createdAt": "2024-10-05T15:37:11Z",
+      "body": "The effective priority to define `wait` and `timeout` variables would now be:\r\n900, 600 for T2 DUT & safe reboot > values defined in inv > explicitly defined `wait` and `timeout` > default values in `reboot_ctrl_dict`\r\n\r\nI'm unsure if we want to set a default of `wait = 900` and `timeout = 600` if `wait` and `timeout` are not explicitly defined for a T2 DUT?"
+    },
+    {
+      "author": "Javier-Tan",
+      "createdAt": "2024-10-07T06:57:32Z",
+      "body": "Not sure if we should also change similar behaviour for config reload?\r\n\r\nConfig reload behaviour:\r\n`wait = max(wait, 900) if modular_chassis else wait`"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 14849,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/14849",
+      "title": "Change behaviour of reboot wait and timeout assignment for T2 devices",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-10-09T01:35:19Z",
+      "createdAt": "2024-10-05T15:53:26Z",
+      "author": "Javier-Tan",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #14840\r\n\r\nChanged behaviour of forcing minimum `wait` and `timeout` times for reboot on T2 devices to only trigger when `safe_reboot == True`\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nTests were failing when because of the minimum 900s wait time during reboot for T2 devices, despite explicitly setting wait time.\r\n#### How did you do it?\r\nChanged behaviour of forcing minimum `wait` and `timeout` times for reboot on T2 devices to only trigger when `safe_reboot == True`\r\n#### How did you verify/test it?\r\nTested on T2 testbed to confirm that the effective priority to define `wait` and `timeout` variables would now be:\r\n900, 600 for T2 DUT & safe reboot >\r\nvalues defined in inv >\r\nexplicitly defined `wait` and `timeout` during function call >\r\ndefault values in `reboot_ctrl_dict`\r\n#### Any platform specific information?\r\nPlatform agnostic\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nN/A",
+      "files": [
+        {
+          "path": "tests/common/reboot.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-10-15T00:04:44Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-mgmt/pull/14989"
+        }
+      ]
+    }
+  ]
+}

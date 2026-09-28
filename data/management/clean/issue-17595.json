@@ -1,0 +1,43 @@
+{
+  "id": "management-17595",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 17595,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/17595",
+    "title": "Bug: test_iface_namingmode.py - sometimes interface is missing from show_lldp_table after link flap",
+    "created_at": "2025-03-19T05:55:13Z",
+    "closed_at": "2025-04-17T02:04:15Z"
+  },
+  "metadata": {
+    "severity": "low",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nWhen running `test_iface_namingmode.py` tests, sometimes the `test_show_lldp_table` test (specifically with naming-mode = default) will fail because an entry is missing from the LLDP table.\n\nLLDP table which is missing entry causing failures:\n```\ntest_iface_namingmode.test_show_lldp_tab L0266 INFO   | lldp_table:\nCapability codes: (R) Router, (B) Bridge, (O) Other\nLocalPort    RemoteDevice    RemotePortID    Capability    RemotePortDescr\n-----------  --------------  --------------  ------------  -----------------\nEthernet32   ARISTA01T3      Ethernet1       BR\nEthernet40   ARISTA01T3      Ethernet2       BR\nEthernet64   ARISTA03T3      Ethernet1       BR\nEthernet208  ARISTA04T3      Ethernet1       BR\nEthernet216  ARISTA04T3      Ethernet2       BR\n--------------------------------------------------\nTotal entries displayed:  5\n```\nFull LLDP table:\n```\ntest_iface_namingmode.test_show_lldp_tab L0266 INFO   | lldp_table:\nCapability codes: (R) Router, (B) Bridge, (O) Other\nLocalPort    RemoteDevice    RemotePortID    Capability    RemotePortDescr\n-----------  --------------  --------------  ------------  -----------------\nEthernet32   ARISTA01T3      Ethernet1       BR\nEthernet40   ARISTA01T3      Ethernet2       BR\nEthernet64   ARISTA03T3      Ethernet1       BR\nEthernet184  ARISTA06T3      Ethernet1       BR\nEthernet208  ARISTA04T3      Ethernet1       BR\nEthernet216  ARISTA04T3      Ethernet2       BR\n--------------------------------------------------\nTotal entries displayed:  6\n```\n\nThis is caused by a timing issue by `test_config_interface_state` performing `shutdown` and `startup` on an interface, sometimes the LLDP is not repopulated in time. (This is the reason it only happens on naming-mode default when running the entire suite, because `test_config_interface_state` is not run before naming-mode alias)\n\n### Steps to Reproduce\n\nRun `test_config_interface_state` and `test_show_lldp_table` back to back to hit the same issue.\n\nNOTE: We had a lot of trouble reporducing the issue when running the whole test suite locally or individually, it seems to trigger fairly often on full nightly runs. See timing calculations below for more information\n\n### Actual Behavior and Expected Behavior\n\nTest `test_config_interface_state` performs `shutdown` and `startup`, and the lldp table is not repopulated in time when it should be.\n\n### Relevant log output\n\n```shell\nSome calculations:\n\nTimings from \"startup Ethernetxxx\" to \"show lldp table\":\nFail in nightly:\n<IPV6>.938949\n<IPV6>.015427\n~22s\n<IPV6>.866642\n<IPV6>.040900\n~22s\n\nLocal successes:\n<IPV6>.768387\n<IPV6>.980429\n~26s\n<IPV6>.127990\n<IPV6>.477481\n~26s\n\nManual benchmark is very variable as it always takes longer the first time (?):\n\nadmin@bjw-can-7250-lc2-1:~$ sudo config interface -n asic1 shutdown Ethernet208; sleep 3s; sudo config interface -n asic1 startup Ethernet208; date; watch -n 0 -g show lldp t\nable; date\nWed Mar 19 <IPV6> AM UTC 2025\nWed Mar 19 <IPV6> AM UTC 2025\n~22s\n```\n\n### Output of `show version`\n\n```shell\nN/A\n```\n\n### Attach files (if any)\n\nN/A"
+  },
+  "resolution": {
+    "pr_number": 17603,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/17603",
+    "title": "test_iface_namingmode - Ensure LLDP neighbor comes back after link flap",
+    "merged_at": "2025-04-17T02:04:14Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #17595\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n\n### Approach\n#### What is the motivation for this PR?\ntest_show_lldp_table sometimes fails because of missing lldp entry from interface flapped in test_config_interface_state\n#### How did you do it?\nAdd an assert wait_until for lldp neighbor coming back before proceeding in test_config_interface_State\n#### How did you verify/test it?\nT0: [Test plan 67da932be946313de56c8bd5: ifacenamingmode changes regression test T0 - Elastictest (elastictest.org)](https://elastictest.org/scheduler/testplan/67da932be946313de56c8bd5)\nT1: [Test plan 67db4c7f2d7dcfaa9d43f859: ifacenamingmode changes regression test T1 - Elastictest (elastictest.org)](https://elastictest.org/scheduler/testplan/67db4c7f2d7dcfaa9d43f859)\nT2: [Test plan 67da9530e3ea980065c43a91: ifacenamingmode changes regression test T2 - Elastictest (elastictest.org)](https://elastictest.org/scheduler/testplan/67da9530e3ea980065c43a91)\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/iface_namingmode/test_iface_namingmode.py",
+        "additions": 13,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

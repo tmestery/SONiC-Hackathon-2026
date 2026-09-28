@@ -1,0 +1,43 @@
+{
+  "id": "management-27723",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27723,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27723",
+    "title": "[process_monitoring] Revert the blanket BMC skip from #26984",
+    "created_at": "2026-09-03T19:00:20Z",
+    "closed_at": "2026-09-05T07:13:15Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### What #26984 did\n\nPR #26984 added a whole-test skip for `test_monitoring_critical_processes` on BMC topologies:\n\n```yaml\nprocess_monitoring/test_critical_process_monitoring.py::test_monitoring_critical_processes:\n  skip:\n    reason: \"BMC platforms have no swss/orchagent/syncd containers. This test kills critical processes and relies on auto-restart to recover, which fails on BMC due to reduced container set and lack of PDU controller.\"\n    conditions:\n      - \"'bmc' in topo_type\"\n```\n\n### Neither clause of the stated rationale holds\n\n**\"BMC platforms have no swss/orchagent/syncd containers\"** cannot fail the test. `get_containers_namespace_ids()` builds the container list from `duthost.get_feature_status()` and includes only features whose state is not `disabled` / `always_disabled`. Containers that do not exist on a BMC are never enumerated, never killed, and never contribute an expected alert.\n\n**\"lack of PDU controller\"** is not a property of BMC topologies. `recover_critical_processes` reaches the power-cycle path under `if is_testing_database:`, and hard-fails only where the testbed has no PDU entry:\n\n```python\nif pdu_ctrl is None:\n    pytest.fail(\"No PDU controller available for {}, cannot recover from database container test\"\n                .format(duthost.hostname))\n```\n\nA BMC topology has since been observed running this test to completion **including the database phase** \u2014 the PDU controller was obtained, the power cycle performed, the DUT recovered, and the post-check of critical processes passed. Whether a PDU controller exists is a per-testbed inventory property, not something `topo_type` can predict. If a PDU-less testbed is a real case, the correct guard is PDU availability, not a topology-wide skip.\n\n### What the blanket skip costs\n\nThe test runs end to end on a BMC topology and reports exactly the signal it exists to produce. Two concrete costs to skipping it:\n\n1. **It removes the only coverage of the container-to-host syslog delivery path on BMC.** A real product defect lives there: the `redfish` container is started with bridge networking in `files/build_templates/docker_image_ctl.j2` while its rsyslog target is left at `<IP>`, which inside a bridged container is the container itself \u2014 so nothing it logs reaches the host. Fixes are open as sonic-net/sonic-buildimage#29258 and sonic-net/sonic-host-services#429. With #26984 in place, no BMC test will verify them when they land.\n\n2. **It makes #27355 unreachable.** #27355 added per-process handling for `bmcweb` and `sonic-dbus-bridge` on BMC, but the conditional_mark skip fires before the test body, so that code never executes on a BMC topology.\n\n### Ask\n\nRevert #26984. The test completes on BMC topologies, including the database phase, so a whole-test skip is not warranted. If a PDU-less testbed turns out to be a genuine case, gate the power-cycle path on PDU availability rather than on `topo_type` \u2014 and per-container handling, as #27355 already does, is the right granularity for anything container-specific."
+  },
+  "resolution": {
+    "pr_number": 27728,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27728",
+    "title": "[test] Revert Skip process_monitoring tests on BMC topology (#26984)",
+    "merged_at": "2026-09-05T07:13:14Z",
+    "description": "### Description of PR\n  This reverts commit 84876cbc2caeabbd9f19af8ccab073a0d41237c0.\n\n  The BMC skip added in #26984 worked around two problems that are now\n  fixed:\n  - Database-container recovery on BMC now power-cycles via PDU (test_critical_process_monitoring.py), instead of leaving the board in an unrecoverable boot loop.\n  - #27355 fixed the false \"not running\" alert for autorestart processes (bmcweb/sonic-dbus-bridge) that caused BMC failures.\n\nSummary:\nFixes #27723\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type:\n\n### Tested branch\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n\n### Approach\n#### What is the motivation for this PR?\nReenable process_monitoring_tests on BMC\n\n#### How did you do it?\n\n#### How did you verify/test it?\nCheck change reverts #26984\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 0,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

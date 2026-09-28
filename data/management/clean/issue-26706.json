@@ -1,0 +1,43 @@
+{
+  "id": "management-26706",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26706,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26706",
+    "title": "Bug: `macsec/test_deployment.py` fails with `AttributeError: 'NoneType' object has no attribute 'replace'`",
+    "created_at": "2026-07-30T21:29:52Z",
+    "closed_at": "2026-08-12T17:56:02Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n`macsec/test_deployment.py::test_scale_rekey` fails on systems where the neighbors are `EosHost`s with:\n```\n30/07/2026 <IPV6> __init__.pytest_runtest_call             L0040 ERROR  | Traceback (most recent call last):\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 1707, in runtest\n    self.ihook.pytest_pyfunc_call(pyfuncitem=self)\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_hooks.py\", line 512, in __call__\n    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_manager.py\", line 120, in _hookexec\n    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 167, in _multicall\n    raise exception\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 121, in _multicall\n    res = hook_impl.function(*args)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 167, in pytest_pyfunc_call\n    result = testfunction(**testargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/data/tests/macsec/test_deployment.py\", line 41, in test_scale_rekey\n    _, _, _, dut_egress_sa_table_orig[dut_port], dut_ingress_sa_table_orig[dut_port] = get_appl_db(\n                                                                                       ^^^^^^^^^^^^\n  File \"/data/tests/common/macsec/macsec_helper.py\", line 125, in get_appl_db\n    host_sci = get_sci(host.get_dut_iface_mac(host_port_name))\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/data/tests/common/macsec/macsec_helper.py\", line 70, in get_sci\n    system_identifier = macaddress.replace(\":\", \"\").replace(\"-\", \"\")\n                        ^^^^^^^^^^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'replace'\n```\n\nThe issue is that the previous testlet `macsec/test_deployment.py::test_config_reload` didn't wait long enough after executing it's `config reload` before moving onto the next test.\nBecause ports are still down `host.get_dut_iface_mac(host_port_name)` ends up returning `None`.\n\nThe reason `macsec/test_deployment.py::test_config_reload` doesn't wait long enough is because it's relying on `check_appl_db` as it's check that the ports are back up:\n```\nconfig_reload(duthost)\nassert wait_until(300, 6, 12, check_appl_db, duthost, ctrl_links, policy, cipher_suite, send_sci)\n```\n\nThe problem is `check_appl_db` does nothing if the neighbors are `EosHost`s:\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/macsec/macsec_helper.py#L203-L208\n```\ndef check_appl_db(duthost, ctrl_links, policy, cipher_suite, send_sci):\n    logger.info(\"Check appl_db start\")\n    procs = []\n    for port_name, nbr in list(ctrl_links.items()):\n        if isinstance(nbr[\"host\"], EosHost):\n            continue\n```\n```\n30/07/2026 <IPV6> utilities.wait_until                     L0137 DEBUG  | Wait until check_appl_db is True, timeout is 300 seconds, checking interval is 6, delay is 12 seconds\n30/07/2026 <IPV6> utilities.wait_until                     L0141 DEBUG  | Delay for 12 seconds first\n30/07/2026 <IPV6> utilities.wait_until                     L0147 DEBUG  | Time elapsed: 0.000000 seconds\n30/07/2026 <IPV6> macsec_helper.check_appl_db              L0184 INFO   | Check appl_db start\n30/07/2026 <IPV6> macsec_helper.check_appl_db              L0198 INFO   | Check appl_db finished\n30/07/2026 <IPV6> utilities.wait_until                     L0162 DEBUG  | check_appl_db is True, exit early with True\n```\n\n### Steps to Reproduce\n\nRun `macsec/test_deployment.py` on a cluster that has neighbors running `EosHost`\n\n### Actual Behavior and Expected Behavior\n\n`macsec/test_deployment.py::test_config_reload` should wait until ports are back up before moving to the next test.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26707,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26707",
+    "title": "Improve interlock in `check_appl_db` for `EosHost` nbrs",
+    "merged_at": "2026-08-12T17:56:00Z",
+    "description": "### Description of PR\nWithout this interlock test_config_reload ends up finishing the test before the ports come back up causing issues on subsequent tests\n\nSummary:\nFixes #26706\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\n### Tested branch\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n202511 - `macsec/test_deployment.py` passes now\n\n### Approach\n#### What is the motivation for this PR?\n`macsec/test_deployment.py::test_config_reload` completing early causes `macsec/test_deployment.py::test_scale_rekey` to fail due to ports still being down.\n\n#### How did you do it?\nImprove the interlock in `macsec/test_deployment.py::test_config_reload` to make sure the macsec ports are up even on `EosHost` nbrs.\n\n#### How did you verify/test it?\nSaw `macsec/test_deployment.py` passing all testlets on 202511.\n\n#### Any platform specific information?\nN/A\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/common/macsec/macsec_helper.py",
+        "additions": 4,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

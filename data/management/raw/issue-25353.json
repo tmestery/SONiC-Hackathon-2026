@@ -1,0 +1,63 @@
+{
+  "number": 25353,
+  "title": "Bug: syslog/test_logrotate_small_size setup/cleanup failure after /var/log remount",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25353",
+  "createdAt": "2026-06-14T14:37:39Z",
+  "closedAt": "2026-06-29T03:07:20Z",
+  "author": "securely1g",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric (t2 topology via Elastictest)\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`tests/syslog/test_logrotate.py::test_logrotate_small_size` intermittently fails during setup on t2 KVM Elastictest after it remounts `/var/log` and calls `config_reload(..., wait_for_bgp=True)`.\n\nThis issue has been split from the broader original report. The separate `test_logrotate_normal_size` assertion failure is tracked in: https://github.com/sonic-net/sonic-mgmt/issues/25360\n\n**Observed in failed plan:**\n- Elastictest plan: https://elastictest.org/scheduler/testplan/6a2e403f729d944bd21ca1ce\n- PR under test: sonic-net/sonic-buildimage#26724\n- Build: `1138047`\n- Topology: `t2`, KVM, `vms-kvm-t2`\n\n**Base run behavior:**\n- `test_logrotate_normal_size` passed\n- `test_logrotate_small_size` errored in setup\n- Failure summary:\n\n```text\nfailed on setup with \"Failed: Not all bgp sessions are established after config reload\"\n```\n\n**Teardown also failed:**\n\n```text\nmv: cannot stat '/var/log/syslog_bk': No such file or directory\n```\n\n### Root Cause Analysis\n\nThere are two likely problems in this specific failure mode:\n\n1. `simulate_small_var_log_partition` mounts a new filesystem over `/var/log`, then runs:\n\n```python\nconfig_reload(duthost, safe_reload=True, check_intf_up_ports=True, wait_for_bgp=True)\n```\n\nOn t2 KVM this can fail because BGP does not fully converge after config reload within the wait window. This is unrelated to logrotate behavior itself.\n\n2. `backup_syslog` stores `/var/log/syslog_bk` inside `/var/log`:\n\n```python\nduthost.shell('sudo cp -f /var/log/syslog /var/log/syslog_bk')\n...\nduthost.shell('sudo mv /var/log/syslog_bk /var/log/syslog')\n```\n\nBut `simulate_small_var_log_partition` later mounts a new filesystem on `/var/log`. If setup fails before the fixture reaches `yield`, its cleanup does not run, and the module-level teardown cannot find `/var/log/syslog_bk` in the currently mounted `/var/log`.\n\n### Why this is flaky / not PR-specific\n\nKusto history for `syslog.test_logrotate::test_logrotate_small_size` setup failures shows this is widespread across PRs:\n\n- last 30 days: **72 hits / 71 test plans / 67 PRs**\n- branches: `master`, `internal`\n- topologies: `t1-lag`, `t1-8-lag`, `t2`\n\nThe PR under test (`sonic-net/sonic-buildimage#26724`) changes docker-sonic-vs feature composition and does not modify syslog/logrotate or BGP convergence logic.\n\n### Suggested Fix\n\n1. Make `simulate_small_var_log_partition` cleanup robust with `try/finally` so `/var/log` is unmounted and `/dev/loop2` is detached even when `config_reload()` fails before `yield`.\n2. Store the syslog backup outside `/var/log`, or recreate it after mounting the small `/var/log` filesystem.\n3. Consider whether this logrotate test really needs `wait_for_bgp=True`; if not, avoid making logrotate validation depend on full BGP convergence.\n4. If BGP convergence is still required, collect BGP neighbor state on failure so this can be triaged separately from logrotate behavior.\n\n### Steps to reproduce\n\nRun `tests/syslog/test_logrotate.py` on a t2 KVM Elastictest plan. The failure is intermittent.\n\n### Link to failed CI run\n\n- Azure DevOps build: https://dev.azure.com/mssonic/be1b070f-be15-4154-aade-b1d3bfb17054/_build/results?buildId=1138047&view=logs&jobId=3ab7146d-ea64-5d52-0097-33a9aae59fb6\n- Elastictest plan: https://elastictest.org/scheduler/testplan/6a2e403f729d944bd21ca1ce\n- PR: https://github.com/sonic-net/sonic-buildimage/pull/26724\n\n### Related Issues\n\n- https://github.com/sonic-net/sonic-mgmt/issues/25360 \u2014 split-out issue for `test_logrotate_normal_size` assertion failure\n- #23051\n- #13451\n- #16055\n- #11179\n",
+  "comments": [
+    {
+      "author": "securely1g",
+      "createdAt": "2026-06-15T05:26:52Z",
+      "body": "Split the separate `test_logrotate_normal_size` assertion failure into https://github.com/sonic-net/sonic-mgmt/issues/25360. This issue now tracks the `test_logrotate_small_size` setup/config-reload + cleanup failure mode."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25361,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25361",
+      "title": "Improve logrotate test isolation and cleanup",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-29T03:07:19Z",
+      "createdAt": "2026-06-15T05:30:28Z",
+      "author": "securely1g",
+      "body": "## Description\n\nImprove `tests/syslog/test_logrotate.py` isolation and cleanup for the intermittent Elastictest failures tracked in #25353 and #25360.\n\nChanges:\n- Store the module-level syslog backup outside `/var/log`, so it is not hidden/lost when `test_logrotate_small_size` mounts a temporary filesystem on `/var/log`.\n- Make the small `/var/log` fixture cleanup run from `finally`, including when setup fails before `yield`.\n- Make cleanup best-effort after setup failure so cleanup errors do not hide the original `config_reload`/BGP setup failure.\n- Use a test-specific logrotate state file (`/tmp/logrotate-test.status`) so the test is isolated from the DUT's normal `/var/lib/logrotate/status` state.\n- Log logrotate return code/stdout/stderr and collect syslog/logrotate state on assertion failures.\n\n## Motivation and Context\n\nIn Elastictest plan `6a2e403f729d944bd21ca1ce`, `syslog/test_logrotate.py` failed in two different ways:\n\n1. `test_logrotate_small_size` failed during setup after remounting `/var/log`, then teardown failed with:\n   ```text\n   mv: cannot stat '/var/log/syslog_bk': No such file or directory\n   ```\n   because the backup lived under `/var/log` and the fixture cleanup did not run when setup failed before `yield`.\n\n2. Retry runs of `test_logrotate_normal_size` failed with:\n   ```text\n   AssertionError: No logrotate happens, both syslog file number and timestamp are the same\n   ```\n   but the test did not capture enough state to explain why logrotate skipped rotation.\n\n## Testing\n\n- `python3 -m py_compile tests/syslog/test_logrotate.py`\n- `git diff --check`\n\nFull behavioral validation requires a SONiC KVM/t2 Elastictest run.\n\nFixes #25353\nFixes #25360\n",
+      "files": [
+        {
+          "path": "tests/syslog/test_logrotate.py",
+          "additions": 109,
+          "deletions": 46
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T05:30:36Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T05:30:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-18T07:15:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-18T07:15:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

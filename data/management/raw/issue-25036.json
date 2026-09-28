@@ -1,0 +1,76 @@
+{
+  "number": 25036,
+  "title": "[testgap] Add test SAI versoin for new legacy-th image",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25036",
+  "createdAt": "2026-06-02T07:11:33Z",
+  "closedAt": "2026-06-16T06:48:55Z",
+  "author": "lipxu",
+  "labels": [
+    "Test gap"
+  ],
+  "assignees": [
+    "lipxu"
+  ],
+  "milestone": null,
+  "body": "## Test gap\n\nA new SONiC image type \u2014 `legacy-th` \u2014 is introduced starting from build `20251110`. It is used by the Arista 7060CX (Tomahawk) family, which keeps an older BRCM SAI paired with the latest OCP SAI header, while other HwSKUs continue to use the standard build.\n\nToday there is no automated test coverage for this new image type. In particular, there is nothing that verifies a built `legacy-th` image actually ships the expected BRCM SAI and OCP SAI versions for the 7060CX HwSKUs. A SAI version regression on the `legacy-th` image (wrong BRCM SAI build, wrong OCP SAI header) can land on master and reach test/production without being caught.\n\n## Affected coverage\n\n- No platform test runs `bcmcmd bsv` on a 7060CX DUT and asserts the parsed BRCM SAI / OCP SAI versions against the `legacy-th` baseline.\n- A monolithic single-version check across all HwSKUs would either spuriously fail on 7060CX (because `legacy-th` intentionally lags BRCM SAI) or silently pass when a real regression slips through on other platforms \u2014 so the baseline must be expressed per image type.\n\n## Expected coverage\n\nA platform test that, for a Broadcom DUT on a release build `>= 20251110`:\n\n1. Resolves the HwSKU to an image type (e.g., `Arista-7060CX-32S-C32` \u2192 `legacy-th`).\n2. Looks up the expected BRCM SAI / OCP SAI versions for that image type.\n3. Runs `bcmcmd bsv` on the DUT and parses BRCM SAI / OCP SAI / SDK from the output.\n4. Asserts BRCM SAI matches `major.minor.patch` and `build >= baseline`.\n5. Asserts OCP SAI header `>= minimum`.\n6. Cleanly skips for non-Broadcom ASICs, non-release builds, or HwSKUs not yet in the per-image-type mapping (fail-closed: unknown HwSKU never breaks CI).\n\n## Why this matters\n\n- Catches `legacy-th` SAI version regressions early, before they reach production fleets running 7060CX.\n- Mapping-driven design so adding the next image type (or another HwSKU under `legacy-th`) is a few-line config change with no test-logic edit.\n\n## Suggested fix\n\nAdd `tests/platform_tests/test_sai_ocp_version.py` with two mapping-driven constants:\n- `IMAGE_TYPE_VERSIONS` \u2014 expected BRCM SAI / OCP SAI versions per image type (starts with `legacy-th`).\n- `HWSKU_IMAGE_TYPE_MAP` \u2014 supported HwSKU \u2192 image type mapping (starts with the Arista 7060CX family).\n\nImplementation in progress at #25035.\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25035,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25035",
+      "title": "[platform_tests] Add test_sai_ocp_version: verify BRCM SAI / OCP SAI version baseline per image type",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-16T06:48:54Z",
+      "createdAt": "2026-06-02T07:06:55Z",
+      "author": "lipxu",
+      "body": "### Description of PR\n\nSummary:\nAdds `tests/platform_tests/test_sai_ocp_version.py` \u2014 a new platform test that verifies the BRCM SAI / OCP SAI version baseline on the DUT against an expected version-per-image-type matrix.\n\nStarting from SONiC build `20251110`, different HwSKUs run different target image types (e.g., `legacy-th` for the Arista 7060CX family), each requiring specific BRCM SAI and OCP SAI versions. This test:\n\n1. Skips if the SONiC build date is before `20251110`\n2. Skips if the ASIC vendor is not Broadcom\n3. Skips if the DUT HwSKU is not present in `HWSKU_IMAGE_TYPE_MAP`\n4. Runs `bcmcmd bsv` and parses BRCM SAI / OCP SAI / SDK versions\n5. Asserts BRCM SAI same `major.minor.patch` and `build &gt;= baseline`; OCP SAI header `&gt;= minimum`\n\nThe version table (`IMAGE_TYPE_VERSIONS`) and the HwSKU mapping (`HWSKU_IMAGE_TYPE_MAP`) are the only two places to edit as the support matrix evolves \u2014 adding a new HwSKU or image type is a few-line change with no test-logic edit required.\n\nTestgap: #25036\nFixes #25036\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [x] New Test case\n    - [x] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\nCatch SAI version regressions early on supported HwSKUs after the `20251110` image-type split. The previous monolithic SAI version assumption no longer holds \u2014 Arista 7060CX (Tomahawk) now ships with an older BRCM SAI paired with the latest OCP SAI header (the `legacy-th` image type), while other HwSKUs use the standard build. A single hard-coded check across all platforms would either spuriously fail on 7060CX or silently pass when a real regression slips through on other platforms.\n\nThis PR closes the testgap tracked in #25036 \u2014 &#34;Add test coverage for new legacy-th image&#34;.\n\n#### How did you do it?\nMapping-driven design:\n- `IMAGE_TYPE_VERSIONS` \u2014 per-image-type expected version constants (BRCM SAI baseline, OCP SAI minimum)\n- `HWSKU_IMAGE_TYPE_MAP` \u2014 maps each supported HwSKU to its image type\n- Test resolves DUT HwSKU \u2192 image type \u2192 expected versions, then parses `bcmcmd bsv` and compares\n\nBehavior is fail-closed: any HwSKU NOT in `HWSKU_IMAGE_TYPE_MAP` causes a `pytest.skip`, so unknown HwSKUs never break CI.\n\n#### How did you verify/test it?\nCherry-picked the same content from the internal sonic-mgmt-int branch `dev/xuliping/20260602_internal_sai_check` (commit `cdedfd937e`) \u2014 the version was validated against `bcmcmd bsv` output on Arista 7060CX testbeds.\n\n#### Any platform specific information?\nBroadcom-only \u2014 the test uses `bcmcmd bsv` which exists only on Broadcom ASICs. Cleanly skips on Mellanox / Cisco / Nokia / others via the ASIC-vendor gate.\n\n#### Supported testbed topology if it&#39;s a new test case?\n`pytest.mark.topology(&#39;any&#39;)` and `pytest.mark.device_type(&#39;physical&#39;)` \u2014 runs on any topology with a physical Broadcom DUT.\n\n### Documentation\nN/A \u2014 single-file test, no Wiki page required.\n\n### Elastic Test Jobs\n| Testbed | HW / Topo | Image | Plan |\n|---|---|---|---|\n| `testbed-bjw3-can-t0-7060-7` | Arista 7060CX legacy-th / t0 | internal-202511 (no install/pretest) | [6a2f96a153b3182993b4fecb](https://elastictest.org/scheduler/testplan/6a2f96a153b3182993b4fecb) |\n| `testbed-bjw2-can-t1-7260-11` | Arista 7260CX3 / t1-64-lag | internal-202511 (no install/pretest) | [6a2f9702729d944bd21ca2fd](https://elastictest.org/scheduler/testplan/6a2f9702729d944bd21ca2fd) |\n| `testbed-bjw3-can-t0-7060-8` | Arista 7060CX legacy-th / t0 | internal (with image install + pretest) | [6a2f975303b7f75ed1c22f23](https://elastictest.org/scheduler/testplan/6a2f975303b7f75ed1c22f23) |\n| `testbed-bjw3-can-t0-7060-7` | Arista 7060CX legacy-th / t0 | internal (with image install + pretest) | [6a2fe13b2047c3c4a9f92d56](https://elastictest.org/scheduler/testplan/6a2fe13b2047c3c4a9f92d56) |\n| `testbed-bjw3-can-t0-7060-8` | Arista 7060CX legacy-th / t0 | internal-202511 (with image install + pretest) | [6a2fe13b95ed954f0d3d7e9d](https://elastictest.org/scheduler/testplan/6a2fe13b95ed954f0d3d7e9d) |",
+      "files": [
+        {
+          "path": "tests/platform_tests/test_sai_ocp_version.py",
+          "additions": 324,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-06-02T07:07:04Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: lipxu / name: Liping Xu (adc3daa83d4a026b3ad86f5dc66762968718f42f)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-02T07:07:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-02T07:07:20Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-02T07:38:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-02T07:38:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T21:47:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T21:47:47Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

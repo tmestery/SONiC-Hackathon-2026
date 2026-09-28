@@ -1,0 +1,138 @@
+{
+  "number": 24738,
+  "title": "[test/qos] Validate pg_drop and port_buffer_drop counter support on Broadcom and Mellanox platforms",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24738",
+  "createdAt": "2026-05-20T04:45:09Z",
+  "closedAt": "2026-06-03T11:58:07Z",
+  "author": "XuChen-MSFT",
+  "labels": [
+    "Enhancement",
+    "Triaged"
+  ],
+  "assignees": [
+    "XuChen-MSFT"
+  ],
+  "milestone": null,
+  "body": "## Background\n\nThe ingress drop probe now supports 3-level counter fallback:\n- Level 1: pg_drop (PG drop counter, most precise)\n- Level 2: port_buffer_drop (Port buffer drop counter)\n- Level 3: port_drop (Port ingress drop counter, includes noise)\n\nCurrently only Cisco-8000 is configured to use pg_drop (verified on physical testbed vms28-t1-8102-02).\n\n## Action needed\n\nValidate whether Broadcom and Mellanox platforms support:\n1. sai_thrift_read_pg_drop_counters (pg_drop mode)\n2. INGRESS_PORT_BUFFER_DROP counter accuracy (port_buffer_drop mode)\n\nOnce validated, update test_qos_probe.py to set the appropriate ingress_drop_counter_mode for each platform.",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25064,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25064",
+      "title": "[mmu probing] pr19.fix: Enable pg_drop counter mode for Mellanox IngressDrop probing",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-03T11:58:06Z",
+      "createdAt": "2026-06-03T01:06:45Z",
+      "author": "XuChen-MSFT",
+      "body": "### Description of PR\n\nSummary:\nEnable pg_drop (per-PG SAI ingress drop counter) mode for Mellanox platforms in the MMU probe framework.\n\nFixes https://github.com/sonic-net/sonic-mgmt/issues/24738\n\nPreviously only cisco-8000 was mapped to `pg_drop` mode. Mellanox SPC1/SPC3 SAI also supports per-PG ingress drop counters, which are noise-immune compared to port-wide `port_drop` counters. This PR extends the mapping to include `mellanox`, reducing false positives caused by non-test traffic noise during IngressDrop and HeadroomPool probing on Mellanox platforms.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\n### Approach\n#### What is the motivation for this PR?\n\nDuring IngressDrop and HeadroomPool probing on Mellanox SPC1 (2700) and SPC3 (4600c), the probe uses `port_drop` counters by default. These port-wide counters include drops from all sources (ARP, LLDP, control plane), causing false positives where the probe detects \"ingress drops\" that are actually unrelated noise.\n\nMellanox SAI supports `SAI_INGRESS_PRIORITY_GROUP_STAT_DROPPED_PACKETS` (per-PG drop counter), which only counts drops for the specific priority group under test \u2014 making it immune to background noise.\n\n#### How did you do it?\n\n- Modified `get_ingress_drop_counter_mode()` in `test_qos_probe.py`: changed `if platform_asic == \"cisco-8000\"` to `if platform_asic in (\"cisco-8000\", \"mellanox\")`\n- Added 15 unit tests in `test_get_ingress_drop_counter_mode.py` covering all platform mappings and edge cases\n\n#### How did you verify/test it?\n\n1. **Unit Tests**: 15 new tests all pass (cisco-8000\u2192pg_drop, mellanox\u2192pg_drop, broadcom\u2192port_drop, edge cases)\n2. **Existing UT regression**: 498 passed (no regression)\n3. **Existing IT regression**: 99 passed (no regression)\n4. **Physical testbed**: Verified on Mellanox SPC3 (4600c) \u2014 pg_drop counter correctly reads per-PG drops with no noise contamination\n\n#### Any platform specific information?\n\n- Mellanox SPC1 (Spectrum, e.g. MSN2700): `pg_drop` verified\n- Mellanox SPC3 (Spectrum-3, e.g. MSN4600C): `pg_drop` verified\n- Cisco-8000: unchanged (already uses `pg_drop`)\n- Broadcom: unchanged (remains `port_drop` until verified)\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 this is a bug fix for existing probe tests. Works on any topology that runs QoS probe tests (t0, t1).\n\n### Documentation\n\nNo documentation changes needed \u2014 this is an internal counter mode selection.",
+      "files": [
+        {
+          "path": "tests/qos/test_qos_probe.py",
+          "additions": 3,
+          "deletions": 3
+        },
+        {
+          "path": "tests/saitests/mock/ut/test_get_ingress_drop_counter_mode.py",
+          "additions": 91,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-03T01:06:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-03T01:07:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-06-03T11:56:06Z",
+          "body": "**Code Review**\n\n\u2705 LGTM \u2014 clean and minimal.\n\nOne-liner change adding Mellanox to pg_drop path is correct. The 91-line UT covers all relevant cases (cisco-8000, mellanox, broadcom, broadcom-dnx, marvell, None, empty string, missing key, and valid-mode contract). No concerns."
+        }
+      ]
+    },
+    {
+      "number": 25066,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25066",
+      "title": "[mmu probing] pr20.fix: Fix positional arg and lossy_queue fallback bugs for Mellanox",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-04T10:38:43Z",
+      "createdAt": "2026-06-03T01:32:22Z",
+      "author": "XuChen-MSFT",
+      "body": "### Description of PR\n\nSummary:\nFix two probe bugs affecting Mellanox platforms:\n\n1. **HeadroomPoolProbe positional arg bug**: `updateTestPortIdIp()` was called with `qosConfig[\"hdrm_pool_size\"]` as the 3rd positional argument, which binds to `portSpeedCableLength` instead of `qosParams`. Fixed by using the keyword argument `qosParams=qosConfig[\"hdrm_pool_size\"]`.\n\n2. **EgressDropProbe lossy_queue fallback**: On Mellanox, `lossy_queue_1` is defined at the `dutQosConfig[\"param\"]` level (sibling of the `\"profile\"` key in `qos_params.mellanox.yaml`), not inside the per-speed sub-dict. The probe skipped with \"lossy_queue_1 is not defined\" instead of falling back. Added a 2-level lookup matching legacy `testQosSaiLossyQueue` behavior (`test_qos_sai.py` L1213-1216).\n\nFixes https://github.com/sonic-net/sonic-mgmt/issues/24738\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\n### Approach\n#### What is the motivation for this PR?\n\n**Bug 1 \u2014 positional arg**: `updateTestPortIdIp(self, dutConfig, get_src_dst_asic_and_duts, portSpeedCableLength=None, qosParams=None)` has two optional keyword parameters. The HeadroomPoolProbe call site passed `qosConfig[\"hdrm_pool_size\"]` positionally as the 3rd arg, so it was silently assigned to `portSpeedCableLength` instead of `qosParams`. This caused incorrect port-ID resolution during headroom pool probing.\n\n**Bug 2 \u2014 lossy fallback**: On Mellanox platforms, the QoS YAML structure places `lossy_queue_1` at the `dutQosConfig[\"param\"]` level rather than inside the per-speed-cable-length sub-dict (e.g., `param[\"100000_3m\"]`). The EgressDropProbe only checked the speed sub-dict and would `pytest.skip` instead of probing. The legacy `testQosSaiLossyQueue` test already handles this with a fallback (`test_qos_sai.py` L1213-1216).\n\n#### How did you do it?\n\n1. Changed line 510: `self.updateTestPortIdIp(dutConfig, get_src_dst_asic_and_duts, qosConfig[\"hdrm_pool_size\"])` \u2192 `self.updateTestPortIdIp(dutConfig, get_src_dst_asic_and_duts, qosParams=qosConfig[\"hdrm_pool_size\"])`\n\n2. Added fallback at line 332-338: if `lossyProfile` is not in the speed-specific `qosConfig`, retry lookup at `dutQosConfig[\"param\"]` level before skipping.\n\n3. Added 13 unit tests in `test_probe_bugfixes.py` covering:\n   - Positional arg: verifies buggy vs fixed call binding behavior\n   - Lossy fallback: Broadcom direct lookup, Mellanox fallback, missing-skip, precedence, edge cases\n\n#### How did you verify/test it?\n\n1. **New Unit Tests**: 13 tests all pass\n2. **Existing UT regression**: 496 passed (1 pre-existing failure \u2014 Unicode `\u2713` char on Windows, unrelated)\n3. **Existing IT regression**: 99 passed (no regression)\n\n#### Any platform specific information?\n\n- **Mellanox SPC1/SPC3**: Both bugs affect Mellanox platforms. The lossy fallback is specifically needed because Mellanox YAML places `lossy_queue_1` at the param level.\n- **Broadcom/Cisco-8000**: No impact \u2014 these platforms define lossy profiles in the speed sub-dict.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 bug fix for existing probe tests. Works on any topology that runs QoS probe tests (t0, t1).\n\n### Documentation\n\nNo documentation changes needed.",
+      "files": [
+        {
+          "path": "tests/qos/test_qos_probe.py",
+          "additions": 7,
+          "deletions": 2
+        },
+        {
+          "path": "tests/saitests/mock/ut/test_probe_bugfixes.py",
+          "additions": 219,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-03T01:32:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-03T01:32:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-06-03T11:56:21Z",
+          "body": "**Code Review**\n\nLGTM - both fixes are correct and well-tested.\n\n**Fix 1 - positional arg:** `updateTestPortIdIp(..., qosParams=qosConfig[\"hdrm_pool_size\"])` correctly routes the value to `qosParams` instead of silently binding to `portSpeedCableLength`.\n\n**Fix 2 - lossy_queue fallback:** 2-level lookup (speed-specific -> param-level -> skip) correctly handles Mellanox where `lossy_queue_1` lives at `dutQosConfig[\"param\"]` level rather than per-speed sub-dict. The UT covers Broadcom direct lookup, Mellanox fallback, missing-skip, both-levels-prefer-speed, and edge cases.\r\n"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-06-03T12:00:22Z",
+          "body": "hi @XuChen-MSFT could you check the DCO ?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-04T06:17:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-04T06:17:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lipxu",
+          "createdAt": "2026-07-10T13:07:59Z",
+          "body": "### \u2705 202605 backport verification\n\nThe **202605** backport checkbox on this PR was left unchecked, so this fix never reached the `202605` release branch. Consequently `qos/test_qos_probe.py::testQosHeadroomPoolProbe` was **failing on the 202605 nightly** (the positional-arg bug bound the `hdrm_pool_size` dict to `portSpeedCableLength`).\n\nI prepared a **byte-identical backport** of this PR onto `internal-202605` and verified it on real hardware:\n\n| Item | Value |\n|------|-------|\n| Testbed | `testbed-bjw3-can-t0-7060-7` (Arista-7060CX-32S-C32, TH) |\n| Image | `internal-202605` (broadcom legacy-th) |\n| Result | `testQosHeadroomPoolProbe[single_asic]` **PASSED** |\n| Module rollup | **6 passed, 44 skipped, 0 failed** (pretest 12\u2713 / posttest 5\u2713) |\n| Before fix (202605 nightly) | `1 failed (HeadroomPool), 5 passed, 44 skipped` |\n| `git range-diff` vs this PR | code **byte-identical** (only cherry-pick trailer added) |\n\nA dedicated backport PR targeting `202605` will follow.\r\n"
+        },
+        {
+          "author": "lipxu",
+          "createdAt": "2026-07-10T13:10:02Z",
+          "body": "> ### \u2705 202605 backport verification\r\n> The **202605** backport checkbox on this PR was left unchecked, so this fix never reached the `202605` release branch. Consequently `qos/test_qos_probe.py::testQosHeadroomPoolProbe` was **failing on the 202605 nightly** (the positional-arg bug bound the `hdrm_pool_size` dict to `portSpeedCableLength`).\r\n> \r\n> I prepared a **byte-identical backport** of this PR onto `internal-202605` and verified it on real hardware:\r\n> \r\n> Item\tValue\r\n> Testbed\t`testbed-bjw3-can-t0-7060-7` (Arista-7060CX-32S-C32, TH)\r\n> Image\t`internal-202605` (broadcom legacy-th)\r\n> Result\t`testQosHeadroomPoolProbe[single_asic]` **PASSED**\r\n> Module rollup\t**6 passed, 44 skipped, 0 failed** (pretest 12\u2713 / posttest 5\u2713)\r\n> Before fix (202605 nightly)\t`1 failed (HeadroomPool), 5 passed, 44 skipped`\r\n> `git range-diff` vs this PR\tcode **byte-identical** (only cherry-pick trailer added)\r\n> A dedicated backport PR targeting `202605` will follow.\r\n\r\nHi, @vaibhavhd  @StormLiangMS , Could you please help to review and approve this PR for 202605 branch, thanks a lot"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-13T08:13:43Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26104"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-07-15T03:29:38Z",
+          "body": "Removed `Request for 202605 branch` because this change is already present in `202605`.\n\nEvidence: I checked the PR branch against `origin/202605` with `git cherry`; all commit patches from this PR are patch-equivalent to commits already in `202605` (no non-equivalent commits remain).\n\nSo no additional 202605 cherry-pick is needed."
+        }
+      ]
+    }
+  ]
+}

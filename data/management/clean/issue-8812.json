@@ -1,0 +1,43 @@
+{
+  "id": "management-8812",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 8812,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/8812",
+    "title": "test_crm.py: \"crm_stats_acl_entry_used\" counter was not decremented or \"crm_stats_acl_entry_available\" counter was not incremented on DNX devices",
+    "created_at": "2023-07-04T19:08:53Z",
+    "closed_at": "2023-08-03T22:45:40Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "On DNX devices test_crm.py fails with the following assertion:\n```\n    pytest_assert(crm_stats_checker,\n                  \"\\\"crm_stats_acl_entry_used\\\" counter was not decremented or \"\n                  \"\\\"crm_stats_acl_entry_available\\\" counter was not incremented\")\n```\n\nThis is because the ACL_ENTRY_AVAILABLE returned by DNX SAI is NULL (4095) when no rules are applied to an ACL.\n\nThis results in the total USED+AVAILABLE number being much higher when no rules are applied to an ACL vs a few rules applied to an ACL.\n\nBroadcom CSP CS00012288540 is tracking this issue.\n\nThis is easily reproducible by adding rules to the ACL and removing rules from the ACL:\n```\n> scp templates/acl.json <switch>:/tmp/acl-0.json\n\n# crm config polling interval 1\n\n# acl-loader update full /tmp/acl-0.json\n\n# crm show resources acl table\n\nTable ID         Resource Name      Used Count    Available Count\n---------------  ---------------  ------------  -----------------\n0x7000000000c94  acl_entry                   2               2040\n0x7000000000c94  acl_counter                 2                  2\n\n# acl-loader delete\n\n# crm show resources acl table\n\nTable ID         Resource Name      Used Count    Available Count\n---------------  ---------------  ------------  -----------------\n0x7000000000c94  acl_entry                   0               4095\n0x7000000000c94  acl_counter                 0                  0\n```"
+  },
+  "resolution": {
+    "pr_number": 9054,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/9054",
+    "title": "Leave 1 ACL rule in test_crm.py::test_acl_entry",
+    "merged_at": "2023-08-03T22:45:39Z",
+    "description": "Some platforms (like broadcom-dnx) allocate ACL banks dynamically so if there are no ACL rules it returns a NULL value for CRM purposes. So leave 1 ACL rule when comparing the returned used/available CRM values.\n\nAlso on broadcom-dnx an ACL entry is used per bind point so account for that when calculating the expected available acl entries.\n\nSummary:\nFixes #8812\n\n### Type of change\n- [x] Test case(new/improvement)\n\n### Back port request\n- [x] 202205\n- [x] 202305",
+    "files": [
+      {
+        "path": "tests/crm/test_crm.py",
+        "additions": 36,
+        "deletions": 9
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "number": 24946,
+  "title": "Bug:test_tunnel_qos_remap teardown fails: get_pfcwd_config returns None instead of dict",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24946",
+  "createdAt": "2026-05-28T18:08:37Z",
+  "closedAt": "2026-06-04T10:59:13Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n## Problem\n\n  When PFC_WD is not configured in CONFIG_DB, `get_pfcwd_config()` returns `None` for single-ASIC devices, causing test fixture teardown to fail with RuntimeError in `reapply_pfcwd()`.\n\n  ## Error Message\n\n  RuntimeError: Script problem: Got an unsupported type of pfcwd_config:None\n\n  Traceback (most recent call last):\n    File \"/data/tests/qos/test_tunnel_qos_remap.py\", line 80, in disable_pfcwd\n      reapply_pfcwd(duthost, pfcwd_value[duthost.hostname])\n    File \"/data/tests/common/snappi_tests/qos_fixtures.py\", line 160, in reapply_pfcwd\n      raise RuntimeError(f\"Script problem: Got an unsupported type of pfcwd_config:{pfcwd_config}\")\n  RuntimeError: Script problem: Got an unsupported type of pfcwd_config:None\n\n\n### Steps to Reproduce\n\n- Run test qos/test_tunnel_qos_remap.py\n- After the last test executed test_xoff_for_pcbb[pcbb_xoff_4]  we get    \n-   Error: `RuntimeError: Script problem: Got an unsupported type of pfcwd_config:None` at teardown \n\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behaviour**\nThe test module teardown fails with a RuntimeError when attempting to restore PFC watchdog configuration:\n\n  ERROR at teardown of test_xoff_for_pcbb[pcbb_xoff_4]\n\n  Traceback (most recent call last):\n    File \"/data/tests/qos/test_tunnel_qos_remap.py\", line 80, in disable_pfcwd\n      reapply_pfcwd(duthost, pfcwd_value[duthost.hostname])\n    File \"/data/tests/common/snappi_tests/qos_fixtures.py\", line 160, in reapply_pfcwd\n      raise RuntimeError(f\"Script problem: Got an unsupported type of pfcwd_config:{pfcwd_config}\")\n  RuntimeError: Script problem: Got an unsupported type of pfcwd_config:None\n\n  _What happens:_\n  1. The disable_pfcwd fixture calls get_pfcwd_config() during setup to save the current PFC watchdog configuration\n  2. On devices without PFC_WD configured, get_running_config(duthost, filter=\".PFC_WD\") returns None (because jq .PFC_WD returns \"null\" when the key doesn't exist)\n  3. During teardown, reapply_pfcwd(duthost, None) is called\n  4. The reapply_pfcwd() function only handles dict or list types, not None\n  5. A RuntimeError is raised, causing the test teardown to fail\n\n **Expected Behavior**\n The test module should complete successfully without errors during teardown, even when there is no PFC watchdog configuration to restore.\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n<!-- Failed to upload \"test_tunnel_qos_remap.log\" -->\n[test_tunnel_qos_remap.xml](https://github.com/user-attachments/files/28360688/test_tunnel_qos_remap.xml)",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 24948,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24948",
+      "title": "Fix get_pfcwd_config to return dict instead of None",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-04T10:59:12Z",
+      "createdAt": "2026-05-28T18:29:07Z",
+      "author": "pdam-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\nWhen PFC_WD is not configured in CONFIG_DB, `get_pfcwd_config()` returns `None` for single-ASIC devices, causing test teardown to fail with `RuntimeError` in `reapply_pfcwd()`.\r\n\r\n  PR #21065 added filter parameter to `get_running_config()`, which uses `jq .PFC_WD`. When the key doesn't exist, jq returns `\"null\"` which Python's `json.loads()` converts to `None`.\r\n\r\n  The fix uses `or {}` to ensure `get_pfcwd_config()` always returns a dict (either populated or empty), which `reapply_pfcwd()` handles correctly.\r\n\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #24946 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n- [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nQoS tests (e.g., `qos/test_tunnel_qos_remap.py`) fail during module teardown on devices without PFC watchdog configured. \r\nThe `disable_pfcwd` fixture saves PFC_WD config at setup and restores it at teardown. \r\n When there's no PFC_WD config, `get_pfcwd_config()` returns `None`, causing `reapply_pfcwd()` to raise:\r\n\r\nRuntimeError: Script problem: Got an unsupported type of pfcwd_config:None\r\n\r\nThis causes test modules to fail with ERROR status even when all individual tests pass.\r\n\r\n#### How did you do it?\r\n Modified get_pfcwd_config() in tests/common/snappi_tests/qos_fixtures.py (line 125):\r\nAdded  or {}\r\n  # Before\r\n  return (get_running_config(duthost, filter=\".PFC_WD\"))\r\n\r\n  # After\r\n  return get_running_config(duthost, filter=\".PFC_WD\") or {}\r\n\r\n#### How did you verify/test it?\r\nTest case: qos/test_tunnel_qos_remap.py\r\n\r\n  Before fix:\r\n  - Module teardown fails with RuntimeError: Script problem: Got an unsupported type of pfcwd_config:None\r\n  - Test module marked as ERROR even though all 20 tests passed\r\n\r\n  After fix:\r\n  - Module teardown completes successfully\r\n  - Empty dict {} is restored to device (no-op for empty PFC_WD config)\r\n  - All tests pass without errors\r\n  \r\n#### Any platform specific information?\r\nNo\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nN/A",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/qos_fixtures.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-28T18:30:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-28T18:30:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T07:23:38Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26203"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-18T09:13:26Z",
+          "body": "@pdam-arista cherry pick PR didn't pass PR checker after retry. Please help check! Thanks.<br>https://github.com/sonic-net/sonic-mgmt/pull/26203\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-09T06:16:39Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

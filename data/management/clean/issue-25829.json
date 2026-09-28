@@ -1,0 +1,43 @@
+{
+  "id": "management-25829",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25829,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25829",
+    "title": "Bug: pfcwd/test_pfcwd_function.py  tests to fail with no PFC storm detected",
+    "created_at": "2026-07-01T20:21:28Z",
+    "closed_at": "2026-07-09T11:53:16Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nMost tests in pfcwd/test_pfcwd_function.py failed on branch 202605 with:\n\n  ```\nFailed: No port matching EthernetXX detected storm!\n  BUG897504: Tests failed as no pfc storm was detected on selected port\n```\n\n### Steps to Reproduce\n\n Run PFCWD functional tests on affected 202605 dualtor testbeds:\n\n  ```\nsudo ./run_tests.sh -n dtAA56  -m individual -p pfcwdlogs \\\n      -r -t any,util,dualtor,t0 \\\n      -f ../ansible/testbed.yaml -u \\\n      -c \"pfcwd/test_pfcwd_function.py\"\n```\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behavior**\n  The test fails because no storm is detected:\n\n  pfcwd/test_pfcwd_function.py::TestPfcwdFunc::test_pfcwd_multi_port[IPv6-gd426]\n  Failed: No port matching Ethernet160 detected storm!\n\n  On the fanout, pfc_gen_brcm_xgs.py is not started by Ansible.\n\n  **Expected Behavior**\n  The fanout action should render the EOS PFC storm template correctly and launch:\n\n  sudo python3 pfc_gen_brcm_xgs.py ...\n\n  Then the DUT should detect the PFC storm on the selected port, and the PFCWD tests should pass.\n\n### Relevant log output\n\n```shell\ntest_pfcwd_actions[IPv6-gd223]\n  Failed: No port matching Ethernet80 detected storm!\n\ntest_pfcwd_multi_port[IPv6-gd223]\n  Failed: No port matching Ethernet80 detected storm!\n```\n\n### Output of `show version`\n\n```shell\nsonic-mgmt  202605\n```\n\n### Attach files (if any)\n\n[test_pfcwd_function.log](https://github.com/user-attachments/files/29572259/test_pfcwd_function.log)\n[test_pfcwd_function.xml](https://github.com/user-attachments/files/29572258/test_pfcwd_function.xml)"
+  },
+  "resolution": {
+    "pr_number": 25830,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25830",
+    "title": "Fix apswitch template rendering",
+    "merged_at": "2026-07-09T11:53:15Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #25829\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request:\nFailure type:\n\n### Approach\n#### What is the motivation for this PR?\nWith latest Ansible ( 2.19+) behavior , arbitrary strings passed to `Templar` are\nnot rendered as templates unless they are marked trusted.\n\nRefer:\nhttps://docs.ansible.com/projects/ansible/latest/porting_guides/porting_guide_core_2.19.html#template-trust-model-inversion\n\nUnder `Template trust model inversion`, Ansible documents the new behavior:\nOnly strings marked as loaded from a trusted source are eligible to be\nrendered as templates.\n\nThe same section also states that custom plugins sourcing template strings\n must use public APIs to apply trust where appropriate. That is the case here:\n `ansible/plugins/action/apswitch.py` is a custom action plugin that reads the\n EOS PFC storm template from disk and passes the raw string to `Templar`.\nWith latest Ansible, that string is left unrendered unless it is wrapped with\n`trust_as_template()`.\n\n`apswitch.py` reads the EOS PFC storm template from disk and passes the raw\nfile content to `Templar`. Since the content was not trusted, Jinja variables\nwere not rendered before sending the command to the fanout. As a result, raw\nJinja content was sent to EOS and `pfc_gen_brcm_xgs.py` was not launched.\n\nThis caused PFCWD tests to fail with no PFC storm detected on the selected\nDUT port.\n\n#### How did you do it?\nImported `trust_as_template` from `ansible.template` and wrapped the file\ncontent read from the EOS fanout template before passing it to\n`self._templar.template()`.\n\n#### How did you verify/test it?\n##### Before the fix:\n\n  - pfc_gen_brcm_xgs.py was not started on the fanout.\n  - PFCWD tests failed with No port matching EthernetXX detected storm.\n\n##### After the fix:\n\n  - pfc_gen_brcm_xgs.py started correctly on the fanout.\n  - Example passing test:\n\n#### Any platform specific information?\nNo\n\n#### Supported testbed topology if it's a new test case?\nNo\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/plugins/action/apswitch.py",
+        "additions": 9,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

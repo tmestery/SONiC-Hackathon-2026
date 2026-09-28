@@ -1,0 +1,43 @@
+{
+  "id": "management-27354",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27354,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27354",
+    "title": "Bug: test_monitoring_critical_processes fails on BMC because bmcweb/sonic-dbus-bridge auto-restart and never emit \"not running\" alerts",
+    "created_at": "2026-08-25T23:32:24Z",
+    "closed_at": "2026-08-27T23:44:53Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\ngeneric\n\n### Importance or Severity\nMedium\n\n### Description of the bug\n`process_monitoring/test_critical_process_monitoring.py::test_monitoring_critical_processes` fails on BMC platforms (e.g. Nokia 7220 BMC).\n\nThe test kills the critical processes of the `redfish` container (`bmcweb` and `sonic-dbus-bridge`) and then expects a `Process '<name>' is not running in namespace 'host'` alert in syslog. However, both processes are configured with `autorestart=true` in `dockers/docker-sonic-redfish/supervisord.conf`, so supervisord restarts them immediately after they are killed. They never stay down long enough for `supervisor-proc-exit-listener` to emit the alert, so LogAnalyzer reports them as missing.\n\nThis is the same behavior already handled for the `otel` process.\n\n### Steps to Reproduce\nRun against a BMC testbed:\n\n```\npython3 -m pytest process_monitoring/test_critical_process_monitoring.py \\\n    --inventory=../ansible/veos,../ansible/str4 --host-pattern=all \\\n    --testbed=<bmc-testbed> --testbed_file=../ansible/testbed.yaml \\\n    --topology bmc,any\n```\n\n### Actual Behavior and Expected Behavior\nActual: LogAnalyzer fails with `expected_missing_match: 2` for `sonic-dbus-bridge` and `bmcweb`, because these auto-restarting processes never emit a \"not running\" alert.\n\nExpected: Auto-restarting critical processes (like `otel`) are excluded from the expected alerting messages, so the test passes on BMC while still exercising the kill/restart path.\n\n### Relevant log output\n```shell\ntests.common.plugins.loganalyzer.loganalyzer.LogAnalyzerError: match: 0\nexpected_match: 3\nexpected_missing_match: 2\n\nExpected Messages:\n2026 Aug 20 <IPV6> ... Process 'lldpmgrd' is not running in namespace 'host' (1 minutes).\n2026 Aug 20 <IPV6> ... Process 'lldpd' is not running in namespace 'host' (1 minutes).\n2026 Aug 20 <IPV6> ... Process 'telemetry' is not running in namespace 'host' (1 minutes).\n\nExpected Messages that are missing:\n.*Process 'sonic-dbus-bridge' is not running in namespace 'host'.*\n.*Process 'bmcweb' is not running in namespace 'host'.*\n```\n\n### Output of `show version`\n```shell\nN/A (BMC image, Nokia 7220)\n```\n\n### Attach files (if any)\nN/A"
+  },
+  "resolution": {
+    "pr_number": 27355,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27355",
+    "title": "[process_monitoring] Skip auto-restart processes (bmcweb/sonic-dbus-bridge) from expected alerts on BMC",
+    "merged_at": "2026-08-27T23:44:52Z",
+    "description": "### Description of PR\nSummary:\nFixes #27354\n\n`test_monitoring_critical_processes` fails on BMC platforms. The test kills the `redfish` container's critical processes (`bmcweb`, `sonic-dbus-bridge`) and expects a `Process '<name>' is not running` alert in syslog. But both are configured with `autorestart=true` in their container's `supervisord.conf`, so supervisord restarts them immediately after they are killed \u2014 they never stay down long enough for `supervisor-proc-exit-listener` to emit the alert. LogAnalyzer then reports them as missing (`expected_missing_match: 2`).\n\nThe `otel` process already had the same problem and was handled with a hardcoded skip; this PR generalizes that handling.\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [x] 202608\n\n### Approach\n#### What is the motivation for this PR?\nMake `test_monitoring_critical_processes` pass on BMC platforms, where `bmcweb` and `sonic-dbus-bridge` auto-restart and therefore never emit \"not running\" syslog alerts.\n\n#### How did you do it?\nAdded a static `AUTORESTART_CRITICAL_PROCESSES` map (keyed by container name: `otel` \u2192 `otel`; `redfish` \u2192 `bmcweb`, `sonic-dbus-bridge`) and a `_is_autorestart_process()` helper (tolerates a namespace/ASIC suffix). In `get_expected_alerting_messages_supervisor`, these processes are skipped from the expected alerting messages, in both the process and group loops. This folds the previously hardcoded `otel` skip into the same list. The processes are still killed, so the kill/restart path is still exercised.\n\n#### How did you verify/test it?\n- `python -m py_compile` and `flake8 --max-line-length=120` pass on the modified file.\n- Root cause confirmed in sonic-buildimage: `bmcweb`, `sonic-dbus-bridge`, and `otel` all set `autorestart=true`; alerting processes `lldpd`/`lldpmgrd` set `autorestart=false`.\n\n#### Any platform specific information?\nThe `redfish` container (bmcweb, sonic-dbus-bridge) only exists on BMC platforms.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 existing test, `bmc`/`any` topology.\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/process_monitoring/test_critical_process_monitoring.py",
+        "additions": 38,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

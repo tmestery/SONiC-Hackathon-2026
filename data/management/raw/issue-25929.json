@@ -1,0 +1,94 @@
+{
+  "number": 25929,
+  "title": "[conditional_mark] Conditional skips silently ignored when rootdir floats above tests/ (nodeid keeps 'tests/' prefix)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25929",
+  "createdAt": "2026-07-06T21:34:13Z",
+  "closedAt": "2026-07-08T18:53:21Z",
+  "author": "nhegde-microsoft",
+  "labels": [
+    "bug"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Summary\n\n`conditional_mark`'s `pytest_collection_modifyitems` normalizes each `item.nodeid` before matching it against the tests-mark-conditions files (whose keys are relative to the `tests/` directory, e.g. `platform_tests/api`). The normalization strips `basename(rootpath) + \"/\"` (added for pytest 9.0+ in #22944):\n\n```python\nroot_prefix = os.path.basename(str(session.config.rootpath)) + \"/\"\nfor item in items:\n    nodeid = item.nodeid\n    if nodeid.startswith(root_prefix):\n        nodeid = nodeid[len(root_prefix):]\n```\n\nThis is insufficient when pytest's `rootdir` is **not** the `tests/` directory.\n\n### Root cause\n\nWhen the harness is invoked with a path argument that lives **outside** `tests/` \u2014 e.g. `run_tests.sh` passes `--inventory ../ansible/veos_vtb` \u2014 pytest 9.0 floats `rootdir` up to the sonic-mgmt checkout root. `item.nodeid` then carries a leading `tests/` segment:\n\n```\ntests/platform_tests/api/test_watchdog.py::TestWatchdogApi::test_arm_disarm_states\n```\n\nBut `root_prefix` is now `basename(<checkout>) + \"/\"`, which does **not** prefix `tests/...`. The strip no-ops, the `tests/` survives, and every `nodeid.startswith(<condition_key>)` comparison fails. The net effect is **no conditional mark is ever applied** for the entire session (`Found match: 0`, `Adding mark: 0`, `skipped: 0`).\n\n### Impact\n\nAll conditional skips/xfails silently stop firing in that invocation mode. Concretely, on a virtual-switch (`asic_type: vs`) DUT the rule\n\n```yaml\nplatform_tests/api:\n  skip:\n    reason: Unsupported platform API\n    conditions:\n      - asic_type in ['vs']\n```\n\nno longer applies, so the platform-API tests run and **error** with `ModuleNotFoundError: No module named 'sonic_platform'` (the DUT can't start the `platform_api` service) instead of skipping cleanly with \"Unsupported platform API\".\n\n### Reproduce\n\nOn a KVM/virtual-switch testbed (asic_type `vs`), run any `platform_tests/api` test through `run_tests.sh` (which passes `--inventory ../ansible/veos_vtb`):\n\n```\n./run_tests.sh -n vms-kvm-t0-... -d vlab-01 -c platform_tests/api/test_watchdog.py \\\n  -f vtestbed.yaml -i ../ansible/veos_vtb -u -e --skip_sanity\n```\n\nObserved: `8 errors` (`No module named 'sonic_platform'` -> `Timeout waiting for ...:8000`), `skipped: 0`. The conditional-mark debug log shows `Found match: 0`. Expected: 8 skipped, \"Unsupported platform API\".\n\npytest version: 9.0.3.\n\n### Fix\n\nAfter the existing `basename(rootpath)` strip, also strip a leading `tests/` so nodeids match the `tests/`-relative rule keys regardless of where pytest resolved `rootdir`. PR to follow.\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25930,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25930",
+      "title": "[conditional_mark] Fix nodeid normalization so skips apply when rootdir floats above tests/",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-08T18:53:19Z",
+      "createdAt": "2026-07-06T21:34:40Z",
+      "author": "nhegde-microsoft",
+      "body": "Fixes #25929\n\nADO: https://msazure.visualstudio.com/One/_workitems/edit/38913902\n\n### Description of PR\n\n`conditional_mark` matches each test's `item.nodeid` against the tests-mark-conditions files, whose keys are relative to the `tests/` directory (e.g. `platform_tests/api`). Before matching, `pytest_collection_modifyitems` normalizes the nodeid by stripping `basename(rootpath) + \"/\"` (added for pytest 9.0+ in #22944).\n\nThat normalization breaks when pytest's `rootdir` is not the `tests/` directory. When the harness is invoked with a path argument outside `tests/` (e.g. `run_tests.sh` passes `--inventory ../ansible/veos_vtb`), pytest 9.0 floats `rootdir` up to the sonic-mgmt checkout root, so `item.nodeid` becomes `tests/platform_tests/api/...`. `root_prefix` is then `basename(<checkout>)/`, which does not prefix `tests/...`; the strip no-ops, the `tests/` survives, and every `nodeid.startswith(<key>)` fails. Result: **no conditional mark is applied at all** (`Found match: 0`, `skipped: 0`).\n\nPractically, on a virtual-switch (`asic_type: vs`) DUT the `platform_tests/api: skip if asic_type in ['vs']` rule stops firing, so those tests run and error with `No module named 'sonic_platform'` instead of skipping with \"Unsupported platform API\".\n\nThis PR adds a second normalization step: after stripping `basename(rootpath)`, also strip a leading `tests/` so nodeids match the `tests/`-relative rule keys regardless of where pytest resolved `rootdir`.\n\n#### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework (new/improvement)\n- [ ] New Test case\n- [x] Test case enhancement\n- [ ] Skipped for non-supported platforms\n\n### Back port request\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202605\n\n### Tested branch\n\n- [x] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n- master: on a virtual-switch (`asic_type: vs`) testbed through `run_tests.sh`, the platform API cases changed from errors to the expected conditional skips/xfails.\n- 202605: `testbed-bjw-can-720dt-3` (m0, `Arista-720DT-G48S4`) on `SONiC.20260510.06`; with this node-ID normalization change and the #26340 conditional marks applied to the `202605` test branch, targeted `tests/run_tests.sh` completed with **3 skipped**, 0 failures, exit 0 in 43.88 seconds. This standard-runner path previously retained the leading `tests/` and bypassed the marks.\n\n### Approach\n\n#### What is the motivation for this PR?\n\nConditional skips/xfails are silently ignored whenever pytest's `rootdir` resolves above `tests/` (which happens with the standard `run_tests.sh` invocation that passes `../`-relative paths). This causes false ERRORs for tests that are supposed to skip \u2014 most visibly the `platform_tests/api` suite on virtual-switch DUTs, but it affects every conditional rule in that run mode.\n\n#### How did you do it?\n\nIn `pytest_collection_modifyitems`, after the existing `basename(rootpath)` strip, also strip a leading `tests/` from the nodeid before matching against the condition keys.\n\n#### How did you verify/test it?\n\nOn a virtual-switch (`asic_type: vs`) testbed via `run_tests.sh` (which passes `--inventory ../ansible/veos_vtb`, i.e. the rootdir-floats-up case):\n\n| Test | Before | After |\n| --- | --- | --- |\n| `platform_tests/api/test_watchdog.py` | 8 errors (`No module named 'sonic_platform'`) | **8 skipped** (\"Unsupported platform API\") |\n| `platform_tests/api/test_psu.py` | errors | **14 skipped** (\"Unsupported platform API\") |\n| `platform_tests/sfp/test_sfputil.py` | errors | `asic_type in ['vs']` **xfail** rule fires (4 xfailed) |\n\nThe `sfp` case exercises a different conditions file and an `xfail` (not `skip`) rule, confirming the fix restores conditional-mark matching globally rather than only for `platform_tests/api`.\n\n`flake8 --max-line-length=120` clean.\n\nThe `202605` target-branch validation used the standard test runner with the backported normalization change and confirmed that all three #26340 warm-reboot conditions matched and skipped before entering the reboot path.\n\n### Documentation\n\n- [ ] Yes\n- [x] No\n",
+      "files": [
+        {
+          "path": "tests/common/plugins/conditional_mark/__init__.py",
+          "additions": 5,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-06T21:34:48Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-06T21:35:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-06T22:52:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-06T22:52:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-06T23:51:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-06T23:51:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "nhegde-microsoft",
+          "createdAt": "2026-07-07T21:21:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-07T21:22:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T03:09:56Z",
+          "body": "Cherry-pick PR to msft-202608: https://github.com/Azure/sonic-mgmt.msft/pull/1328"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T06:18:40Z",
+          "body": "This PR has backport request label(s) for branch(es): msft-202608, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202608: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T09:09:10Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26518"
+        }
+      ]
+    }
+  ]
+}

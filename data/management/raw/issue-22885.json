@@ -1,0 +1,95 @@
+{
+  "number": 22885,
+  "title": "[snappi][bug]: Unused old snappi fixture causing testcase to skip.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22885",
+  "createdAt": "2026-03-11T20:53:17Z",
+  "closedAt": "2026-04-17T06:59:33Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nTestcase: tests/snappi_tests/pfc/test_pfc_pause_lossy_with_snappi.py\n\nThis particular test case is importing following functions from snappi_fixtures.py file:\n```\nfrom tests.snappi_tests.files.helper import reboot_duts, setup_ports_and_dut, multidut_port_info  # noqa: F401\n```\n\nThe snappi infrastructure is already migrated to use \"tgen_port_info\" to find the list of static or dynamic ports for the test. In case of static port selection, this function uses snappi_tests/variables.override.yml file to select the ports.\n\nBut the above testcase imports the old setup_ports_and_dut pytest fixture which reads snappi_tests/variables.py file and since nothing is defined there, simply skips the testcase.\n\n\n### Steps to Reproduce\n\nExecute following testcase - tests/snappi_tests/pfc/test_pfc_pause_lossy_with_snappi.py\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\nSince the unused old functions are imported, the old functions checks variables.py file to find the ports.\n\nExpected behavior:\nThe import should be removed, instead testcase should rely on 'tgen_port_info' to find the relevant test ports.\n\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-03-11T22:07:26Z",
+      "body": "Hi @amitpawar12, thanks for filing this. I just looked at this and seems like the scope is larger than the single file mentioned.\n\n[`test_pfc_pause_lossy_with_snappi.py`](https://github.com/sonic-net/sonic-mgmt/blob/b9f87bddee076856a66ddf7ccf68156ae4e6e72e/tests/snappi_tests/pfc/test_pfc_pause_lossy_with_snappi.py#L14) is an example of stale import. `setup_ports_and_dut` and `multidut_port_info` are imported but never actually used in test logic. Removing them from the import is straightforward.\n\nHowever, multiple other files have the same import for the old `setup_ports_and_dut` in their test function signatures and bodies. I believe some of them can't be fixed by simply removing the import \u2014 they need to be migrated to `tgen_port_info`:\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/b9f87bddee076856a66ddf7ccf68156ae4e6e72e/tests/snappi_tests/ecn/test_ecn_marking_with_snappi.py#L12 \nhttps://github.com/sonic-net/sonic-mgmt/blob/b9f87bddee076856a66ddf7ccf68156ae4e6e72e/tests/snappi_tests/ecn/test_ecn_marking_with_pfc_quanta_variance_with_snappi.py#L13\nhttps://github.com/sonic-net/sonic-mgmt/blob/b9f87bddee076856a66ddf7ccf68156ae4e6e72e/tests/snappi_tests/ecn/test_bp_fabric_ecn_marking_with_snappi.py#L13\nhttps://github.com/sonic-net/sonic-mgmt/blob/b9f87bddee076856a66ddf7ccf68156ae4e6e72e/tests/snappi_tests/ecn/test_ecn_marking_cisco8000.py#L14\nhttps://github.com/sonic-net/sonic-mgmt/blob/b9f87bddee076856a66ddf7ccf68156ae4e6e72e/tests/snappi_tests/pfcwd/test_pfcwd_actions.py#L18\n\nAll of them import `setup_ports_and_dut`, which parametrizes against hardcoded hostnames in `variables.py`. But some are still structurally dependent on the old fixture's return values (`testbed_config`, `port_config_list`, `snappi_ports = setup_ports_and_dut`), so they'll need actual migration work to `tgen_port_info`, not just import removal.\n\n`test_pfcwd_actions.py` in particular is heavily coupled \u2014 14 references to `setup_ports_and_dut` and 12 to `multidut_port_info` across multiple test functions and parametrize decorators.\n\nMight be worth expanding the scope of this issue (or filing a follow-up) to track the full migration. Is there already an issue tracking something similar?"
+    },
+    {
+      "author": "amitpawar12",
+      "createdAt": "2026-03-11T22:49:36Z",
+      "body": "For test_pfcwd_actions.py - I have this following issue open (#22473) and I am working on it.\n\nThere is similar test case test_pfcwd_basic.py which also needs to be addressed. The ECN testcases, you mentioned above are Cisco testcases, and I will ask them if they can work on it.\n\nI am trying to get everything in one single direction ; to use tgen_port_info so that redundant functions can be removed. "
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-03-11T22:56:07Z",
+      "body": "Thanks for the info @amitpawar12! \n\nDo you think it would be useful to create a global issue tracking everything related to tgen_port_info migration?"
+    },
+    {
+      "author": "amitpawar12",
+      "createdAt": "2026-03-12T14:10:40Z",
+      "body": "> Thanks for the info [@amitpawar12](https://github.com/amitpawar12)!\n> \n> Do you think it would be useful to create a global issue tracking everything related to tgen_port_info migration?\n\n@Bojun-Feng:\nI have created a pull-request for this issue. Cisco team has an existing issue open to address the ECN testcase. The change to tgen_port_info migration was earlier tracked in community and majority of testcases were migrated to tgen_port_info.\n\nWe can create a parent issue for this and attach these child-issues for tracking. Pls let me know if u want me to do it.\n\nThanks,\n-A"
+    },
+    {
+      "author": "amitpawar12",
+      "createdAt": "2026-03-12T14:11:22Z",
+      "body": "@sdszhang- Can you please tag this issue with snappi labels so that we can track it?\n\nThanks,\n-A"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22912,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22912",
+      "title": "[snappi] removed unused import in pfc_pause_lossy testcase which caused testcase to skip",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-17T06:59:32Z",
+      "createdAt": "2026-03-12T14:06:03Z",
+      "author": "amitpawar12",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\nTestcase: tests/snappi_tests/pfc/test_pfc_pause_lossy_with_snappi.py\r\n\r\nThis particular test case is importing following functions from snappi_fixtures.py file:\r\n\r\n```\r\nfrom tests.snappi_tests.files.helper import reboot_duts, setup_ports_and_dut, multidut_port_info  # noqa: F401\r\n```\r\n\r\nThe snappi infrastructure is already migrated to use \"tgen_port_info\" to find the list of static or dynamic ports for the test. In case of static port selection, this function uses snappi_tests/variables.override.yml file to select the ports.\r\n\r\nBut the above testcase imports the old setup_ports_and_dut pytest fixture which reads snappi_tests/variables.py file and since nothing is defined there, simply skips the testcase.\r\n\r\nFollowing fixes are added:\r\n- Remove the unnecessary imports (setup_dut_ports and multidut_port_info) from the pfc_pause_lossy testcase.\r\n- modify the function reboot_duts in snappi_tests/files/helper.py to use tgen_port_info as well.\r\n- reboot_duts will choose setup_dut_ports or tgen_port_info depending on what is being used to select the ports.\r\n- Once the setup_dut_port is completely removed, the reboot_duts will require change to ONLY use tgen_port_info.\r\n- remove the try: <test> finally: <cleanup> and associated cleanup function from the test.\r\n- Clean-up should be taken care by tgen_port_info function itself now.\r\n\r\nSummary:\r\nFixes #22885 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThere is an unwanted \"import setup_ports_and_dut, multidut_port_info\" in the pfc_pause_lossy testcase. This testcase reads the variables.py file to determine the port for the test.\r\n\r\nThis is not required as tgen_port_info is introduced to select static/dynamic ports for the test. In case of static ports, it reads the port-info from variables.override.yml file.\r\n\r\n#### How did you do it?\r\nRemoved the unrequired imports.\r\n\r\n```\r\nfrom tests.snappi_tests.files.helper import reboot_duts   # noqa: F401\r\n```\r\n\r\n#### How did you verify/test it?\r\nVerified against the local master clone.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/snappi_tests/files/helper.py",
+          "additions": 15,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/test_pfc_pause_lossy_with_snappi.py",
+          "additions": 10,
+          "deletions": 7
+        }
+      ],
+      "comments": [
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-03-12T14:07:01Z",
+          "body": "@sdszhang, @auspham for viz."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-13T15:31:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-13T15:31:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-14T13:46:16Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-14T13:46:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

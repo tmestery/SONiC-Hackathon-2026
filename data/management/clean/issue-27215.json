@@ -1,0 +1,43 @@
+{
+  "id": "management-27215",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27215,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27215",
+    "title": "[202605] Bug: `crm/test_crm.py::test_acl_entry` fails with `Failed: \"crm_stats_acl_entry_used\" counter was not decremented or \"crm_stats_acl_entry_available\" counter was not incremented`",
+    "created_at": "2026-08-20T22:14:59Z",
+    "closed_at": "2026-09-09T17:41:17Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nIntroduced in https://github.com/sonic-net/sonic-mgmt/pull/22166 many of the ports in the minigraph.xml output went from using the `alias` name to using the `non-alias` name but the associated testing code wasn't updated.\nThis failure is due to this.\n```\n{% if num_asics > 1 or hwsku_has_alias_name_collision %}\n  {% set a_intf = intf_alias %}\n{% else %}\n  {% set a_intf = port_alias_map[intf_alias] %}\n{% endif %}\n{{- acl_intfs.append(a_intf) -}}\n```\nWhen you run `crm/test_crm.py::test_acl_entry` on a single-asic system on 202605 or later it will fail with:\n```\nE                         Failed: \"crm_stats_acl_entry_used\" counter was not decremented or \"crm_stats_acl_entry_available\" counter was not incremented\n```\nWhen reproducing we can see the test removes 2 ACL entries and expects the available ACL count to go from `2028` to\n```\n((Pdb)) p crm_stats_acl_entry_available\n2034\n```\nBut in reality it goes to `2038`\n```\n  Available Count\n-----------------\n             2038\n```\n\nThe reason it calculates the available count wrong is it only considers the port-channels as acl binding points:\n```\n((Pdb)) p asicAclBindings\n{'PortChannel104', 'PortChannel103', 'PortChannel101'}\n```\nSo it thinks it should add `3 (ports) * 2 (acl rules) = 6` to the available count.\n\nBut in reality there are also 2 front panel ports bound to this ACL that aren't included in the `mg_facts['minigraph_acls']`:\n```\nName        Type       Binding\n----------  ---------  --------------\nDATAACL     L3         Ethernet28\n                       Ethernet88\n                       PortChannel101\n                       PortChannel103\n                       PortChannel104\n((Pdb)) mg_facts[\"minigraph_acls\"]\n{'DataAcl': ['Ethernet8', 'Ethernet36', 'Ethernet60', 'Ethernet64']}\n```\nIf it did include the extra 2 non-portchannel ports it would've correctly calculated `5 (ports) * 2 (acl rules) = 10`\n\nAnd the reason it only considers the port-channels as acl binding points is because the the `minigraph_facts.py` expects the `AttachTo` to contain alias ports not Ethernet ports:\nhttps://github.com/sonic-net/sonic-mgmt/blob/5ed0dc0820aab417d7986c603908533ff95ad789/ansible/library/minigraph_facts.py#L471-L480\n```\n                elif member in port_alias_to_name_map:\n                    acl_intfs.append(port_alias_to_name_map[member])\n```\n```\n((Pdb)) mg_facts['minigraph_port_alias_to_name_map']\n{'Recirc0': 'Ethernet-Rec0', 'etp1': 'Ethernet0', ...\n```\nSo because of https://github.com/sonic-net/sonic-mgmt/pull/22166 we now see Ethernet ports in the AttachTo of the ACLs in minigraph:\n```\n<AttachTo>PortChannel101;PortChannel103;PortChannel104;Ethernet28;Ethernet88</AttachTo>\n<InAcl>DataAcl</InAcl>\n```\n\nE.G 202511 looks like:\n```\n<AttachTo>PortChannel102;PortChannel104;PortChannel106;PortChannel108;PortChannel110;PortChannel112;PortChannel114;PortChannel116;PortChannel118;PortChannel120;PortChannel122;PortChannel124;PortChannel126;PortChannel128;PortChannel130;PortChannel132;PortChannel134;PortChannel136;PortChannel138;PortChannel140;PortChannel142;PortChannel144;PortChannel146;PortChannel148;PortChannel150;PortChannel152;PortChannel154;PortChannel156;PortChannel158;PortChannel160;PortChannel162;PortChannel164;etp17;etp18;etp19;etp20;etp21;etp22;etp23;etp24;etp25;etp26;etp27;etp28;etp29;etp30;etp31;etp32;etp33;etp34;etp35;etp36;etp37;etp38;etp39;etp40;etp41;etp42;etp43;etp44;etp45;etp46;etp47;etp48</AttachTo>\n          <InAcl>DataAcl</InAcl>\n```\n\n### Steps to Reproduce\n\nRun `crm/test_crm.py::test_acl_entry` on any single-asic SKU with non-portchannels on 202605 or later and it will fail.\n\n### Actual Behavior and Expected Behavior\n\nminigraph_facts.py and minigraph_dpg.j2 need to agree on the format they are using in the AttachTo output so we don't incorrectly miss the front panel ports.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27217,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27217",
+    "title": "mg_facts: Handle ACL bind points being non-alias",
+    "merged_at": "2026-09-09T17:41:16Z",
+    "description": "### Description of PR\nhttps://github.com/sonic-net/sonic-mgmt/pull/22166 made single-asic SKUs use non-alias ports as the bind points for ACLs.\nThe minigraph_facts.py was never updated to handle non-alias ports in the ACLs.\n\nMore details in https://github.com/sonic-net/sonic-mgmt/issues/27215\n\nSummary:\nFixes #27215\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\n### Tested branch\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n- 202605: internal image built on Aug 20th\n\n### Approach\n#### What is the motivation for this PR?\nhttps://github.com/sonic-net/sonic-mgmt/pull/22166 converted the ACL bindpoints to use non-alias ports.\nWe need to update minigraph_facts.py to handle non-alias ports otherwise `crm/test_crm.py::test_acl_entry` will fail\n\n#### How did you do it?\nCheck if the port in the ACL `AttachTo` entry is in both `port_alias_to_name_map` and `port_name_to_alias_map`\n\n#### How did you verify/test it?\nRan `crm/test_crm.py::test_acl_entry` and saw it passing on 202605 after the change\n\n#### Any platform specific information?\nN/A\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "ansible/library/minigraph_facts.py",
+        "additions": 2,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

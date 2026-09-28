@@ -1,0 +1,138 @@
+{
+  "number": 23846,
+  "title": "Test Gap: GCU test infrastructure does not enforce apply-patch timeout -- hung GCU goes undetected in CI",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23846",
+  "createdAt": "2026-04-12T20:35:12Z",
+  "closedAt": "2026-04-30T19:14:31Z",
+  "author": "rimunagala",
+  "labels": [
+    "Enhancement",
+    "P0",
+    "Triaged"
+  ],
+  "assignees": [
+    "rimunagala"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\ngeneric\n\n### Importance or Severity\nHigh\n\n### Description of the test gap\n`apply_patch()` in `tests/common/gu_utils.py` is the shared utility called by ~35 test files. `GCUTIMEOUT_MAP` and `get_gcu_timeout()` already exist in this file, but the `config apply-patch` shell command was invoked synchronously with no mechanism to pre-empt a hung command:\n\n- The original code ran `duthost.shell(cmds, module_ignore_errors=True)` synchronously and only checked `elapsed_time` *after* the command returned -- a hung GCU blocks the test runner **indefinitely** since the synchronous call never returns\n- Every test file that calls `apply_patch()` from this utility inherits this gap\n\n### Affected Area\n`tests/common/gu_utils.py` -- affects all tests under `tests/generic_config_updater/` (~31 files) and 4 BGP tests that import `apply_patch` from this utility (`test_bgp_bbr.py`, `test_bgp_bbr_default_state.py`, `test_bgp_dual_asn.py`, `test_bgp_max_route.py`).\n\nNote: `tests/dhcp_relay/test_dhcp_relay.py` and other files import from a separate `tests/common/gcu_utils.py` utility and are **not** affected by this change.\n\n### Impact of missing tests and proposed tests\nFix uses `module_async=True` to run the shell command in a Python `ThreadPool` (via `AnsibleHostBase._run()` in `tests/common/devices/base.py`), then polls for completion using `wait_until()` -- the standard polling helper used across the repo (`tests/common/utilities.py`):\n\n`python\npool, async_result = duthost.shell(cmds, module_ignore_errors=True,\n                                   module_async=True)\ntry:\n    completed = wait_until(gcu_timeout, 10, 0,\n                           lambda: async_result.ready())\n    if not completed:\n        logger.error(\"apply-patch did not complete within {} seconds, \"\n                     \"terminating\".format(gcu_timeout))\n        raise TimeoutError(\n            \"Command execution timeout: {} seconds\".format(gcu_timeout))\n    output = async_result.get()\nfinally:\n    pool.terminate()\n    pool.join()\n`\n\nThis gives us:\n1. **Proactive timeout enforcement** -- raises `TimeoutError` and kills the thread pool if the command exceeds `gcu_timeout` (default 600s, Nokia IXS7215: 1200s, Nvidia SN5640: 3600s)\n2. **Periodic debug logging** -- `wait_until` logs elapsed time at each 10-second poll interval at debug level\n3. **Python-level thread control** -- `pool.terminate()` + `pool.join()` in `finally` ensures cleanup in all code paths (success, timeout, and exception)\n4. **Return-value compatibility** -- `async_result.get()` returns the same Ansible result dict (`rc`, `stdout`, `stderr`) as synchronous `duthost.shell()`\n\nThis follows a similar pattern to the existing `module_async=True` usage in `tests/platform_tests/test_reload_config.py`, improved by using `wait_until` instead of a manual `time.sleep` loop.\n\nAfter this fix, GCU tests correctly fail when GCU is slow or hung, surfacing performance regressions that previously went undetected in CI.",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23848,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23848",
+      "title": "[Test Gap] Enforce apply-patch timeout in GCU shared test utility",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-30T19:14:30Z",
+      "createdAt": "2026-04-12T20:41:34Z",
+      "author": "rimunagala",
+      "body": "### Description of PR\nSummary:\nFixes the GCU test infrastructure gap where `apply_patch()` in `tests/common/gu_utils.py` does not enforce an effective timeout on the `config apply-patch` shell command, allowing GCU patch application to block test execution indefinitely.\n\n`GCUTIMEOUT_MAP` and `get_gcu_timeout()` already exist in this file but the original implementation only measured elapsed time *after* the synchronous `duthost.shell()` call returned -- it could never pre-empt a hung command.\n\nThis change replaces the synchronous call with `module_async=True` + `wait_until()` polling so that a hung GCU is detected and terminated at the Python level, failing the test instead of blocking CI indefinitely.\n\nFixes #23846\n\n### Type of change\n- [ ] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\n`apply_patch()` in `tests/common/gu_utils.py` is the shared utility called by ~35 test files across `tests/generic_config_updater/` and `tests/bgp/`. The original code ran the shell command synchronously and only checked elapsed time *after* the command returned -- a hung GCU would block the test runner indefinitely with no mechanism to pre-empt it.\n\n#### How did you do it?\nUsed `module_async=True` to run the shell command in a Python `ThreadPool` (via `AnsibleHostBase._run()` in `tests/common/devices/base.py`), then polled for completion using `wait_until()` -- the standard polling helper used across the repo (`tests/common/utilities.py`). This gives us:\n\n1. **Proactive timeout enforcement** -- if the command doesn't complete within `gcu_timeout` seconds (default 600s, platform-specific overrides in `GCUTIMEOUT_MAP`), we raise `TimeoutError` and terminate the thread pool\n2. **Periodic debug logging** -- `wait_until` logs elapsed time at each 10-second poll interval at debug level\n3. **Python-level thread control** -- `pool.terminate()` + `pool.join()` in a `finally` block ensures cleanup in all code paths (success, timeout, and exception)\n4. **Return-value compatibility** -- `async_result.get()` returns the same Ansible result dict (`rc`, `stdout`, `stderr`) as synchronous `duthost.shell()`, so all callers (`expect_op_success`, `expect_op_failure`, direct `output['rc']` checks) are fully compatible\n\nThis follows a similar pattern to the existing `module_async=True` usage in `tests/platform_tests/test_reload_config.py`, improved by using `wait_until` instead of a manual `time.sleep` loop.\n\nAlso removed the now-unused `import time` and added a docstring to `get_gcu_timeout()`.\n\n#### How did you verify/test it?\n- Verified `async_result.get()` returns the identical Ansible result dict as sync `duthost.shell()` by tracing through `AnsibleHostBase._run()` in `tests/common/devices/base.py`\n- Confirmed all ~35 caller files handle the return value identically (pass to `expect_op_success()` or check `output['rc']` directly)\n- No lint errors introduced (only pre-existing unresolved imports for pytest/jsonpointer)\n\n#### Any platform specific information?\nNo -- affects all platforms via shared test utility. Platform-specific timeouts are handled by `GCUTIMEOUT_MAP` (Nokia IXS7215: 1200s, Nvidia SN5640: 3600s, all others: 600s default).\n\n#### Supported testbed topology if it's a new test case?\nN/A -- framework change, not a new test case\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "tests/common/gu_utils.py",
+          "additions": 28,
+          "deletions": 7
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-12T20:41:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-12T20:41:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-13T17:35:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-13T17:36:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "wangxin",
+          "createdAt": "2026-04-15T07:27:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-15T07:27:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-04-15T17:35:11Z",
+          "body": "The fix in `tests/common/gu_utils.py` looks good, but there are several other call sites that invoke `config apply-patch` directly (bypassing `apply_patch()`) and still lack a timeout:\n\n- `tests/common/gcu_utils.py`\n- `tests/generic_config_updater/gu_utils.py` \u2014 `dut.shell(\"config apply-patch ...\")`\n- `tests/common/fixtures/split_vlan.py`\n- `tests/common/devices/multi_asic.py`\n- `tests/dhcp_server/dhcp_server_test_common.py`\n- `tests/configlet/util/generic_patch.py`\n- `tests/common/helpers/yang_utils.py`\n\nThese will still hang indefinitely if GCU stalls. Worth either expanding this PR to cover them or tracking the gap for a follow-up."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T15:14:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "rimunagala",
+          "createdAt": "2026-04-17T15:14:32Z",
+          "body": "Thanks for the review. Updated the PR to address both points:\n\n**Dual-layer enforcement:** Updated the comment to clarify that \\\timeout=\\ actively kills a hung command (preventing indefinite blocking), while the existing \\elapsed_time > gcu_timeout\\ check below is kept as the post-completion safety net. Both layers now coexist intentionally. Also moved \\get_gcu_timeout()\\ to a single call before the shell invocation.\n\n**Other call sites:** Agreed \u2014 there are several places that invoke \\config apply-patch\\ directly, bypassing \\^Gpply_patch()\\. Tracking that as a follow-up."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T15:14:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T22:49:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T22:50:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T22:53:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T22:53:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rimunagala",
+          "createdAt": "2026-04-17T22:53:51Z",
+          "body": "**Updated approach (force-pushed):** Replaced the broken `timeout=` kwarg with the OS-level `timeout` command. Ansible's builtin `shell` module does not accept `timeout` as a parameter \u2014 passing it caused the module to fail validation silently (masked by `module_ignore_errors=True`), meaning the command never actually executed.\n\nThe fix now wraps the command string itself:\n```\ncmds = 'timeout {} config apply-patch {}'.format(gcu_timeout, dest_file)\noutput = duthost.shell(cmds, module_ignore_errors=True)\n```\nThis matches the pattern used by the repo's own `shell_cmds.py` Ansible module. When the timeout fires, the process is killed via SIGTERM and the shell returns `rc=124`, causing `expect_op_success()` to correctly fail the test. The existing `elapsed_time` check is kept as a post-completion safety net.\n\nAlso added a docstring to `get_gcu_timeout()`.\n\n**Other call sites:** Agreed \u2014 tracking as a follow-up. The sites calling `config apply-patch` directly (`gcu_utils.py`, `split_vlan.py`, `dhcp_server_test_common.py`, etc.) will be addressed in separate PRs."
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2026-04-22T19:17:49Z",
+          "body": "/Azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-22T19:18:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-23T04:58:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-23T04:59:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-18101",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 18101,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/18101",
+    "title": "Bug: sonic-mgmt: monit service parsing needs to handle multi-line data",
+    "created_at": "2025-04-18T19:53:06Z",
+    "closed_at": "2025-04-24T16:10:22Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nIn some circumstances monit can return multiline data for a value for a service, such as:\n\n```\nProgram 'routeCheck'\n  status                       Status ok\n  monitoring status            Monitored\n  monitoring mode              active\n  on reboot                    start\n  last exit value              255\n  last output                  Some routes are not set offloaded in FRR                           but all routes in APPL_DB and ASIC_DB are in sync\n                               Failure results: {{\n                                   \"\": {\n                                       \"missed_FRR_routes\": [\n                                           {\n                                               \"destSelected\": true,\n                                               \"distance\": 1,\n...\n```\n\nThis results in a parser error like\n```\nFile \"/var/AzDevOps/sonic-mgmt/tests/common/utilities.py\", line 146, in wait_until\n    check_result = condition(*args, **kwargs)\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 434, in is_monit_mem_ok\n    status = self.get_monit_mem_status()\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 431, in get_monit_mem_status\n    return get_monit_service_status(self.duthost, self.memory_service_name)\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 180, in get_monit_service_status\n    services = parse_monit_output(result[\"stdout_lines\"])\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 161, in parse_monit_output\n    key, value = line.lstrip().split('  ', 1)\nValueError: not enough values to unpack (expected 2, got 1)\n, error:not enough values to unpack (expected 2, got 1)\n```\n\nThis can happen in memory_checker/test_memory_checker.py::test_monit_reset_counter_failure as it will forcibly kill containers that have exceeded the specified memory limits.  This can leave things in a bad state when daemons are killed hard, such as in this case, not all routes are synced.  But recovery of said daemons is not the purpose for this test, so can be ignored.\n\n### Steps to Reproduce\n\nOn real hardware the T1 topology memory_checker/test_memory_checker.py::test_monit_reset_counter_failure can fail.  Though this shouldn't be specific to T1, but is where it was observed.\n\n### Actual Behavior and Expected Behavior\n\ntest passes\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n### Implementation\n* https://github.com/sonic-net/sonic-mgmt/pull/18045"
+  },
+  "resolution": {
+    "pr_number": 18045,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/18045",
+    "title": "monit service parsing needs to handle multi-line data",
+    "merged_at": "2025-04-24T16:10:21Z",
+    "description": "### Description of PR\n\nThis patch adds handling for concatenating multi-line output to the prior service's last value.\n\nSummary: memory_checker/test_memory_checker.py fix reading monit status\nFixes https://github.com/sonic-net/sonic-mgmt/issues/18101\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [x] 202411\n\n### Approach\n#### What is the motivation for this PR?\n\nIn some circumstances monit can return multiline data for a value for a service, such as:\n\n```\nProgram 'routeCheck'\n  status                       Status ok\n  monitoring status            Monitored\n  monitoring mode              active\n  on reboot                    start\n  last exit value              255\n  last output                  Some routes are not set offloaded in FRR                           but all routes in APPL_DB and ASIC_DB are in sync\n                               Failure results: {{\n                                   \"\": {\n                                       \"missed_FRR_routes\": [\n                                           {\n                                               \"destSelected\": true,\n                                               \"distance\": 1,\n...\n```\n\nThis results in a parser error like\n```\nFile \"/var/AzDevOps/sonic-mgmt/tests/common/utilities.py\", line 146, in wait_until\n    check_result = condition(*args, **kwargs)\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 434, in is_monit_mem_ok\n    status = self.get_monit_mem_status()\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 431, in get_monit_mem_status\n    return get_monit_service_status(self.duthost, self.memory_service_name)\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 180, in get_monit_service_status\n    services = parse_monit_output(result[\"stdout_lines\"])\n  File \"/var/AzDevOps/sonic-mgmt/tests/memory_checker/test_memory_checker.py\", line 161, in parse_monit_output\n    key, value = line.lstrip().split('  ', 1)\nValueError: not enough values to unpack (expected 2, got 1)\n, error:not enough values to unpack (expected 2, got 1)\n```\n\nThis can happen in memory_checker/test_memory_checker.py::test_monit_reset_counter_failure as it will forcibly kill containers that have exceeded the specified memory limits.  This can leave things in a bad state when daemons are killed hard, such as in this case, not all routes are synced.  But recovery of said daemons is not the purpose for this test, so can be ignored.\n\n#### How did you do it?\n\nIgnore mutli-line continuations for monit service values.\n\n#### How did you verify/test it?\n\nmemory_checker/test_memory_checker.py::test_monit_reset_counter_failure now passes\n\n#### Any platform specific information?\n\nSeen in T1 topology on physical hardware\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/memory_checker/test_memory_checker.py",
+        "additions": 6,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

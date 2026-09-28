@@ -1,0 +1,83 @@
+{
+  "number": 23818,
+  "title": "Enhancement: harden test_console_stress.py",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23818",
+  "createdAt": "2026-04-10T03:59:28Z",
+  "closedAt": "2026-04-16T06:22:30Z",
+  "author": "antonio-nexthop",
+  "labels": [
+    "Enhancement",
+    "Triaged"
+  ],
+  "assignees": [
+    "antonio-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the enhancement\n\nTest was using `max_loops=300`, coupled with the default `loop_delay` of `0.025` only waits for 7.5 secs before timing out in `test_console_stress_output`. Changed it to `read_timeout=300` to increase timeout allowance and also `max_loops` is being deprecated according to Netniko docs.\n\nReplaced `send_command` with send_command_timing in `test_console_stress_input` because `send_command` internally calls `command_echo_read()` with a hardcoded 10-second timeout that cannot be overridden. The 100,000-character echo command takes longer than 10 seconds to echo back over console, causing a `ReadTimeout` before the actual output is ever read. `send_command_timing` skips echo matching entirely, avoiding this limitation. Since `send_command_timing` returns the raw channel output (command echo + output + prompt), the test now strips the command echo and prompt before verifying the payload.\n\n### Current Behavior\n\nConsistently failing on Nexthop platforms\n\n### Proposed Behavior\n\nConsistent passing on Nexthop platforms",
+  "comments": [
+    {
+      "author": "antonio-nexthop",
+      "createdAt": "2026-04-15T15:33:42Z",
+      "body": "@wangxin Can I please get some help on merging the linked PR, it's already been approved and just awaiting `Semgrep` and merge. Thank you very much!"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 23817,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23817",
+      "title": "Enhance and harden test_console_stress.py",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-16T06:22:29Z",
+      "createdAt": "2026-04-10T03:44:10Z",
+      "author": "antonio-nexthop",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\nThis PR makes improvements and hardens `test_console_stress.py`\r\n\r\nSummary:\r\nFixes # https://github.com/sonic-net/sonic-mgmt/issues/23818\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\n`test_console_stress.py` is a new test case recently introduced and has been failing consistently on Nexthop devices.\r\n\r\n#### How did you do it?\r\nTest was using `max_loops=300`, coupled with the default `loop_delay` of `0.025` only waits for 7.5 secs before timing out in `test_console_stress_output`. Changed it to `read_timeout=300` to increase timeout allowance and also `max_loops` is being deprecated according to Netniko docs.\r\n<img width=\"1329\" height=\"734\" alt=\"Screenshot 2026-04-09 at 8 43 31\u202fPM\" src=\"https://github.com/user-attachments/assets/62205d97-b5fb-4ed2-9cda-92e8ec75c041\" />\r\n\r\nReplaced `send_command` with send_command_timing in `test_console_stress_input` because `send_command` internally calls `command_echo_read()` with a hardcoded 10-second timeout that cannot be overridden. The 100,000-character echo command takes longer than 10 seconds to echo back over console, causing a `ReadTimeout` before the actual output is ever read. `send_command_timing` skips echo matching entirely, avoiding this limitation. Since `send_command_timing` returns the raw channel output (command echo + output + prompt), the test now strips the command echo and prompt before verifying the payload.\r\n\r\n#### How did you verify/test it?\r\npreviously when the test was failing:\r\n```\r\ndut_console/test_console_stress.py::test_console_stress_output\r\n-------------------------------- live log call ---------------------------------\r\n09/04/2026 09:57:30 __init__.pytest_runtest_call             L0040 ERROR  | Traceback (most recent call last):\r\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 1720, in runtest\r\n    self.ihook.pytest_pyfunc_call(pyfuncitem=self)\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_hooks.py\", line 512, in __call__\r\n    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_manager.py\", line 120, in _hookexec\r\n    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 167, in _multicall\r\n    raise exception\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 121, in _multicall\r\n    res = hook_impl.function(*args)\r\n          ^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 166, in pytest_pyfunc_call\r\n    result = testfunction(**testargs)\r\n             ^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/var/AzDevOps/sonic-mgmt/tests/dut_console/test_console_stress.py\", line 31, in test_console_stress_output\r\n    output = duthost_console.send_command(\r\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/base_connection.py\", line 111, in wrapper_decorator\r\n    return_val = func(self, *args, **kwargs)\r\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/utilities.py\", line 667, in wrapper_decorator\r\n    return func(self, *args, **kwargs)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/base_connection.py\", line 1841, in send_command\r\n    raise ReadTimeout(msg)\r\nnetmiko.exceptions.ReadTimeout: \r\nPattern not detected: 'admin:\\\\~\\\\$' in output.\r\n\r\nThings you might try to fix this:\r\n1. Explicitly set your pattern using the expect_string argument.\r\n2. Increase the read_timeout to a larger value.\r\n\r\nYou can also look at the Netmiko session_log or debug log for more information.\r\n\r\n\r\n\r\nFAILED                                                                   [ 50%]\r\ndut_console/test_console_stress.py::test_console_stress_input\r\n-------------------------------- live log call ---------------------------------\r\n09/04/2026 09:57:41 __init__.pytest_runtest_call             L0040 ERROR  | Traceback (most recent call last):\r\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 1720, in runtest\r\n    self.ihook.pytest_pyfunc_call(pyfuncitem=self)\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_hooks.py\", line 512, in __call__\r\n    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_manager.py\", line 120, in _hookexec\r\n    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 167, in _multicall\r\n    raise exception\r\n  File \"/opt/venv/lib/python3.12/site-packages/pluggy/_callers.py\", line 121, in _multicall\r\n    res = hook_impl.function(*args)\r\n          ^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/_pytest/python.py\", line 166, in pytest_pyfunc_call\r\n    result = testfunction(**testargs)\r\n             ^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/var/AzDevOps/sonic-mgmt/tests/dut_console/test_console_stress.py\", line 79, in test_console_stress_input\r\n    output = duthost_console.send_command(\r\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/base_connection.py\", line 111, in wrapper_decorator\r\n    return_val = func(self, *args, **kwargs)\r\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/utilities.py\", line 667, in wrapper_decorator\r\n    return func(self, *args, **kwargs)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/base_connection.py\", line 1791, in send_command\r\n    new_data = self.command_echo_read(cmd=cmd, read_timeout=10)\r\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/base_connection.py\", line 1494, in command_echo_read\r\n    new_data = self.read_until_pattern(\r\n               ^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"/opt/venv/lib/python3.12/site-packages/netmiko/base_connection.py\", line 755, in read_until_pattern\r\n    raise ReadTimeout(msg)\r\nnetmiko.exceptions.ReadTimeout: \r\n\r\nPattern not detected: \"echo\\\\ '012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\n...\r\n```\r\n\r\nOn Nexthop devices, with the fix:\r\n\r\n<img width=\"1160\" height=\"322\" alt=\"Screenshot 2026-04-09 at 8 57 18\u202fPM\" src=\"https://github.com/user-attachments/assets/0da798b1-8dc0-4a7d-b3c7-f9ad0a1d9927\" />\r\n\r\n\r\n```\r\n09/04/2026 21:57:57 base_connection.read_channel             L0652 DEBUG  | read_channel: \r\n09/04/2026 21:57:57 base_connection.find_prompt              L1462 DEBUG  | [find_prompt()]: prompt is admin:~$\r\n09/04/2026 21:57:57 base_connection.wrapper_decorator        L0128 DEBUG  | write_channel: b'python3 -c \"for i in range(1000): print(f\\'LINE_{i:04d}: \\' + \\'0123456789\\' * 10)\"\\n'\r\n...\r\n09/04/2026 21:57:58 base_connection.read_channel             L0652 DEBUG  | read_channel: python3 -c \"for i in range(1000): print(f'LINE_{i:04d}: ' + '0123456789' * 10)\"\r\n...\r\n09/04/2026 21:57:58 base_connection.read_until_pattern       L0743 DEBUG  | Pattern found: (python3\\ \\-c\\ \"for\\ i\\ in\\ range\\(1000\\):\\ print\\(f'LINE_\\{i:04d\\}:\\ '\\ \\+\\ '0123456789'\\ \\*\\ 10\\)\") admin:~$ python3 -c \"for i in range(1000): print(f'LINE_{i:04d}: ' + '0123456789' * 10)\"\r\n...\r\n09/04/2026 21:57:58 base_connection.read_channel             L0652 DEBUG  | read_channel: LINE_0000: 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\nLINE_0001: 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\nLINE_0002: 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\nLINE_0003: 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\nLINE_0004: 0123456789012345678901234567890123456789012345678\r\n...\r\n9/04/2026 21:59:56 base_connection.read_channel             L0652 DEBUG  | read_channel: 1234567890123456789\r\nLINE_0997: 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\nLINE_0998: 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\nLINE_0999: 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\r\n...\r\n09/04/2026 21:59:56 base_connection.read_channel             L0652 DEBUG  | read_channel: echo test_responsive\r\ntest_responsive\r\n\r\n09/04/2026 21:59:56 base_connection.read_until_pattern       L0743 DEBUG  | Pattern found: (echo\\ test_responsive) echo test_responsive\r\n09/04/2026 21:59:56 base_connection.read_channel             L0652 DEBUG  | read_channel: \r\n09/04/2026 21:59:56 base_connection.read_channel             L0652 DEBUG  | read_channel: \r\n09/04/2026 21:59:56 base_connection.read_channel             L0652 DEBUG  | read_channel: \r\n```\r\n\r\n#### Any platform specific information?\r\nN/A\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nN/A\r\n",
+      "files": [
+        {
+          "path": "tests/dut_console/test_console_stress.py",
+          "additions": 11,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-10T03:44:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-10T03:44:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "antonio-nexthop",
+          "createdAt": "2026-04-13T17:24:07Z",
+          "body": "@yanmo96 can I please get a review on this short PR? Thank you for your help!"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-14T00:18:16Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-14T00:18:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "antonio-nexthop",
+          "createdAt": "2026-04-14T02:59:00Z",
+          "body": "@yanmo96 @yxieca Can I please get help on merging this PR? I already have approvals and builds are passing. Just need approval on `Semgrep` run and merge please."
+        },
+        {
+          "author": "antonio-nexthop",
+          "createdAt": "2026-04-15T23:15:49Z",
+          "body": "@yxieca Thanks for the approval! Can we please merge the PR?"
+        }
+      ]
+    }
+  ]
+}

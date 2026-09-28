@@ -1,0 +1,73 @@
+{
+  "number": 9790,
+  "title": "vm_host_* shouldn't erase all ansible connection values with defaults",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/9790",
+  "createdAt": "2023-08-31T11:33:32Z",
+  "closedAt": "2023-10-25T23:46:38Z",
+  "author": "collivier",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "#6303 introduced new bugs as it sets use_own_value to all ansible connection variables.\r\nsee the following lines in ansible/group_vars/all/creds.yml and ansible/group_vars/vm_host/creds.yml\r\n```\r\nvm_host_user: use_own_value\r\nvm_host_password: use_own_value\r\nvm_host_become_password: use_own_value\r\n```\r\n\r\nand a related task in ansible/testbed_add_vm_topology.yml\r\n```\r\n  - set_fact: ansible_user=\"{{ vm_host_user }}\"\r\n    when: vm_host_user is defined\r\n```\r\n\r\nThese variables should have been unset by default or at least compared to default in testbed_add_vm_topology.yml\r\n\r\nFixing this would make the KVM Testbed configuration very simple (docs/testbed/README.testbed.VsSetup.md) and less misleading. The configuration would just ask to set ansible_user for  STR-ACS-VSERV-01 (and even this could even been done automatically when setting the public keys).",
+  "comments": [
+    {
+      "author": "collivier",
+      "createdAt": "2023-08-31T11:34:05Z",
+      "body": "Please assign it to me"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 9791,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/9791",
+      "title": "Stop overriding all ansible connection variables with 'use_own_value'",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-10-25T23:46:37Z",
+      "createdAt": "2023-08-31T11:51:01Z",
+      "author": "collivier",
+      "body": "https://github.com/sonic-net/sonic-mgmt/pull/6303 asked to replace use_own_value to vm_host_xxx which override all ansible connection variables.\r\nsee the following lines in ansible/group_vars/all/creds.yml and ansible/group_vars/vm_host/creds.yml\r\n\r\nvm_host_user: use_own_value\r\nvm_host_password: use_own_value\r\nvm_host_become_password: use_own_value\r\n\r\nand a related task in ansible/testbed_add_vm_topology.yml\r\n\r\n  - set_fact: ansible_user=\"{{ vm_host_user }}\"\r\n    when: vm_host_user is defined\r\n\r\nThese variables are now compared to default before changing all ansible connection values.\r\nThis could make the KVM Testbed configuration simpler (docs/testbed/README.testbed.VsSetup.md) as the configuration could now only ask to set ansible_user for STR-ACS-VSERV-01 (and even this could even been done automatically when setting the public keys).\r\n\r\nPlease note that this will defacto fix the documentation which forgets modifying vm_host_* vars in ansible/group_vars/all/creds.yml,\r\n\r\nfix: #9790",
+      "files": [
+        {
+          "path": "ansible/testbed_add_vm_topology.yml",
+          "additions": 9,
+          "deletions": 3
+        },
+        {
+          "path": "ansible/testbed_remove_vm_topology.yml",
+          "additions": 9,
+          "deletions": 3
+        },
+        {
+          "path": "ansible/testbed_renumber_vm_topology.yml",
+          "additions": 9,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "collivier",
+          "createdAt": "2023-08-31T12:31:23Z",
+          "body": "\\+ @lizhijianrd \\+ @wangxin"
+        },
+        {
+          "author": "wangxin",
+          "createdAt": "2023-09-21T08:01:27Z",
+          "body": "@collivier Can you elaborate why and how this change can help? If the `use_own_value` string is not updated to fit your environment, there would still be connection issue with this change."
+        },
+        {
+          "author": "collivier",
+          "createdAt": "2023-09-22T11:26:26Z",
+          "body": "@wangxin once this patchset is merged we only have to change use_own_value for ansible_user in veos_vtb and that's it.\r\n\r\n```\r\ndiff --git a/ansible/veos_vtb b/ansible/veos_vtb\r\nindex 632a195e9..7ed401218 100644\r\n--- a/ansible/veos_vtb\r\n+++ b/ansible/veos_vtb\r\n@@ -271,7 +271,7 @@ vm_host_1:\r\n   hosts:\r\n     STR-ACS-VSERV-01:\r\n       ansible_host: 172.17.0.1\r\n-      ansible_user: use_own_value\r\n+      ansible_user: cedric\r\n       vm_host_user: use_own_value\r\n \r\n vms_1:\r\n```\r\n\r\nPlease note that this will defacto fix the documentation which forgets modifying vm_host_* vars in ansible/group_vars/all/creds.yml, that it's safe for the gating workflows and that I will push a second PR about the documentation once this one is merged (Github can't manage the PR dependencies as Gerrit does).\r\n\r\nI detailed a little bit in the issue https://github.com/sonic-net/sonic-mgmt/issues/9790 dumped below:\r\n\r\nhttps://github.com/sonic-net/sonic-mgmt/pull/6303 introduced new bugs as it sets use_own_value to all ansible connection variables.\r\nsee the following lines in ansible/group_vars/all/creds.yml and ansible/group_vars/vm_host/creds.yml\r\n\r\n```\r\nvm_host_user: use_own_value\r\nvm_host_password: use_own_value\r\nvm_host_become_password: use_own_value\r\n```\r\n\r\nand a related task in ansible/testbed_add_vm_topology.yml\r\n\r\n```\r\n  - set_fact: ansible_user=\"{{ vm_host_user }}\"\r\n`    when: vm_host_user is defined`\r\n```\r\n\r\nThese variables should have been unset by default or at least compared to default in testbed_add_vm_topology.yml\r\n\r\nFixing this would make the KVM Testbed configuration very simple (docs/testbed/README.testbed.VsSetup.md) and less misleading. The configuration would just ask to set ansible_user for STR-ACS-VSERV-01 (and even this could even been done automatically when setting the public keys).\r\n"
+        },
+        {
+          "author": "collivier",
+          "createdAt": "2023-10-25T14:17:16Z",
+          "body": "@yxieca any news?"
+        }
+      ]
+    }
+  ]
+}

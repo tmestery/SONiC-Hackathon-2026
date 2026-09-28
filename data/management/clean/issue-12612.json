@@ -1,0 +1,43 @@
+{
+  "id": "management-12612",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 12612,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/12612",
+    "title": "[Logrotate] test case test_orchagent_logrotate could be affected by the config reload in the teardown of the previous test",
+    "created_at": "2024-04-26T07:59:05Z",
+    "closed_at": "2024-07-18T23:25:32Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\n**Steps to reproduce the issue:**\n1. Run the test tests/syslog/test_logrotate.py\n2.\n3.\n\n**Describe the results you received:**\nThe first run of test test_orchagent_logrotate failed:\n```\nFailed: Found pending entries in APPL_DB: ['_NEIGH_TABLE:Ethernet64:<IP>']\norch_logrotate_setup = (['_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', ...], 'Ethernet64')\nrand_selected_dut = <MultiAsicSonicHost r-leopard-79>\n\n    @pytest.mark.repeat(5)\n    def test_orchagent_logrotate(orch_logrotate_setup, rand_selected_dut):\n        \"\"\"\n        Tests for the issue where an orchagent logrotate can cause a missed APPL_DB notification\n        \"\"\"\n        ignore_entries, target_port = orch_logrotate_setup\n        rand_selected_dut.control_process('orchagent', pause=True)\n        rand_selected_dut.control_process('orchagent', signal='SIGHUP')\n        rand_selected_dut.shell('sudo ip neigh add {} lladdr {} dev {}'.format(FAKE_IP, FAKE_MAC, target_port))\n        rand_selected_dut.control_process('orchagent', pause=False)\n        pending_entries = get_pending_entries(rand_selected_dut, ignore_list=ignore_entries)\n>       pytest_assert(not pending_entries, \"Found pending entries in APPL_DB: {}\".format(pending_entries))\nE       Failed: Found pending entries in APPL_DB: ['_NEIGH_TABLE:Ethernet64:<IP>']\n\nignore_entries = ['_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', ...]\norch_logrotate_setup = (['_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', '_ROUTE_TABLE:<IP>/25', ...], 'Ethernet64')\npending_entries = ['_NEIGH_TABLE:Ethernet64:<IP>']\nrand_selected_dut = <MultiAsicSonicHost r-leopard-79>\ntarget_port = 'Ethernet64'\n\nsyslog/test_logrotate.py:285: Failed\n```\nThe root cause is that there is a config reload in the teardown of the previous test case test_logrotate_small_size:\nhttps://github.com/sonic-net/sonic-mgmt/blob/92ea888a8fa3dc6a80f2867d3b79e587a8b6e667/tests/syslog/test_logrotate.py#L64\nWhen the test test_orchagent_logrotate starts, the system is still processing thousands of routes, which make it impossible for the neighbor update to be processed as these are sequential.\nThe test should start only after the system is in a stable state.\n\n**Describe the results you expected:**\nTest should pass.\n\n**Additional information you deem important:**\n\n    **Output of `show version`:**\n\n    ```\n    (paste your output here)\n    ```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```"
+  },
+  "resolution": {
+    "pr_number": 12558,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/12558",
+    "title": "[logrotate]: Relax APPL_DB check tolerance",
+    "merged_at": "2024-07-18T23:25:32Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #12612\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n\n### Approach\n#### What is the motivation for this PR?\nThe orchagent log rotate notification test can fail if orchagent is busy executing many operations (such as during system init after a config reload). This leads to a delay in processing APPL_DB notifications. If the test case checks APPL_DB during the delay, the test will fail even if orchagent later does process the notification correctly.\n\n#### How did you do it?\nAdd 5 seconds of tolerance to the test case\n\n#### How did you verify/test it?\nRun the entire test module. The test case which runs before `test_orchagent_logrotate` calls `config_reload` during teardown. Prior to the fix, this would result in `test_orchagent_logrotate` failing. After the fix, all tests pass consistently.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/syslog/test_logrotate.py",
+        "additions": 12,
+        "deletions": 7
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

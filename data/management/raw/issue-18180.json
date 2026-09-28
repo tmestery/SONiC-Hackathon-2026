@@ -1,0 +1,94 @@
+{
+  "number": 18180,
+  "title": "[Snappi][Nokia][Enhancement]: Support to skip warm and fast reboots on Nokia platform.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/18180",
+  "createdAt": "2025-04-29T23:49:31Z",
+  "closedAt": "2025-05-14T23:33:54Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Enhancement"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the enhancement\n\nCurrently, Nokia platforms do not support 'warm' and 'fast' mode of reboots.\n\nWe will add a skip for warm and fast reboots if HW-SKU contains Nokia.\n\n### Current Behavior\n\nCurrently there is check for the following file tests/snappi_tests/files/helper.py in function \"skip_warm_reboot\":\n```\n    reboot_case_supported = True\n    if (reboot_type == \"warm\" or reboot_type == \"fast\") and is_cisco_device(duthost):\n        reboot_case_supported = False\n    elif is_broadcom_device(duthost) and asic_type in SKIP_LIST and \"warm\" in reboot_type:\n        reboot_case_supported = False\n    msg = \"Reboot type {} is {} supported on {} switches\".format(\n            reboot_type, \"\" if reboot_case_supported else \"not\", duthost.facts['asic_type'])\n    logger.info(msg)\n    pytest_require(reboot_case_supported, msg)\n```\nThere is no check for Nokia platforms. \n\n### Proposed Behavior\n\nWe will create a file called /tests/common/nokia_data.py, which will contain following function:\n\ndef is_nokia_device(dut):\n    return ('nokia' in dut.facts[\"hwsku\"].lower())\n\nThis function will be called in tests/snappi_tests/files/helper.py file:\n```\nfrom tests.common.nokia_data import is_nokia_device\n```\n\nFunction 'skip_warm_reboot' in the above file, will be modified to check for warm-fast reboots:\n```\n    if (reboot_type == \"warm\" or reboot_type == \"fast\") and is_cisco_device(duthost):\n        reboot_case_supported = False\n    elif is_broadcom_device(duthost) and asic_type in SKIP_LIST and \"warm\" in reboot_type:\n        reboot_case_supported = False\n    elif (reboot_type == \"warm\" or reboot_type == \"fast\") and is_nokia_device(duthost):\n        reboot_case_supported = False\n```\n\nThis will help to skip the warm and fast reboots for Nokia platforms.\n\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 18228,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/18228",
+      "title": "[Snappi] Skip warm and fast reboots for Nokia devices.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-05-14T23:33:53Z",
+      "createdAt": "2025-05-05T21:07:41Z",
+      "author": "amitpawar12",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #18180 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [X] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [X] 202411\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nNokia platforms do not support warm and fast reboots. The warm and fast reboots are part of two testcases:\r\ntests/snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py\r\ntests/snappi_tests/pfc/test_pfc_pause_lossy_with_snappi.py\r\n\r\nThese testcases have warm, cold and fast reboots parameterized. However, Nokia platforms do not support warm and fast reboots and hence need to skipped.\r\n\r\n@vmittal-msft, @rawal01 , @sdszhang for viz\r\n\r\n#### How did you do it?\r\nCreate a file called nokia_data.py which looks for hardware SKU contains NOKIA or not.\r\n\r\nIn snappi_tests/files/helper.py, the function skip_warm_reboot, then calls this function. If reboot_type is either warm or fast, and hardware SKU contains Nokia, then reboot_type is skipped.\r\n\r\n#### How did you verify/test it?\r\nT0/T1 verification:\r\n```\r\nAzDevOps@sonic_mgmt_nokia_202411:/data/sonic-mgmt/tests$ date;python3 -m pytest --inventory ../ansible/ixia-sonic --host-pattern ixr-aaa-14 --testbed ixr-aaa-14-t2 --testbed_file ../ansible/testbed.csv --log-cli-level info --log-file-level info --kube_master unset --showlocals -ra --show-capture stdout --junit-xml=/tmp/p.xml --skip_sanity --log-file=/tmp/p.log --cache-clear --topology tgen snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py -k reboot\r\nFri May  2 19:02:59 UTC 2025\r\n---------- curtailed output ----------------\r\n19:03:37 helper.skip_warm_reboot                  L0048 INFO   | Reboot type warm is not supported on broadcom switches\r\nSKIPPED (Reboot type warm is not supported on broadcom switches) \r\n---------- curtailed output ----------------\r\nsnappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py::test_pfc_pause_single_lossless_prio_reboot[multidut_port_info0-cold-ixr-aaa-14|3] \r\n--------------------------------------------------------------------------------------------------- live log setup ----------------------------------------------------------------------------------------------------\r\n19:10:28 __init__._fixture_generator_decorator    L0085 INFO   | -------------------- fixture reboot_duts_and_disable_wd setup ends --------------------\r\n19:10:28 __init__.pytest_runtest_setup            L0034 INFO   | collect memory before test test_pfc_pause_single_lossless_prio_reboot[multidut_port_info0-cold-ixr-aaa-14|3]\r\n19:10:28 __init__.pytest_runtest_setup            L0054 INFO   | Before test: collected memory_values {'before_test': {}, 'after_test': {}}\r\n---------- curtailed output ----------------\r\nPASSED                                                                                                                                                                                                          [ 16%]\r\n-------------------------------------------------------------------------------------------------- live log teardown --------------------------------------------------------------------------------------------------\r\n19:16:15 __init__.pytest_runtest_teardown         L0066 INFO   | collect memory after test test_pfc_pause_single_lossless_prio_reboot[multidut_port_info0-cold-ixr-aaa-14|3]\r\n19:16:15 __init__.pytest_runtest_teardown         L0089 INFO   | After test: collected memory_values {'before_test': {}, 'after_test': {}}\r\n19:16:15 __init__._fixture_generator_decorator    L0093 INFO   | -------------------- fixture reboot_duts_and_disable_wd teardown starts --------------------\r\n19:16:22 config_reload.config_reload              L0145 INFO   | reloading config_db\r\n19:20:47 processes_utils.wait_critical_processes  L0078 INFO   | Wait until all critical processes are healthy in 600 sec\r\n19:20:47 processes_utils._all_critical_processes_ L0045 INFO   | Check critical processes status\r\n19:20:55 __init__._fixture_generator_decorator    L0102 INFO   | -------------------- fixture reboot_duts_and_disable_wd teardown ends --------------------\r\n19:20:55 __init__._fixture_generator_decorator    L0093 INFO   | -------------------- fixture setup_ports_and_dut teardown starts --------------------\r\n19:20:56 __init__._fixture_generator_decorator    L0102 INFO   | -------------------- fixture setup_ports_and_dut teardown ends --------------------\r\n19:20:56 __init__._fixture_generator_decorator    L0093 INFO   | -------------------- fixture number_of_tx_rx_ports teardown starts --------------------\r\n19:20:56 __init__._fixture_generator_decorator    L0102 INFO   | -------------------- fixture number_of_tx_rx_ports teardown ends --------------------\r\n19:20:56 __init__._fixture_generator_decorator    L0093 INFO   | -------------------- fixture multidut_port_info teardown starts --------------------\r\n19:20:56 __init__._fixture_generator_decorator    L0102 INFO   | -------------------- fixture multidut_port_info teardown ends --------------------\r\n19:20:56 __init__._fixture_generator_decorator    L0093 INFO   | -------------------- fixture ignore_route_check_for_cisco_8000 teardown starts --------------------\r\n19:20:56 __init__._fixture_generator_decorator    L0102 INFO   | -------------------- fixture ignore_route_check_for_cisco_8000 teardown ends --------------------\r\n\r\nsnappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py::test_pfc_pause_single_lossless_prio_reboot[multidut_port_info0-fast-ixr-aaa-14|3] \r\n--------------------------------------------------------------------------------------------------- live log setup ----------------------------------------------------------------------------------------------------\r\n19:20:58 helper.skip_warm_reboot                  L0048 INFO   | Reboot type fast is not supported on broadcom switches\r\nSKIPPED (Reboot type fast is not supported on broadcom switches)                                                                                                            \r\n---------- curtailed output ----------------\r\n=============================================================================================== short test summary info ===============================================================================================\r\nSKIPPED [2] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:202: Reboot type warm is not supported on broadcom switches\r\nSKIPPED [2] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:202: Reboot type fast is not supported on broadcom switches\r\nSKIPPED [2] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:261: Reboot type warm is not supported on broadcom switches\r\nSKIPPED [2] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:261: Reboot type fast is not supported on broadcom switches\r\n======================================================================== 4 passed, 8 skipped, 10 deselected, 12 warnings in 3941.64s (1:05:41) ========================================================================\r\nAzDevOps@sonic_mgmt_nokia_202411:/data/sonic-mgmt/tests$ \r\n```\r\n\r\nT2 verification:\r\n```\r\nAzDevOps@7c3002ea4994:/data/tests$ date;python3 -m pytest --inventory ../ansible/ixia-sonic --host-pattern board73,board74 --testbed chassis17-t2 --testbed_file ../ansible/testbed.csv --show-capture=stdout --log-cli-level info --showlocals -ra --allow_recover --junit-xml=/tmp/pfc/p.xml --skip_sanity --log-file=/tmp/pfc/p.log snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py -k reboot --pdb\r\nSat May  3 15:06:45 UTC 2025\r\n---------- curtailed output ----------------\r\n15:07:41 helper.skip_warm_reboot                  L0052 INFO   | Reboot type warm is not supported on broadcom switches\r\nSKIPPED (Reboot type warm is not supported on broadcom switches)                                                                                              \r\n---------- curtailed output ----------------\r\n15:29:57 helper.skip_warm_reboot                  L0052 INFO   | Reboot type fast is not supported on broadcom switches\r\nSKIPPED (Reboot type fast is not supported on broadcom switches) \r\n\r\n---------- curtailed output ----------------\r\nsnappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py::test_pfc_pause_single_lossless_prio_reboot[multidut_port_info1-cold-board71|4] \r\n--------------------------------------------------------------------------------------------------- live log setup ----------------------------------------------------------------------------------------------------\r\n15:30:13 __init__.set_default                     L0053 INFO   | Completeness level not set during test execution. Setting to default level: CompletenessLevel.basic\r\n15:30:13 __init__.check_test_completeness         L0151 INFO   | Test has no defined levels. Continue without test completeness checks\r\n15:30:13 __init__.loganalyzer                     L0067 INFO   | Log analyzer is disabled\r\n---------- curtailed output ----------------\r\n15:30:19 __init__._fixture_generator_decorator    L0085 INFO   | -------------------- fixture setup_ports_and_dut setup ends --------------------\r\n15:30:19 __init__._fixture_generator_decorator    L0081 INFO   | -------------------- fixture reboot_duts_and_disable_wd setup starts --------------------\r\n15:30:19 sonic.get_asic_name                      L1778 INFO   | asic: unknown\r\n15:30:19 helper.skip_warm_reboot                  L0052 INFO   | Reboot type cold is  supported on broadcom switches\r\n15:30:20 sonic.get_asic_name                      L1778 INFO   | asic: unknown\r\n15:30:20 helper.skip_warm_reboot                  L0052 INFO   | Reboot type cold is  supported on broadcom switches\r\n15:30:22 helper.save_config_and_reboot            L0411 INFO   | Issuing a cold reboot on the dut board73\r\n15:30:22 helper.save_config_and_reboot            L0411 INFO   | Issuing a cold reboot on the dut board74\r\n---------- curtailed output ----------------\r\n=============================================================================================== short test summary info ===============================================================================================\r\nSKIPPED [4] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:203: Reboot type warm is not supported on broadcom switches\r\nSKIPPED [4] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:203: Reboot type fast is not supported on broadcom switches\r\nSKIPPED [4] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:262: Reboot type warm is not supported on broadcom switches\r\nSKIPPED [4] snappi_tests/pfc/test_pfc_pause_lossless_with_snappi.py:262: Reboot type fast is not supported on broadcom switches\r\n======================================================================= 8 passed, 16 skipped, 20 deselected, 71 warnings in 10050.95s (2:47:30) =======================================================================\r\nINFO:root:Can not get Allure report URL. Please check logs\r\n```\r\n\r\n#### Any platform specific information?\r\nOnly Nokia platform specific changes.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/nokia_data.py",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "tests/snappi_tests/files/helper.py",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-05T21:07:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-05T21:08:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "sdszhang",
+          "createdAt": "2025-05-07T23:19:34Z",
+          "body": "@vmittal-msft to review"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-05-14T02:16:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-14T02:16:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-05-14T02:23:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-14T02:23:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-14T23:34:26Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-mgmt/pull/18421"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-14T23:34:35Z",
+          "body": "Cherry-pick PR to msft-202405: https://github.com/Azure/sonic-mgmt.msft/pull/279"
+        },
+        {
+          "author": "auspham",
+          "createdAt": "2026-06-05T08:06:41Z",
+          "body": "@amitpawar12 The automated cherry-pick of this change to the `202411` branch ([action] PR #18421) failed and has been closed. Please raise a PR to `202411` to cherry-pick this change manually."
+        }
+      ]
+    }
+  ]
+}

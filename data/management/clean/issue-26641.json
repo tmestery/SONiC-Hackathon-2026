@@ -1,0 +1,43 @@
+{
+  "id": "management-26641",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26641,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26641",
+    "title": "Bug: LogAnalyzer misses rsyslog repeated imrelp session-broken message",
+    "created_at": "2026-07-29T02:29:01Z",
+    "closed_at": "2026-08-19T23:54:26Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nLogAnalyzer already ignores the direct rsyslog imrelp session-broken\n  message:\n\n`  ERR rsyslogd: imrelp...error 'error when receiving data, session broken'...`\n\n  Recent 202605 runs also emit the same condition in rsyslog duplicate-message\n  reduction format:\n\n```\n  ERR rsyslogd: message repeated 2 times: [imrelp[2514]: error 'error when\n  receiving data, session broken'...]\n```\n\n  The existing common ignore regex does not match the compressed\n  \"message repeated N times: [imrelp...]\" form. As a result, tests fail during\n  teardown even though the test logic itself passed.\n\n### Steps to Reproduce\n\n Run affected tests on a 202605 dualtor-aa testbed where rsyslog is HUPed\n  during the LogAnalyzer window.\n\n  Example:\n```\n\n  ./run_tests.sh \\\n    -n dtAA \\\n    -m individual \\\n    -r \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -c \"pfcwd/test_pfcwd_cli.py::TestPfcwdFunc::test_pfcwd_show_stat\"\n```\n\n  The same issue was also seen with:\n`dualtor_io/test_link_failure.py::test_active_link_admin_down_config_reload_downstream[active-active]`\n\n### Actual Behavior and Expected Behavior\n\n **Actual:**\n  The test fails in teardown with LogAnalyzer because the compressed rsyslog\n  message is treated as an unexpected ERR syslog line.\n\n  **Expected:**\n  The compressed repeated-message form should be ignored the same way the direct\n  imrelp session-broken message is already ignored.\n\n### Relevant log output\n\n```shell\nFailure 1:\n  pfcwd/test_pfcwd_cli.py::TestPfcwdFunc::test_pfcwd_show_stat[IPv4-ldp202]\n\n  JUnit:\n  tests=\"2\" failures=\"0\" errors=\"1\"\n\n  failed on teardown with \"Failed: Got matched syslog in processes\n  \"analyze_logs--<MultiAsicSonicHost ldp202>\" exit code:\"1\"\n  match: 1\n  expected_match: 0\n  expected_missing_match: 0\n\n  Match Messages:\n  2026 Jul 18 <IPV6>.136311 ldp202 ERR rsyslogd:  message repeated 2 times:\n  [imrelp[2514]: error 'error when receiving data, session broken', object\n  'lstn 2514: conn to clt <IP>/<IP>' - input may not work as intended\n  [v8.2504.0 try https://www.rsyslog.com/e/2353 ]]\n\n  Surrounding syslog:\n  2026 Jul 18 <IPV6>.135799 ldp202 INFO systemd[1]: rsyslog.service:\n  Sent signal SIGHUP to main process 1252 (rsyslogd) on client request.\n  2026 Jul 18 <IPV6>.136512 ldp202 INFO rsyslogd:\n  rsyslogd was HUPed\n\n  Failure 2:\n  dualtor_io/test_link_failure.py::test_active_link_admin_down_config_reload_downstream[active-active]\n\n  JUnit:\n  tests=\"36\" failures=\"0\" errors=\"1\" skipped=\"28\"\n\n  Match Messages:\n  2026 Jul 17 <IPV6>.838824 ldp202 ERR rsyslogd:  message repeated 2 times:\n  [imrelp[2514]: error 'error when receiving data, session broken', object\n  'lstn 2514: conn to clt <IP>/<IP>' - input may not work as intended\n  [v8.2504.0 try https://www.rsyslog.com/e/2353 ]]\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[test_pfcwd_cli.log](https://github.com/user-attachments/files/30487536/test_pfcwd_cli.log)\n[test_pfcwd_cli.xml](https://github.com/user-attachments/files/30487535/test_pfcwd_cli.xml)\n[test_link_failure.xml](https://github.com/user-attachments/files/30487513/test_link_failure.xml)"
+  },
+  "resolution": {
+    "pr_number": 26643,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26643",
+    "title": "LogAnalyzer: ignore repeated imrelp errors",
+    "merged_at": "2026-08-19T23:54:25Z",
+    "description": "### Description of PR\n\nLogAnalyzer already ignores the direct rsyslog imrelp\n \"error when receiving data, session broken\" message.\n\n  Recent runs can emit the same condition in rsyslog's duplicate-message\n  reduction format:\n\n`  ERR rsyslogd: message repeated N times: [imrelp...]`\n\n  The existing ignore regex does not match this compressed form, so tests can\n  fail in teardown with a LogAnalyzer error even though the test logic itself\n  passed.\n\n  This PR updates the common LogAnalyzer ignore regex to match both the direct\n  imrelp message and the optional repeated-message wrapper.\n\nSummary:\n  Fixes #26641\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: regression\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n- 202605\n Image : branch.202605-ars.3213bfab-buildimage.63f17ae505b85275482fef3274201014c07fed91-nightly-2026.07.15.21.40\n Failure Logs\n[test_link_failure.xml](https://github.com/user-attachments/files/30488089/test_link_failure.xml)\n[test_pfcwd_cli.xml](https://github.com/user-attachments/files/30488098/test_pfcwd_cli.xml)\n\n### Approach\n#### What is the motivation for this PR?\n Tests were failing in teardown because LogAnalyzer treated rsyslog's compressed\n  duplicate-message form as a new unexpected ERR log. The direct imrelp\n  session-broken message is already ignored, but the equivalent repeated form was\n  not covered.\n\n#### How did you do it?\nUpdated the common LogAnalyzer ignore regex for the rsyslog imrelp\n  session-broken message to allow an optional:\n\n  `message repeated N times: [`\n\n  prefix before `imrelp`.\n\n#### How did you verify/test it?\n\nVerified the updated regex matches both forms:\n  - `ERR rsyslogd: imrelp...error 'error when receiving data, session broken'...`\n  - `ERR rsyslogd: message repeated N times: [imrelp...error 'error when receiving data, session broken'...]`\n\n  Verified it does not match unrelated repeated rsyslog messages.\n\n  Validated against failed 202605 logs where LogAnalyzer matched the repeated\n  imrelp line, and against later passing 202605 runs for `pfcwd` and\n  `dualtor_io`.\n\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/tools/loganalyzer/loganalyzer_common_ignore.txt",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

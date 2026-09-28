@@ -1,0 +1,45 @@
+{
+  "id": "management-1587",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 1587,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/1587",
+    "title": "Bgp multipath test failed because the routing entries required for the test haven't injected into VM in t1-lag",
+    "created_at": "2020-04-20T10:31:12Z",
+    "closed_at": "2020-05-21T16:23:20Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Testbed"
+    ]
+  },
+  "failure": {
+    "body": "**Description**\nBgp multipath test failed because the routing entries required for the test haven't injected into VM in t1-lag VMs simulating TOR.\n\n**Steps to reproduce the issue:**\n1. Deploy the testbed in t1-lag topo.\n2. Run bgp-multipath test.\n3.\n\n**Describe the results you received:**\nTest failed:\n```\nSaturday 18 April 2020  <IPV6> +0000 (<IPV6>.647)       <IPV6>.724 ********\nUsing module file /root/mars/workspace/sonic-mgmt/ansible/library/bgp_route.py\nPipelining is enabled.\n<r-tigris-13> ESTABLISH SSH CONNECTION FOR USER: admin\n<r-tigris-13> SSH: EXEC sshpass -d12 ssh -o ControlMaster=auto -o ControlPersist=120s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o StrictHostKeyChecking=no -o 'User=\"admin\"' -o ConnectTimeout=30 -o ControlPath=/root/.ansible/cp/fe26bceb9b r-tigris-13 '/bin/sh -c '\"'\"'/usr/bin/python && sleep 0'\"'\"''\n<r-tigris-13> (0, '\\n{\"invocation\": {\"module_args\": {\"direction\": null, \"prefix\": \"<IP>/26\", \"neighbor\": null}}, \"ansible_facts\": {\"bgp_route\": {\"<IP>/26\": {\"found\": false}}}}\\n', '')\nok: [r-tigris-13-t1-lag] => {\n    \"ansible_facts\": {\n        \"bgp_route\": {\n            \"<IP>/26\": {\n                \"found\": false\n            }\n        }\n    },\n    \"changed\": false,\n    \"invocation\": {\n        \"module_args\": {\n            \"direction\": null,\n            \"neighbor\": null,\n            \"prefix\": \"<IP>/26\"\n        }\n    }\n}\n```\nThis is because the routing entry <IP>/26 hasn't been injected on VM simulating TORs.\nOn a test bed where the testcase passes, we see:\n```\nARISTA01T0#show ip route <IP>/26\n\nVRF name: default\nCodes: C - connected, S - static, K - kernel,\n       O - OSPF, IA - OSPF inter area, E1 - OSPF external type 1,\n       E2 - OSPF external type 2, N1 - OSPF NSSA external type 1,\n       N2 - OSPF NSSA external type2, B I - iBGP, B E - eBGP,\n       R - RIP, I L1 - ISIS level 1, I L2 - ISIS level 2,\n       A B - BGP Aggregate, A O - OSPF Summary,\n       NG - Nexthop Group Static Route, V - VXLAN Control Service\n\n S      <IP>/26 [1/0] via <IP>, Ethernet5\n\nARISTA01T0#show ip bgp <IP>/26\nBGP routing table information for VRF default\nRouter identifier <IP>, local AS number 64001\nBGP routing table entry for <IP>/26\n Paths: 2 available\n  64700\n    - from - (<IP>)\n      Origin INCOMPLETE, metric 0, localpref 0, weight -, valid, local, best, redistributed (Static)\n  65100 64003 64700\n    <IP> from <IP> (<IP>)\n      Origin INCOMPLETE, metric 0, localpref 100, weight 0, valid, external\n```\nBut on a testbed where the test fails, we see\n```\n\nARISTA01T0#show ip route <IP>/26\n\nVRF: default\nCodes: C - connected, S - static, K - kernel,\n       O - OSPF, IA - OSPF inter area, E1 - OSPF external type 1,\n       E2 - OSPF external type 2, N1 - OSPF NSSA external type 1,\n       N2 - OSPF NSSA external type2, B I - iBGP, B E - eBGP,\n       R - RIP, I L1 - IS-IS level 1, I L2 - IS-IS level 2,\n       O3 - OSPFv3, A B - BGP Aggregate, A O - OSPF Summary,\n       NG - Nexthop Group Static Route, V - VXLAN Control Service,\n       DH - DHCP client installed default route, M - Martian\n\nGateway of last resort:\n B E    <IP>/0 [200/0] via <IP>, Ethernet1\n\nARISTA01T0#show ip bgp <IP>/26\nBGP routing table information for VRF default\nRouter identifier <IP>, local AS number 64001\nARISTA01T0#\n```\nThis route entry is configured by the following command\n```\nip prefix-list test_vip_1 seq 11 permit <IP>/26\n!\nroute-map PREPENDAS permit 21\n   match ip address prefix-list test_vip_1\n   set as-path prepend 64700\n!\nrouter bgp 64001\n...\n   redistribute static route-map PREPENDAS\n...\n```\nI see the above configuration was removed from `t1-lag-spine.j2` and `t1-lag-tor.j2`.\nShould they be added back or there should be some other way to advertise the route entry?\n\n**Describe the results you expected:**\nThe route entry should be learnt by VM.\n\n**Additional information you deem important:**\n\n    **Output of `show version`:**\n\n    ```\n    (paste your output here)\n    ```\n\n    **Attach debug file `sudo generate_dump`:**\n\n    ```\n    (paste your output here)\n    ```"
+  },
+  "resolution": {
+    "pr_number": 1692,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/1692",
+    "title": "Announce vips routes for bgp_multipath_relax testing",
+    "merged_at": "2020-05-21T16:23:19Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #1587\n\nPreviously the vips routes were statically configured in the VMs for\nbgp_multipath_relax testing. After the change of announcing\nroutes from exabgp in PTF to VMs, the vips routes were missing.\nThe bgp_multipath_relax testing depends on the vips routes failed.\n\nThis change is to announce the vips routes to VMs  that have the\nvips routes configuration. The functions in the fib fixture definition\nfile were refactored a little bit.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Approach\n#### How did you do it?\nUpdated the fib fixture to announce vips routes to VMs that have this configuration in topology definition.\n\n#### How did you verify/test it?\n* Run the test_announce_routes.py to announce all the routes.\n* Run the bgp_multipath_relax ansible test. It passed.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/plugins/fib.py",
+        "additions": 51,
+        "deletions": 35
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

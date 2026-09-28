@@ -1,0 +1,45 @@
+{
+  "id": "management-21354",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 21354,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/21354",
+    "title": "Bug:[Smartswitch] Consecutive config reloads in smartswitch leading to DPU state changes",
+    "created_at": "2025-11-19T02:09:14Z",
+    "closed_at": "2026-03-12T07:59:53Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [
+      "202511"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nDuring execution of tests in smartswitch in light mode, we can have multiple config reloads which lead to admin state changes in successsion without verifying if the admin state changes are complete, leading to log errors / other issues, this is due to removal and addition of admin state configuration (In smartswitch light mode we have DPUs pwoered on, and if we replace with config with absent admin state configuration the DPUs are powered off)\n\n### Steps to Reproduce\n\nExample test cases:\ntests/golden_config_infra/test_config_reload_with_rendered_golden_config.py\n\n### Actual Behavior and Expected Behavior\n\nActual behaviour:\nDPUs admin state change is not complete before executing config reload again\nExpected behaviour:\nAfter config relaod in smartswitch, confirm whether DPUs are in expected state before continuing the test case\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22770,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22770",
+    "title": "[smartswitch][config_reload] Wait for DPU states after config reload on smartswitch",
+    "merged_at": "2026-03-12T07:59:48Z",
+    "description": "### Description of PR\n\nSummary:\nOn smartswitch platforms in lit mode, `config_reload()` applies `CHASSIS_MODULE` entries from config_db which trigger DPU admin state transitions (powering on/off). The common `config_reload()` utility in `tests/common/config_reload.py` had no smartswitch/DPU awareness, so it returned immediately without waiting for these transitions to complete. When consecutive config reloads occur (e.g. in golden config infra tests or setup/teardown), the second reload fires while DPUs are still transitioning from the first, causing log errors and instability.\n\nThis PR adds smartswitch DPU state wait logic to `config_reload()` so that after any config reload on a smartswitch, the function queries `CHASSIS_MODULE` admin_status from config_db and waits for each DPU to reach its expected state (online if admin_status is \"up\", offline if admin_status is \"down\") before returning.\n\nFixes #21354\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [x] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\nThe `config_reload()` function in `tests/common/config_reload.py` is used across the entire test suite. On smartswitch platforms, config reload applies `CHASSIS_MODULE` entries which control DPU power states. Without waiting for DPU state transitions to complete, consecutive config reloads (common in test setup/teardown flows) cause race conditions where DPUs are mid-transition when a new reload starts.\n\nThis is analogous to how `tests/common/reboot.py` already handles smartswitch differently via `reboot_smartswitch()` \u2014 the config reload path needed the same treatment.\n\n#### How did you do it?\n\nAdded three components to `tests/common/config_reload.py`:\n\n1. **`_check_dpu_module_status()`** \u2014 Checks if a DPU module has reached its expected online/offline status by parsing `show chassis module status`. Mirrors the logic from `tests/smartswitch/common/device_utils_dpu.py:check_dpu_module_status()` but is self-contained to avoid cross-module dependencies.\n\n2. **`_wait_for_smartswitch_dpu_states()`** \u2014 After config reload, queries all `CHASSIS_MODULE|*` entries from config_db (database 4) to determine each DPU's expected state based on `admin_status`. Uses `wait_until()` with a 360s timeout (matching `DPU_MAX_ONLINE_TIMEOUT` from the smartswitch test helpers) to wait for each DPU to reach its expected state.\n\n3. **Integration in `config_reload()`** \u2014 After the existing modular chassis wait adjustment and before safe_reload/BGP checks, detects smartswitch using `sonic_host.dut_basic_facts()['ansible_facts']['dut_basic_facts'].get(\"is_smartswitch\")` (same pattern as `reboot.py:393`) and calls the DPU state wait function. Gated on `is_dut` to avoid running on neighbor devices.\n\n#### How did you verify/test it?\n\n- Verified Python syntax compiles cleanly\n- Confirmed the smartswitch detection pattern matches existing usage across the codebase (`tests/common/reboot.py:393`, `tests/cacl/test_cacl_application.py:515`, etc.)\n- Confirmed timeout values align with existing smartswitch test helpers (`DPU_MAX_ONLINE_TIMEOUT = 360` in `tests/smartswitch/common/device_utils_dpu.py`)\n- On non-smartswitch platforms, the `is_smartswitch` check returns False and the new code path is never entered, so there is no impact on existing tests\n\n#### Any platform specific information?\n\nThis change only affects smartswitch platforms. On all other platforms, `dut_basic_facts().get(\"is_smartswitch\")` returns False and the new code is skipped entirely.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 this is a bug fix to the common config_reload utility, not a new test case.\n\n### Documentation\n\nN/A \u2014 no new features or test cases; this is a bug fix to existing infrastructure.",
+    "files": [
+      {
+        "path": "tests/common/config_reload.py",
+        "additions": 82,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

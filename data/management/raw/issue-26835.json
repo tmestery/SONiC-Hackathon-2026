@@ -1,0 +1,79 @@
+{
+  "number": 26835,
+  "title": "Bug:`_retry_if_oci_exec_race` falsely logs recovery due to strict `dict` check on `pytest-ansible` `ModuleResult`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26835",
+  "createdAt": "2026-08-06T05:43:11Z",
+  "closedAt": "2026-08-31T06:17:17Z",
+  "author": "ashishalok-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nThe helper function `_retry_if_oci_exec_race` in `tests/common/devices/sonic.py` is designed to detect transient Docker `runc-setns` race failures (`rc=127` with `OCI runtime exec failed: ... setns process | fork/exec /proc/self/fd`), retry the command boundedly, and return the retried result.\n\nHowever, during test execution, the helper falsely logs a successful recovery message:\n`Recovered from transient docker exec OCI race on attempt 1 for cmd: ...`\n...even though the retried command still contains the exact same OCI failure output\n\n### Steps to Reproduce\n\nThe issues occurs when there is oci flake while running any `docker exec` command and the `_retry_if_oci_exec_race` is triggered.\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behavior:**\nWhen `_retry_if_oci_exec_race` executes a retry using `self.shell()`, the returned result is a `pytest-ansible` `ModuleResult` object. Because `ModuleResult` inherits from `collections.UserDict` (and not `dict`), `isinstance(retry, dict)` inside `_is_oci(retry)` evaluates to False.\n\nAs a result:\n - `_is_oci(retry)` returns False immediately without checking `rc` or evaluating the regex pattern.\n\n - The helper incorrectly assumes the OCI race condition has cleared on attempt 1.\n\n**Expected Behavior:**\n`_is_oci(retry)` should recognize `ModuleResult `as a valid dict-like mapping. If the retried command still contains the OCI race error, `_is_oci(retry)` should return True, allowing the function to continue retrying for the specified number of attempts. If all retries fail, it should return the final result without falsely logging that it recovered.\n\n### Relevant log output\n\n```shell\n# 1. Initial command result contains OCI race failure (rc=127):\n07/07/2026 06:30:27 base._run L0225 DEBUG | AnsibleModule::shell_cmds Result => {\"failed\": true, ..., \"results\": [..., {\"cmd\": \"docker exec bgp supervisorctl status\", \"rc\": 127, \"stdout\": \"OCI runtime exec failed: exec failed: unable to start container process: error starting setns process: fork/exec /proc/self/fd/6: no such file or directory: unknown\\r\\n\", ...}]}\n\n# 2. Retry attempt 1 executes via self.shell():\n07/07/2026 06:30:29 base._run L0177 DEBUG | AnsibleModule::shell, args=[\"docker exec bgp supervisorctl status\"], kwargs={\"module_ignore_errors\": true}\n07/07/2026 06:30:30 base._run L0225 DEBUG | AnsibleModule::shell Result => {\"failed\": true, \"changed\": true, \"stdout\": \"OCI runtime exec failed: exec failed: unable to start container process: error starting setns process: fork/exec /proc/self/fd/6: no such file or directory: unknown\", \"stderr\": \"\", \"rc\": 127, \"cmd\": \"docker exec bgp supervisorctl status\", ...}\n\n# 3. FALSE POSITIVE RECOVERY: _is_oci(retry) returned False due to isinstance(retry, dict) check failure, logging recovery despite identical failure output:\n07/07/2026 06:30:30 sonic._retry_if_oci_exec_race L0651 INFO | Recovered from transient docker exec OCI race on attempt 1 for cmd: docker exec bgp supervisorctl status\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26840,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26840",
+      "title": "[sonic-mgmt]: Fix oci flake retry check",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-31T06:17:15Z",
+      "createdAt": "2026-08-06T07:33:43Z",
+      "author": "ashishalok-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFix false positive recovery logging in `_retry_if_oci_exec_race` by replacing strict `isinstance(res, dict)` checks with `isinstance(res, Mapping)`, and enhance helper debug logging.\r\nFixes [26835](https://github.com/sonic-net/sonic-mgmt/issues/26835)\r\nFixes [qual-issue](https://github.com/aristanetworks/sonic-qual.msft/issues/1361)\r\n\r\nBackground context:\r\nIn modern `pytest-ansible` versions (e.g., v25.8.0+ running on Python 3.12 / Ansible 2.13 host manager path), `self.shell()` returns a `ModuleResult` object inheriting from `collections.UserDict` rather than built-in `dict`.\r\n\r\nBecause `_retry_if_oci_exec_race` used `isinstance(res, dict)`, retried results failed the `_is_oci` type check immediately. This caused `_is_oci(retry)` to return `False` even when the retried output still contained the identical Docker exec OCI race failure. Consequently, the helper logged a misleading `\"Recovered from transient docker exec OCI race...\"` message and passed the failing result downstream.\r\n\r\nReviewers should start at `tests/common/devices/sonic.py` in function `_retry_if_oci_exec_race`.\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [x] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: day-one issue\r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [x] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n- 202605: Validated on Python 3.12 / pytest-ansible v25.8.0 with `ModuleResult` and standard `dict` objects. Retry loop now properly detects ongoing OCI failures across iterations and logs type/attempt details accurately.\r\n\r\n#### Before Fix (False Positive Recovery):\r\nOn attempt 1, even though the command output still failed with `rc=127` and contained the OCI race error, `_is_oci(retry)` returned `False` due to the strict `dict` type guard. The runner logged a false positive recovery message and exited retries immediately:\r\n```text\r\n07/07/2026 06:31:33 base._run L0225 DEBUG | AnsibleModule::shell Result => {\"failed\": true, \"changed\": true, \"stdout\": \"OCI runtime exec failed: exec failed: unable to start container process: error starting setns process: fork/exec /proc/self/fd/6: no such file or directory: unknown\", \"stderr\": \"\", \"rc\": 127, \"cmd\": \"docker exec bgp supervisorctl status\", ...}\r\n07/07/2026 06:31:33 sonic._retry_if_oci_exec_race L0651 INFO | Recovered from transient docker exec OCI race on attempt 1 for cmd: docker exec bgp supervisorctl status\r\n```\r\n\r\n### After Fix (Proper Bounded Retry Execution):\r\nWith `isinstance(res, Mapping)`, `ModuleResult` objects are correctly recognized. When the OCI race persists, the helper properly iterates through all bounded retry attempts (1/3, 2/3, 3/3) without falsely declaring recovery:\r\n```text\r\n03/08/2026 14:48:23 sonic._retry_if_oci_exec_race L0498 INFO | Executing OCI race retry attempt 1/3 for cmd: docker exec bgp bash -c \"[ -f /etc/supervisor/critical_processes ] && cat /etc/supervisor/critical_processes\"\r\n03/08/2026 14:48:24 base._run L0234 DEBUG | AnsibleModule::shell Result => {\"failed\": true, \"rc\": 127, \"stdout\": \"OCI runtime exec failed: exec failed: unable to start container process: error starting setns process: fork/exec /proc/self/fd/6: no such file or directory: unknown\", ...}\r\n\r\n03/08/2026 14:48:26 sonic._retry_if_oci_exec_race L0498 INFO | Executing OCI race retry attempt 2/3 for cmd: docker exec bgp bash -c \"[ -f /etc/supervisor/critical_processes ] && cat /etc/supervisor/critical_processes\"\r\n03/08/2026 14:48:27 base._run L0234 DEBUG | AnsibleModule::shell Result => {\"failed\": true, \"rc\": 127, \"stdout\": \"OCI runtime exec failed: exec failed: unable to start container process: error starting setns process: fork/exec /proc/self/fd/6: no such file or directory: unknown\", ...}\r\n\r\n03/08/2026 14:48:29 sonic._retry_if_oci_exec_race L0498 INFO | Executing OCI race retry attempt 3/3 for cmd: docker exec bgp bash -c \"[ -f /etc/supervisor/critical_processes ] && cat /etc/supervisor/critical_processes\"\r\n03/08/2026 14:48:30 base._run L0234 DEBUG | AnsibleModule::shell Result => {\"failed\": true, \"rc\": 127, \"stdout\": \"OCI runtime exec failed: exec failed: unable to start container process: error starting setns process: fork/exec /proc/self/fd/6: no such file or directory: unknown\", ...}\r\n```\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nTo ensure transient Docker/runc OCI race conditions are accurately detected and retried when using `pytest-ansible`, preventing unrecovered errors from falsely logging as \"Recovered\" and causing downstream test failures with confusing context.\r\n\r\n#### How did you do it?\r\n1. Updated `_is_oci()` in `tests/common/devices/sonic.py` to use `isinstance(res, Mapping)` (from `collections.abc`) instead of `isinstance(res, dict)`, accommodating both standard dicts and `collections.UserDict` instances (`ModuleResult`).\r\n2. Added detailed `logging.debug` calls inside `_is_oci()` to log object type (`type(res).__name__`), initial return code validation status, and regex match outcome.\r\n3. Added `logging.info` inside the retry loop to explicitly track the attempt counter (`attempt/attempts`).\r\n\r\n#### How did you verify/test it?\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\nDescribed in the section \"After Fix\" .\r\n\r\n#### Any platform specific information?\r\nN/A\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/devices/sonic.py",
+          "additions": 12,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T07:33:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T07:33:52Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T07:34:08Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T12:15:18Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T12:15:22Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-08-10T07:04:10Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-10T07:04:28Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-31T10:04:56Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/27510"
+        }
+      ]
+    }
+  ]
+}

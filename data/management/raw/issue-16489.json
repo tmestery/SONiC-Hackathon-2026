@@ -1,0 +1,111 @@
+{
+  "number": 16489,
+  "title": "[Bug]: Need make sure monit init ready before container stop test",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16489",
+  "createdAt": "2025-01-13T08:28:09Z",
+  "closedAt": "2026-02-20T00:55:12Z",
+  "author": "weiguo-nvidia",
+  "labels": [
+    "Help Wanted",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\r\n\r\nTest case `container_checker/test_container_checker.py::test_container_checker` fail because the log `containers not running.*syncd.*` was recorded 10 mins after stop syncd\r\n\r\n### Results you see\r\n\r\n**Root cause**\r\n\r\nBase on the logic of test_container_checker,  the script will check if the tested container is running before the tested container stop. If the tested container is not running, it will execute config reload to recover the tested container\r\n\r\nWhen swss stop, the syncd also be stopped. So when run the syncd stop test, config reload will be executed firstly to recovery syncd. After config reload, the monit needs takes sometimes to init, which lead to generate message delay\r\n\r\n\r\n**Why the issue does not occur on other containers**\r\n\r\nIn others container stop test, the tested container in running status before the test, no need to do config load, monit no need to re-init, so the message can record in syslog immediately\r\n\r\n\r\n**Next action**\r\n\r\nAfter config reload, need use command `sudo monit summary` make sure monit init ready before do other operations\r\n\r\n```\r\nadmin@r-panther-03:~$ sudo monit summary\r\nMonit 5.20.0 uptime: 8h 26m\r\n Service Name                     Status                      Type          \r\n r-panther-03                     Running                     System        \r\n rsyslog                          Running                     Process       \r\n root-overlay                     Accessible                  Filesystem    \r\n var-log                          Accessible                  Filesystem    \r\n routeCheck                       Status ok                   Program       \r\n dualtorNeighborCheck             Status ok                   Program       \r\n diskCheck                        Status ok                   Program       \r\n container_checker                Status ok                   Program       \r\n vnetRouteCheck                   Status ok                   Program       \r\n memory_check                     Status ok                   Program       \r\n arp_update_checker               Status ok                   Program       \r\n controlPlaneDropCheck            Status ok                   Program       \r\n container_memory_snmp            Status ok                   Program       \r\n container_memory_gnmi            Status ok                   Program       \r\n container_eventd                 Status ok                   Program       \r\n container_memory_bmp             Status ok                   Program       \r\n```\r\n\r\n### Results you expected to see\r\nCase always pass\r\n\r\n\r\n### Is it platform specific\r\n\r\ngeneric\r\n\r\n### Relevant log output\r\n\r\n_No response_\r\n\r\n### Output of `show version`\r\n\r\n_No response_\r\n\r\n### Attach files (if any)\r\n\r\n_No response_",
+  "comments": [
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2025-02-05T16:50:11Z",
+      "body": "In which branch do you see the issue? I checked the test result in 202405 but didn't see the issue."
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2025-02-05T16:52:27Z",
+      "body": "@weiguo-nvidia what platform did you hit this issue with?\n\nSeems that you are discovering inefficiency in syncd/swss docker running/stopping together behavior. If you have a change to address this issue. do you mind upstream?"
+    },
+    {
+      "author": "weiguo-nvidia",
+      "createdAt": "2025-02-07T07:34:20Z",
+      "body": "> [@weiguo-nvidia](https://github.com/weiguo-nvidia) what platform did you hit this issue with?\n> \n> Seems that you are discovering inefficiency in syncd/swss docker running/stopping together behavior. If you have a change to address this issue. do you mind upstream?\n\nThe issue occured in SN2700 platform. It was not always reproduced.\n"
+    },
+    {
+      "author": "rustiqly",
+      "createdAt": "2026-02-18T02:08:25Z",
+      "body": "This is addressed by PR #22421, which replaces the hardcoded `time.sleep()` after `config_reload` with a `wait_until` that polls for Monit readiness before proceeding with the container stop test."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22421,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22421",
+      "title": "[container_checker] Wait for Monit readiness after config reload instead of hardcoded sleep",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-20T00:55:11Z",
+      "createdAt": "2026-02-14T21:02:55Z",
+      "author": "sonicly1g",
+      "body": "**Summary:**\nReplace `time.sleep(300)` with `wait_until()` polling for Monit service readiness in `test_container_checker` and `test_container_checker_telemetry`.\n\n**Context:** When the syncd container is stopped and needs recovery via `config_reload`, the test sleeps for a hardcoded 300 seconds (5 minutes) before proceeding. However, Monit initialization time varies depending on the platform and system load. If Monit takes longer than 300 seconds, the test proceeds before Monit is ready, causing it to miss alerting messages and fail. Conversely, when Monit initializes faster, the test wastes time sleeping.\n\n**Fix:** Use `wait_until(360, 10, 30, check_monit_running, duthost)` which:\n- Polls every 10 seconds for up to 360 seconds (6 min)\n- Waits 30 seconds initially for config reload to settle\n- Fails fast with a clear assertion if Monit never becomes ready\n- Succeeds as soon as Monit is confirmed running (no wasted time)\n\nThis reuses the existing `check_monit_running()` helper already defined in the same test file and follows the `wait_until` pattern used throughout the codebase.\n\nFixes #16489\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Test case improvement\n\n### Approach\n#### What is the motivation for this PR?\nTo fix intermittent `test_container_checker` failures caused by Monit not being fully initialized after `config_reload`.\n\n#### How did you do it?\nReplaced two instances of `time.sleep(300)` with `wait_until(360, 10, 30, check_monit_running, duthost)`:\n1. In `test_container_checker` \u2014 after config reload when container is not running\n2. In `test_container_checker_telemetry` \u2014 after config reload to restore the container\n\n#### How did you verify/test it?\n- The `check_monit_running()` function is already used in the `update_monit_service` fixture (line 119) with the same `wait_until` pattern\n- Code review confirms `wait_until` is the established pattern for polling service readiness (see `tests/common/utilities.py`)\n\n#### Any platform specific information?\nN/A \u2014 generic test fix.\n\n#### Supported testbed topology if it is a new test case?\nN/A \u2014 existing test fix.",
+      "files": [
+        {
+          "path": "tests/container_checker/test_container_checker.py",
+          "additions": 15,
+          "deletions": 5
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-14T21:03:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-14T21:03:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "sonicly1g",
+          "createdAt": "2026-02-15T02:39:24Z",
+          "body": "### VS Testbed Test Results\n\n**Testbed:** vms-kvm-t0 (KVM-based T0 virtual switch)\n**DUT:** vlab-01 (SONiC VS)\n\n| Test | Result | Notes |\n|------|--------|-------|\n| `test_container_checker[NOTSET]` | \u23ed\ufe0f SKIPPED | Empty parameter set \u2014 `enum_dut_feature` fixture does not populate on VS |\n\nThe test parametrizes over DUT features (`enum_rand_one_asic_index`, `enum_dut_feature`) which aren't enumerated on VS. This fix targets physical/CI testbeds where the test actually runs and hits the `time.sleep(300)` issue. The code change is mechanical: replacing `time.sleep(300)` with `wait_until(360, 10, 30, check_monit_running, duthost)` \u2014 the same helper already used in the `update_monit_service` fixture at line 119."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-02-17T22:13:15Z",
+          "body": "Suggest come up with another PR to unify the wait_until interval and expiry with common definition in this test. While doing so, please check the interval value, it can be half of the regular counter update interval, I suspect either 5s or 10s is more aggressive than necessary.\r\n\r\nNo need to fix it in this PR, just to be clear."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-17T23:05:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-17T23:05:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-17T23:53:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-17T23:54:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-17T23:54:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-17T23:55:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

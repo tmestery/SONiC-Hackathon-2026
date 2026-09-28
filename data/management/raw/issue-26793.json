@@ -1,0 +1,182 @@
+{
+  "number": 26793,
+  "title": "[conditional_mark] Skip rules fail after pytest 9 changes parametrized fixture ordering",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26793",
+  "createdAt": "2026-08-05T09:53:29Z",
+  "closedAt": "2026-09-22T20:20:17Z",
+  "author": "zypgithub",
+  "labels": [
+    "Bug :bug:",
+    "Test gap"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter upgrading to pytest 9.x.x, the parameter order in some Everflow test node IDs changed.\n\nThe upstream implementation change is described in [pytest PR #13789](https://github.com/pytest-dev/pytest/pull/13789), which changed fixture-closure traversal from breadth-first to depth-first:\n`Now instead of a simple breadth-first search, we do a depth-first search, which more closely simulates the runtime behavior`\n\nThe conditional mark rules depend on the previous node ID order, so unsupported IPv6 Everflow tests are executed instead of being skipped.\n\n### Steps to Reproduce\n\nRun everflow test cases.\n\n### Actual Behavior and Expected Behavior\n\nActual: With pytest 9.1.1, the parameter order in the generated node ID changes.\nBecause the conditional mark entry expects the previous order and uses prefix matching, no skip mark is applied. The unsupported test is executed and fails during packet verification.\n\nExpected: Conditional skip rules should continue to match parametrized tests regardless of changes in pytest fixture discovery or node ID parameter ordering.\nOn unsupported platforms, the affected IPv6 Everflow cases should be skipped according to `tests_mark_conditions.yaml`.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "dlanov",
+      "createdAt": "2026-08-11T18:33:25Z",
+      "body": "I'd like to work on this. I'll first reproduce the pytest 9 parameter-ordering mismatch in the conditional_mark matcher with a focused local regression test, then make the matching robust without changing existing condition semantics."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26963,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26963",
+      "title": "conditional_mark: handle pytest 9 Everflow parameter order",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-08-11T19:42:46Z",
+      "author": "dlanov",
+      "body": "### Description of PR\n\nSummary:\n\nFixes #26793\n\nPytest 9 changed fixture-closure traversal from breadth-first to depth-first, which changes the order of independently parametrized fixture values in some Everflow test node IDs.\n\nFor example, node IDs that previously contained:\n\n`[ipv6-erspan_ipv4-...]`\n\ncan now contain:\n\n`[erspan_ipv4-ipv6-...]`\n\nTwo `conditional_mark` rules for `test_everflow_packet_format` and `test_everflow_per_interface` relied on the previous literal parameter order, so their skip conditions no longer matched under pytest 9.\n\nThis changes those two rules to narrowly scoped regex entries that accept either fixture ordering while preserving their existing skip conditions and reasons.\n\nFocused unit coverage verifies both pytest <=8 and pytest 9 orderings and guards against matching IPv4 or a different test function.\n\n### Type of change\n\n* [x] Bug fix\n* [ ] Testbed and Framework(new/improvement)\n* [ ] New Test case\n\n  * [ ] Skipped for non-supported platforms\n* [ ] Test case improvement\n\n### Back port request\n\n* [ ] 202311\n* [ ] 202405\n* [ ] 202411\n* [ ] 202505\n* [ ] 202511\n* [ ] 202512\n* [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A\n\nFailure type: regression\n\n### Tested branch\n\n* [x] master\n* [ ] 202311\n* [ ] 202405\n* [ ] 202411\n* [ ] 202505\n* [ ] 202511\n* [ ] 202512\n* [ ] 202605\n* [ ] N/A\n\n### Test result\n\n* `conditional_mark` unit tests: 24 passed\n* Verified both pytest <=8 and pytest 9 Everflow parameter orderings\n* Verified IPv4 and a different test function do not match the new rules\n* Conditional-mark YAML sort check passed\n* flake8 passed on the changed Python test\n* YAML parsing passed for both changed YAML files\n* `git diff --check` passed\n\n### Approach\n\n#### What is the motivation for this PR?\n\nThe conditional-mark plugin matches non-regex rules against pytest node IDs. Pytest 9 can reorder independently parametrized fixture values in those IDs, causing rules written against the previous ordering to silently stop matching.\n\n#### How did you do it?\n\nConverted only the two confirmed affected Everflow rules to explicit `regex: true` entries that recognize either:\n\n* `ipv6-erspan_ipv4` / `ipv6-erspan_ipv6`, or\n* `erspan_ipv4-ipv6` / `erspan_ipv6-ipv6`\n\nThe matching logic itself is unchanged, and other Everflow conditional-mark rules are not modified.\n\nAdded focused regression cases to the existing `conditional_mark` unit-test harness.\n\n#### How did you verify/test it?\n\nReproduced the fixture-order change using pytest 7.4.4 and pytest 9.1.1, then verified the new rules against both node-ID orderings.\n\nThe existing conditional-mark unit suite passes with the added regression cases.\n\n#### Any platform specific information?\n\nNone. This is test-framework matching behavior and is platform independent.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nNo documentation change.\n",
+      "files": [
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 19,
+          "deletions": 17
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/unit_test/tests_conditions.yaml",
+          "additions": 10,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/unit_test/unittest_find_all_matches.py",
+          "additions": 89,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-11T19:42:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-11T19:42:55Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-11T19:43:13Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "github-actions",
+          "createdAt": "2026-08-11T19:43:14Z",
+          "body": "<!-- skip-expiry-conditional-mark-review-note -->\n@StormLiangMS @wangxin @yxieca A user wants to merge changes to the conditional mark files into `master`. Please review."
+        },
+        {
+          "author": "nhe-NV",
+          "createdAt": "2026-09-07T04:37:29Z",
+          "body": "HI @dlanov  after your fix, will it work comptible for both pytest 8.xxx and 9.xxX?"
+        }
+      ]
+    },
+    {
+      "number": 27770,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27770",
+      "title": "[everflow]: Make conditional_mark keys order-independent for parametrized node IDs",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-22T20:20:16Z",
+      "createdAt": "2026-09-06T11:00:37Z",
+      "author": "wsycqyz",
+      "body": "### Description of PR\n\nSummary:\nFixes #26793\n\nFour everflow test cases that had always been skipped on unsupported platforms silently started running \u2014 and failing \u2014 after the `sonic-mgmt` container upgraded pytest from 9.0.3 to 9.1.1. No test code changed; the pytest upgrade changed the generated node IDs, which broke the `conditional_mark` keys that gate those cases.\n\npytest 9.1.0 reworked fixture closure construction. `skip_ipv6_everflow_tests` in `tests/everflow/everflow_test_utilities.py` is `scope=\"module\", autouse=True` and depends on `erspan_ip_ver`, so `erspan_ip_ver` enters the closure through an autouse path while `ip_ver` enters as a direct test argument. Their relative closure order flipped, and since the node ID is built in closure order, so did the ID:\n\n```\npytest <= 9.0.x:  test_everflow_per_interface[ipv6-erspan_ipv4-default]\npytest >= 9.1.0:  test_everflow_per_interface[erspan_ipv4-ipv6-default]\n```\n\nThe affected `conditional_mark` entries are plain prefix keys written against the old order (matching is `nodeid.startswith(key)`), so they no longer match:\n\n| Test case | Before | After |\n| --- | --- | --- |\n| `test_everflow_per_interface[erspan_ipv4-ipv6-default]` | skipped | **failed** |\n| `test_everflow_per_interface[erspan_ipv6-ipv6-default]` | skipped | **failed** |\n| `test_everflow_packet_format[erspan_ipv4-ipv6-default]` | skipped | **failed** |\n| `test_everflow_packet_format[erspan_ipv6-ipv6-default]` | skipped | **failed** |\n\nThe same flip also silently dropped the `xfail` on `test_everflow_per_interface[ipv4-erspan_ipv4-default]` for the `t0-isolated-d256u256s2` scale topology, and the nvidia `x86_64-nvidia_sn5640-r0` skip.\n\n#### Relationship to #26963\n\n@dlanov's #26963 targets the same issue and reaches the same conclusion (regex keys accepting either ordering). Credit for spotting it first. That PR converts the two generic \"unsupported platforms\" rules and adds unit-test coverage for the plugin, which this PR does not have.\n\nThis PR additionally converts the two remaining order-dependent keys for the same test module, which #26963 leaves as prefix keys and which therefore stay broken under pytest >= 9.1.0:\n\n- `test_everflow_per_interface[ipv4-erspan_ipv4-default]` \u2014 the `t0-isolated-d256u256s2` scale-topology `xfail` (issue #21571). Under the new ordering the node ID is `[erspan_ipv4-ipv4-default]`, so the `xfail` no longer applies and a known-unstable case reports a hard failure.\n- `test_everflow_per_interface[ipv6-erspan_ipv6-default]` \u2014 the `x86_64-nvidia_sn5640-r0` skip. Currently masked because that platform is `asic_type == mellanox` and so still matches the generic rule, but the entry itself is dead under the new ordering.\n\nHappy to defer: if maintainers prefer #26963 as the base, I will close this PR and re-send these two entries plus the verification notes on top of it \u2014 or fold its unit tests into this one. Whichever is least disruptive.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nNo back port is requested here yet. The linked issue #26793 is marked Critical and generic, but per the back-port policy a request also needs test evidence from each target branch, which is not gathered yet. Release branches are only affected once their container picks up pytest >= 9.1.0. The change is deliberately order-independent, so it is safe to cherry-pick as-is \u2014 it is a no-op on branches still running pytest <= 9.0.x.\n\n### Approach\n#### What is the motivation for this PR?\n\n`conditional_mark` keys that encode a specific parameter order are fragile: any pytest change that reorders the fixture closure silently un-skips tests on platforms that do not support the feature. That turns into nightly failures that look like product regressions but are pure infrastructure noise, and it also silently disables `xfail` marks. Making the keys order-independent removes the coupling between the skip rules and the pytest version shipped in the container.\n\n#### How did you do it?\n\nConverted the four affected keys in `tests/common/plugins/conditional_mark/tests_mark_conditions.yaml` to `regex: true` patterns that match both parameter orderings:\n\n| Before (prefix key) | After (`regex: true`) |\n| --- | --- |\n| `...::test_everflow_packet_format[ipv6-erspan` | `...::test_everflow_packet_format\\[(ipv6-erspan_ipv[46]\\|erspan_ipv[46]-ipv6)-` |\n| `...::test_everflow_per_interface[ipv6-erspan` | `...::test_everflow_per_interface\\[(ipv6-erspan_ipv[46]\\|erspan_ipv[46]-ipv6)-` |\n| `...::test_everflow_per_interface[ipv4-erspan_ipv4-default]` | `...::test_everflow_per_interface\\[(ipv4-erspan_ipv4\\|erspan_ipv4-ipv4)-default` |\n| `...::test_everflow_per_interface[ipv6-erspan_ipv6-default]` | `...::test_everflow_per_interface\\[(ipv6-erspan_ipv6\\|erspan_ipv6-ipv6)-default` |\n\nThe skip/xfail payloads (reasons and conditions) are carried over verbatim \u2014 only the keys change. The entries are repositioned because `\\` sorts after `[`, so `.hooks/pre_commit_hooks/check_conditional_mark_sort.py` requires the new keys to move within their block. That is what makes the diff look larger than it is.\n\nFixing the YAML rather than the test was chosen deliberately: the parameter order is an implementation detail of pytest's closure construction, not something the everflow tests control, and other `conditional_mark` entries already use `regex: true` for exactly this kind of matching.\n\n#### How did you verify/test it?\n\n1. **Reproduced the ID flip in isolation.** A minimal test file modelling the everflow fixture graph (module-scoped autouse fixture depending on `erspan_ip_ver`, plus `ip_ver` as a direct argument, plus `topo_scenario` injected via `metafunc.parametrize`) was collected under several pytest versions with no source changes:\n\n   | pytest | Generated ID |\n   | --- | --- |\n   | 7.4.4 / 8.0.2 / 8.3.5 / 8.4.2 / 9.0.1 | `[ipv6-erspan_ipv4-default]` |\n   | **9.1.1** | `[erspan_ipv4-ipv6-default]` |\n\n   This confirms the flip is entirely a pytest 9.0.x -> 9.1.x behaviour change.\n\n2. **Confirmed against real nightly logs** on the same testbed: the run using pytest 9.0.3 reported the old IDs with 4 skipped, and the run using pytest 9.1.1 reported the new IDs with 4 failed / 0 skipped. Historical results show the old IDs were skipped in 100% of runs before the container upgrade.\n\n3. **Validated the YAML change directly** with a harness replicating the plugin's matching logic (`re.search` when `regex: true`, otherwise `startswith`) over all 16 node IDs (both orderings x both test functions x both `ip_ver` x both `erspan_ip_ver`):\n   - the file still parses with `yaml.safe_load` and has the same key count (795) as before;\n   - for the **old** ordering every case resolves to exactly the same marks as before this change (no behaviour change for containers still on pytest <= 9.0.x);\n   - for the **new** ordering the four IPv6 cases regain the \"unsupported platforms\" skip, `[erspan_ipv4-ipv4-default]` regains its `xfail`, and `[erspan_ipv6-ipv6-default]` regains the nvidia skip;\n   - no `ip_ver=ipv4` variant picks up the IPv6-only skip in either ordering.\n\n4. `.hooks/pre_commit_hooks/check_conditional_mark_sort.py` passes on the updated file (exit code 0).\n\n#### Any platform specific information?\n\nThe regression surfaced on `cisco-8000` (Cisco-8101), but the broken keys gate `asic_type in ['cisco-8000', 'marvell', 'mellanox', 'marvell-prestera']`, `broadcom-dnx` sub-type, `dualtor` topologies, the `x86_64-8800_lc_48h[_o]-r0` platforms, and multi-asic setups \u2014 so every one of those was affected once the container moved to pytest 9.1.1. The `x86_64-nvidia_sn5640-r0` skip and the `t0-isolated-d256u256s2` `xfail` were affected as well.\n\nNo platform-specific code is added; only the match patterns change.\n\n#### Supported testbed topology if it's a new test case?\n\nNot a new test case \u2014 no topology change. The affected cases keep their existing topology coverage; this only restores the intended skip/xfail behaviour.\n\n### Documentation\n\nNo documentation update needed. The `regex: true` option used here is an existing, documented feature of the `conditional_mark` plugin and is already used by other entries in the same file.\n",
+      "files": [
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 30,
+          "deletions": 26
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/unit_test/tests_conditions.yaml",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/unit_test/unittest_find_all_matches.py",
+          "additions": 75,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-06T11:00:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-06T11:00:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "github-actions",
+          "createdAt": "2026-09-06T11:01:00Z",
+          "body": "<!-- skip-expiry-conditional-mark-review-note -->\n@StormLiangMS @wangxin @yxieca A user wants to merge changes to the conditional mark files into `master`. Please review."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-06T11:01:13Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-06T12:14:06Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "nhe-NV",
+          "createdAt": "2026-09-07T04:35:02Z",
+          "body": "@wsycqyz  the fix you made here , it will work for the pytest version 9.10, will be work when the pytest version is still 8.xx? "
+        },
+        {
+          "author": "wsycqyz",
+          "createdAt": "2026-09-08T01:54:28Z",
+          "body": "> @wsycqyz the fix you made here , it will work for the pytest version 9.10, will be work when the pytest version is still 8.xx?\r\n\r\npytest <= 9.0 ordering has no behavior changes."
+        },
+        {
+          "author": "Janetxxx",
+          "createdAt": "2026-09-15T12:33:42Z",
+          "body": "Thanks for the fix @wsycqyz, I experienced the same issue on Mellanox platform. With pytest 9.0.3, the IPv6 cases used `[ipv6-erspan_ipv4/6-default]` and were correctly skipped. With pytest 9.1.1, the IDs changed to `[erspan_ipv4/6-ipv6-default]`, so the existing prefix-based skip rules no longer matched, and all four IPv6 cases ran and failed. https://github.com/pytest-dev/pytest/commit/4722f2472dfb2dad48420cc22e24cd06256ac7bc "
+        },
+        {
+          "author": "nhe-NV",
+          "createdAt": "2026-09-16T02:36:28Z",
+          "body": "@wsycqyz  is this change backward compitible? "
+        },
+        {
+          "author": "wsycqyz",
+          "createdAt": "2026-09-18T02:33:14Z",
+          "body": "> @wsycqyz is this change backward compitible?\r\n\r\nYes, I tested with 202605 branch."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T01:27:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-22T01:27:23Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "wsycqyz",
+          "createdAt": "2026-09-22T01:27:58Z",
+          "body": "> @wsycqyz Thanks for covering all four order-dependent Everflow conditional-mark entries. This appears more complete than #26963 for the immediate failure. Could we also carry over the focused \u00a0conditional_mark\u00a0 unit coverage from #26963? The tests should verify both pytest \u22649.0 and pytest \u22659.1 parameter orders, ensure IPv4 cases are not accidentally matched, and guard against matching similarly named test functions. This would prevent the regex behavior from silently regressing later.\r\n\r\nCode is carried over. @Sourabh-Kumar7 "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-23T10:11:49Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/28157"
+        }
+      ]
+    }
+  ]
+}

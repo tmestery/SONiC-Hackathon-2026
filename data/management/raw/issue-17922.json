@@ -1,0 +1,103 @@
+{
+  "number": 17922,
+  "title": "Regression: `add-topo` fails `testbed_config_vchassis.yml` with `ERROR! Specified hosts and/or --limit does not match any hosts`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/17922",
+  "createdAt": "2025-04-10T00:16:29Z",
+  "closedAt": "2025-04-18T22:36:38Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "regression"
+  ],
+  "assignees": [
+    "BYGX-wcr"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Previous Working Version\n\nIntroduced by https://github.com/sonic-net/sonic-mgmt/pull/17647\n\n### Steps to Reproduce\n\nIn https://github.com/sonic-net/sonic-mgmt/pull/17647 `add-topo` was updated with a new ansible playbook call on T2 topologies:\n```\n    if [[ $topo == *\"t2\"* ]]; then\n      ansible-playbook -i ${inv_name} testbed_config_vchassis.yml --vault-password-file=\"$passfile\" -l \"$duts\" -e testbed_name=\"$testbed_name\" \\\n      -e topo=\"$topo\" -e testbed_file=$tbfile -e vm_file=$vmfile  -e server=\"$server\" $@\n    fi\n```\n\nThis playbook fails with:\n```\nansible-playbook 2.8.20\n  config file = /data/ansible/ansible.cfg\n  configured module search path = [u'/data/ansible/library', u'/data/ansible/library/ixia']\n  ansible python module location = /usr/local/lib/python2.7/dist-packages/ansible\n  executable location = /usr/local/bin/ansible-playbook\n  python version = 2.7.18 (default, Dec  9 2024, 19:35:20) [GCC 9.4.0]\nUsing /data/ansible/ansible.cfg as config file\nhost_list declined parsing /data/ansible/lab as it did not pass it's verify_file() method\nscript declined parsing /data/ansible/lab as it did not pass it's verify_file() method\nauto declined parsing /data/ansible/lab as it did not pass it's verify_file() method\nParsed /data/ansible/lab inventory source with ini plugin\n[WARNING]: Could not match supplied host pattern, ignoring: server_1\nERROR! Specified hosts and/or --limit does not match any hosts\n```\n\nI think the problem may be that only the `-i ${inv_name}` inventory file is included and not `-i $vmfile`.\nAt least on our setup it seems like `server_1` is defined in the `$vmfile` and not `${inv_name}`.\n\n### Impact of this regression\n\n`add-topo` stage fails, can't setup sonic-mgmt infra.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2025-04-11T20:54:47Z",
+      "body": "@BYGX-wcr can you check on this?\n"
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2025-04-12T05:52:45Z",
+      "body": "Hi @arista-nwolfe, I don't get the point that you indicated. The ansible command runs with `-l \"$duts\"`. So, the host limit should be applied to the DUTs instead of the servers. How can the \"$duts\" get interpreted as \"server_1\" in your lab?"
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2025-04-15T19:31:04Z",
+      "body": "> Hi [@arista-nwolfe](https://github.com/arista-nwolfe), I don't get the point that you indicated. The ansible command runs with `-l \"$duts\"`. So, the host limit should be applied to the DUTs instead of the servers. How can the \"$duts\" get interpreted as \"server_1\" in your lab?\n\nHi @BYGX-wcr the problem is the extra arguments passed into `testbed-cli.sh`.\nIn Arista's case we call `testbed-cli.sh` with the following arguments:\n`cd /data/ansible;./testbed-cli.sh -k ceos add-topo ardut  password.txt -l server_1 -vvv`\n\nBy time we get into `add_topo` we've shifted the `$@` arguments to the last 2 arguments.\n`echo \"NATHAN: $@\"` returns `NATHAN: -l server_1 -vvv`\n\nSo because the call to `testbed_config_vchassis.yml` has `$@` on the end of the command\n```\nansible-playbook -i ${inv_name} testbed_config_vchassis.yml --vault-password-file=\"$passfile\" -l \"$duts\" -e testbed_name=\"$testbed_name\" \\\n-e topo=\"$topo\" -e testbed_file=$tbfile -e vm_file=$vmfile  -e server=\"$server\" $@\n```\nWe'll end up passing two limit arguments in the same call:\n`-l $duts` and `-l server_1`\n\nI tried this out on my server and I see that it's skipped because no hosts matched\n```\nansible-playbook -i lab testbed_config_vchassis.yml --vault-password-file=\"\" -l \"nfc406-7,nfc406-9,nfc406\" -e testbed_name=\"ardut\" -e topo=\"t2_2lc_min_ports-masic\" -e testbed_file=testbed.yaml -e vm_file=veos -e server=\"server_1\" -l server_1 -vvv\n/usr/local/lib/python2.7/dist-packages/ansible/parsing/vault/__init__.py:44: CryptographyDeprecationWarning: Python 2 is no longer supported by the Python core team. Support for it is now deprecated in cryptography, and will be removed in the next release.\n  from cryptography.exceptions import InvalidSignature\nansible-playbook 2.8.20\n  config file = /sonic-mgmt/ansible/ansible.cfg\n  configured module search path = [u'/sonic-mgmt/ansible/library', u'/sonic-mgmt/ansible/library/ixia']\n  ansible python module location = /usr/local/lib/python2.7/dist-packages/ansible\n  executable location = /usr/local/bin/ansible-playbook\n  python version = 2.7.18 (default, Dec  9 2024, 19:35:20) [GCC 9.4.0]\nUsing /sonic-mgmt/ansible/ansible.cfg as config file\nhost_list declined parsing /sonic-mgmt/ansible/lab as it did not pass it's verify_file() method\nscript declined parsing /sonic-mgmt/ansible/lab as it did not pass it's verify_file() method\nauto declined parsing /sonic-mgmt/ansible/lab as it did not pass it's verify_file() method\nParsed /sonic-mgmt/ansible/lab inventory source with yaml plugin\n\nPLAYBOOK: testbed_config_vchassis.yml **************************************************************************************************************************************************************************************************************************************************************************************************************************************\n1 plays in testbed_config_vchassis.yml\n\nPLAY [sonic] ***************************************************************************************************************************************************************************************************************************************************************************************************************************************************************\nskipping: no hosts matched\n```"
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2025-04-15T23:42:06Z",
+      "body": "Hi @arista-nwolfe , I raised a PR to remove those unused arguments and it should fix the issue that you encountered. Please test it and let me know the result. PR: https://github.com/sonic-net/sonic-mgmt/pull/17999"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 17999,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/17999",
+      "title": "Remove unused arguments when calling testbed_config_vchassis playbook.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-04-18T22:36:37Z",
+      "createdAt": "2025-04-15T23:40:21Z",
+      "author": "BYGX-wcr",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary: Previously, the testbed_config_vchassis.yml playbook was called with some unnecessary arguments which may cause failures for certain users depending on the user input. Now, we remove the unnecessary arguments to reduce the possibility caused by misinput.\r\nFixes #17922  (issue)\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [x] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\n#### How did you do it?\r\n\r\n#### How did you verify/test it?\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "ansible/testbed-cli.sh",
+          "additions": 2,
+          "deletions": 4
+        },
+        {
+          "path": "ansible/testbed_config_vchassis.yml",
+          "additions": 0,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-15T23:40:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-15T23:40:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-16T17:30:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-16T17:31:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "BYGX-wcr",
+          "createdAt": "2025-04-16T20:52:40Z",
+          "body": "@rlhui , @arlakshm, can you merge this PR?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-18T03:49:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-18T03:50:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}
