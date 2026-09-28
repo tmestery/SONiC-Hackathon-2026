@@ -1,8 +1,9 @@
 # sonic-mgmt clean schema (`1.0`)
 
-Labeled train/val/test records in `clean/issue-<n>.json`. Not a RAG corpus - that is `[data/documentation/](../documentation/)`.
+Labeled train/test records in `clean/issue-<n>.json`. Not a RAG corpus - that is `[data/documentation/](../documentation/)`.
 
 Build with `python3 scripts/management/clean_management.py`. Never edit `raw/`.
+Frozen splits live in [`splits.json`](splits.json) — **never train on `split: "test"`**.
 
 See [`issue.md`](issue.md) for mining vs quality criteria.
 
@@ -14,15 +15,19 @@ See [`issue.md`](issue.md) for mining vs quality criteria.
 | Optional    | `resolution.files`                          |
 | Audit       | `issue.url`, `resolution.url`               |
 | Filter only | `metadata`, dates, `related_prs`, `quality` |
+| Split       | `split`: `train` \| `test` \| `null`        |
 
 
-Include a record when a linked PR is merged and its body is non-empty after HTML comments are stripped. Primary PR is the latest `mergedAt`. Other linked PRs go in `related_prs` (no bodies). Keep `has_diagnostic_signal == false` rows out of train/val/test.
+Include a record when a linked PR is merged and its body is non-empty after HTML comments are stripped. Primary PR is the latest `mergedAt`. Other linked PRs go in `related_prs` (no bodies).
+
+**Splits (frozen):** only `has_diagnostic_signal == true` rows are assigned. Random shuffle (seed `42`): **75% train / 25% test**. Non-diagnostic rows get `split: null` (excluded). Rebuild stamps with `python3 scripts/management/freeze_splits.py --apply-only`.
 
 ```json
 {
   "id": "management-28115",
   "schema_version": "1.0",
   "source": "sonic-mgmt",
+  "split": "test",
   "issue": {
     "number": 28115,
     "url": "https://github.com/sonic-net/sonic-mgmt/issues/28115",
@@ -68,4 +73,4 @@ Include a record when a linked PR is merged and its body is non-empty after HTML
 | `issue_type` | `bug` | `enhancement` | `regression` | `build` | `question` |
 
 
-Unknown values are `null` or `[]`. Bodies are HTML-comment-stripped and scrubbed; discussion comments stay in `raw/`. No authors, `patch`, or `split` in v1.
+Unknown values are `null` or `[]`. Bodies are HTML-comment-stripped and scrubbed; discussion comments stay in `raw/`. No authors or `patch` in v1.

@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = ROOT / "data" / "management" / "raw"
 CLEAN_DIR = ROOT / "data" / "management" / "clean"
 MANIFEST_FILE = CLEAN_DIR / "manifest.json"
+SPLITS_FILE = ROOT / "data" / "management" / "splits.json"
 SCHEMA_VERSION = "1.0"
 SOURCE = "sonic-mgmt"
 
@@ -434,6 +435,7 @@ def main() -> None:
                 "priority": record["metadata"]["priority"],
                 "issue_type": record["metadata"]["issue_type"],
                 "has_diagnostic_signal": record["quality"]["has_diagnostic_signal"],
+                "split": record.get("split"),
             }
         )
         severity_counts[record["metadata"]["severity"] or "null"] += 1
@@ -441,6 +443,41 @@ def main() -> None:
         type_counts[record["metadata"]["issue_type"] or "null"] += 1
         if record["quality"]["has_diagnostic_signal"]:
             diagnostic_true += 1
+
+    # Re-apply frozen splits if present (source of truth: splits.json).
+    split_meta = None
+    if SPLITS_FILE.exists() and SPLITS_FILE.stat().st_size > 0:
+        with SPLITS_FILE.open(encoding="utf-8") as fh:
+            splits = json.load(fh)
+        train_set = set(splits.get("train") or [])
+        test_set = set(splits.get("test") or [])
+        for path in CLEAN_DIR.glob("issue-*.json"):
+            with path.open(encoding="utf-8") as fh:
+                record = json.load(fh)
+            number = record["issue"]["number"]
+            if number in train_set:
+                record["split"] = "train"
+            elif number in test_set:
+                record["split"] = "test"
+            else:
+                record["split"] = None
+            with path.open("w", encoding="utf-8") as fh:
+                json.dump(record, fh, indent=2)
+                fh.write("\n")
+        for entry in written:
+            if entry["issue_number"] in train_set:
+                entry["split"] = "train"
+            elif entry["issue_number"] in test_set:
+                entry["split"] = "test"
+            else:
+                entry["split"] = None
+        split_meta = {
+            "file": "data/management/splits.json",
+            "method": splits.get("method"),
+            "frozen_at": splits.get("frozen_at"),
+            "counts": splits.get("counts"),
+            "seed": splits.get("seed"),
+        }
 
     manifest = {
         "source": SOURCE,
@@ -459,6 +496,8 @@ def main() -> None:
         },
         "records": written,
     }
+    if split_meta:
+        manifest["splits"] = split_meta
     with MANIFEST_FILE.open("w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2)
         fh.write("\n")
@@ -468,6 +507,11 @@ def main() -> None:
     print(f"Skipped no merged PR: {skipped_no_merged}")
     print(f"Skipped empty PR description: {skipped_empty_desc}")
     print(f"Diagnostic signal: {diagnostic_true}/{len(written)}")
+    if split_meta:
+        print(
+            f"Applied frozen splits: train={split_meta['counts'].get('train')} "
+            f"test={split_meta['counts'].get('test')}"
+        )
     print(f"Manifest: {MANIFEST_FILE}")
 
 
