@@ -20,7 +20,8 @@ data/swss/
 │   └── manifest.json         # Index of all mined issues and linked PRs
 ├── clean/                    # Schema 1.0 records for train/val/test
 │   ├── issue-<number>.json
-│   └── manifest.json
+│   ├── manifest.json
+│   └── split.json            # id -> train/test assignment
 ├── format.md                 # Schema for entries in clean/
 └── readme.md                 # This documentation
 ```
@@ -125,7 +126,7 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 
 **Diagnostic signal.** `quality.has_diagnostic_signal` looks for failure-oriented language plus swss-specific markers: `error`, `traceback`, `crash`, `segfault`, `timeout`, `orchagent`, `syncd`, `swss#`, `sairedis`, `valgrind`, `asan`/`sanitizer`, `deadlock`, `memory leak`, `show techsupport`, `FAILED`. Keep `false` rows out of train/val/test.
 
-**Train/val/test.** Prefer `quality.has_diagnostic_signal == true`. Explicit `split` values are not assigned in v1.
+**Train/test split.** Each record's top-level `split` field is `"train"`, `"test"`, or `null`. Only records with `quality.has_diagnostic_signal == true` get a split — 75% train / 25% test, assigned deterministically (seed `42`, see `assign_splits()` in `clean_swss.py`). Records without diagnostic signal keep `split: null`. The same mapping is written to [`clean/split.json`](clean/split.json) as `{ id: "train" | "test" | null }` alongside the seed, ratio, and counts.
 
 **RAG.** Do not index these records. Use [`data/rag/`](../rag/) only.
 
@@ -137,8 +138,9 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 - **Skipped (no merged PR)**: 0
 - **Skipped (empty PR description)**: 0
 - **With diagnostic signal**: 41
+- **Split**: 31 train / 10 test (75/25 of the 41 with diagnostic signal, seed 42); 16 excluded (no diagnostic signal)
 
-Rebuild with `python3 scripts/swss/clean_swss.py`. Counts by severity/priority/type are in `clean/manifest.json`.
+Rebuild with `python3 scripts/swss/clean_swss.py`. Counts by severity/priority/type/split are in `clean/manifest.json`; the full id -> split map is in `clean/split.json`.
 
 ## Ground Rules
 
