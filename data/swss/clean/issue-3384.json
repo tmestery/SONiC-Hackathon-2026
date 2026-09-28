@@ -1,0 +1,43 @@
+{
+  "id": "swss-3384",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 3384,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/3384",
+    "title": "NEIGH_TABLE not populated with VXLAN routes",
+    "created_at": "2024-11-20T23:08:09Z",
+    "closed_at": "2025-02-12T21:22:10Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "Observed on master and 202405 (with PR #3383 applied to make VXLANs actually work).\n\nBasic architecture is VXLAN EVPN with an irb/svi vni interface on the switches participating in the vxlan fabric.\n```\n|------------| <IP>             |---------------------------------|\n|    host    |-----------------------|             sonic1              |\n|------------|             Ethernet8 | Loopback0: <IP>           |\n                           Untagged  | VLAN 2/VNI 10002 irb: <IP> |\n                           VLAN2     |---------------------------------|\n                           VNI 10002                 | Ethernet54\n                                                     | BGP Unnumbered\n                                                     |\n                                                     |\n                                          Ethernet54 |\n                                      BGP Unnumbered |\n                                     |---------------------------------|\n                                     |              sonic2             |\n                                     | Loopback0: <IP>           |\n                                     | VLAN 2/VNI 10002 irb: <IP> |\n                                     |---------------------------------|\n```\n\nIn `sw2` I've noticed log entries like:\n```\n2024 Nov 20 <IPV6>.482102 sw2 WARNING swss#arp_update[900]: 108 MAC mismatch for <IP> on Vlan2 - kernel: <IPV6>, APPL_DB:\n```\n\nThen when I investigate, `NEIGH_TABLE` in `APPL_DB` doesn't have any neighbors listed for Vlan2.\n```\n# sonic-db-dump -n APPL_DB -y -k \"NEIGH_TABLE:Vlan2:*\"\n{}\n```\n\nBut the kernel has the neighbor listed as added by BGP/Zebra:\n```\nroot@sw2:~# ip neigh show dev Vlan2\n<IP> lladdr <IPV6> extern_learn NOARP proto zebra\n<IP> lladdr <IPV6> extern_learn NOARP proto zebra\nfe80::<IPV6> lladdr <IPV6> extern_learn NOARP proto zebra\n```\n\nAnd the type-2 routes look good:\n```\n# vtysh -c \"show bgp l2vpn evpn\"\nBGP table version is 7, local router ID is <IP>\nStatus codes: s suppressed, d damped, h history, * valid, > best, i - internal\nOrigin codes: i - IGP, e - EGP, ? - incomplete\nEVPN type-1 prefix: [1]:[EthTag]:[ESI]:[IPlen]:[VTEP-IP]:[Frag-id]\nEVPN type-2 prefix: [2]:[EthTag]:[MAClen]:[MAC]:[IPlen]:[IP]\nEVPN type-3 prefix: [3]:[EthTag]:[IPlen]:[OrigIP]\nEVPN type-4 prefix: [4]:[ESI]:[IPlen]:[OrigIP]\nEVPN type-5 prefix: [5]:[EthTag]:[IPlen]:[IP]\n\n   Network          Next Hop            Metric LocPrf Weight Path\nRoute Distinguisher: <IP>:2\n *> [2]:[0]:[48]:[<IPV6>]\n                    <IP>                             0 4210000001 i\n                    RT:32897:10002 ET:8\n *> [2]:[0]:[48]:[<IPV6>]:[32]:[<IP>]\n                    <IP>                             0 4210000001 i\n                    RT:32897:10002 ET:8\n *> [2]:[0]:[48]:[<IPV6>]:[32]:[<IP>]\n                    <IP>                             0 4210000001 i\n                    RT:32897:10002 ET:8\n *> [2]:[0]:[48]:[<IPV6>]:[128]:[fe80::<IPV6>]\n                    <IP>                             0 4210000001 i\n                    RT:32897:10002 ET:8\n *> [3]:[0]:[32]:[<IP>]\n                    <IP>                             0 4210000001 i\n                    RT:32897:10002 ET:8\nRoute Distinguisher: <IP>:2\n *> [2]:[0]:[48]:[<IPV6>]:[32]:[<IP>]\n                    <IP>                         32768 i\n                    ET:8 RT:32898:10002\n *> [2]:[0]:[48]:[<IPV6>]:[128]:[fe80::<IPV6>]\n                    <IP>                         32768 i\n                    ET:8 RT:32898:10002\n *> [3]:[0]:[32]:[<IP>]\n                    <IP>                         32768 i\n                    ET:8 RT:32898:10002\n\nDisplayed 8 out of 8 total prefixes\n```\n\nGoing over to the originating VTEP (`sw1`) where the host is directly connected, the NEIGH_TABLE is populated as expected:\n```\n# sonic-db-dump -n APPL_DB -y -k \"NEIGH_TABLE:Vlan2:*\"\n{\n  \"NEIGH_TABLE:Vlan2:<IP>\": {\n    \"expireat\": 1732144228.8517292,\n    \"ttl\": -0.001,\n    \"type\": \"hash\",\n    \"value\": {\n      \"family\": \"IPv4\",\n      \"neigh\": \"<IPV6>\"\n    }\n  }\n}\n```\n\nAnd we see these log entries.\n```\n2024 Nov 20 <IPV6>.369623 sw1 NOTICE swss#orchagent: :- addNeighbor: Created neighbor ip <IP>, <IPV6> on Vlan2\n2024 Nov 20 <IPV6>.370310 sw1 NOTICE syncd#syncd: [none] SAI_API_NEXT_HOP:brcm_sai_create_next_hop:334 nhid 3 vr_id 0 ip af:v4 addr:<IP> rif-id 1 tunnel-id 0 vni 0\n2024 Nov 20 <IPV6>.370474 sw1 NOTICE syncd#syncd: [none] SAI_API_NEXT_HOP:_brcm_sai_xgs_create_ip_nexthop:554 nhid 3 eg-if 400004 rif 0 vid 0 port/tid(0x0) is_trunk(0)\n2024 Nov 20 <IPV6>.371069 sw1 NOTICE swss#orchagent: :- addNextHop: Created next hop <IP> on Vlan2\n```\n\nI'm assuming there is some event that should cause population of the `NEIGH_TABLE` on `sw2`, which likely should also trigger off programming of the neighbor into the ASIC.  Since this is not happening it is a violation of the HLD:\nhttps://github.com/sonic-net/SONiC/blob/master/doc/vxlan/EVPN/EVPN_VXLAN_HLD.md#438-mac-ip-route-handling\n\nLikely this is at least part of the underlying cause of the svi not being able to speak to neighbors across the vxlan."
+  },
+  "resolution": {
+    "pr_number": 3478,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/3478",
+    "title": "[neighsync] bug: VXLAN EVPN neighbors not in NEIGH_TABLE",
+    "merged_at": "2025-02-12T21:22:09Z",
+    "description": "**Why I did it**\n\nVXLAN EVPN learned routes are not entered into NEIGH_TABLE as per Issue #3384.\n\nThe EVPN VXLAN HLD specifically states this should be populated so it triggers an update to the SAI database:\n\nhttps://github.com/sonic-net/SONiC/blob/master/doc/vxlan/EVPN/EVPN_VXLAN_HLD.md#438-mac-ip-route-handling\n\n> The remote MAC-IP routes will be installed by BGP (Zebra) in Linux neighbor table against Vlan netdevice. Neighsyncd subscribes to neighbor entries and will receive remote MAC-IP bindings as well. These entries will continue to go into NEIGH_TABLE in APP_DB, and neighorch will update SAI database.\n\nIt appears this was mistakingly introduced in #943 with a short conversation here about the reason, but it didn't take into account other reasons for NOARP entries: https://github.com/sonic-net/sonic-swss/pull/943/files#r332867379\n\n**What I did**\n\nThe reason it was not occurring is NOARP entries were being rejected, this patch adds an exception for externally learned neighbors (which have NOARP set).\n\n**How I verified it**\n\nInstalled on a physical switch and observe remotely learned neighbors are present in NEIGH_TABLE\n\n**Details if related**\n\nFixes #3384\nSigned-off-by: Brad House (@bradh352)",
+    "files": [
+      {
+        "path": "neighsyncd/neighsync.cpp",
+        "additions": 12,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "number": 4655,
+  "title": "[portsorch] Invalid LAG learn_mode handling may corrupt m_toSync iterator in PortsOrch::doLagTask",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4655",
+  "createdAt": "2026-06-09T08:43:57Z",
+  "closedAt": "2026-06-12T17:48:28Z",
+  "author": "haojun291",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nSONiC Version: latest master\nDescription:\nIn `PortsOrch::doLagTask()` in `orchagent/portsorch.cpp`, when parsing LAG attributes, the invalid `learn_mode` handling updates the outer `m_toSync` iterator inside the inner field parsing loop.\nCurrent logic is similar to:\n```cpp\nauto it = consumer.m_toSync.begin();\nwhile (it != consumer.m_toSync.end())\n{\n    auto &t = it->second;\n    for (auto i : kfvFieldsValues(t))\n    {\n        if (fvField(i) == \"learn_mode\")\n        {\n            const auto cit = learn_mode_map.find(learn_mode_str);\n            if (cit == learn_mode_map.end())\n            {\n                SWSS_LOG_ERROR(\"Invalid MAC learn mode: %s\", learn_mode_str.c_str());\n                it++;\n                continue;\n            }\n            learn_mode = cit->second;\n        }\n    }\n    // Continue processing current LAG task...\n}\n```\nThere are two issues here:\n - The continue statement is inside the inner for (auto i : kfvFieldsValues(t)) loop, so it only continues the field parsing loop. It does not skip the current LAG task in the outer while loop.\n - The outer iterator it is incremented inside the inner loop while the code is still processing the current task through \"it\" and alias. This may cause the iterator to point to the next pending task while the current task is still being processed.\n\nAs a result, when an invalid learn_mode is configured:\n1. The current invalid LAG task may still be processed with the default learning mode.\n2. A later erase(it) or it++ may operate on the wrong pending task.\n3. The outer m_toSync iterator may become inconsistent with the task currently being processed.\n\n<img width=\"1180\" height=\"905\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/289f688f-b11e-4fbc-8d98-1bb92470b699\" />\n\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4656,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4656",
+      "title": "[portsorch] Fix invalid LAG field handling in doLagTask",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-12T17:48:27Z",
+      "createdAt": "2026-06-09T09:20:40Z",
+      "author": "haojun291",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\nFixes #4655\r\n\r\n**What I did**\r\nFixed invalid LAG field handling in `PortsOrch::doLagTask()`.\r\nPreviously, when an invalid `learn_mode` or `oper_status` value was detected, the code incremented the outer `m_toSync` iterator inside the inner field parsing loop. However, the following `continue` only applied to the inner loop, so the current task could still be processed while the iterator already pointed to the next task.\r\nThis change uses an `invalid_field` flag to stop field parsing and handles the current task explicitly in the outer loop.\r\n\r\n**Why I did it**\r\nThe previous logic could make the current task and the outer iterator inconsistent. This may cause the invalid task to continue being processed, or cause a later erase/increment operation to affect the wrong pending task.\r\n",
+      "files": [
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 11,
+          "deletions": 4
+        },
+        {
+          "path": "tests/mock_tests/portsorch_ut.cpp",
+          "additions": 142,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-09T09:20:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-09T09:20:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-06-09T16:36:45Z",
+          "body": "@haojun291 , please address coverage"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-06-09T16:37:01Z",
+          "body": "Changes lgtm, @saiarcot895 for viz"
+        },
+        {
+          "author": "haojun291",
+          "createdAt": "2026-06-10T02:11:16Z",
+          "body": "Thanks for the review. I\u2019ll need some time to look into the coverage issue and will follow up and ping you once the tests are updated."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T07:00:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T07:00:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-11T01:53:04Z",
+          "body": "<samp>\nCommenter does not have sufficient privileges for PR 4656 in repo sonic-net/sonic-swss<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-11T03:09:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-11T03:10:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "haojun291",
+          "createdAt": "2026-06-11T06:45:22Z",
+          "body": "Hi @prsunny @saiarcot895, could you please take a look?\r\nThanks!"
+        }
+      ]
+    }
+  ]
+}

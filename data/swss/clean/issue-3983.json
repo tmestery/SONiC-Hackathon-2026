@@ -1,0 +1,58 @@
+{
+  "id": "swss-3983",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 3983,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/3983",
+    "title": "[DPB]: Stale queue counter mappings in COUNTERS_DB post port breakout",
+    "created_at": "2025-11-09T10:15:54Z",
+    "closed_at": "2025-11-28T05:30:52Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description:**\nAfter dynamic port breakout of a port, `show queue counters <Port>` doesn't work as queue counter map in the COUNTERS_DB is not updated.\n\n**How to reproduce:**\nPerform breakout of a port and check queue counters after breakout:\n\n```bash\n# sudo config interface breakout Ethernet448 \"1x800G[400G,200G]\" -y -f\n\nRunning Breakout Mode : 1x800G[400G,200G]\nTarget Breakout Mode : 1x800G[400G,200G]\n[WARNING] No action will be taken as current and desired Breakout Mode are same.\nroot@sonic:/home/admin# sudo config interface breakout Ethernet448 \"8x100G[50G]\" -y -f\n\nRunning Breakout Mode : 1x800G[400G,200G]\nTarget Breakout Mode : 8x100G[50G]\n\nPorts to be deleted :\n {\n    \"Ethernet448\": \"800000\"\n}\nPorts to be added :\n {\n    \"Ethernet448\": \"100000\",\n    \"Ethernet449\": \"100000\",\n    \"Ethernet450\": \"100000\",\n    \"Ethernet451\": \"100000\",\n    \"Ethernet452\": \"100000\",\n    \"Ethernet453\": \"100000\",\n    \"Ethernet454\": \"100000\",\n    \"Ethernet455\": \"100000\"\n}\nBreakout process got successfully completed.\nPlease note loaded setting will be lost after system reboot. To preserve setting, run `config save`.\n```\n\n**Issue**\n```bash\nshow queue counters Ethernet0\nTraceback (most recent call last):\nFile \"/usr/local/bin/queuestat\", line 455, in <module>\nmain()\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 764, in {}call{}\nreturn self.main(*args, **kwargs)\n^^^^^^^^^^^^^^^^^^^^^^^^^^\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 717, in main\nrv = self.invoke(ctx)\n^^^^^^^^^^^^^^^^\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 956, in invoke\nreturn ctx.invoke(self.callback, **ctx.params)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 555, in invoke\nreturn callback(*args, **kwargs)\n^^^^^^^^^^^^^^^^^^^^^^^^^\nFile \"/usr/local/bin/queuestat\", line 450, in main\nqueuestat_wrapper.run(save_fresh_stats, port_to_show_stats, json_opt, non_zero)\nFile \"/usr/local/lib/python3.11/dist-packages/utilities_common/multi_asic.py\", line 156, in wrapped_run_on_all_asics\nfunc(self, *args, **kwargs)\nFile \"/usr/local/bin/queuestat\", line 117, in run\nqueuestat = Queuestat(self.multi_asic.current_namespace, self.db, self.voq)\n```"
+  },
+  "resolution": {
+    "pr_number": 3982,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/3982",
+    "title": "[DPB]: Fix stale queue counter maps in COUNTERS_DB after port breakout",
+    "merged_at": "2025-11-28T05:30:51Z",
+    "description": "Fixes #3983\n\n**What I did**\nAdded cleanup of COUNTERS_*_NAME_MAP entries for a port during its deinit phase, and regenerated the NAME_MAP tables with fresh OIDs during port init when queue flex counters are already enabled.\n\n**Why I did it**\nAfter dynamic port breakout of a port, queue name map tables in the COUNTERS_DB table are not regenerated leaving stale entries resulting in CLI crash\n\n**How I verified it**\n```bash\n# show queue counters Ethernet0\nFor namespace :\n     Port    TxQ    Counter/pkts    Counter/bytes    Drop/pkts    Drop/bytes\n---------  -----  --------------  ---------------  -----------  ------------\nEthernet0    UC0               0                0            0             0\nEthernet0    UC1               0                0            0             0\nEthernet0    UC2               0                0            0             0\nEthernet0    UC3               0                0            0             0\nEthernet0    UC4               0                0            0             0\nEthernet0    UC5               0                0            0             0\nEthernet0    UC6               0                0            0             0\nEthernet0    UC7               0                0            0             0\n\nroot@sonic:~# redis-dump -d 2 -k \"COUNTERS_PORT_NAME_MAP*\" | jq | grep Ethernet448\n      \"Ethernet448\": \"oid:0x100000000085c\",\nroot@sonic:~#  redis-dump -d 2 -k \"COUNTERS_QUEUE_PORT_MAP*\" | jq | grep 0x100000000085c\n      \"oid:0x15000000000860\": \"oid:0x100000000085c\",\n      \"oid:0x15000000000861\": \"oid:0x100000000085c\",\n      \"oid:0x15000000000862\": \"oid:0x100000000085c\",\n      \"oid:0x15000000000863\": \"oid:0x100000000085c\",\n      \"oid:0x15000000000864\": \"oid:0x100000000085c\",\n      \"oid:0x1500000000085d\": \"oid:0x100000000085c\",\n      \"oid:0x1500000000085f\": \"oid:0x100000000085c\",\n      \"oid:0x1500000000085e\": \"oid:0x100000000085c\",\nroot@sonic:~# redis-dump -d 2 -k \"COUNTERS_QUEUE_NAME_MAP*\" | jq | grep -E \"0x15000000000860|0x15000000000861|0x15000000000862|0x15000000000863|0x15000000000864|0x1500000000085d|0x1500000000085f|0x1500000000085e\"\n      \"Ethernet448:6\": \"oid:0x15000000000863\",\n      \"Ethernet448:2\": \"oid:0x1500000000085f\",\n      \"Ethernet448:4\": \"oid:0x15000000000861\",\n      \"Ethernet448:7\": \"oid:0x15000000000864\",\n      \"Ethernet448:3\": \"oid:0x15000000000860\",\n      \"Ethernet448:0\": \"oid:0x1500000000085d\",\n      \"Ethernet448:5\": \"oid:0x15000000000862\",\n      \"Ethernet448:1\": \"oid:0x1500000000085e\",\nroot@sonic:~# redis-dump -d 2 -k \"COUNTERS_QUEUE_INDEX_MAP*\" | jq | grep -E \"0x15000000000860|0x15000000000861|0x15000000000862|0x15000000000863|0x15000000000864|0x1500000000085d|0x1500000000085f|0x1500000000085e\"\n      \"oid:0x15000000000860\": \"3\",\n      \"oid:0x15000000000861\": \"4\",\n      \"oid:0x15000000000862\": \"5\",\n      \"oid:0x15000000000863\": \"6\",\n      \"oid:0x15000000000864\": \"7\",\n      \"oid:0x1500000000085d\": \"0\",\n      \"oid:0x1500000000085f\": \"2\",\n      \"oid:0x1500000000085e\": \"1\",\nroot@sonic:~#  redis-dump -d 2 -k \"COUNTERS_QUEUE_TYPE_MAP*\" | jq | grep -E \"0x15000000000860|0x15000000000861|0x15000000000862|0x15000000000863|0x15000000000864|0x1500000000085d|0x1500000000085f|0x1500000000085e\"\n      \"oid:0x15000000000860\": \"SAI_QUEUE_TYPE_UNICAST\",\n      \"oid:0x15000000000861\": \"SAI_QUEUE_TYPE_UNICAST\",\n      \"oid:0x15000000000862\": \"SAI_QUEUE_TYPE_UNICAST\",\n      \"oid:0x15000000000863\": \"SAI_QUEUE_TYPE_UNICAST\",\n      \"oid:0x15000000000864\": \"SAI_QUEUE_TYPE_UNICAST\",\n      \"oid:0x1500000000085d\": \"SAI_QUEUE_TYPE_UNICAST\",\n      \"oid:0x1500000000085f\": \"SAI_QUEUE_TYPE_UNICAST\",\n      \"oid:0x1500000000085e\": \"SAI_QUEUE_TYPE_UNICAST\",\n```\n\n**Details if related**",
+    "files": [
+      {
+        "path": "orchagent/high_frequency_telemetry/counternameupdater.cpp",
+        "additions": 6,
+        "deletions": 9
+      },
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 39,
+        "deletions": 2
+      },
+      {
+        "path": "tests/mock_tests/mock_table.cpp",
+        "additions": 29,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/portsorch_ut.cpp",
+        "additions": 73,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

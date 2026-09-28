@@ -1,0 +1,68 @@
+{
+  "id": "swss-4406",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4406,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4406",
+    "title": "[handleSai] Prioritize route programming over ACL ACE retries on SAI_STATUS_INSUFFICIENT_RESOURCES",
+    "created_at": "2026-03-30T04:16:27Z",
+    "closed_at": "2026-05-08T00:51:54Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description:**\nCurrently, SAI_STATUS_INSUFFICIENT_RESOURCES failures during ACE creation are handled as task_need_retry, which queues additional ACE entries for retry. While this made sense initially (resources might free up quickly), it creates problematic scenarios when ACL tables reach capacity.\n\nIssue: When ACEs hit the maximum limit but more entries remain pending, these retries block higher-priority route programming in the orchagent processing pipeline, significantly slowing down BGP route convergence.\n\nExample scenario:\n```\nACL table full \u2192 SAI_STATUS_INSUFFICIENT_RESOURCES \u2192 task_need_retry \u2192 BGP convergence delayed\n```\n\n**Proposed solution:**\nFine-tune retry priorities so route programming takes precedence over resource-constrained ACL operations"
+  },
+  "resolution": {
+    "pr_number": 4470,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4470",
+    "title": "Handle ACL resource constraints with event based retry",
+    "merged_at": "2026-05-08T00:51:53Z",
+    "description": "Handle ACL resource constraints with event based retry. Fixes #4406\n\n**What I did**\n\nUse an event-based retry using RetryCache to handle ACL resource availability constraints.\n\n**Why I did it**\n\nBlind retries are not helpful when resources (ACL in this case) are not available. This can cause new events including route updates to be throttled even when retries are not guaranteed to help.\n\n**How I verified it**\n* By using mock tests to test the behavior.\n* Also verified by the originator of issue 4406 that the problem reported is resolved.\n\n**Details if related**\n\nUses the RetryCache mechanism that has already been used for some orchs like routeorch and srv6orch.\n\n**Retry Behavior**\n\n**How frequently does retry happen?**\n\n Retry is event-driven, not periodic. Parked tasks are retried only when resources are actually freed \u2014 specifically, when an ACL rule is successfully removed from the same table. The flow is:\n\n * Rule creation fails with SAI_STATUS_INSUFFICIENT_RESOURCES (or TABLE_FULL, NO_MEMORY, NV_STORAGE_FULL)\n * The task is parked in the RetryCache under a (RETRY_CST_SAI_RESOURCE, table_id) constraint\n * No retry occurs until a DEL operation successfully removes a rule from the same ACL table\n * The successful removal calls notifyRetry(), which marks the constraint as resolved\n * On the next Orch::doTask() cycle, retryToSync() moves resolved tasks back to m_toSync (subject to the per-iteration quota in Orch::doTask)\n * The task is then processed normally by doAclRuleTask()\n\n There is no timer or polling \u2014 no CPU is spent retrying until the resolving event occurs.\n\n **When is an entry removed from retry?**\n\n * On success: If the retried SAI create call succeeds, the rule is created normally and the entry is fully consumed (no longer in retry or m_toSync).\n * On repeated resource exhaustion: If the retry fails again with a resource-full status, the task is re-parked in the retry cache under the same constraint, awaiting the next resource-freeing event.\n * On non-resource failure: If the retry fails with a different error (e.g., SAI_STATUS_FAILURE), the task remains in m_toSync for normal retry handling (not re-parked).",
+    "files": [
+      {
+        "path": "orchagent/aclorch.cpp",
+        "additions": 36,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/aclorch.h",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/retrycache.h",
+        "additions": 7,
+        "deletions": 5
+      },
+      {
+        "path": "orchagent/saihelper.cpp",
+        "additions": 8,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/saihelper.h",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/aclorch_rule_ut.cpp",
+        "additions": 205,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

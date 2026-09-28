@@ -1,0 +1,160 @@
+{
+  "number": 4406,
+  "title": "[handleSai] Prioritize route programming over ACL ACE retries on SAI_STATUS_INSUFFICIENT_RESOURCES",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4406",
+  "createdAt": "2026-03-30T04:16:27Z",
+  "closedAt": "2026-05-08T00:51:54Z",
+  "author": "AnantKishorSharma",
+  "labels": [],
+  "assignees": [
+    "prabhataravind"
+  ],
+  "milestone": null,
+  "body": "**Description:**\nCurrently, SAI_STATUS_INSUFFICIENT_RESOURCES failures during ACE creation are handled as task_need_retry, which queues additional ACE entries for retry. While this made sense initially (resources might free up quickly), it creates problematic scenarios when ACL tables reach capacity.\n\nIssue: When ACEs hit the maximum limit but more entries remain pending, these retries block higher-priority route programming in the orchagent processing pipeline, significantly slowing down BGP route convergence.\n\nExample scenario:\n```\nACL table full \u2192 SAI_STATUS_INSUFFICIENT_RESOURCES \u2192 task_need_retry \u2192 BGP convergence delayed\n```\n\n**Proposed solution:**\nFine-tune retry priorities so route programming takes precedence over resource-constrained ACL operations",
+  "comments": [
+    {
+      "author": "AnantKishorSharma",
+      "createdAt": "2026-03-30T04:17:37Z",
+      "body": "Hi @prsunny, @prabhataravind  - for viz."
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2026-03-30T21:30:24Z",
+      "body": "@prabhataravind , can you take a look and propose a solution as to low prioritize retries as compared to regular updates"
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2026-03-30T21:31:28Z",
+      "body": "If we don't have a quick fix, i think we can log this as a failure and skip retry for` insufficient resource` case"
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-04-03T23:15:37Z",
+      "body": "hi @AnantKishorSharma retrycache used in some orchs might be the best solution for this problem - https://github.com/a114j0y/SONiC/blob/retry/doc/retrycache/retrycache.md\n\nIt is already implemented for routeorch and srv6orch - see PR https://github.com/sonic-net/sonic-swss/pull/3699\n\n@prsunny for viz."
+    },
+    {
+      "author": "AnantKishorSharma",
+      "createdAt": "2026-04-06T02:24:14Z",
+      "body": "> routeorch\n\nThanks @prabhataravind for reviewing this! We will test with these changes and share the results."
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-04-13T02:46:47Z",
+      "body": "@AnantKishorSharma please see if this patch helps - https://github.com/sonic-net/sonic-swss/pull/4470"
+    },
+    {
+      "author": "AnantKishorSharma",
+      "createdAt": "2026-04-13T13:56:46Z",
+      "body": "> [@AnantKishorSharma](https://github.com/AnantKishorSharma) please see if this patch helps - [#4470](https://github.com/sonic-net/sonic-swss/pull/4470)\n\nHi @prabhataravind - this helped, thanks!"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4470,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4470",
+      "title": "Handle ACL resource constraints with event based retry",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-05-08T00:51:53Z",
+      "createdAt": "2026-04-11T18:39:09Z",
+      "author": "prabhataravind",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\nHandle ACL resource constraints with event based retry. Fixes #4406 \r\n\r\n**What I did**\r\n\r\nUse an event-based retry using RetryCache to handle ACL resource availability constraints.\r\n\r\n**Why I did it**\r\n\r\nBlind retries are not helpful when resources (ACL in this case) are not available. This can cause new events including route updates to be throttled even when retries are not guaranteed to help.\r\n\r\n**How I verified it**\r\n* By using mock tests to test the behavior.\r\n* Also verified by the originator of issue 4406 that the problem reported is resolved.\r\n  \r\n**Details if related**\r\n\r\nUses the RetryCache mechanism that has already been used for some orchs like routeorch and srv6orch.\r\n\r\n**Retry Behavior**\r\n\r\n**How frequently does retry happen?**\r\n\r\n Retry is event-driven, not periodic. Parked tasks are retried only when resources are actually freed \u2014 specifically, when an ACL rule is successfully removed from the same table. The flow is:\r\n\r\n * Rule creation fails with SAI_STATUS_INSUFFICIENT_RESOURCES (or TABLE_FULL, NO_MEMORY, NV_STORAGE_FULL)\r\n * The task is parked in the RetryCache under a (RETRY_CST_SAI_RESOURCE, table_id) constraint\r\n * No retry occurs until a DEL operation successfully removes a rule from the same ACL table\r\n * The successful removal calls notifyRetry(), which marks the constraint as resolved\r\n * On the next Orch::doTask() cycle, retryToSync() moves resolved tasks back to m_toSync (subject to the per-iteration quota in Orch::doTask)\r\n * The task is then processed normally by doAclRuleTask()\r\n\r\n There is no timer or polling \u2014 no CPU is spent retrying until the resolving event occurs.\r\n\r\n **When is an entry removed from retry?**\r\n\r\n * On success: If the retried SAI create call succeeds, the rule is created normally and the entry is fully consumed (no longer in retry or m_toSync).\r\n * On repeated resource exhaustion: If the retry fails again with a resource-full status, the task is re-parked in the retry cache under the same constraint, awaiting the next resource-freeing event.\r\n * On non-resource failure: If the retry fails with a different error (e.g., SAI_STATUS_FAILURE), the task remains in m_toSync for normal retry handling (not re-parked).\r\n\r\n",
+      "files": [
+        {
+          "path": "orchagent/aclorch.cpp",
+          "additions": 36,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/aclorch.h",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/retrycache.h",
+          "additions": 7,
+          "deletions": 5
+        },
+        {
+          "path": "orchagent/saihelper.cpp",
+          "additions": 8,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/saihelper.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/aclorch_rule_ut.cpp",
+          "additions": 205,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-11T18:39:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-11T18:39:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-11T23:27:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-11T23:27:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-04-13T17:20:38Z",
+          "body": "@prabhataravind , can you update in description as to \"how frequently retry happens in this case\" and also when this will be eventually removed from retry etc. \r\n\r\n@bingwang-ms for viz"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-13T19:09:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-13T19:09:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-04-17T20:32:05Z",
+          "body": "@bingwang-ms , would you review?"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2026-04-20T18:25:29Z",
+          "body": "@AndoniSanguesa Can you help review this PR?"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-05-01T18:43:34Z",
+          "body": "@bingwang-ms , the changes lgtm. Can you check @prabhataravind response to your comment and signoff"
+        },
+        {
+          "author": "AnantKishorSharma",
+          "createdAt": "2026-06-13T13:16:58Z",
+          "body": "Hi @prabhataravind  @prsunny @bingwang-ms  - Could you please add 202511 backport label in this PR?"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-06-19T17:26:40Z",
+          "body": "> Hi @prabhataravind @prsunny @bingwang-ms - Could you please add 202511 backport label in this PR?\r\n\r\nNo more backport to 202511, unless for critical bugs"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "number": 4705,
+  "title": "[switchorch] No vendor-neutral way to disable the VOQ credit watchdog via SWITCH_TABLE",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4705",
+  "createdAt": "2026-06-24T17:25:55Z",
+  "closedAt": "2026-06-29T18:36:38Z",
+  "author": "darius-nexthop",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "**Is it platform specific**\n\nAffects VOQ switches which implement support for the SAI attribute.\n\n**Importance or Severity**\n\nMedium\n\n**Description**\n\nSwitchOrch exposes a range of `SAI_SWITCH_ATTR_*` knobs through APPL_DB SWITCH_TABLE, but there is no field for the VOQ hardware credit watchdog (`SAI_SWITCH_ATTR_CREDIT_WD` / `SAI_SWITCH_ATTR_CREDIT_WD_TIMER`).\n\nOn VOQ platforms the credit watchdog ages out and drains queues that stop receiving scheduler credits. That is exactly the condition some tests and tooling create on purpose. For example, [snappi](https://github.com/sonic-net/sonic-mgmt/tree/master/tests/snappi_tests) ECN-marking tests build up a lossless egress queue with a PFC pause storm, the watchdog trips, and the queued packets are dropped.\n\nToday, the only ways to disable it are vendor-specific:\n\n1. A raw bcmcmd register poke (not portable, not always available on newer Broadcom platforms)\n2. The sai_thrift path (drags in a syncd-RPC image dependency for a single knob).\n\n**Current Behavior**\n\nSwitchOrch's SWITCH_TABLE attribute map has no entry for the credit watchdog, so `SAI_SWITCH_ATTR_CREDIT_WD` / `_TIMER` cannot be reached from configuration. Disabling the watchdog requires vendor-specific `bcmcmd` or `sai_thrift`.\n\n**Proposed Behavior**\n\nSWITCH_TABLE should expose `credit_watchdog` / `credit_watchdog_timer` fields mapping to `SAI_SWITCH_ATTR_CREDIT_WD` / `SAI_SWITCH_ATTR_CREDIT_WD_TIMER`, gated on `SAI_SWITCH_TYPE_VOQ` (skipped with a log notice on non-VOQ switches), giving any VOQ platform a vendor-neutral way to control the credit watchdog over the standard APPL_DB path.\n\nRequires SAI headers with `SAI_SWITCH_ATTR_CREDIT_WD` / `_TIMER` (added in opencomputeproject/SAI#1779, released in SAI v1.12.0).",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4658,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4658",
+      "title": "switchorch: add credit_watchdog SWITCH_TABLE knob",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-29T18:36:37Z",
+      "createdAt": "2026-06-09T22:36:54Z",
+      "author": "darius-nexthop",
+      "body": "**What I did**\r\n\r\nAdded `credit_watchdog` and `credit_watchdog_timer` to the SwitchOrch `SWITCH_TABLE` attribute map. These map to the SAI attributes `SAI_SWITCH_ATTR_CREDIT_WD` and `SAI_SWITCH_ATTR_CREDIT_WD_TIMER` respectively.\r\n\r\nThis allows the VOQ credit watchdog for supported platforms to be controlled through the standard SAI switch-attribute path driven via APPL_DB.\r\n\r\nBoth attributes are gated by `SAI_SWITCH_ATTR_TYPE == SAI_SWITCH_TYPE_VOQ` so setting them on non-VOQ switches will be skipped with a log notice. We also define `gMySwitchType` in p4orch test main to fix linker errors.\r\n\r\n**Why I did it**\r\n\r\nThere is currently no vendor-neutral way to disable the VOQ hardware credit watchdog. Today, [for example in Snappi](https://github.com/nexthop-ai/sonic-mgmt/blob/master/tests/common/snappi_tests/common_helpers.py#L833-L860), the only method is via a bcmcmd, which is not supported on latest BCM platforms.\r\n\r\nThe alternatives are using platform shell commands to write explicit registers, exposing vendor-specific implementation details, or `sai_thrift`, introducing a dependency on the syncd RPC swap image which snappi tests today have no reason to rely on.\r\n\r\nExposing the attribute via `SWITCH_TABLE` makes the knob available to tests and tooling on any VOQ platform.\r\n\r\n**How I verified it**\r\n\r\n- New DVS test `test_switch.py::TestSwitch::test_credit_watchdog_non_voq` verifies the fields are skipped on a non-VOQ switch without blocking other attributes in the same batch.\r\n- New DVS test `test_virtual_chassis.py::TestVirtualChassis::test_voq_switch_credit_watchdog` verifies the attributes are programmed on a VOQ switch.\r\n- Verified on Broadcom DNX VOQ hardware: writing `credit_watchdog=0` via `SWITCH_TABLE` (using `swssconfig`) disables the credit watchdog and writing `1` restores it.\r\n\r\n**Details if related**\r\n\r\nRequires SAI headers with `SAI_SWITCH_ATTR_CREDIT_WD` / `SAI_SWITCH_ATTR_CREDIT_WD_TIMER` (added in [opencomputeproject/SAI#1779](https://github.com/opencomputeproject/SAI/pull/1779), first released in SAI v1.12.0).\r\n\r\nChanges validated on SAI 14.1.\r\n\r\nRelated to sonic-net/sonic-mgmt#25152\r\n\r\nFixes #4705 ",
+      "files": [
+        {
+          "path": "orchagent/p4orch/tests/test_main.cpp",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/switchorch.cpp",
+          "additions": 33,
+          "deletions": 1
+        },
+        {
+          "path": "tests/test_switch.py",
+          "additions": 46,
+          "deletions": 0
+        },
+        {
+          "path": "tests/test_virtual_chassis.py",
+          "additions": 48,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-09T22:37:01Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-09T22:37:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T16:33:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T16:33:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T16:59:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T16:59:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "sdszhang",
+          "createdAt": "2026-06-17T23:23:50Z",
+          "body": "@vmittal-msft @amitpawar12 for review."
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-06-18T00:32:37Z",
+          "body": "@vmittal-msft and @amitpawar12  As discussed changes validated on SAI 14.1."
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-06-18T14:23:35Z",
+          "body": "@saksarav-nokia @ysmanman please help review"
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-06-18T14:25:47Z",
+          "body": "@darius-nexthop  Can you please share how are we enabling/disabling credit-wd during runtime ? Are tests going to explicitly call set to configure or is there another way ? Also, if user like to turn on by default for all snappi tests. is there way ?"
+        },
+        {
+          "author": "darius-nexthop",
+          "createdAt": "2026-06-19T22:44:37Z",
+          "body": "> @darius-nexthop Can you please share how are we enabling/disabling credit-wd during runtime ? Are tests going to explicitly call set to configure or is there another way ? Also, if user like to turn on by default for all snappi tests. is there way ?\r\n\r\nHi @vmittal-msft, yes it would be an explicit set. \r\n\r\nThe plan is to keep Snappi changes minimal by only updating the existing [`disable_packet_aging()` / `enable_packet_aging()` helpers](https://github.com/sonic-net/sonic-mgmt/blob/3ae22ef8deb0b37464ff691f7f8edb0fc4be8844/tests/common/snappi_tests/common_helpers.py#L833-L890), which today use \"BCMSAI credit-watchdog disable\".\r\n\r\nInstead, the helper just needs to write the field into APPL_DB's SWITCH_TABLE at runtime, which SwitchOrch translates to the SAI attribute (the logic in this PR):\r\n\r\n```py\r\ndb = DBConnector(\"APPL_DB\", 0, True)\r\np = ProducerStateTable(db, \"SWITCH_TABLE\")\r\np.set(\"switch\", [(\"credit_watchdog\", \"0\")])   # \"0\" = off, \"1\" = on\r\n```\r\n\r\nI validated this end-to-end on a DNX VOQ linecard. The APPL_DB write flips `SAI_SWITCH_ATTR_CREDIT_WD` in ASIC_DB and the HW credit-watchdog register, works for both directions.\r\n\r\nIf we want this applied by default across snappi tests, we just issue the APPL_DB write once in a session-scoped fixture rather than per-test. @atul-nexthop may be able to share more regarding test plans."
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-06-19T22:48:22Z",
+          "body": "@vmittal-msft Currently test which needs to disable this use helpers [disable_packet_aging() / enable_packet_aging() helpers](https://github.com/sonic-net/sonic-mgmt/blob/3ae22ef8deb0b37464ff691f7f8edb0fc4be8844/tests/common/snappi_tests/common_helpers.py#L833-L890)\r\n\r\nSo, when test is run its enabled and disabled during cleanup. this is the current design in ecn tests scripts.\r\n\r\nbut yeah, It could be a auto use fixture which disables and enables it when running snappi tests on DNX VOQ linecard so tests in snappi does not need to opt in for this - but that would be change on how snappi utilizes this."
+        },
+        {
+          "author": "darius-nexthop",
+          "createdAt": "2026-06-24T01:42:29Z",
+          "body": "~~Snappi tests utilize GCU to apply patches. GCU performs YANG validation. We are working on adding YANG validation for the new credit-watchdog attribute, do not merge this PR until complete. Thanks!~~\r\n\r\nDisregard the above, this doesn't require a YANG change.\r\n\r\nThis change adds an APPL_DB field. YANG validation applies to CONFIG_DB, so APPL_DB switch attributes do not require (and have never had) YANG models. This is consistent with every existing field in the same SWITCH_TABLE attribute map, none of which are YANG-modeled (e.g., `fdb_aging_time`).\r\n\r\nConsumers should therefore write this knob into APPL_DB, which drives `SAI_SWITCH_ATTR_CREDIT_WD` through SwitchOrch.\r\n\r\nYANG validation *would* become relevant if a future use case needs this in `config_db.json`. However, that would also require a new model of the full SWITCH table in YANG, which is out of scope here and independent of this orchagent change."
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-06-24T19:05:41Z",
+          "body": "@darius-nexthop Thank you for the quick update on this \r\n@vmittal-msft LGTM if everything looks good on this."
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-06-24T21:13:24Z",
+          "body": "@rlhui @yxieca please help merge"
+        },
+        {
+          "author": "darius-nexthop",
+          "createdAt": "2026-06-25T17:08:55Z",
+          "body": "@vmittal-msft do we need to take this in 202511 as well?"
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-06-26T17:37:02Z",
+          "body": "> @vmittal-msft do we need to take this in 202511 as well?\r\n\r\nwe can skip for 202511 as only critical changes can go into 202511 now,"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-06-29T17:22:47Z",
+          "body": "@vmittal-msft @sdszhang - It would be great if you could help us with merging this PR."
+        },
+        {
+          "author": "darius-nexthop",
+          "createdAt": "2026-07-23T18:28:49Z",
+          "body": "@prsunny can you please add `Approved for 202605` so this change can be taken up in that release?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-24T00:21:15Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

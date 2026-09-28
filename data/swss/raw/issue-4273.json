@@ -1,0 +1,158 @@
+{
+  "number": 4273,
+  "title": "orchagent busy-wait loop in cSONiC containers when PortInitDone is never set",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4273",
+  "createdAt": "2026-02-28T08:34:25Z",
+  "closedAt": "2026-04-20T07:03:11Z",
+  "author": "securely1g",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Description\n\nOn the SONiC Virtual Switch (VS) platform, `orchagent` occasionally enters a tight CPU spin loop in its CRM (Counter Resource Monitoring) thread, consuming 100% of a CPU core indefinitely. The issue is observed in `docker-sonic-vs` containers used as cSONiC neighbors in sonic-mgmt testbeds, but likely affects any VS deployment.\n\n## Symptoms\n\n- `orchagent` process pegged at ~100% CPU\n- `rsyslogd` also elevated (~55% CPU) due to log flooding from orchagent\n- Container overall CPU usage ~158% (orchagent + rsyslogd combined)\n- Occurs on some containers but not all, even in the same testbed (suggests a timing/race condition at startup)\n\n## Root Cause Analysis\n\nThe CRM thread in orchagent continuously polls SAI resource availability via `object_type_get_availability()`. On the VS SAI implementation, many of these queries return `SAI_STATUS_NOT_SUPPORTED`. The CRM thread appears to retry without any backoff or rate-limiting, resulting in a tight poll loop.\n\nEvidence from `sairedis.rec` on an affected container shows continuous rapid-fire queries:\n\n```\n2026-02-28.08:28:59.277910|q|object_type_get_availability|SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000|SAI_ROUTE_ENTRY_ATTR_IP_ADDR_FAMILY=SAI_IP_ADDR_FAMILY_IPV4\n2026-02-28.08:28:59.278251|Q|object_type_get_availability|SAI_STATUS_NOT_SUPPORTED|COUNT=0\n2026-02-28.08:28:59.278499|q|object_type_get_availability|SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000|SAI_ROUTE_ENTRY_ATTR_IP_ADDR_FAMILY=SAI_IP_ADDR_FAMILY_IPV6\n2026-02-28.08:28:59.278704|Q|object_type_get_availability|SAI_STATUS_NOT_SUPPORTED|COUNT=0\n... (repeating continuously)\n```\n\n## Reproduction\n\n1. Deploy a sonic-mgmt KVM testbed with cSONiC neighbors (`-k csonic`)\n2. After `add-topo` completes, check CPU usage: `docker stats --no-stream`\n3. Some cSONiC containers will show ~158% CPU; inside, `orchagent` is at 100%\n\nIn our test, VM0100 and VM0101 were healthy (0.2% CPU), while VM0102 and VM0103 were affected (158% CPU). The only difference is startup timing.\n\n## CPU Evidence\n\n```\nVM0100 orchagent:  0.0% CPU,  00:00:01 cumulative\nVM0101 orchagent:  0.0% CPU,  00:00:01 cumulative\nVM0102 orchagent: 99.9% CPU,  00:45:00 cumulative (in ~45 min uptime)\nVM0103 orchagent: 99.9% CPU,  00:45:00 cumulative (in ~45 min uptime)\n```\n\n## Environment\n\n- Platform: VS (docker-sonic-vs)\n- Usage: cSONiC neighbors in sonic-mgmt KVM testbed\n- Host OS: Ubuntu with KVM/Docker\n\n## Suggested Fix\n\nThe CRM polling loop should:\n1. Skip or cache results for resource types that return `SAI_STATUS_NOT_SUPPORTED`\n2. Add a backoff/sleep between polling cycles to prevent tight loops\n3. Optionally, disable CRM polling entirely on VS platform where resource counters are not meaningful\n\n## Impact\n\n- Wastes ~2-3 CPU cores per testbed (when multiple neighbors are affected)\n- Floods syslog, making it harder to debug real issues\n- Functional impact is low \u2014 BGP and data plane still work correctly\n\n## Related\n\n- sonic-net/sonic-swss#189 (different orchagent CPU issue \u2014 unresolved next hops)\n",
+  "comments": [
+    {
+      "author": "securely1g",
+      "createdAt": "2026-02-28T17:08:42Z",
+      "body": "## Update: Root Cause Clarification\n\nAfter reviewing the VS SAI source code in [`vslib/VirtualSwitchSaiInterface.cpp`](https://github.com/sonic-net/sonic-sairedis/blob/master/vslib/VirtualSwitchSaiInterface.cpp), the VS SAI **does** implement `objectTypeGetAvailability()` for several object types:\n\n- \u2705 `SAI_OBJECT_TYPE_DEBUG_COUNTER` \u2192 returns 3\n- \u2705 `SAI_OBJECT_TYPE_INSEG_ENTRY` \u2192 returns MPLS platform labels count\n- \u2705 `SAI_OBJECT_TYPE_NEXT_HOP` (MPLS type) \u2192 returns 1000\n- \u2705 `SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MAP` \u2192 returns 512\n- \u2705 `SAI_OBJECT_TYPE_MY_SID_ENTRY` \u2192 returns from switch state\n- \u2705 DASH object types (VNET, ENI, etc.) \u2192 returns 100000\n\nHowever, the **default fallback** returns `SAI_STATUS_NOT_SUPPORTED` for any unhandled object types. The specific CRM resource types that fall through are:\n\n- \u274c `SAI_OBJECT_TYPE_ROUTE_ENTRY` (with `SAI_ROUTE_ENTRY_ATTR_IP_ADDR_FAMILY` IPv4/IPv6)\n- \u274c `SAI_OBJECT_TYPE_NEIGHBOR_ENTRY` (with `SAI_NEIGHBOR_ENTRY_ATTR_IP_ADDR_FAMILY` IPv4/IPv6)\n\nThese are queried by CRM every polling interval. When they return `NOT_SUPPORTED`, orchagent's CRM thread appears to enter a tight retry loop on the affected containers (VM0102/VM0103 in our case), while other containers (VM0100/VM0101) with the same config do not \u2014 suggesting a race condition or state-dependent trigger.\n\n### Possible fixes (two layers):\n\n1. **sonic-sairedis (VS SAI):** Add route_entry and neighbor_entry to the handled types in `objectTypeGetAvailability()`, returning a reasonable default count (similar to how MPLS/DASH are handled). This would make the API return `SAI_STATUS_SUCCESS` for all CRM-queried types.\n\n2. **sonic-swss (orchagent CRM):** When `objectTypeGetAvailability()` returns `SAI_STATUS_NOT_SUPPORTED`, cache that result and skip future polls for that resource type, rather than retrying every interval."
+    },
+    {
+      "author": "securely1g",
+      "createdAt": "2026-02-28T17:49:31Z",
+      "body": "## Update #2: Revised Root Cause \u2014 NOT CRM\n\nFurther investigation reveals the tight loop is **not** in CRM polling. The CRM code correctly marks unsupported resources with `CRM_RES_NOT_SUPPORTED` and skips them on subsequent polls.\n\n### Actual Root Cause: `PortInitDone` polling in orchagent select loop\n\n`redis-cli monitor` on the affected containers shows orchagent continuously polling `PORT_TABLE:PortInitDone` in APPL_DB:\n\n```\n1772300919.098084 [0] \"HGETALL\" \"PORT_TABLE:PortInitDone\"\n1772300919.098211 [0] \"HGETALL\" \"PORT_TABLE:PortInitDone\"\n1772300919.594142 [6] \"HGETALL\" \"PORT_TABLE|Ethernet8\"\n1772300920.098282 [0] \"HGETALL\" \"PORT_TABLE:PortInitDone\"\n1772300920.098383 [0] \"HGETALL\" \"PORT_TABLE:PortInitDone\"\n```\n\nKey observations:\n- `PORT_TABLE:PortInitDone` does **not exist** in APPL_DB on any of the cSONiC containers (healthy or sick)\n- `PORT_TABLE:PortConfigDone` **does** exist\n- On healthy containers, the select loop polls at ~2 queries/sec (normal blocking select with timeout)\n- On sick containers, the select loop runs without blocking \u2014 **~55 million log messages dropped per 5-minute window**\n- Only the main thread (PID 109) is spinning; other threads (ZMQ, etc.) are idle\n- The spinning appears to be a race condition at startup \u2014 same config, same image, but only some containers are affected\n\nThis suggests orchagent's main select loop hits a condition where it doesn't sleep/block properly when `PortInitDone` is missing, causing a busy-wait. The missing `PortInitDone` is expected in cSONiC containers since `portsyncd` may not set it in this deployment mode.\n\n### Impact\n- ~100% CPU on affected containers (plus ~55% from rsyslogd logging the flood)\n- BGP and data plane still functional\n- Only affects cSONiC/docker-sonic-vs containers, not KVM-based VS"
+    },
+    {
+      "author": "securely1g",
+      "createdAt": "2026-02-28T17:51:49Z",
+      "body": "## Update #3: Final Root Cause \u2014 Port Init Retry Loop (NOT CRM)\n\nAfter deeper analysis, CRM is **not** the cause of the CPU spin. The CRM code correctly falls back to `get_switch_attribute()` when `objectTypeGetAvailability()` returns `NOT_SUPPORTED`, and the VS SAI handles those switch attributes successfully. CRM polling works as intended.\n\n### The Real Root Cause\n\nThe CPU spin is in orchagent's **port task retry loop**. When port entries exist in APPL_DB but `PortInitDone` has never been set by portsyncd:\n\n1. `doPortTask()` processes port entries from the consumer\n2. Ports that aren't fully initialized stay in `m_toSync` (via `it++; continue;`)\n3. After each select iteration, `doTask()` retries all pending items in `m_toSync`\n4. Since items are never consumed (waiting for init), `m_toSync` is never empty\n5. The select loop never blocks because there are always pending events to process\n6. Result: busy-wait consuming 100% CPU\n\n**Why only some containers?** Timing difference at startup \u2014 containers that happen to have ports enter a ready state before `m_toSync` fills up behave normally. Containers where the race goes the other way get stuck.\n\n**Why cSONiC specifically?** In cSONiC (docker-sonic-vs used as neighbor), portsyncd may not set `PortInitDone` since the container isn't booting like a full SONiC switch.\n\n### Updated title to reflect actual root cause.\n\nCRM is not involved. I'll retitle this issue accordingly."
+    },
+    {
+      "author": "securely1g",
+      "createdAt": "2026-02-28T17:54:15Z",
+      "body": "## Update #4: Additional findings\n\nBoth healthy and unhealthy containers are **missing `PortInitDone`** \u2014 portsyncd never sets it in any of the 4 cSONiC containers. So that's not the differentiator.\n\nThe CPU spin is **pure userspace computation** (`/proc/PID/syscall` shows `running` 100% of samples, never blocked on a syscall). Redis operations are minimal (~18 ops/sec on both healthy and unhealthy). The 55M dropped syslog messages are from internal `SWSS_LOG_*` calls flooding syslog.\n\nThis strongly suggests a tight loop in orchagent's internal processing \u2014 likely a retry loop for some failed operation that logs on each iteration. The exact hot path would need `perf` profiling to identify (blocked by `perf_event_paranoid=4` on our test host).\n\nHealthy vs unhealthy containers have identical startup arguments and config. The difference is a timing/race condition during initialization \u2014 PID 1103573 (VM0100, healthy): 0.0% CPU, PID 1103575 (VM0102, sick): 100% CPU, 605 minutes accumulated in ~10h uptime.\n\nWill continue investigation with profiling when possible."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4274,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4274",
+      "title": "Fix orchagent 100% CPU spin when gOrchUnhealthy is set",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-20T07:03:10Z",
+      "createdAt": "2026-02-28T18:26:30Z",
+      "author": "securely1g",
+      "body": "## Description\n\nFix orchagent consuming 100% CPU when `gOrchUnhealthy` is permanently set after a SAI API failure. Two root causes addressed:\n\n1. **Syslog spam**: The error log was called every select loop iteration (~80K/sec), causing rsyslogd to also consume ~55% CPU. Fixed by moving the log into the existing `SELECT_TIMEOUT` periodic block (once per second).\n\n2. **epoll_wait spin**: When `gOrchUnhealthy` is set, internal `Selectable` objects remain in a \"ready\" state, causing `epoll_wait()` to return immediately with timeout=0 instead of blocking for `SELECT_TIMEOUT` (1000ms). This causes the select loop to spin at ~160K iterations/sec. Fixed by adding an explicit `sleep_for(SELECT_TIMEOUT)` when both `gOrchUnhealthy` is set and select returns `TIMEOUT`.\n\n### Root Cause\nPR #4040 introduced `gOrchUnhealthy` flag that gets set permanently when SAI hostif creation fails during startup. On SONiC VS (docker-sonic-vs) used as cSONiC neighbors in testbeds, a race condition between orchagent and syncd causes this failure reliably on some containers.\n\n### Impact Before Fix\n- orchagent: **100% CPU** (epoll_wait spin at 160K calls/sec)\n- rsyslogd: **~55% CPU** (processing ~37K syslog messages/sec)\n- System effectively unusable for its intended purpose\n\n### Impact After Fix\n- orchagent: **0% CPU** (select loop blocks properly for 1 second intervals)\n- rsyslogd: **0% CPU** (1 log message per second)\n\n### Validation\n- Tested on SONiC KVM testbed with 4 cSONiC neighbors (docker-sonic-vs)\n- Before fix: VM0102/VM0103 at 100% CPU\n- After fix: All 4 neighbors at 0% CPU\n- Confirmed via `strace`: `epoll_wait` now blocks with 1000ms timeout\n- All 4 BGP sessions Established and stable\n\n### Changes\n- `orchagent/orchdaemon.cpp`: Add `sleep_for(SELECT_TIMEOUT)` when `gOrchUnhealthy && ret == TIMEOUT`\n- `orchagent/orchdaemon.cpp`: Move `gOrchUnhealthy` error log into `SELECT_TIMEOUT` periodic block\n- `orchagent/orchdaemon.cpp`: Add `#include <thread>` for `std::this_thread::sleep_for`\n- `tests/mock_tests/test_failure_handling.cpp`: Unit test for `gOrchUnhealthy` flag behavior\n\nFixes: #4273",
+      "files": [
+        {
+          "path": "orchagent/orchdaemon.cpp",
+          "additions": 18,
+          "deletions": 4
+        },
+        {
+          "path": "tests/mock_tests/test_failure_handling.cpp",
+          "additions": 31,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-28T18:26:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-28T18:26:47Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "securely1g",
+          "createdAt": "2026-02-28T18:35:49Z",
+          "body": "cc @prabhataravind \u2014 this fixes a rate-limiting gap in the `gOrchUnhealthy` logging you introduced in #4040. The intent was periodic logging but it fired on every select iteration. Would appreciate your review."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-28T18:42:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-28T18:42:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-01T04:17:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-01T04:17:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "securely1g",
+          "createdAt": "2026-03-01T06:58:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-01T06:59:03Z",
+          "body": "<samp>\nCommenter does not have sufficient privileges for PR 4274 in repo sonic-net/sonic-swss<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-01T17:39:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-01T17:39:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "securely1g",
+          "createdAt": "2026-03-01T18:33:03Z",
+          "body": "**Validated on cSONiC testbed (docker-sonic-vs) \u2014 all 4 neighbors now under 1% CPU**\n\nBefore fix (VM0102 and VM0103 had `gOrchUnhealthy=true`):\n```\nCONTAINER ID   NAME                   CPU %     MEM USAGE / LIMIT     MEM %     NET I/O   BLOCK I/O         PIDS\ncsonic_vms6-1_VM0100   0.21%     ...\ncsonic_vms6-1_VM0101   0.21%     ...\ncsonic_vms6-1_VM0102   100.40%   ...\ncsonic_vms6-1_VM0103   100.68%   ...\n```\n\nAfter fix (commit `f6565a54`):\n```\nCONTAINER ID   NAME                   CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O         PIDS\nf400d44de4c5   csonic_vms6-1_VM0103   1.24%     131.5MiB / 62.51GiB   0.21%     0B / 0B           77.8kB / 12.2MB   106\n3e4a5dc74e86   csonic_vms6-1_VM0102   0.99%     131.5MiB / 62.51GiB   0.21%     0B / 0B           217kB / 12.2MB    106\n0dff16a184da   csonic_vms6-1_VM0101   1.02%     131.6MiB / 62.51GiB   0.21%     0B / 0B           77.8kB / 12.2MB   104\ne5f781c2fed0   csonic_vms6-1_VM0100   1.06%     135.7MiB / 62.51GiB   0.21%     0B / 0B           3.87MB / 12.2MB   104\ncfb301d4d5f9   ptf_vms6-1             13.04%    506.2MiB / 32GiB      1.54%     0B / 0B           65.5kB / 35.4MB   24\n62904555b5b0   net_vms6-1_VM0103      0.00%     1.078MiB / 62.51GiB   0.00%     0B / 0B           0B / 0B           1\n9eb6b932df53   net_vms6-1_VM0102      0.00%     1.082MiB / 62.51GiB   0.00%     0B / 0B           0B / 0B           1\nc940e14c1eba   net_vms6-1_VM0101      0.00%     1.078MiB / 62.51GiB   0.00%     0B / 0B           0B / 0B           1\n8ed7ccc3d61a   net_vms6-1_VM0100      0.00%     1.086MiB / 62.51GiB   0.00%     0B / 0B           307kB / 0B        1\n15eeb3ba3395   sonic-mgmt             0.00%     31.96MiB / 62.51GiB   0.05%     23.4MB / 1.27GB   55.4MB / 226MB    2\n```\n\n**Note:** Initial version had `if (gOrchUnhealthy && ret == Select::TIMEOUT)` which never triggered because `Select::select()` returns `Select::OBJECT` (not `TIMEOUT`) \u2014 `poll_descriptors(c, 0)` phase 1 always finds ready Selectables after the SAI failure. Updated to unconditional `if (gOrchUnhealthy)` in commit `f6565a54`."
+        },
+        {
+          "author": "securely1g",
+          "createdAt": "2026-03-16T08:55:10Z",
+          "body": "@lguohan \u2014 gentle ping. The detailed root cause analysis is in the inline thread: `Select::poll()` uses `timeout=0` when `m_ready` is non-empty, and failed SAI operations leave selectables in the ready set permanently. This causes 100% CPU on any VS/cSONiC container with `gOrchUnhealthy=true`.\n\nThe fix rate-limits the retry loop by yielding back to the select with proper timeout when unhealthy. Happy to discuss further or adjust the approach."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-18T22:35:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-18T22:36:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-18T22:37:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-18T22:38:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-18T22:50:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-18T22:50:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

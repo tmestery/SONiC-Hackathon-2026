@@ -1,0 +1,53 @@
+{
+  "id": "swss-4885",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4885,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4885",
+    "title": "[Dualtor][Prefix-route]:Next Hop Group Remove Failure on Dualtor with Prefix-Route Neighbor Mode, `ERR swss#orchagent: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED`",
+    "created_at": "2026-09-14T06:45:38Z",
+    "closed_at": "2026-09-22T15:48:07Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn an active-standby DualToR system with `neighbor_mode: prefix-route`, deleting an ECMP static route after all its nexthop mux cables have transitioned to standby causes a persistent orchagent failure. The `SAI_API_NEXT_HOP_GROUP` remove operation fails with `SAI_STATUS_NOT_EXECUTED`.\n\nThe issue does not occur on DualToR systems with `neighbor_mode: host-route`.\n\n### Steps to Reproduce\n\nfull repro logs: https://github.com/sonic-net/sonic-swss/issues/4885#issuecomment-5660106255\n\nOn a dualtor DUT with `neighbor_mode: prefix-route`:\n\n```bash\n# Verify neighbor_mode is prefix-route:\n# show mux config | head -8\n\n# Step 1: Set 2 mux ports to active and resolve neighbors\nsudo config mux mode active Ethernet4\nsudo config mux mode active Ethernet8\nsleep 5\nsudo ip neigh replace <IP> lladdr <IPV6> dev Vlan1000\nsudo ip neigh replace <IP> lladdr <IPV6> dev Vlan1000\nsleep 5\n\n# Step 2: Create ECMP static route with 2+ nexthops behind mux cables\nsudo config route add prefix <IP>/24 nexthop <IP>,<IP>\nsleep 5\nshow ip route <IP>/24\n# Should show 2 nexthops via Vlan1000\n\n# Step 3: Set the mux ports to standby\nsudo config mux mode standby Ethernet4\nsudo config mux mode standby Ethernet8\nsleep 5\n\n# Step 4: Delete the static route \u2014 this triggers the bug\nsudo config route del prefix <IP>/24\nsleep 2\n\n# Step 5: Check for the error\nsudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\n# Error count grows over time (~1 per second):\nsudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | wc -l\n```\n\n**Key conditions:**\n- `neighbor_mode` must be `prefix-route` (not `host-route`)\n- Static route must have 2+ nexthops pointing to Vlan neighbors behind mux cables\n- Mux must transition active -> standby _after_ the route exists\n- Route must be deleted _after_ mux standby\n\n### Actual Behavior and Expected Behavior\n\n**Actual:**\nAfter deleting the ECMP route, the next hop group removal fails with `SAI_STATUS_NOT_EXECUTED`.\n**Expected:**\nRoute deletion should complete cleanly without SAI errors. Orchagent should remain healthy.\n\n### Relevant log output\n\n```shell\n2026 Sep 14 <IPV6>.099420 gd450 ERR swss#orchagent: :- handleSaiFailure: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 <IPV6>.099504 gd450 NOTICE swss#orchagent: :- publish: EVENT_PUBLISHED: {\"sonic-events-swss:sai-operation-failure\":{\"api\":\"SAI_API_NEXT_HOP_GROUP\",\"operation\":\"remove\",\"status\":\"SAI_STATUS_NOT_EXECUTED\",\"timestamp\":\"2026-09-14T05:25:47.99434Z\"}}\n2026 Sep 14 <IPV6>.203935 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 <IPV6>.397119 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 <IPV6>.915318 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC Software Version: SONiC.branch.202605-ars.543cbf5a-buildimage.ccd774c0f0bab05d35518f9fab1ac40a401b5ca1-nightly-2026.09.13.14.39\nSONiC OS Version: 13\nDistribution: Debian 13.7\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 4b4a34c43\nBuild date: Sun Sep 13 <IPV6> UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-arsonic-backend-k8s-116789-411w1-t7qbq\n\nPlatform: x86_64-arista_7260cx3_64\nHwSKU: Arista-7260CX3-D108C8\nASIC: broadcom\nASIC Count: 1\nSerial Number: FGN22072791\nModel Number: DCS-7260CX3-64\nHardware Revision: 03.00\n```\n\n### Attach files (if any)\n\n[NHG_bug_reproduced.log](https://github.com/user-attachments/files/32182630/NHG_bug_reproduced.log)"
+  },
+  "resolution": {
+    "pr_number": 4886,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4886",
+    "title": "[Dualtor][Prefix-route]: Fix NHG member stale OID causing remove failure on dualtor prefix-route mode",
+    "merged_at": "2026-09-22T15:48:06Z",
+    "description": "#### Why I did it\n\nFixes: https://github.com/sonic-net/sonic-swss/issues/4885\n\nOn dualtor topologies with `neighbor_mode: prefix-route`, deleting an ECMP\nstatic route after all its nexthop mux cables have transitioned to standby\ncauses a persistent orchagent failure. The `SAI_API_NEXT_HOP_GROUP` remove\noperation fails with `SAI_STATUS_NOT_EXECUTED`.\n\nWhen mux cables go to standby, `MuxPrefixBasedNbrHandler::disable()` calls\n`invalidnexthopinNextHopGroup()` to remove NHG members from SAI. Unlike the\nhost-route handler which always pairs invalidate with validate to swap members,\nthe prefix-route handler intentionally does not add tunnel replacements \u2014\nroute-to-tunnel redirection is handled separately via `setBulkRouteNH()`.\n\nHowever, `invalidnexthopinNextHopGroup()` does not update the in-memory\n`nhopgroup_members` map after removing members from SAI. The stale OIDs remain\nin the map. When the route is later deleted, `removeNextHopGroup()` reads these\nstale OIDs and submits them for bulk removal. SAI meta validation fails with\n`SAI_STATUS_ITEM_NOT_FOUND`, and `SAI_BULK_OP_ERROR_MODE_STOP_ON_ERROR` causes\nthe remaining members to get `SAI_STATUS_NOT_EXECUTED`.\n\nThe issue does not occur with `neighbor_mode: host-route` because that handler\nalways calls `validnexthopinNextHopGroup()` after invalidation, which overwrites\nthe stale OID with a fresh one.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n- In `invalidnexthopinNextHopGroup()`, set the member OID to\n  `SAI_NULL_OBJECT_ID` after successful SAI removal. This preserves `seq_id`\n  for ordered ECMP re-add via `validnexthopinNextHopGroup()` while clearly\n  marking the member as already removed from SAI.\n- In `removeNextHopGroup()`, skip members whose OID is `SAI_NULL_OBJECT_ID`\n  since they have already been removed from SAI.\n- Add a mock unit test (`RemoveNhgAfterAllMembersInvalidatedWithoutReplacement`)\n  that exercises the exact sequence: create ECMP route, invalidate all members\n  without replacement, delete route and verifies no SAI failures occur.\n- Add a virtual switch test (`test_multi_nexthop_all_standby_then_delete_route`)\n  that creates an ECMP route while mux is active, transitions all mux ports to\n  standby, deletes the route, and verifies: NHG members are cleaned up from\n  ASIC DB, no SAI error is logged, and orchagent remains healthy.\n\n#### How to verify it\n\nOn an active-standby DualToR device with `neighbor_mode: prefix-route`:\n\n```bash\n# Step 1: Set 2 mux ports to active and resolve neighbors\nsudo config mux mode active Ethernet4\nsudo config mux mode active Ethernet8\nsudo ip neigh replace <IP> lladdr <IPV6> dev Vlan1000\nsudo ip neigh replace <IP> lladdr <IPV6> dev Vlan1000\n\n# Step 2: Create ECMP static route\nsudo config route add prefix <IP>/24 nexthop <IP>,<IP>\n\n# Step 3: Set mux ports to standby\nsudo config mux mode standby Ethernet4\nsudo config mux mode standby Ethernet8\n\n# Step 4: Delete the route\nsudo config route del prefix <IP>/24\n\n# Step 5: Verify no SAI errors\nsudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\n# Expected: no output (no errors logged)\n```\n\n- Run the new mock UT: `RemoveNhgAfterAllMembersInvalidatedWithoutReplacement`\n  in `tests/mock_tests/routeorch_ut.cpp`.\n- Run the new VS test: `test_multi_nexthop_all_standby_then_delete_route` in\n  `tests/test_mux_prefixroute.py`.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): https://github.com/sonic-net/sonic-swss/issues/4885\n\nFailure type:  day-one issue\n\nReason for backport: the issue is reproducible on 202605 active-standby\nDualToR setups with `neighbor_mode: prefix-route` and causes sonic-mgmt tests like `route/test_static_route.py` to fail due to presence of syslog error that is being caught by logAnalyzer\n\n#### Tested branch\n\n- [ ] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n202605: SONiC.branch.202605-ars.f113c325-buildimage.ccd774c0f0bab05d35518f9fab1ac40a401b5ca1-review.801796.5-2026.09.13.15.46 -\n[Passing_test_static_route.xml](https://github.com/user-attachments/files/32184195/Passing_test_static_route.xml)\n[NHG_bug_fixed.log](https://github.com/user-attachments/files/32184239/NHG_bug_fixed.log)\n\n#### Description for the changelog\n\nFix NHG member stale OID causing SAI remove failure on dualtor with prefix-route neighbor mode.\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no YANG or config_db schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n```\n\n /\\     /\\\n{  `---'  }\n{  O   O  }\n~~>  V  <~~\n \\  \\|/  /\n  `-----'__\n  /     \\  `^\\_\n {       }\\ |\\_\\_   W\n |  \\_/  |/ /  \\_\\_( )\n  \\__/  /(_E     \\__/\n    (  /\n```",
+    "files": [
+      {
+        "path": "orchagent/routeorch.cpp",
+        "additions": 13,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/routeorch_ut.cpp",
+        "additions": 62,
+        "deletions": 0
+      },
+      {
+        "path": "tests/test_mux_prefixroute.py",
+        "additions": 71,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

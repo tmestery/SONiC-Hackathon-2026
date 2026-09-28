@@ -1,0 +1,131 @@
+{
+  "number": 4823,
+  "title": "[dualtor][intfsorch] Router interface update overwrites shared VLAN gateway MAC with per-device switch MAC (regression from #4615)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4823",
+  "createdAt": "2026-08-13T04:00:03Z",
+  "closedAt": "2026-09-02T16:20:23Z",
+  "author": "lolyu",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "lolyu"
+  ],
+  "milestone": null,
+  "body": "### Description\n\nOn a dual-ToR VLAN SVI, any `INTF_TABLE` update to the VLAN interface makes `IntfsOrch::doTask()` issue a spurious `set_router_interface_attribute(SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS)` that **overwrites the shared VLAN gateway MAC with the per-device switch MAC** (`gMacAddress`).\n\nReplacing the shared gateway MAC with a per-device MAC breaks seamless mux failover: each ToR then answers the server's gateway ARP with a different MAC, so a mux switchover stales the server's ARP cache and blackholes traffic until it re-resolves.\n\nThis is a **regression** introduced by #4615 ([EVPN-MH] Integrate EVPN-MH with existing modules, `f0c53b94`). Releases predating it never issued the set \u2014 the old reconcile was guarded by `if (mac)`, so the empty (`00:00:00:00:00:00`) sentinel simply meant \"don't touch the MAC\".\n\n### Root cause\n\nThere is an asymmetry between the RIF **create** path and the **update** path in `orchagent/intfsorch.cpp`:\n\n- **Create** \u2014 `setIntf()` derives the tracked MAC from the port, only falling back to the switch MAC when the port has none (lines 512\u2013519):\n\n  ```cpp\n  if (port.m_mac)\n      intfs_entry.mac = port.m_mac;   // e.g. dual-ToR shared VLAN gateway MAC\n  else\n      intfs_entry.mac = gMacAddress;\n  ```\n\n- **Update** \u2014 `doTask()` falls back straight to `gMacAddress` (lines 1080\u20131082):\n\n  ```cpp\n  if (!mac)          // mac parsed from INTF_TABLE is the zero sentinel\n      mac = gMacAddress;\n  ```\n\nFor a VLAN SVI whose gateway MAC is configured on the VLAN (populated into `port.m_mac` from `VLAN_TABLE`), the two never agree:\n\n1. The RIF is created with the VLAN's gateway MAC (e.g. the dual-ToR shared MAC).\n2. On the next interface update, `INTF_TABLE.mac_addr` is the empty sentinel, so the update path recomputes `mac = gMacAddress` (the per-device switch MAC).\n3. `m_syncdIntfses[alias].mac` (shared) `!= mac` (device) \u2192 the \"update mac if it is changed\" block (lines 1084\u20131096) issues `SET SRC_MAC = <device MAC>`, clobbering the shared gateway MAC.\n\n### Steps to reproduce\n\n1. On a dual-ToR device, configure the shared gateway MAC on the server-facing VLAN (`VLAN_TABLE` `mac` \u2192 `port.m_mac` for the SVI). The RIF is created with this shared MAC.\n2. Trigger any update to the VLAN interface key in `INTF_TABLE` (e.g. add/remove an IP prefix, or any field touch that re-runs `IntfsOrch::doTask()` for the interface).\n3. Observe that orchagent issues `set_router_interface_attribute(SRC_MAC)` and the RIF's source MAC becomes the per-device switch MAC (`gMacAddress`) instead of the configured shared VLAN gateway MAC.\n4. After a mux switchover, the peer ToR replies to the server's gateway ARP with a *different* MAC, so the server's ARP cache is stale until it re-resolves.\n\n### Expected behavior\n\nThe update path should reconcile against the **same** MAC the RIF was created with. For a VLAN SVI with a configured gateway MAC, that is the port's MAC, so **no** `SET SRC_MAC` should be generated on interface updates and the shared gateway MAC must be preserved.\n\n### Fix\n\nMake the update path mirror the create path \u2014 prefer `port.m_mac` and only fall back to `gMacAddress` when the port has no MAC \u2014 so the reconciliation MAC matches the create-time MAC and no spurious set is emitted. Proposed in #4816.\n\nBehavior is unchanged for:\n- routed PHY/LAG interfaces (`port.m_mac` empty \u2192 `gMacAddress`, as before), and\n- SAG interfaces (intfmgr writes a non-zero anycast MAC into `INTF_TABLE`, so the fallback is never taken).\n\n### Notes\n\n- Regression source: #4615 (`f0c53b94`).\n- Fix PR: #4816 (`[dualtor][intfsorch] Preserve port MAC when updating router interface MAC`).\n- Affected file: `orchagent/intfsorch.cpp` (`IntfsOrch::doTask()` MAC reconcile block).\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4816,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4816",
+      "title": "[dualtor][intfsorch] Preserve port MAC when updating router interface MAC",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-02T16:20:21Z",
+      "createdAt": "2026-08-05T04:11:08Z",
+      "author": "lolyu",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\n\r\nMade `IntfsOrch::doTask()` prefer the port's own MAC (`port.m_mac`) when reconciling a router interface's `SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS`, only falling back to the switch MAC (`gMacAddress`) when the port has no MAC \u2014 mirroring what the create path in `setIntf()` already does.\r\n\r\n**Why I did it**\r\n\r\n#4615 ([EVPN-MH] Integrate EVPN-MH with existing modules, f0c53b94) added an \"update mac if it is changed\" block to IntfsOrch::doTask() that reconciles the RIF's SRC_MAC on every interface update. When the MAC parsed from INTF_TABLE is empty (the 00:00:00:00:00:00 sentinel that intfmgr writes for interfaces without a per-interface MAC), it falls back to gMacAddress and, if that differs from the tracked MAC, issues a set_router_interface_attribute(SRC_MAC).\r\n\r\nThe problem is an asymmetry between the create and update paths:\r\n\r\n- Create (setIntf() \u2192 intfs_entry.mac): port.m_mac ? port.m_mac : gMacAddress \u2014 so the RIF is created with the port's MAC (line 514/518).\r\n- Update (doTask()): fell back straight to gMacAddress (line 1080).\r\n\r\nFor a VLAN SVI whose gateway MAC is configured on the VLAN (populated into port.m_mac from VLAN_TABLE), the two never agree:\r\n\r\n1. The RIF is created with the VLAN's gateway MAC (e.g. dual-ToR shared MAC 00:aa:bb:cc:dd:ee).\r\n2. The update path immediately recomputes the MAC as gMacAddress (the per-device switch MAC) because INTF_TABLE.mac_addr is the zero sentinel.\r\n3. m_syncdIntfses[alias].mac (shared) != mac (device) \u2192 a spurious SET SRC_MAC = <device MAC> is issued, overwriting the shared gateway MAC.\r\n\r\nOn dual-ToR, replacing the shared VLAN gateway MAC with a per-device MAC breaks seamless mux failover (each ToR would answer the server's gateway ARP with a different MAC, so a switchover stales the server's ARP cache). This is a regression introduced in #4615; releases predating it never issued the set (the old code was guarded by if (mac), so the zero sentinel simply meant \"don't touch the MAC\").\r\n\r\nThe fix makes the update path fall back exactly like the create path, so the reconciliation MAC matches what the RIF was created with and no spurious set is generated.\r\n\r\n**How I verified it**\r\nBuild and validate on dualtor device.\r\n\r\n**Details if related**\r\n\nFixes #4823\r\n",
+      "files": [
+        {
+          "path": "orchagent/intfsorch.cpp",
+          "additions": 4,
+          "deletions": 1
+        },
+        {
+          "path": "tests/evpn_tunnel.py",
+          "additions": 23,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T04:11:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T04:11:16Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T04:11:27Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-08-11T11:00:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-11T11:00:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-14T06:23:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-14T06:23:54Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-08-14T12:46:07Z",
+          "body": "\r\n/azp run\r\n\r\n"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-14T12:46:18Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-17T12:57:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-17T12:58:09Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-17T22:20:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-17T22:20:52Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-08-17T22:21:19Z",
+          "body": "Hi @prsunny  @tahmed-dev, could you please help review this one?"
+        },
+        {
+          "author": "tahmed-dev",
+          "createdAt": "2026-08-18T17:42:07Z",
+          "body": "The change looks right to me, and the diagnosis matches what I see in the code: `setIntf()` creates the RIF with `port.m_mac` when the port has one, while the update path fell back to `gMacAddress`, so a VLAN carrying its own MAC gets a spurious `SET SRC_MAC` immediately after create.\n\nOne note on scope. Both sides of that asymmetry arrived together in f0c53b94 (#4615), which also added the SAG support. `m_sagMac` is only used to derive the link-local EUI64 route and never sets the RIF `SRC_MAC`, so a static anycast gateway MAC reaches the RIF through `VLAN_TABLE` and `port.m_mac` in exactly the same way the dual-ToR shared MAC does. That suggests this is not specific to dual-ToR: an anycast gateway VLAN would get overwritten the same way, so the fix likely covers more than the title implies.\n\n@pbrisset one question on intent, since it decides which shape of fix is correct here. Is the `if (!mac)` branch in the update path meant to actively re-assert a default MAC onto the RIF, or is it only there to give the comparison a value? If nothing is configured in `INTF_TABLE.mac_addr`, there is arguably nothing to reconcile, and returning early would avoid carrying two copies of the \"which MAC do we default to\" rule that have to stay in agreement. If it is meant to re-assert, then it probably wants to share a single helper with `setIntf()` rather than repeat the expression in both places.\n"
+        },
+        {
+          "author": "pbrisset",
+          "createdAt": "2026-08-19T17:34:20Z",
+          "body": "> @pbrisset one question on intent, since it decides which shape of fix is correct here. Is the `if (!mac)` branch in the update path meant to actively re-assert a default MAC onto the RIF, or is it only there to give the comparison a value? If nothing is configured in `INTF_TABLE.mac_addr`, there is arguably nothing to reconcile, and returning early would avoid carrying two copies of the \"which MAC do we default to\" rule that have to stay in agreement. If it is meant to re-assert, then it probably wants to share a single helper with `setIntf()` rather than repeat the expression in both places.\r\n\r\nGood question. I do not think the empty `mac_addr` case should actively re-assert a default MAC on every interface update. Historically the update path only programmed `SRC_MAC` when `INTF_TABLE.mac_addr` carried an explicit non-zero value; the zero/sentinel value meant there was no configured interface MAC to reconcile.\r\n\r\nSo I agree the better shape is probably to skip the MAC update when `mac_addr` is empty, rather than recomputing the create-time default in the update path. That avoids duplicating the `port.m_mac ? port.m_mac : gMacAddress` rule and also preserves the old behavior for VLAN/SAG/dualtor cases where the RIF MAC comes from the underlying port/VLAN.\r\n\r\nIf we do decide there is a real need to re-assert the default later, then I agree it should go through a shared helper used by both `setIntf()` and the update path. But for this regression, returning early on empty `mac_addr` seems like the narrower and safer fix."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-08-27T02:18:07Z",
+          "body": "@pbrisset , could you approve the PR since you commented? "
+        }
+      ]
+    }
+  ]
+}

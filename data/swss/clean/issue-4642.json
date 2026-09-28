@@ -1,0 +1,43 @@
+{
+  "id": "swss-4642",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4642,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4642",
+    "title": "Noise from ERR syslog: VID oid:0x90000000008bf, was not found (probably port was removed/ splitted) and will remove from counters now",
+    "created_at": "2026-06-03T22:02:53Z",
+    "closed_at": "2026-06-24T16:32:55Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "There are ERR syslog prints occuring on the Broadcom TH5 platform whenever the switch `reboot`s or `config reload`s:\n```\nERR syncd#syncd: :- processFlexCounterEvent: port VID oid:0x5700000000069a, was not found (probably port was removed/splitted) and will remove from counters now\n```\n\nThere seems to be an issue when retrieving VID info when removing VID mappings related to Port PHY Serdes SAI objects."
+  },
+  "resolution": {
+    "pr_number": 4643,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4643",
+    "title": "Fix orchagent Port PHY Serdes Invalid VID on Removal",
+    "merged_at": "2026-06-24T16:32:54Z",
+    "description": "**What I did**\nRemoving a check such that old VID mappings are always removed after the successful creation of a new Port PHY Serdes SAI object for the purposes of reconfiguration and replacing the previous one.\nThe order of removal has also been rearranged such that VID mappings are removed before the actual removal of the Port PHY Serdes SAI object.\n\n**Why I did it**\nWhen a serdes is reconfigured (happens some time after initialization), the SAI object(s) for the Port PHY Serdes Attribute has to be recreated. This means to go look for any objects with references to Port PHY Serdes Attributes, clearing VID references for those objects, and re-creating them.\n\nAfterwards, there will be a function call to clear counter ids on the old VID ref'd objects.\n\nCurrently, this ordering of object removal before VID mapping removal will cause the ERR syslog print:\n```\nport VID oid:0x90000000008bf, was not found (probably port was removed/\nsplitted) and will remove from counters now\n```\nThis is a harmless print, but still should not happen nonetheless. It is generating lots of noise.\n\nIf we are calling `setPortSerdesAttribute()`, then we need a new serdes object. By the time the function removes the old object, it has already successfully created the new one.\n\nThis means old mappings are no longer needed, regardless of whether if the old object is successfully removed or not.\n\nFixes https://github.com/sonic-net/sonic-swss/issues/4642\n\n**How I verified it**\nThe syslog ERR no longer prints on config reload on TH5. `sonic-mgmt` tests also shows no fallout.\n\n**Details if related**",
+    "files": [
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 17,
+        "deletions": 18
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

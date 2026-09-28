@@ -1,0 +1,48 @@
+{
+  "id": "swss-4273",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4273,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4273",
+    "title": "orchagent busy-wait loop in cSONiC containers when PortInitDone is never set",
+    "created_at": "2026-02-28T08:34:25Z",
+    "closed_at": "2026-04-20T07:03:11Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\nOn the SONiC Virtual Switch (VS) platform, `orchagent` occasionally enters a tight CPU spin loop in its CRM (Counter Resource Monitoring) thread, consuming 100% of a CPU core indefinitely. The issue is observed in `docker-sonic-vs` containers used as cSONiC neighbors in sonic-mgmt testbeds, but likely affects any VS deployment.\n\n## Symptoms\n\n- `orchagent` process pegged at ~100% CPU\n- `rsyslogd` also elevated (~55% CPU) due to log flooding from orchagent\n- Container overall CPU usage ~158% (orchagent + rsyslogd combined)\n- Occurs on some containers but not all, even in the same testbed (suggests a timing/race condition at startup)\n\n## Root Cause Analysis\n\nThe CRM thread in orchagent continuously polls SAI resource availability via `object_type_get_availability()`. On the VS SAI implementation, many of these queries return `SAI_STATUS_NOT_SUPPORTED`. The CRM thread appears to retry without any backoff or rate-limiting, resulting in a tight poll loop.\n\nEvidence from `sairedis.rec` on an affected container shows continuous rapid-fire queries:\n\n```\n2026-02-28.<IPV6>.277910|q|object_type_get_availability|SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000|SAI_ROUTE_ENTRY_ATTR_IP_ADDR_FAMILY=SAI_IP_ADDR_FAMILY_IPV4\n2026-02-28.<IPV6>.278251|Q|object_type_get_availability|SAI_STATUS_NOT_SUPPORTED|COUNT=0\n2026-02-28.<IPV6>.278499|q|object_type_get_availability|SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000|SAI_ROUTE_ENTRY_ATTR_IP_ADDR_FAMILY=SAI_IP_ADDR_FAMILY_IPV6\n2026-02-28.<IPV6>.278704|Q|object_type_get_availability|SAI_STATUS_NOT_SUPPORTED|COUNT=0\n... (repeating continuously)\n```\n\n## Reproduction\n\n1. Deploy a sonic-mgmt KVM testbed with cSONiC neighbors (`-k csonic`)\n2. After `add-topo` completes, check CPU usage: `docker stats --no-stream`\n3. Some cSONiC containers will show ~158% CPU; inside, `orchagent` is at 100%\n\nIn our test, VM0100 and VM0101 were healthy (0.2% CPU), while VM0102 and VM0103 were affected (158% CPU). The only difference is startup timing.\n\n## CPU Evidence\n\n```\nVM0100 orchagent:  0.0% CPU,  <IPV6> cumulative\nVM0101 orchagent:  0.0% CPU,  <IPV6> cumulative\nVM0102 orchagent: 99.9% CPU,  <IPV6> cumulative (in ~45 min uptime)\nVM0103 orchagent: 99.9% CPU,  <IPV6> cumulative (in ~45 min uptime)\n```\n\n## Environment\n\n- Platform: VS (docker-sonic-vs)\n- Usage: cSONiC neighbors in sonic-mgmt KVM testbed\n- Host OS: Ubuntu with KVM/Docker\n\n## Suggested Fix\n\nThe CRM polling loop should:\n1. Skip or cache results for resource types that return `SAI_STATUS_NOT_SUPPORTED`\n2. Add a backoff/sleep between polling cycles to prevent tight loops\n3. Optionally, disable CRM polling entirely on VS platform where resource counters are not meaningful\n\n## Impact\n\n- Wastes ~2-3 CPU cores per testbed (when multiple neighbors are affected)\n- Floods syslog, making it harder to debug real issues\n- Functional impact is low \u2014 BGP and data plane still work correctly\n\n## Related\n\n- sonic-net/sonic-swss#189 (different orchagent CPU issue \u2014 unresolved next hops)"
+  },
+  "resolution": {
+    "pr_number": 4274,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4274",
+    "title": "Fix orchagent 100% CPU spin when gOrchUnhealthy is set",
+    "merged_at": "2026-04-20T07:03:10Z",
+    "description": "## Description\n\nFix orchagent consuming 100% CPU when `gOrchUnhealthy` is permanently set after a SAI API failure. Two root causes addressed:\n\n1. **Syslog spam**: The error log was called every select loop iteration (~80K/sec), causing rsyslogd to also consume ~55% CPU. Fixed by moving the log into the existing `SELECT_TIMEOUT` periodic block (once per second).\n\n2. **epoll_wait spin**: When `gOrchUnhealthy` is set, internal `Selectable` objects remain in a \"ready\" state, causing `epoll_wait()` to return immediately with timeout=0 instead of blocking for `SELECT_TIMEOUT` (1000ms). This causes the select loop to spin at ~160K iterations/sec. Fixed by adding an explicit `sleep_for(SELECT_TIMEOUT)` when both `gOrchUnhealthy` is set and select returns `TIMEOUT`.\n\n### Root Cause\nPR #4040 introduced `gOrchUnhealthy` flag that gets set permanently when SAI hostif creation fails during startup. On SONiC VS (docker-sonic-vs) used as cSONiC neighbors in testbeds, a race condition between orchagent and syncd causes this failure reliably on some containers.\n\n### Impact Before Fix\n- orchagent: **100% CPU** (epoll_wait spin at 160K calls/sec)\n- rsyslogd: **~55% CPU** (processing ~37K syslog messages/sec)\n- System effectively unusable for its intended purpose\n\n### Impact After Fix\n- orchagent: **0% CPU** (select loop blocks properly for 1 second intervals)\n- rsyslogd: **0% CPU** (1 log message per second)\n\n### Validation\n- Tested on SONiC KVM testbed with 4 cSONiC neighbors (docker-sonic-vs)\n- Before fix: VM0102/VM0103 at 100% CPU\n- After fix: All 4 neighbors at 0% CPU\n- Confirmed via `strace`: `epoll_wait` now blocks with 1000ms timeout\n- All 4 BGP sessions Established and stable\n\n### Changes\n- `orchagent/orchdaemon.cpp`: Add `sleep_for(SELECT_TIMEOUT)` when `gOrchUnhealthy && ret == TIMEOUT`\n- `orchagent/orchdaemon.cpp`: Move `gOrchUnhealthy` error log into `SELECT_TIMEOUT` periodic block\n- `orchagent/orchdaemon.cpp`: Add `#include <thread>` for `std::this_thread::sleep_for`\n- `tests/mock_tests/test_failure_handling.cpp`: Unit test for `gOrchUnhealthy` flag behavior\n\nFixes: #4273",
+    "files": [
+      {
+        "path": "orchagent/orchdaemon.cpp",
+        "additions": 18,
+        "deletions": 4
+      },
+      {
+        "path": "tests/mock_tests/test_failure_handling.cpp",
+        "additions": 31,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

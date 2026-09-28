@@ -1,0 +1,148 @@
+{
+  "number": 4842,
+  "title": "[fdbsyncd][EVPN-MH] OIF nexthop delete emits L2NHG DEL although matching create was ignored",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4842",
+  "createdAt": "2026-08-25T18:45:53Z",
+  "closedAt": "2026-09-21T16:39:41Z",
+  "author": "croos12",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "\n### Description\n\nWhen EVPN NVO is configured, `fdbsyncd` processes Linux `RTM_NEWNEXTHOP` and `RTM_DELNEXTHOP` notifications.\n\nFor an `RTM_NEWNEXTHOP` containing `NHA_OIF`, `fdbsyncd` intentionally ignores the object because it is not an L2 nexthop that belongs in `L2_NEXTHOP_GROUP_TABLE`:\n\n```cpp\nif (msg->nlmsg_type == RTM_NEWNEXTHOP)\n{\n    if (has_oif)\n    {\n        SWSS_LOG_INFO(\"NHG %u has OIF, dropping\", nhid);\n        return;\n    }\n}\n```\n\nHowever, the corresponding `RTM_DELNEXTHOP` path unconditionally publishes a DEL operation without checking whether the ID was previously accepted and inserted into `m_l2NhgMap`:\n\n```cpp\nelse if (msg->nlmsg_type == RTM_DELNEXTHOP)\n{\n    m_l2NhgTable.del(to_string(nhid));\n    m_l2NhgMap.erase(nhid);\n\n    SWSS_LOG_INFO(\"L2_NEXTHOP_GROUP_TABLE: DEL nhid=%u\", nhid);\n}\n```\n\nOrchagent receives this unmatched DEL and reports:\n\n```text\ndeleteL2Nhg: Can't delete L2NHG '<id>': does not exist\n```\n\nRelevant source:\n\n- [OIF create filtering](https://github.com/nvidia-sonic/sonic-swss/blob/b1990a3c34ef7642f03f62849c9af5dffb1d66bf/fdbsyncd/fdbsync.cpp#L1197-L1204)\n- [Unconditional delete](https://github.com/nvidia-sonic/sonic-swss/blob/b1990a3c34ef7642f03f62849c9af5dffb1d66bf/fdbsyncd/fdbsync.cpp#L1291-L1297)\n- [Orchagent missing-object error](https://github.com/nvidia-sonic/sonic-swss/blob/b1990a3c34ef7642f03f62849c9af5dffb1d66bf/orchagent/l2nhgorch.cpp#L763-L795)\n\n### Steps to Reproduce\n\n1. Boot SONiC with EVPN NVO configured and Linux interface-bound nexthop objects present.\n2. Confirm that `fdbsyncd` receives an `RTM_NEWNEXTHOP` and logs:\n\n   ```text\n   NHG <id> has OIF, dropping\n   ```\n\n3. Run a forced configuration reload:\n\n   ```bash\n   sudo config reload -y -f\n   ```\n\n4. Inspect `fdbsyncd`, orchagent, and `swss.rec` logs.\n5. Observe that `fdbsyncd` publishes `L2_NEXTHOP_GROUP_TABLE:<id>|DEL` even though it never published a matching SET.\n6. Observe the orchagent `deleteL2Nhg` missing-object error.\n\nThe issue was reproduced by:\n\n```text\nngts/tests/push_build_tests/general/qos/test_qos_reload.py::test_qos_reload_ports\n```\n\n### Actual Behavior and Expected Behavior\n\n### Actual behavior\n\nAn OIF-bearing `RTM_NEWNEXTHOP` is ignored, but the corresponding `RTM_DELNEXTHOP` still publishes an APP_DB DEL. Orchagent receives a deletion for an object absent from its L2NHG maps and logs an error.\n\n```text\nIgnored NEW \u2192 no APP_DB SET \u2192 APP_DB DEL \u2192 orchagent error\n```\n\n### Expected behavior\n\nIf `fdbsyncd` ignored the create notification, it should also ignore the corresponding delete notification. Tracked VTEP and group nexthops must continue to generate normal SET and DEL operations.\n\n```text\nIgnored NEW  \u2192 no SET \u2192 no DEL\nAccepted NEW \u2192 SET    \u2192 DEL\n```\n\n## Relevant log output\n\n```text\n\nsyslog\n2026 Aug 18 15:12:59.046807 <dut> INFO swss#fdbsyncd: :- onMsgRaw: Received message type: 104\n2026 Aug 18 15:12:59.046809 <dut> INFO swss#fdbsyncd: :- onMsgNhg: NHG 245 has OIF, dropping\n2026 Aug 18 15:12:59.046812 <dut> INFO swss#fdbsyncd: :- onMsgRaw: Received message type: 104\n2026 Aug 18 15:12:59.046814 <dut> INFO swss#fdbsyncd: :- onMsgNhg: NHG 246 has OIF, dropping\n2026 Aug 18 15:18:39.087629 <dut> INFO swss#fdbsyncd: :- onMsgRaw: Received message type: 104\n2026 Aug 18 15:18:39.087636 <dut> INFO swss#fdbsyncd: :- onMsgNhg: NHG 292 has OIF, dropping\n2026 Aug 18 15:18:40.053888 <dut> INFO swss#fdbsyncd: :- onMsgRaw: Received message type: 104\n2026 Aug 18 15:18:40.053896 <dut> INFO swss#fdbsyncd: :- onMsgNhg: NHG 297 has OIF, dropping\n2026 Aug 18 15:18:40.363876 <dut> INFO swss#fdbsyncd: :- onMsgRaw: Received message type: 104\n2026 Aug 18 15:18:40.363897 <dut> INFO swss#fdbsyncd: :- onMsgNhg: NHG 122 has OIF, dropping\n\nsairedis.rec\n2026-08-18.15:20:17.955191|L2_NEXTHOP_GROUP_TABLE:245|DEL\n2026-08-18.15:20:17.955682|L2_NEXTHOP_GROUP_TABLE:122|DEL\n2026-08-18.15:20:17.955698|L2_NEXTHOP_GROUP_TABLE:246|DEL\n2026-08-18.15:20:17.956001|L2_NEXTHOP_GROUP_TABLE:292|DEL\n2026-08-18.15:20:17.956239|L2_NEXTHOP_GROUP_TABLE:297|DEL\n\nsyslog\n2026 Aug 18 15:20:17.955224 <dut> ERR swss#orchagent: :- deleteL2Nhg: Can't delete L2NHG '245': does not exist\n2026 Aug 18 15:20:17.955710 <dut> ERR swss#orchagent: :- deleteL2Nhg: Can't delete L2NHG '122': does not exist\n2026 Aug 18 15:20:17.955753 <dut> ERR swss#orchagent: :- deleteL2Nhg: Can't delete L2NHG '246': does not exist\n2026 Aug 18 15:20:17.956020 <dut> ERR swss#orchagent: :- deleteL2Nhg: Can't delete L2NHG '292': does not exist\n2026 Aug 18 15:20:17.956256 <dut> ERR swss#orchagent: :- deleteL2Nhg: Can't delete L2NHG '297': does not exist\n```",
+  "comments": [
+    {
+      "author": "dlanov",
+      "createdAt": "2026-08-25T22:11:08Z",
+      "body": "I'm working on a targeted fix with regression coverage for the unmatched RTM_DELNEXTHOP path."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4843,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4843",
+      "title": "[fdbsyncd]: Ignore deletes for untracked L2 nexthops",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-21T16:39:39Z",
+      "createdAt": "2026-08-25T22:13:27Z",
+      "author": "dlanov",
+      "body": "**What I did**\n\n- Guard `RTM_DELNEXTHOP` processing with `m_l2NhgMap` so `fdbsyncd` only publishes a DEL for L2 nexthops it previously accepted.\n- Add `FdbSyncdEvpnMhTest.IgnoredOifNextHopDelete` regression coverage for an `NHA_OIF` nexthop whose create is intentionally ignored.\n\n**Why I did it**\n\nAn `RTM_NEWNEXTHOP` containing `NHA_OIF` is intentionally dropped by `fdbsyncd`, but its corresponding `RTM_DELNEXTHOP` was still publishing an unmatched DEL to `L2_NEXTHOP_GROUP_TABLE`.\n\nThat caused orchagent to receive a delete for an L2 nexthop group that did not exist and log an error.\n\nFixes #4842.\n\n**How I verified it**\n\n- `git diff --check` passes.\n- Added a focused regression test that makes an unmatched DEL observable and verifies that an ignored OIF nexthop does not generate the delete.\n- The full `tests_fdbsyncd` binary could not be built locally because the WSL environment does not have the matching SONiC build dependencies (`libswsscommon`, `libsairedis`, `libsaivs`, and related packages). Repository CI will provide the full build/test validation.\n\n**Details if related**\n\nNo schema or configuration changes.\n",
+      "files": [
+        {
+          "path": "fdbsyncd/fdbsync.cpp",
+          "additions": 8,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/fdbsyncd/fdbsyncd_ut.cpp",
+          "additions": 29,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T22:13:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T22:13:36Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T22:13:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-26T02:08:17Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T00:24:26Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T06:21:55Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T12:22:13Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T18:22:52Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T00:32:35Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T06:21:28Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T12:21:56Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T18:21:45Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-29T00:21:36Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-29T06:21:33Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-29T12:21:26Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-29T18:22:25Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T00:19:41Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T06:19:52Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T12:19:57Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T18:20:32Z",
+          "body": "Hi @sonic-net/sonic-swss-maintainer, this approved PR has workflow run(s) waiting for approval. Please help review. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

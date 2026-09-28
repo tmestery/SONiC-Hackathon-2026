@@ -1,0 +1,70 @@
+{
+  "number": 2044,
+  "title": "CRM incorrect processing for CRM_MPLS_NEXTHOP",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/2044",
+  "createdAt": "2021-11-23T16:30:33Z",
+  "closedAt": "2021-12-04T01:25:30Z",
+  "author": "msosyak",
+  "labels": [],
+  "assignees": [
+    "smaheshm"
+  ],
+  "milestone": null,
+  "body": "In `void CrmOrch::getResAvailableCounters()` for `case CrmResourceType::CRM_MPLS_NEXTHOP:` we do \r\nstatic_cast<sai_object_type_t>(crmResSaiAvailAttrMap.at(res.first)); but after this PR https://github.com/Azure/sonic-swss/pull/2008/ the value was changed from `SAI_OBJECT_TYPE_NEXT_HOP ` to `SAI_SWITCH_ATTR_AVAILABLE_IPV4_NEXTHOP_ENTRY ` so the logic in `void CrmOrch::getResAvailableCounters()` for `case CrmResourceType::CRM_MPLS_NEXTHOP:` become broken and start produce the followin errors in SONiC:\r\n```\r\nNov 23 16:23:54.673681 sonic ERR swss#orchagent: :- objectTypeGetAvailability: attr SAI_L2MC_ENTRY_ATTR_PACKET_ACTION is not resource type\r\nNov 23 16:23:54.673681 sonic ERR swss#orchagent: :- getResAvailableCounters: Failed to get availability for object_type 53 , rv:-5\r\n```\r\nLink to related source code  https://github.com/Azure/sonic-swss/blob/01c243a1cfa397065f9d8f5519168bc556cf6328/orchagent/crmorch.cpp#L589\r\nhttps://github.com/Azure/sonic-swss/blob/01c243a1cfa397065f9d8f5519168bc556cf6328/orchagent/crmorch.cpp#L67",
+  "comments": [
+    {
+      "author": "msosyak",
+      "createdAt": "2021-11-23T16:32:38Z",
+      "body": "@smaheshm @qbdwlr @prsunny @kcudnik  Please take a look\r\n\r\n@kperumalbfn FYI"
+    },
+    {
+      "author": "qbdwlr",
+      "createdAt": "2021-11-23T17:33:07Z",
+      "body": "@smahesh @prsunny @kcudnik @kperumalbfn The fix in https://github.com/Azure/sonic-swss/pull/2008 is completely wrong and likely still triggers the same error that it was supposed to fix.\r\nLook at the code for CrmOrch::getResAvailableCounters():  CRM_MPLS_NEXTHOP uses the SAI API sai_object_type_get_availability(); it does not call sai_switch_api->get_switch_attribute().\r\nThere are no SAI_SWITCH_ATTRs for MPLS Nexthops, because during the SAI Community review, I was asked to remove the SAI_SWITCH_ATTRs that I had defined and use sai_object_type_get_availability with SAI_OBJECT_TYPE instead.  \r\nNot sure what platform was being tested when the issue for https://github.com/Azure/sonic-swss/pull/2008 was seen, but the correct solution is to revert the change in https://github.com/Azure/sonic-swss/pull/2008 and add support for the SAI_OBJECT_TYPE in sai_object_type_get_availability().  For VS platform, see the support I provided in VirtualSwitchSaiInterface::objectTypeGetAvailability().\r\nReviewing other recent changes in CrmOrch::getResAvailableCounters(), it appears that CRM_SRV6_NEXTHOP will have similar issues as CRM_MPLS_NEXTHOP and should be addressed as I have recommended.\r\nCRM_SRV6_MY_SID_ENTRY has no unique processing and should be grouped with CRM_MPLS_INSEG and CRM_NEXTHOP_GROUP_MAP; it does not require a separate case.\r\nI see no support for either CRM_SRV6_MY_SID_ENTRY or CRM_SRV6_NEXTHOP in vslib.  Support needs to be added in VirtualSwitchSaiInterface::objectTypeGetAvailability().\r\n\r\n"
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2021-11-23T18:03:19Z",
+      "body": "@smaheshm , would you take a look. Looks like we may have to revert #2008 "
+    },
+    {
+      "author": "smaheshm",
+      "createdAt": "2021-12-02T20:02:59Z",
+      "body": "#2057 "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2057,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2057",
+      "title": "[swss][CRM][MPLS] MPLS CRM Nexthop - switch back to using SAI OBJECT rather than SWITCH OBJECT",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-12-04T01:25:30Z",
+      "createdAt": "2021-12-02T19:57:36Z",
+      "author": "smaheshm",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nRevert earlier change as it's causing the following issue:\r\nhttps://github.com/Azure/sonic-swss/issues/2044\r\n\r\n**Why I did it**\r\nRevert earlier change as it's causing the following issue:\r\nhttps://github.com/Azure/sonic-swss/issues/2044\r\n\r\nMPLS CRM does not call \"get_switch_attribute()\" but calls \"sai_object_type_get_availability()\" as per the discussion in SAI community. So it doesn't really fetch anything from platform layer.\r\n\r\n**How I verified it**\r\nTests run during build process.\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/crmorch.cpp",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "smaheshm",
+          "createdAt": "2021-12-03T16:20:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-12-03T16:20:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "number": 4063,
+  "title": "Sporadic MACsec cleanup failures: wpa_cli interface_remove timeout leads to partial teardown and spurious PORT SET errors",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4063",
+  "createdAt": "2025-12-15T05:50:10Z",
+  "closedAt": "2026-02-10T00:04:48Z",
+  "author": "rajshekhar-nexthop",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "We are seeing sporadic MACsec cleanup failures where wpa_cli interface_remove times out and causes macsecmgrd to surface spurious Task PORT SET failures and, in some cases, leaves the MACsec state in a partially torn-down condition.\n\nLogs / Evidence\n\n`WARNING macsec#macsecmgrd: :- unconfigureMACsec: Disable MACsec fail : /sbin/wpa_cli -g /var/run/Ethernet0 interface_remove Ethernet0 : 'INTERFACE_REMOVE Ethernet0' command timed out xxx-dut \nWARNING macsec#macsecmgrd: :- disableMACsec: Cannot stop MKA session on the port 'Ethernet0' xxx-dut \nWARNING macsec#macsecmgrd: :- doTask: Task PORT - SET fail xxx-dut `\n\n\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4064,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4064",
+      "title": "[macsecmgr]: Fix MACsec unconfigure failures due to time out ",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-10T00:04:47Z",
+      "createdAt": "2025-12-15T06:11:38Z",
+      "author": "rajshekhar-nexthop",
+      "body": "### Summary\r\n\r\n#4063  tracks sporadic MACsec cleanup failures where `wpa_cli interface_remove` either times out or returns `FAIL`, causing `macsecmgrd` to surface spurious Task `PORT` `SET` failures and sometimes leave MACsec state in a partially torn-down state.\r\n\r\nBelow are some error messages seen before the test failure `xxx-dut WARNING macsec#macsecmgrd: :- unconfigureMACsec: Disable MACsec fail : /sbin/wpa_cli -g /var/run/Ethernet0 interface_remove Ethernet0 : 'INTERFACE_REMOVE Ethernet0' command timed out xxx-dut WARNING macsec#macsecmgrd: :- disableMACsec: Cannot stop MKA session on the port 'Ethernet0'\r\nxxx-dut WARNING macsec#macsecmgrd: :- doTask: Task PORT - SET fail xxx-dut NOTICE macsec#macsecmgrd: :- unconfigureMACsec: interface_remove for port 'Ethernet8' reported error 'Wpa_cli command : /sbin/wpa_cli -g /var/run/Ethernet8 interface_remove Ethernet8 -> FAIL `\r\n\r\n**What I did**\r\n\r\n1. **MACsecMgr::unconfigureMACsec: retry and best-effort semantics**\r\n\r\n* Replace the single `wpa_cli_exec_and_check(..., \"interface_remove\", port_name)` call with a small retry loop:\r\n  * Introduce `MAX_INTERFACE_REMOVE_RETRIES = 3`.\r\n  * For each attempt:\r\n    * Call `interface_remove` via `wpa_cli_exec_and_check`.\r\n* In the `catch (std::runtime_error &e)` path, inspect the error string:\r\n* If it contains `\"-> FAIL\"`, treat this as **best-effort success** \u2013 in practice this means the interface is already gone from `wpa_supplicant`, which is equivalent to a successful unconfigure from macsecmgr's perspective.\r\n`xxx-dut NOTICE macsec#macsecmgrd: :- unconfigureMACsec: interface_remove for port 'Ethernet8' reported error 'Wpa_cli command : /sbin/wpa_cli -g /var/run/Ethernet8 interface_remove Ethernet8 -> FAIL#012'; treating MACsec unconfigure as\r\nbest-effort success`\r\n  * If it contains `\"command timed out\"`:\r\n    * Retry up to `MAX_INTERFACE_REMOVE_RETRIES` times.\r\n* Between retries, log a WARN message and sleep 10 seconds using `std::this_thread::sleep_for(std::chrono::seconds(10))`.\r\n* After the last retry, log a NOTICE and treat the overall unconfigure as **best-effort success**. The caller will still invoke `stopWPASupplicant()` which tears down the process and its interfaces.\r\n* For any other error string, log a WARN and return `false` (preserving the existing behavior for unexpected failures).\r\n* On a completely successful `interface_remove`, simply fall through the loop and return `true` at the end.\r\n\r\n**Why I did it**\r\n\r\n* Field logs show intermittent `wpa_cli interface_remove` timeouts and `FAIL` responses during MACsec teardown, which currently bubble up as hard failures in `MACsecMgr::unconfigureMACsec`. This can cause Task `PORT` `SET` failures even though the underlying state has been effectively cleaned up (or will be cleaned up by killing `wpa_supplicant`).\r\n* By adding retries and best-effort semantics specifically for these two known benign failure modes, we avoid unnecessary churn in the MACsec pipeline while still treating all other errors as real failures.\r\n\r\n**How I verified it**\r\n\r\n* Built and exercised the corresponding change in `private-sonic-buildimage` against a MACsec-capable DUT (xxx120) where `interface_remove` timeouts were observed.\r\n* Rebuilt `swss` and deployed to the DUT; MACsec teardown no longer surfaces spurious Task `PORT` `SET` failures when `interface_remove` times out or returns `FAIL` from `wpa_cli`.\r\n\r\n<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\nFixes #4063 \r\n\r\nWhich release branch to backport (provide reason below if selected)\r\n [x] 202511\r\n\r\n\r\n\r\n\r\n\r\n\r\n",
+      "files": [
+        {
+          "path": "cfgmgr/macsecmgr.cpp",
+          "additions": 71,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T06:11:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T06:12:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T06:15:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T06:15:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T09:47:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T09:47:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T09:47:36Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T09:47:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T09:48:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T09:48:24Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T09:48:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T09:48:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-18T19:03:28Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-18T19:03:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-19T21:38:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-19T21:38:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rajshekhar-nexthop",
+          "createdAt": "2026-01-06T03:59:57Z",
+          "body": "Hi @prsunny , Pls review/add more reviewers for this PR. Thank you"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-06T04:00:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-06T04:00:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-14T05:11:56Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "number": 2579,
+  "title": "[muxorch] tunnel route is removed twice on standby port after deleting the `FAILED` neighbor",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/2579",
+  "createdAt": "2022-12-19T09:40:34Z",
+  "closedAt": "2026-09-22T15:46:43Z",
+  "author": "lolyu",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "lolyu"
+  ],
+  "milestone": null,
+  "body": "Steps to reproduce:\r\n\r\n1. set `Ethernet8` to `standby`\r\n```\r\n# show mux config | grep -w Ethernet8\r\nEthernet8   auto     192.168.0.4/32   fc02:1000::4/128   active-active  192.168.0.5/32\r\n# config mux mode standby Ethernet8\r\nport       state\r\n---------  ----------\r\nEthernet8  INPROGRESS\r\n```\r\n\r\n2. ping the server ipv6 address to create a `FAIELD` neighbor and standalone tunnel route\r\n```\r\n# ping -6 fc02:1000::4\r\nPING fc02:1000::4(fc02:1000::4) 56 data bytes\r\nFrom fc02:1000::1 icmp_seq=1 Destination unreachable: Address unreachable\r\nFrom fc02:1000::1 icmp_seq=5 Destination unreachable: Address unreachable\r\nFrom fc02:1000::1 icmp_seq=6 Destination unreachable: Address unreachable\r\nFrom fc02:1000::1 icmp_seq=7 Destination unreachable: Address unreachable\r\n^C\r\n--- fc02:1000::4 ping statistics ---\r\n7 packets transmitted, 0 received, +4 errors, 100% packet loss, time 6096ms\r\n\r\n# ip neighbor | grep fc02:1000::4\r\nfc02:1000::4 dev Vlan1000  FAILED\r\n```\r\n\r\n3. delete the `FAILED` neighbor `fc02:1000::4`\r\n```\r\n# ip neighbor del fc02:1000::4 dev Vlan1000\r\n```\r\n\r\n4. check the syslog\r\n```\r\nDec 19 09:32:00.014445 DEMO_DEVICE INFO swss#orchagent: :- addZeroMacTunnelRoute: Creating tunnel route for neighbor fc02:1000::4\r\nDec 19 09:32:00.014540 DEMO_DEVICE INFO swss#orchagent: :- createStandaloneTunnelRoute: Creating standalone tunnel route for neighbor fc02:1000::4\r\nDec 19 09:32:00.017193 DEMO_DEVICE NOTICE swss#orchagent: :- create_route: Created tunnel route to fc02:1000::4/128\r\nDec 19 09:32:00.159894 DEMO_DEVICE INFO swss#orchagent: :- set: setting attribute 0x10000004 status: SAI_STATUS_SUCCESS\r\n...\r\nDec 19 09:32:22.731712 DEMO_DEVICE NOTICE swss#orchagent: :- removeNeighbor: Removed neighbor 00:00:00:00:00:00 on Vlan1000\r\nDec 19 09:32:22.731712 DEMO_DEVICE INFO swss#orchagent: :- removeStandaloneTunnelRoute: Removing standalone tunnel route for neighbor fc02:1000::4\r\nDec 19 09:32:22.735661 DEMO_DEVICE NOTICE swss#orchagent: :- remove_route: Removed tunnel route to fc02:1000::4/128\r\nDec 19 09:32:22.736101 DEMO_DEVICE INFO swss#orchagent: :- update: Neigh fc02:1000::4 on Vlan1000, add 0, state 2\r\nDec 19 09:32:22.736333 DEMO_DEVICE ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"fc02:1000::4/128\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000024\"} doesn't exist\r\nDec 19 09:32:22.736461 DEMO_DEVICE ERR swss#orchagent: :- remove_route: Failed to remove tunnel route fc02:1000::4, rv:-5\r\nDec 19 09:32:22.736576 DEMO_DEVICE INFO swss#orchagent: :- removeTunnelRoute: Remove tunnel route DB 'Vlan1000:fc02:1000::4/128'\r\nDec 19 09:32:22.740132 DEMO_DEVICE INFO swss#supervisord: tunnelmgrd RTNETLINK answers: No such process\r\n```",
+  "comments": [
+    {
+      "author": "prsunny",
+      "createdAt": "2022-12-19T19:47:55Z",
+      "body": "Is this a functional issue? AFAIK, the second delete is silently ignored"
+    },
+    {
+      "author": "lolyu",
+      "createdAt": "2022-12-26T02:21:26Z",
+      "body": "> Is this a functional issue? AFAIK, the second delete is silently ignored\r\n\r\nThis error is captured by the loganalyzer, maybe we could ignore it."
+    },
+    {
+      "author": "rajkumar1-arista",
+      "createdAt": "2026-08-19T18:46:36Z",
+      "body": "Fix is raised: https://github.com/sonic-net/sonic-swss/pull/4828"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4828,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4828",
+      "title": "Fix double tunnel route deletion for standalone zero-MAC neighbors",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-22T15:46:41Z",
+      "createdAt": "2026-08-19T18:45:36Z",
+      "author": "rajkumar1-arista",
+      "body": "#### Why I did it\r\n\r\nFixes: https://github.com/sonic-net/sonic-swss/issues/2579\r\n\r\nDeleting a FAILED (zero-MAC) neighbor on a standby mux port removed its\r\nstandalone tunnel route twice. `removeStandaloneTunnelRoute()` removed the SAI\r\nroute first, then the downstream mux-neighbor handler attempted to remove the\r\nsame route again, producing a SAI meta-validation ERR and causing\r\nloganalyzer-based teardown failures.\r\n\r\n##### Work item tracking\r\n\r\n- Microsoft ADO **(number only)**: 38932127\r\n\r\n#### How I did it\r\n\r\nReturn from `MuxOrch::updateNeighbor()` after removing a standalone tunnel\r\nroute for a delete notification. Standalone zero-MAC neighbors do not reach or\r\nregister with `MuxNbrHandler`, so no downstream cleanup is needed. Valid-MAC\r\nadditions continue through the existing path after the standalone route is\r\nremoved.\r\n\r\nAdded mock unit coverage that verifies a standalone-route delete calls\r\n`remove_route_entry` exactly once, and that `NeighOrch` drops a zero-MAC update\r\nfor an already known valid-MAC neighbor.\r\n\r\n#### How to verify it\r\ncheck https://github.com/sonic-net/sonic-swss/issues/2579 OR\r\n\r\n1. Set a mux port to standby.\r\n2. Create a FAILED neighbor for the server IP so that a standalone tunnel route\r\n   is installed.\r\n3. Delete that neighbor.\r\n4. Confirm the route removal succeeds without a\r\n   `meta_sai_validate_route_entry ... doesn't exist` syslog error.\r\n\r\nThe added `StandaloneTunnelRouteDeleteNoDoubleRemove` mock test also verifies\r\nthat SAI receives exactly one route-entry removal request.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n\r\nBackport reason: this is a day-one issue on 202605 that generates erroneous\r\norchagent ERR logs and causes loganalyzer-based test failures.\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): https://github.com/sonic-net/sonic-swss/issues/2579/ ADO: 38932127\r\n\r\nFailure type: day-one issue\r\n\r\n#### Tested branch\r\n\r\n- [ ] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\n\r\n202605: `SONiC.branch.202605-ars.465d18bd-buildimage.71eda5ea11a604186d18c70df5068ca4b1578ab5-review.759356.3-2026.08.13.19.59` - \r\n[msft_1378_passing.log](https://github.com/user-attachments/files/31235279/msft_1378_passing.log)\r\n\r\n\r\n#### Description for the changelog\r\n\r\nFix duplicate deletion of standalone tunnel routes for FAILED neighbors on standby mux ports.\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\nN/A \u2014 this change does not modify a YANG module or CONFIG_DB schema.\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n```\r\n  /\\ ___ /\\\r\n (  o   o  )\r\n  \\  >#<  /\r\n  /       \\\r\n /         \\       ^\r\n|           |     //\r\n \\         /    //\r\n  ///  ///   --\r\n```\r\n",
+      "files": [
+        {
+          "path": "orchagent/muxorch.cpp",
+          "additions": 7,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/mux_rollback_ut.cpp",
+          "additions": 75,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-19T18:45:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-19T18:45:45Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-19T18:45:55Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T00:20:56Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T00:20:59Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-21T06:22:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-21T06:22:27Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-26T08:03:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-26T08:03:16Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-08-27T03:50:49Z",
+          "body": "hi @prsunny  could you help to review?"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-09-18T23:36:06Z",
+          "body": "@rajkumar1-arista , would you resolve conflict? "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-20T18:32:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-20T18:32:52Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rajkumar1-arista",
+          "createdAt": "2026-09-20T18:33:15Z",
+          "body": "> @rajkumar1-arista , would you resolve conflict?\r\n\r\nIts resolved now, PTAL"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-21T09:59:54Z",
+          "body": "<!-- AzurePipelinesStatusComment -->\n<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-21T10:00:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-21T10:00:22Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-09-21T18:35:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-21T18:35:35Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T16:18:32Z",
+          "body": "This PR is approved for branch 202605. No cherry pick PR has been created because of code conflict. @rajkumar1-arista, please manually create the cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

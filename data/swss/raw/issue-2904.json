@@ -1,0 +1,68 @@
+{
+  "number": 2904,
+  "title": "Internal m_portCount incorrect in portsorch",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/2904",
+  "createdAt": "2023-09-16T01:08:07Z",
+  "closedAt": "2023-10-03T17:18:32Z",
+  "author": "mint570",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "The m_portCount is incorrect in portsorch.\r\n\r\nThe count is first initialized by reading SAI during init: https://github.com/sonic-net/sonic-swss/blob/13ef25bf14d0b75d7ef5adec43493f206f701ff4/orchagent/portsorch.cpp#L635\r\n\r\nWhen PortConfigDone happens, the count will be reset to the new value: https://github.com/sonic-net/sonic-swss/blob/13ef25bf14d0b75d7ef5adec43493f206f701ff4/orchagent/portsorch.cpp#L3301\r\n\r\nAt this point, m_portCount should be the correct port count configured in the DB. This value can be different from the default value returned from SAI during init. However, the code will soon perform add ports and delete ports, which will increment and decrement m_portCount correspondingly: https://github.com/sonic-net/sonic-swss/blob/13ef25bf14d0b75d7ef5adec43493f206f701ff4/orchagent/portsorch.cpp#L3372-L3443\r\n\r\nThe final m_portCount will be different from what the DB configured. Given an example:\r\n1. During init, SAI returns 64 ports: m_portCount = 64.\r\n2. In the DB, it configured 56 ports. When PortConfigDone happens, m_portCount = 56.\r\n3. Delete the invalid 64 ports: m_portCount = 56 - 64 = -8\r\n4. Add the new 56 ports: m_portCount = -8 + 56 = 48\r\n\r\nCurrently, this m_portCount variable is only used in removeDefaultVlanMembers() and removeDefaultBridgePorts() for allocating buffers.\r\n\r\n",
+  "comments": [
+    {
+      "author": "mint570",
+      "createdAt": "2023-09-18T23:43:25Z",
+      "body": "This is the original PR that introduces the bug: https://github.com/sonic-net/sonic-swss/pull/320\r\n\r\nBut the original PR won't stop processing the counter from the DB even after config done. So the port count will be set to the correct one in the next config change. Later, this PR added the check to skip the port config done re-processing: https://github.com/sonic-net/sonic-swss/pull/653. This makes the port count to stay incorrect."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2910,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2910",
+      "title": "[orchagent] Do not set internal port count to the PortConfigDone DB value.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-10-03T17:18:31Z",
+      "createdAt": "2023-09-18T23:50:07Z",
+      "author": "mint570",
+      "body": "**What I did**\r\nDo not set internal port count to the PortConfigDone DB value.\r\n\r\n**Why I did it**\r\nFix https://github.com/sonic-net/sonic-swss/issues/2904\r\n\r\n\r\n",
+      "files": [
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 0,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "nazariig",
+          "createdAt": "2023-09-20T16:51:59Z",
+          "body": "@mint570 do we need to remove port `count` attribute also from `portsyncd`?"
+        },
+        {
+          "author": "mint570",
+          "createdAt": "2023-09-20T17:06:16Z",
+          "body": "@nazariig is that count in the DB being used by anything else?\r\nIf not, I can remove that from the DB."
+        },
+        {
+          "author": "mint570",
+          "createdAt": "2023-09-20T17:13:17Z",
+          "body": "Looks like the schema is used in other places as well: https://github.com/sonic-net/sonic-utilities/blob/3df1f18b0a339ab9d92cd8c28ad703a491b30b85/scripts/db_migrator.py#L180\r\n\r\nTo be safe, let's not remove the count from DB now."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2023-09-30T01:58:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-09-30T01:59:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

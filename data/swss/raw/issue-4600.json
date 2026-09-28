@@ -1,0 +1,222 @@
+{
+  "number": 4600,
+  "title": "Memory corruption due to race condition introduced by https://github.com/sonic-net/sonic-swss/pull/4400",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4600",
+  "createdAt": "2026-05-23T01:10:18Z",
+  "closedAt": "2026-07-10T00:20:56Z",
+  "author": "venkit-nexthop",
+  "labels": [],
+  "assignees": [
+    "prabhataravind",
+    "deepak-singhal0408",
+    "venkit-nexthop"
+  ],
+  "milestone": null,
+  "body": "@deepak-singhal0408 @prabhataravind @prsunny for viz\n\nThis problem is caused by the changes in PR https://github.com/sonic-net/sonic-swss/pull/4400\n\nThis change is exposing a race condition that can lead to memory corruption. We noticed Orchagent's ZMQ thread crash when METADATA configuration is changed and Orchagent is sent SIGTERM.\n\nBefore this change, orchagent terminated via _exit() on SIGTERM and ~OrchDaemon never ran.\n\nThis is where main thread is:\n\n```\n  main()  main.cpp:1047\n  \u2514\u2500\u2500 shared_ptr<OrchDaemon>::~shared_ptr   shared_ptr.h:175\n      \u2514\u2500\u2500 ~OrchDaemon                       orchdaemon.cpp:139\n          \u2514\u2500\u2500 ~PortsOrch                    portsorch.h:151\n              \u2514\u2500\u2500 ~FlexCounterTaggedCachedManager / ~FlexCounterCachedManager\n                  \u2514\u2500\u2500 ~FlexCounterManager   flex_counter_manager.cpp:138\n                      \u2514\u2500\u2500 stopFlexCounterPolling   saihelper.cpp:1106\n                          \u2514\u2500\u2500 sai_switch_api->set_switch_attribute\n                              \u2514\u2500\u2500 sairedis::Sai/Server/ClientServerSai::set\n                                  \u2514\u2500\u2500 RedisRemoteSaiInterface::set / notifyCounterOperations\n                                      \u2514\u2500\u2500 RedisRemoteSaiInterface::waitForResponse   RedisRemoteSaiInterface.cpp:935\n                                          \u2514\u2500\u2500 ZeroMQChannel::wait   ZeroMQChannel.cpp:279\n                                              \u2514\u2500\u2500 zmq_poll          \u2190 BLOCKED HERE\n```\n\n1. ~FlexCounterManager makes blocking SAI calls during destruction, round-tripping through sairedis's ZMQ channel to syncd. Main thread parks in zmq_poll.\n2. Meanwhile, multiple ZMQ I/O threads remain alive for various contexts (sairedis channel, north-side ZmqServer, and any ZmqProducerStateTables owned by orchs that were already deleted earlier in the reverse-order loop).\n3. Orchs deleted earlier likely freed memory still referenced by in-flight ZMQ messages \u2014 those zmq_ctx_term calls never happen because owners go out of scope without explicit termination. The crashing thread then dereferences a freed message buffer.\n4. The new async swss recorder thread (SwSSRec::setAsync(true), started lazily via ensureAsyncWorkerLocked()) adds another draining background thread sharing state with destructed orchs \u2014 second-order risk.\n\nThe graceful-shutdown signal handlers were added for one narrow purpose: to drain the new async swss.rec worker's queue on SIGTERM/SIGINT so pending records aren't lost on shutdown. Without it, _exit() on SIGTERM would discard whatever the recorder worker hadn't yet flushed to disk.\nThe problem with the implementation: rather than signaling just the recorder worker to drain and then calling _exit(), the PR set gOrchShutdownRequested, which lets start() return and triggers the entire ~OrchDaemon destructor chain. That's far broader than needed for the goal \u2014 and it's the chain that exposes the latent shutdown-ordering bugs (FlexCounterManager doing SAI calls during destruction, ZMQ I/O threads still alive while orchs are torn down) that crashed orchagent.\nA narrower fix would have been: signal handler \u2192 drain recorder queue \u2192 _exit(). No full destructor chain needed.\n\nSignal handlers are always fraught and we should really quantify what we get out of this.",
+  "comments": [
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-05-23T01:10:48Z",
+      "body": "also tagging @vpandian-nokia "
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-05-23T01:19:07Z",
+      "body": "One potential fix could be \n\n```\n--- a/orchagent/main.cpp\n+++ b/orchagent/main.cpp\n@@ -1106,5 +1106,37 @@ int main(int argc, char **argv)\n\n     orchDaemon->start(heartBeatInterval);\n\n+    /*\n+     * PR 4400 added register_graceful_shutdown_signal_handler(SIGTERM/SIGINT)\n+     * so start() returns on signal rather than relying on default fatal\n+     * action / kernel cleanup. The stated goal was to drain the async\n+     * swss.rec worker before exit so pending records are not lost.\n+     *\n+     * Falling through to `return 0;` runs ~OrchDaemon and all member\n+     * destructors, which is unsafe today:\n+     *   - FlexCounterManager::~FlexCounterManager issues SAI calls\n+     *     (stopFlexCounterPolling -> sai_switch_api->set_switch_attribute)\n+     *     during destruction. These round-trip through sairedis's ZMQ\n+     *     channel to syncd and park the main thread in zmq_poll while many\n+     *     libzmq I/O threads are still alive.\n+     *   - Other orchs reached earlier in the reverse-order delete loop have\n+     *     already freed buffers that libzmq I/O threads still reference,\n+     *     producing jemalloc heap corruption (observed in core zmq.core;\n+     *     crashing thread is a libzmq I/O thread inside msg_t::close ->\n+     *     je_free_default -> tcache flush -> arena decay; main thread is\n+     *     parked in RedisRemoteSaiInterface::waitForResponse from\n+     *     ~FlexCounterManager).\n+     *\n+     * Match the scope of PR 4400's stated goal: drain the async swss\n+     * recorder via setAsync(false) (which calls stopAsyncWorker -> join),\n+     * then _exit() so kernel cleanup tears down the rest of the process\n+     * just like before PR 4400.\n+     */\n+    if (gOrchShutdownRequested != 0)\n+    {\n+        Recorder::Instance().swss.setAsync(false);\n+        _exit(0);\n+    }\n+\n     return 0;\n }\n```"
+    },
+    {
+      "author": "vpandian-nokia",
+      "createdAt": "2026-05-25T22:31:43Z",
+      "body": "@venkit-nexthop: Could you please add a more explicit reproduction sequence for this issue? In particular, it would help to clarify:\n\n- whether the specific `METADATA` change matters for reproducing the issue, and if so, which change was used\n- whether `orchagent` receives `SIGTERM` as part of an automated workflow or as a separate/manual step\n- the exact command or sequence used to trigger the failure\n- whether the system was idle or actively processing routes/events when the failure was triggered\n- whether the crash reproduces consistently\n\nThat would make it easier to validate any proposed fix and confirm whether it actually addresses the reported issue."
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-05-26T17:28:03Z",
+      "body": "Hi @vpandian-nokia \nThe problem happened when the following METADATA was removed and docker containers restarted\n\n```\n\"localhost\": {\n               :\n            \"orch_northbond_route_zmq_enabled\": \"true\",\n            \"orch_southbound_route_zmq_enabled\": \"true\",\n            \"route_state_async_publish\": \"enabled\",\n               :\n```\n\nI dont think the specific `METADATA` matters, but I am not absolutely sure. I am not sure if `SIGTERM` is sent as well. I only saw from the backtrace of the core file that Orchagent is in the destructor path. \nThe system was idle from what I know. This is part of our automated test and we were in the cleanup path. The crash is somewhat consistent. Though I have not tried this out manually. \nI will let you know if the suggested fix I posted above solves the problem or not later today/tomorrow."
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-05-27T06:08:13Z",
+      "body": "@vpandian-nokia I have verified that the suggested fix I gave above indeed fixes the issue. The test that used to produce the crash somewhat consistently is working without the crash."
+    },
+    {
+      "author": "vpandian-nokia",
+      "createdAt": "2026-06-10T16:32:00Z",
+      "body": "> [@vpandian-nokia](https://github.com/vpandian-nokia) I have verified that the suggested fix I gave above indeed fixes the issue. The test that used to produce the crash somewhat consistently is working without the crash.\n\n@venkit-nexthop Thanks for the update and for confirming that the suggested fix avoids the crash in your automation.\n\nI tried to reproduce this issue on my DUT with repeated attempts, but I was not able to hit the crash. If the issue is consistently seen in your setup/automation, the proposed fix seems reasonable from that perspective.\n\nMy only remaining concern is that we still do not have a clear step-by-step reproduction sequence outside the automation cleanup flow. That makes it harder to independently validate the root cause and confirm the fix on another setup. If possible, it would be helpful to document the exact test/cleanup sequence that triggers the crash.\n\nGiven your validation, I am okay with the suggested fix as a practical way to avoid the crash in the reported flow. However, it would still be good to keep in mind that this may not fully address the underlying concern around cleanup/destructor handling in `orchagent`."
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-06-10T16:56:22Z",
+      "body": "> > [@vpandian-nokia](https://github.com/vpandian-nokia) I have verified that the suggested fix I gave above indeed fixes the issue. The test that used to produce the crash somewhat consistently is working without the crash.\n> \n> [@venkit-nexthop](https://github.com/venkit-nexthop) Thanks for the update and for confirming that the suggested fix avoids the crash in your automation.\n> \n> I tried to reproduce this issue on my DUT with repeated attempts, but I was not able to hit the crash. If the issue is consistently seen in your setup/automation, the proposed fix seems reasonable from that perspective.\n> \n> My only remaining concern is that we still do not have a clear step-by-step reproduction sequence outside the automation cleanup flow. That makes it harder to independently validate the root cause and confirm the fix on another setup. If possible, it would be helpful to document the exact test/cleanup sequence that triggers the crash.\n> \n> Given your validation, I am okay with the suggested fix as a practical way to avoid the crash in the reported flow. However, it would still be good to keep in mind that this may not fully address the underlying concern around cleanup/destructor handling in `orchagent`.\n\n@vpandian-nokia since this is a race condition, it is hard to give a clear step-by-step reproduction. "
+    },
+    {
+      "author": "vpandian-nokia",
+      "createdAt": "2026-06-10T17:37:31Z",
+      "body": "@venkit-nexthop Would you be able to create the PR for the suggested fix?"
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-06-10T17:39:46Z",
+      "body": "> [@venkit-nexthop](https://github.com/venkit-nexthop) Would you be able to create the PR for the suggested fix?\n\nYes. Since I am going on leave, my colleage @inder-nexthop is going to create a PR."
+    },
+    {
+      "author": "vpandian-nokia",
+      "createdAt": "2026-06-10T17:54:25Z",
+      "body": "> > [@venkit-nexthop](https://github.com/venkit-nexthop) Would you be able to create the PR for the suggested fix?\n> \n> Yes. Since I am going on leave, my colleage [@inder-nexthop](https://github.com/inder-nexthop) is going to create a PR.\n\n@venkit-nexthop Sounds good, thanks. If possible, please include a brief summary of the automation flow where this issue was observed, along with the validation details, in the PR."
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2026-06-19T17:20:14Z",
+      "body": "> > > [@venkit-nexthop](https://github.com/venkit-nexthop) Would you be able to create the PR for the suggested fix?\n> > \n> > \n> > Yes. Since I am going on leave, my colleage [@inder-nexthop](https://github.com/inder-nexthop) is going to create a PR.\n> \n> [@venkit-nexthop](https://github.com/venkit-nexthop) Sounds good, thanks. If possible, please include a brief summary of the automation flow where this issue was observed, along with the validation details, in the PR.\n\ndo we have a fix PR? please link to this issue"
+    },
+    {
+      "author": "inder-nexthop",
+      "createdAt": "2026-06-23T17:59:48Z",
+      "body": "> > > > [@venkit-nexthop](https://github.com/venkit-nexthop) Would you be able to create the PR for the suggested fix?\n> > > \n> > > \n> > > Yes. Since I am going on leave, my colleage [@inder-nexthop](https://github.com/inder-nexthop) is going to create a PR.\n> > \n> > \n> > [@venkit-nexthop](https://github.com/venkit-nexthop) Sounds good, thanks. If possible, please include a brief summary of the automation flow where this issue was observed, along with the validation details, in the PR.\n> \n> do we have a fix PR? please link to this issue\n\nHi @prsunny , I have opened a PR here: https://github.com/sonic-net/sonic-swss/pull/4699"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4699,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4699",
+      "title": "[orchagent]: _exit() on graceful shutdown to avoid destructor-chain memory corruption",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-10T00:20:55Z",
+      "createdAt": "2026-06-23T17:53:33Z",
+      "author": "inder-nexthop",
+      "body": "**What I did**\r\n\r\nMade orchagent exit through _exit(0) when a graceful shutdown is requested, instead of falling through to return 0 and running the full ~OrchDaemon destructor chain. Before exiting it drains the async swss recorder so any pending records are flushed first.\r\n\r\n**Why I did it**\r\n\r\nFixes https://github.com/sonic-net/sonic-swss/issues/4600.\r\n\r\nPR #4400 added graceful shutdown handling. On SIGTERM or SIGINT the signal handler sets gOrchShutdownRequested, OrchDaemon::start() returns, and main() falls through to return 0. That runs the full ~OrchDaemon destructor chain, which is not safe to run on shutdown.\r\n\r\nDuring that teardown, FlexCounterManager destruction makes blocking SAI calls (stopFlexCounterPolling, which calls set_switch_attribute). Those calls go through sairedis's ZMQ channel to syncd and park the main thread in zmq_poll while several libzmq IO threads are still running. Orchs that were deleted earlier in the reverse order delete loop have freed buffers that those IO threads still reference, so the process corrupts its own heap. We saw orchagent crash in a libzmq IO thread when METADATA configuration was changed and the containers were restarted.\r\n\r\n**How I verified it**\r\n\r\nConfigure the route state async publish and ZMQ options in METADATA, then restart the containers so orchagent receives SIGTERM. Before this change orchagent crashes fairly consistently during teardown. With this change orchagent shuts down cleanly and the crash no longer reproduces.\r\n\r\n**Details if related**\r\n\r\nDraining the async swss recorder through setAsync(false) joins the recorder worker so pending records are flushed, which was the reason PR #4400 wanted start() to return cleanly. \r\n",
+      "files": [
+        {
+          "path": "configure.ac",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/main.cpp",
+          "additions": 16,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/orchdaemon.cpp",
+          "additions": 33,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/orchdaemon.h",
+          "additions": 13,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/orchdaemon_ut.cpp",
+          "additions": 53,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T17:53:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-23T17:53:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T17:59:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-23T17:59:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-06-26T08:24:49Z",
+          "body": "Reviewed the fix and the root cause in #4600. The analysis holds up:\n\nLetting `start()` return and running `~OrchDaemon` on graceful shutdown is unsafe because the reverse-order teardown reaches `~FlexCounterManager`, which issues `stopFlexCounterPolling() \u2192 set_switch_attribute()`. That's a synchronous SAI call over sairedis' ZMQ channel, so the main thread parks in `zmq_poll` while libzmq I/O threads are still live \u2014 but orchs destroyed earlier in the loop have already freed buffers those threads reference, corrupting the heap. This is a structural ordering problem, not something easily fixed by reordering destructors. Before #4400 orchagent always `_exit()`-ed on SIGTERM, so this path never ran.\n\nReverting to `_exit()` while draining the async swss recorder first is the right, minimal fix \u2014 it sidesteps the whole destructor chain and is robust to any future unsafe teardown. The drain path also looks sound: `setAsync(false) \u2192 stopAsyncWorker()` joins the worker, `drain()` only exits once the queue is empty, and records are written with `std::endl` so they're flushed before `_exit()`; `setAsync(false)` is a safe no-op if the worker never started.\n\nTwo optional nits, neither blocking:\n- After this change `start()` only returns on shutdown, so the trailing `return 0;` is now unreachable \u2014 a one-line comment noting that would help future readers.\n- `_exit(0)` reports a clean exit on signal termination; that matches the prior `return 0` intent, just flagging in case exit-status conventions ever matter.\n\nLGTM.\n"
+        },
+        {
+          "author": "venkit-nexthop",
+          "createdAt": "2026-06-29T23:38:51Z",
+          "body": "tagging @vpandian-nokia @prsunny to approve."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-06-30T00:11:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-30T00:11:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vpandian-nokia",
+          "createdAt": "2026-06-30T15:22:25Z",
+          "body": "> tagging @vpandian-nokia @prsunny to approve.\r\n\r\nThanks for tagging me. The proposed fix in PR #4699 looks like the right minimal approach: drain the async recorder first, then use `_exit(0)` to avoid the destructor-chain teardown.\r\n\r\nI see the required coverage check is failing because the new shutdown branch is not covered. A small UT for the shutdown decision path would be useful if practical, but I would not expect the UT to reproduce the heap corruption itself.\r\n\r\nI am not currently on the reviewer list, so I cannot formally approve, but from my review, the fix looks reasonable."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-07-02T21:53:39Z",
+          "body": "@inder-nexthop , can you fix the coverage?"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-07-07T23:21:44Z",
+          "body": "> @inder-nexthop , can you fix the coverage?\r\n\r\n@inder-nexthop, gentle ping on this. JFYI, there are some Ci failures observed in sonic-swss-common repo without this change.\r\ncc: @venkit-nexthop as well."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-07-09T02:53:47Z",
+          "body": "@deepak-singhal0408 , suggest revert the original PR since this fix is getting delayed. \r\n\r\n@inder-nexthop , @prabhataravind , @venkit-nexthop , @vpandian-nokia for viz. "
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-07-09T03:03:26Z",
+          "body": "> @deepak-singhal0408 , suggest revert the original PR since this fix is getting delayed.\r\n> \r\n> @inder-nexthop , @prabhataravind , @venkit-nexthop , @vpandian-nokia for viz.\r\n\r\n@prsunny had a teams chat with @inder-nexthop on this today. He is working on the code coverage part. lets wait till tomorrow? thanks, "
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-07-09T03:27:28Z",
+          "body": "> > @deepak-singhal0408 , suggest revert the original PR since this fix is getting delayed.\r\n> > @inder-nexthop , @prabhataravind , @venkit-nexthop , @vpandian-nokia for viz.\r\n> \r\n> @prsunny had a teams chat with @inder-nexthop on this today. He is working on the code coverage part. lets wait till tomorrow? thanks,\r\n\r\nThanks. May I know why fixing coverage is taking more than a week? I would like to understand submitter feedback and if something can be improved on infra. @theasianpianist for viz. "
+        },
+        {
+          "author": "inder-nexthop",
+          "createdAt": "2026-07-09T17:49:44Z",
+          "body": "> > > @deepak-singhal0408 , suggest revert the original PR since this fix is getting delayed.\r\n> > > @inder-nexthop , @prabhataravind , @venkit-nexthop , @vpandian-nokia for viz.\r\n> > \r\n> > \r\n> > @prsunny had a teams chat with @inder-nexthop on this today. He is working on the code coverage part. lets wait till tomorrow? thanks,\r\n> \r\n> Thanks. May I know why fixing coverage is taking more than a week? I would like to understand submitter feedback and if something can be improved on infra. @theasianpianist for viz.\r\n\r\nHi @prsunny , apologies for missing your initial comment. I was on PTO, working on resolving the comments mentioned in the review."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T18:23:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-09T18:23:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-07-21T07:50:46Z",
+          "body": "This PR has the \"Request for 202605 Branch\" label but is missing 202605-specific test results. Please:\n1. Tick the **202605** checkbox in the \"Tested branch\" section of the PR description\n2. Provide 202605 branch test evidence in the \"Test result\" section\n3. Add the label **\"Tested for 202605 branch\"** once done\n\nMaster branch test results alone are not sufficient for 202605 cherry-pick approval.\n\n*Comment on behalf of @vaibhavhd*\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T12:18:31Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-07-21T22:24:34Z",
+          "body": "**This is live on the 202605 nightly.** We root-caused a recurring 202605 nightly failure to the same shutdown-teardown hazard as https://github.com/sonic-net/sonic-swss/issues/4600, but a different casualty.\n\n**Surfaces as:** the pre-test sanity of [`tests/test_pretest.py`](https://github.com/sonic-net/sonic-mgmt/blob/202605/tests/test_pretest.py#L28) (`check_processes`/`check_bgp`) reports the `bgp` container down, `docker exec bgp` \u2192 `rc=127`. That's a detector, not the cause \u2014 a config reload/container restart sends orchagent SIGTERM, it crashes on graceful shutdown, and the whole swss group restarts; the sanity gate just probes `bgp` mid-restart.\n\n**Root cause (symbolized core), same enabler (https://github.com/sonic-net/sonic-swss/pull/4400 \u2192 `~OrchDaemon` on SIGTERM):**\n```\n~OrchDaemon \u2192 ~MuxOrch \u2192 ~MuxCable \u2192 ~MuxAclHandler (muxorch.cpp)\n  \u2192 gAclOrch->getAclRule() \u2192 AclOrch::getTableById() (aclorch.cpp)\n    on an already-freed AclOrch \u2192 use-after-free \u2192 SIGSEGV\n```\n`~MuxAclHandler` calls into `gAclOrch` from a destructor after the reverse-order teardown already freed `AclOrch`; `getTableById`'s `for (auto it : m_AclTables)` by-value copy then destroys an `AclRule` control block in freed memory. Reproduces only on a mux/dual-ToR config.\n\n**Why the fix is right:** it skips the *entire* destructor chain (robust to any unsafe teardown, not a per-orch patch), drains the async recorder first so nothing is lost, and `_exit(0)` restores the exact pre-#4400 SIGTERM behavior \u2014 a minimal revert-to-known-good.\n"
+        }
+      ]
+    }
+  ]
+}
