@@ -1,0 +1,86 @@
+{
+  "number": 27509,
+  "title": "route_check.py truncates large failure reports without showing mismatch counts",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27509",
+  "createdAt": "2026-05-14T21:38:29Z",
+  "closedAt": "2026-06-30T19:52:56Z",
+  "author": "baiwei0427",
+  "labels": [
+    "Help Wanted :sos:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Description\n\n`route_check.py` can print an incomplete failure report when the mismatch list is large. The script builds a complete `results` object internally, but the CLI/syslog output path truncates the formatted JSON at `PRINT_MSG_LEN_MAX` characters. As a result, the printed `Failure results` block can be cut off in the middle of a route string and does not show how many entries were omitted.\n\nThis makes the output hard to diagnose: a user only sees the first portion of the mismatch list and has no indication of the actual number of missing/unaccounted routes.\n\nRelevant code on `master`:\n\n- `PRINT_MSG_LEN_MAX = 1000`: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L78\n- `print_message()` stops appending once the accumulated message reaches that limit: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L126-L145\n- `check_routes_for_namespace()` stores the complete missing route list in `results[\"missed_ROUTE_TABLE_routes\"]`: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L939-L940\n- `check_routes()` formats and prints the whole `results` object through `print_message()`: https://github.com/sonic-net/sonic-utilities/blob/master/scripts/route_check.py#L1002-L1007\n\n## Example symptom\n\nFor a large mismatch set, the output can look like this:\n\n```text\nFailure results: {{\n    \"\": {\n        \"missed_ROUTE_TABLE_routes\": [\n            \"2001:db8:1001::/64\",\n            \"2001:db8:1002::/64\",\n            \"2001:db8:1003::/64\",\n            ...\n            \"2001:db8:10\nFailed. Look at reported mismatches above\nadd: {\n    \"\": []\n}\ndel: {\n    \"\": []\n}\n```\n\nThe output is not valid JSON, does not state that it was truncated, and does not provide a count such as `missed_ROUTE_TABLE_routes: <N>`.\n\n## Expected behavior\n\nThe checker should make the size of each mismatch category visible even when the detailed route list is too long. For example:\n\n1. Print a summary count per namespace/category before the detailed list.\n2. If detailed output must remain capped, explicitly mark it as truncated.\n3. Prefer printing the first N entries plus `... <remaining> more` instead of cutting the JSON mid-string.\n\n## Impact\n\nWhen route_check reports many mismatches, operators can underestimate the scope of the failure because only the first part of the list is visible. The complete data already exists in the returned `results` object; the issue is in the reporting path.\n",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-06-03T17:47:33Z",
+      "body": "Hi @baiwei0427, I noticed this is tagged Help Wanted and Triaged. I've put together a fix and opened a PR.\n\nThe change adds:\n1. A `... (truncated)` indicator when `print_message()` output exceeds max length\n2. A mismatch count summary line before the JSON dump\n    - e.g. `Route mismatch counts: {\"\":{\"missed_ROUTE_TABLE_routes\":47}}`\n\nCI is all green. Would appreciate your review or anyone else familiar with `route_check.py`.\n\nHappy to incorporate any feedback. Thanks for filing this!"
+    },
+    {
+      "author": "baiwei0427",
+      "createdAt": "2026-06-03T20:25:16Z",
+      "body": "@Bojun-Feng  Thank you!"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4587,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4587",
+      "title": "[route_check]: Add truncation indicator and mismatch summary counts",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-30T19:52:55Z",
+      "createdAt": "2026-06-03T16:26:32Z",
+      "author": "Bojun-Feng",
+      "body": "#### What I did\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/27509\r\n\r\nAdded a truncation indicator and mismatch summary counts to `route_check.py` failure output.\r\n\r\nWhen `print_message()` truncates output at `PRINT_MSG_LEN_MAX` (1000 chars), it now appends `... (truncated)` within the length budget so operators know data was omitted. Additionally, a compact per-namespace mismatch count summary line is emitted before the detailed (potentially truncated) JSON dump.\r\n\r\n#### How I did it\r\n* Add `PRINT_MSG_TRUNCATION_SUFFIX` module-level constant and truncation marker logic in `print_message()` that keeps total length \u2264 `PRINT_MSG_LEN_MAX`\r\n* Extract `summarize_results()` helper to produce `{namespace: {category: count}}` dict\r\n* Emit compact summary via `json.dumps(..., separators=(\",\",\":\"))` before the detailed failure results in both `check_routes()` and `check_sids()`\r\n\r\n#### How to verify it\r\n1. Run existing `test_logging` \u2014 confirms backward compatibility (all length assertions pass unchanged)\r\n2. Run new `test_logging_truncation_indicator` \u2014 confirms truncation suffix behavior at realistic `PRINT_MSG_LEN_MAX=50`, short message passthrough, and edge case where max < suffix length\r\n3. Manually: inject 200+ route mismatches on a VS image, run `route_check.py -l INFO`, verify summary count line appears and truncated output ends with `... (truncated)`\r\n\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n```\r\nFailure results: {\r\n    \"\": {\r\n        \"missed_ROUTE_TABLE_routes\": [\r\n            \"2001:db8:1001::/64\",\r\n            \"2001:db8:1002::/64\",\r\n            \"2001:db8:10\r\nFailed. Look at reported mismatches above\r\n```\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n```\r\nRoute mismatch counts: {\"\":{\"missed_ROUTE_TABLE_routes\":47,\"missed_INTF_TABLE_entries\":2}}\r\nFailure results: {\r\n    \"\": {\r\n        \"missed_ROUTE_TABLE_routes\": [\r\n            \"2001:db8:1001::/64\",\r\n            \"2001:db8:1002::/64\",\r\n            \"2001:db8:10 ... (truncated)\r\nFailed. Look at reported mismatches above\r\n```",
+      "files": [
+        {
+          "path": "scripts/route_check.py",
+          "additions": 25,
+          "deletions": 2
+        },
+        {
+          "path": "tests/route_check_test.py",
+          "additions": 18,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-03T16:26:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-03T16:26:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-03T16:46:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-03T16:46:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-03T16:58:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-03T16:59:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

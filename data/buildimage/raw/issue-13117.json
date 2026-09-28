@@ -1,0 +1,68 @@
+{
+  "number": 13117,
+  "title": "BGP, teamd, dhcp-relay starts with a delay after an upgrade",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/13117",
+  "createdAt": "2022-12-20T15:45:26Z",
+  "closedAt": "2023-01-07T02:36:38Z",
+  "author": "stepanblyschak",
+  "labels": [
+    "Triaged",
+    "Request for 202211 Branch"
+  ],
+  "assignees": [
+    "abdosi"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Upgrade from 202205 to master image\r\n2. Observe that BGP, teamd, dhcp_relay start with a significant delay:\r\n\r\n```\r\nadmin@anc-ali-t10:~$ docker ps\r\nCONTAINER ID   IMAGE                                COMMAND                  CREATED         STATUS         PORTS     NAMES\r\n35ef5938740e   b72e99b9f3ee                         \"/usr/bin/docker_ini\u2026\"   6 seconds ago   Up 4 seconds             dhcp_relay\r\nb531d87c11ae   docker-fpm-frr:latest                \"/usr/bin/docker_ini\u2026\"   8 seconds ago   Up 7 seconds             bgp\r\nd5750996e280   docker-sonic-telemetry:latest        \"/usr/local/bin/supe\u2026\"   2 minutes ago   Up 2 minutes             telemetry\r\nbd98f9e3b2db   docker-sonic-mgmt-framework:latest   \"/usr/local/bin/supe\u2026\"   2 minutes ago   Up 2 minutes             mgmt-framework\r\n464123660ea0   docker-snmp:latest                   \"/usr/local/bin/supe\u2026\"   2 minutes ago   Up 2 minutes             snmp\r\n1c96288afca9   docker-platform-monitor:latest       \"/usr/bin/docker_ini\u2026\"   4 minutes ago   Up 4 minutes             pmon\r\n9251d8a262f4   docker-lldp:latest                   \"/usr/bin/docker-lld\u2026\"   4 minutes ago   Up 4 minutes             lldp\r\n13d9f779720b   docker-router-advertiser:latest      \"/usr/bin/docker-ini\u2026\"   5 minutes ago   Up 5 minutes             radv\r\n452b305d83d5   docker-syncd-mlnx:latest             \"/usr/local/bin/supe\u2026\"   5 minutes ago   Up 5 minutes             syncd\r\n98068d56673f   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   5 minutes ago   Up 5 minutes             swss\r\n046eb3ab63a0   docker-eventd:latest                 \"/usr/local/bin/supe\u2026\"   5 minutes ago   Up 5 minutes             eventd\r\n08628d47da2f   docker-database:latest               \"/usr/local/bin/dock\u2026\"   5 minutes ago   Up 5 minutes             database\r\n```\r\n\r\nSeems this is the PR that caused additional delay: https://github.com/sonic-net/sonic-buildimage/pull/11796.\r\n#### Describe the results you received:\r\nBGP, teamd start 5 min after swss\r\n\r\n#### Describe the results you expected:\r\nBGP, teamd start earlier on boot\r\n\r\n#### Output of `show version`:\r\n\r\nVersion based on 14a5ec79147cfd25ee76031ecbd36332ea11d308\r\n\r\n\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "stephenxs",
+      "createdAt": "2022-12-29T02:36:55Z",
+      "body": "this also failed warm reboot due to the delay."
+    },
+    {
+      "author": "stephenxs",
+      "createdAt": "2022-12-29T02:52:41Z",
+      "body": "In the PR it updated the logic to enable a feature in the FEATURE table in \u201cinit_cfg.json\u201d: it reads some additional tables like \u201cDEVICE_RUNTIME_METADATA\u201d to determine whether bgp, teamd should be enabled or not.\r\nThe motivation of the PR, I think, is to determine whether the features should be enabled or not when the image is installed from scratch.\r\nHowever, there is a building time logic that masks features according to the FEATURE table in \u201cinit_cfg.json\u201d in [build_scripts/mask_disabled_services.py](https://github.com/sonic-net/sonic-buildimage/blob/master/files/build_scripts/mask_disabled_services.py) which is called by [sonic_debian_extension.j2](https://github.com/sonic-net/sonic-buildimage/blob/master/files/build_templates/sonic_debian_extension.j2#L958) which is called by build time script [build_debian.sh](https://github.com/sonic-net/sonic-buildimage/blob/master/build_debian.sh#L597)\r\nAs a result, the bgp and teamd services are masked from the image.\r\n```\r\nstephens@arc-build-server-2:/builds2/stephens/wip/202205/sonic-buildimage/fsroot-mellanox/etc/systemd/system$ ls {bgp*,teamd*} -l\r\nlrwxrwxrwx 1 root root 9 Dec 15 16:41 bgp.service -> /dev/null\r\nlrwxrwxrwx 1 root root 9 Dec 15 16:41 teamd.service -> /dev/null\r\n```\r\nWhen the DUT is rebooted to the new image, nobody takes care of trhe services and they keep masked until 5 minutes later when sonic-host-services restarts the services on handling the FEATURE table.\r\n\r\nrelevant log message\r\n```\r\nDec 10 22:25:00.523680 qa-eth-vt02-4-3800 NOTICE systemd[1]: hostcfgd.service: Main process exited, code=exited, status=1/FAILURE\r\nDec 10 22:25:00.524738 qa-eth-vt02-4-3800 NOTICE systemd[1]: hostcfgd.service: Unit entered failed state.\r\nDec 10 22:25:00.525183 qa-eth-vt02-4-3800 WARNING systemd[1]: hostcfgd.service: Failed with result 'exit-code'.\r\nDec 10 22:25:12 sonic systemd[1]: Started Delays hostcfgd daemon until SONiC has started.\r\nDec 10 22:25:12 sonic systemd[1]: Started Delays hostcfgd daemon until SONiC has started.\r\nDec 10 22:26:38.748517 sonic INFO hostcfgd: ConfigDB connect success\r\nDec 10 22:26:38.765768 sonic INFO hostcfgd: Waiting for systemctl to finish initialization\r\nDec 10 22:30:25.818530 qa-eth-vt02-4-3800 NOTICE root: WARMBOOT_FINALIZER : Some components didn't finish reconcile: bgp ...\r\nDec 10 22:30:26.268771 qa-eth-vt02-4-3800 INFO hostcfgd: systemctl has finished initialization -- proceeding ...\r\nDec 10 22:30:26.279078 qa-eth-vt02-4-3800 INFO hostcfgd: Updating feature 'bgp' systemd config file related to auto-restart ...\r\nDec 10 22:30:26.279511 qa-eth-vt02-4-3800 INFO hostcfgd: Feautre 'bgp' systemd config file related to auto-restart is updated!\r\nDec 10 22:30:26.279557 qa-eth-vt02-4-3800 INFO hostcfgd: Reloading systemd configuration files ...\r\nDec 10 22:30:26.705274 qa-eth-vt02-4-3800 INFO hostcfgd: Systemd configuration files are reloaded!\r\nDec 10 22:30:26.724447 qa-eth-vt02-4-3800 INFO hostcfgd: Running cmd: 'sudo systemctl unmask bgp.service'\r\nDec 10 22:30:26.743052 qa-eth-vt02-4-3800 INFO hostcfgd[13895]: Removed /etc/systemd/system/bgp.service.\r\nDec 10 22:30:27.105740 qa-eth-vt02-4-3800 INFO hostcfgd: Running cmd: 'sudo systemctl enable bgp.service'\r\nDec 10 22:30:27.124633 qa-eth-vt02-4-3800 INFO hostcfgd[13913]: Created symlink /etc/systemd/system/sonic.target.wants/bgp.service \u00e2\u2020\u2019 /lib/systemd/system/bgp.service.\r\nDec 10 22:30:27.502304 qa-eth-vt02-4-3800 INFO hostcfgd: Running cmd: 'sudo systemctl start bgp.service'\r\nDec 10 22:30:28.535576 qa-eth-vt02-4-3800 INFO hostcfgd: Feature bgp is enabled and started\r\nDec 10 22:30:28.547782 qa-eth-vt02-4-3800 INFO hostcfgd: Updating feature 'database' systemd config file related to auto-restart ...\r\n```\r\n\r\nThe same syndrome can be observed in warm reboot flow, which causes ~5 minutes traffic drop in warm reboot.\r\n[SPC2-test_sonic_dump_qa-eth-vt02-4-3800_2022-12-11T003242.tar.gz](https://github.com/sonic-net/sonic-buildimage/files/10318445/SPC2-test_sonic_dump_qa-eth-vt02-4-3800_2022-12-11T003242.tar.gz)\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 13283,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/13283",
+      "title": "During build time mask only those feature/services that are disabled excplicitly",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-01-07T02:36:37Z",
+      "createdAt": "2023-01-06T02:40:02Z",
+      "author": "abdosi",
+      "body": "What I did:\r\nFix :  https://github.com/sonic-net/sonic-buildimage/issues/13117\r\n\r\nHow I did:\r\n\r\nBuild time behavior ::-\r\n\r\n1. init_cfg.json.j2 during build time make state as disabled then mask the service \r\n2.  init_cfg.json.j2 during build time make state as another jinja2 template render string than do no mask the service if the service is one of `database,bgp,swss,sycnd,teamd` else mask the service\r\n3. init_cfg.json.j2 during build time make state as enabled then do not mask the service\r\n\r\n\r\nHow I verify:\r\nManual Verification.\r\n\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_scripts/mask_disabled_services.py",
+          "additions": 12,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-01-07T04:14:00Z",
+          "body": "Cherry-pick PR to 202205: https://github.com/sonic-net/sonic-buildimage/pull/13296"
+        },
+        {
+          "author": "stepanblyschak",
+          "createdAt": "2023-01-10T12:19:19Z",
+          "body": "Request for 202211"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-02-03T15:53:34Z",
+          "body": "Cherry-pick PR to 202211: https://github.com/sonic-net/sonic-buildimage/pull/13651"
+        }
+      ]
+    }
+  ]
+}

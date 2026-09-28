@@ -1,0 +1,168 @@
+{
+  "number": 27012,
+  "title": "Bug: FRR failed to clean up static blackhole route when recovering from ungraceful exits.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27012",
+  "createdAt": "2026-04-27T22:15:40Z",
+  "closedAt": "2026-05-06T21:31:51Z",
+  "author": "BYGX-wcr",
+  "labels": [
+    "Bug :bug:",
+    "routing"
+  ],
+  "assignees": [
+    "deepak-singhal0408"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWe observed that FRR failed to remove stale static blackhole route when it recovered from previous ungraceful exits.\n\n### Steps to Reproduce\n\nOn a running SONiC device, perform the following steps:\n1. configure a static blackhole route: sonic-db-cli CONFIG_DB hset \"STATIC_ROUTE|default|::/0\" nexthop \"\" blackhole \"true\"\n2. kill the FRR ungracefully (can be done via many ways): sudo kill -9 <pid-of-zebra>\n3. remove the blackhole route config: sonic-db-cli CONFIG_DB del \"STATIC_ROUTE|default|::/0\"\n4. restart the BGP container: sudo systemctl restart bgp\n5. check kernel routing table: ip -6 route | grep blackhole\n\nyou will see that the route is still there :(\n\n### Actual Behavior and Expected Behavior\n\nThe blackhole route should be removed since it is no longer in SONiC or FRR configuration\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2026-04-27T22:43:52Z",
+      "body": "This issue seems to happen to blackhole route only."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-04-29T22:33:52Z",
+      "body": "## Root Cause Analysis\n\nReproduced this issue and traced the root cause.\n\n### 1. Not blackhole-specific\n\nThis seems to affect **all** route types installed by FRR (proto 196). Both blackhole and regular nexthop static routes persist as stale after the same procedure.\n\n### 2. Root Cause: Sweep fires before routes are processed into RIB\n\nWhen zebra restarts without `-K` (graceful_restart=0), the startup sequence is:\n\n1. `route_read()` reads kernel routes \u2192 queues them in the **metaqueue** (not directly into the RIB)\n2. `zebra_main_router_started()` schedules `rib_sweep_route()` with a 0-second timer\n3. Event loop starts: sweep fires immediately\n4. **Problem**: The metaqueue has `ZEBRA_RIB_PROCESS_HOLD_TIME = 10ms` hold delay \u2014 routes haven't been moved from metaqueue into the RIB yet\n5. Sweep walks an **empty RIB** \u2192 finds nothing \u2192 no-op\n6. 10ms later, work_queue processes routes into RIB \u2192 stale routes persist forever\n\n### 3. Reproduction (FRR 10.5.1, SONiC VS)\n\n```\nadmin@sonic:~$ sonic-db-cli CONFIG_DB hset \"STATIC_ROUTE|default|::/0\" nexthop \"\" blackhole \"true\"\nadmin@sonic:~$ ip -6 route | grep blackhole\nblackhole default dev lo proto 196 metric 20 pref medium\n\n# Kill zebra ungracefully, remove config, restart\nadmin@sonic:~$ docker exec bgp bash -c 'kill -9 $(pidof zebra)'\nadmin@sonic:~$ sonic-db-cli CONFIG_DB del \"STATIC_ROUTE|default|::/0\"\nadmin@sonic:~$ sudo systemctl restart bgp\n\n# After restart - route is stale:\nadmin@sonic:~$ ip -6 route | grep blackhole\nblackhole default dev lo proto 196 metric 20 pref medium   \u2190 STALE\n```\n\n### 4. Proposed Fix\n\nAdd a metaqueue drain check at the top of `rib_sweep_route()` in `zebra_rib.c`:\n\n```c\nvoid rib_sweep_route(struct event *t)\n{\n    if (zrouter.mq->size > 0) {\n        event_add_timer_msec(zrouter.master, rib_sweep_route, NULL,\n                             ZEBRA_RIB_PROCESS_HOLD_TIME * 2,\n                             &zrouter.t_rib_sweep);\n        return;\n    }\n    /* ... existing sweep logic ... */\n}\n```\n\nThis defers the sweep until the metaqueue has drained, ensuring routes are in the RIB before sweeping.\n\nWill create a fix PR for SONiC and file an upstream FRR issue/fix as well.\n"
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-04-30T09:28:04Z",
+      "body": "## Fix Submitted\n\n| Branch | PR | Status |\n|--------|-----|--------|\n| master | #27093 | Merged |\n\nThe fix defers `rib_sweep_route()` until the metaqueue has drained, ensuring stale kernel routes are correctly identified and removed after ungraceful zebra restart.\n\nValidated on KVM VS testbed \u2014 stale blackhole route successfully swept after zebra SIGKILL + container restart."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-05-07T01:46:11Z",
+      "body": "## Cherry-pick PR Tracking\n\n| Branch | PR | Patch # | Status |\n|--------|-----|---------|--------|\n| `master` | #27093 | 0108 | \u2705 Merged |\n| `202511` | #27210 | 0107 | \u23f3 CI pending |\n| `msft-202412` | [Azure/sonic-buildimage-msft#2260](https://github.com/Azure/sonic-buildimage-msft/pull/2260) | 0147 | \u23f3 CI pending |\n\n**Upstream references:**\n- [FRRouting/frr#21550](https://github.com/FRRouting/frr/pull/21550) \u2014 structural fix (will supersede this carry patch when FRR tag is bumped)\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27093,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27093",
+      "title": "zebra: defer RIB sweep until metaqueue is drained",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-05-06T21:31:49Z",
+      "createdAt": "2026-04-30T09:26:49Z",
+      "author": "deepak-singhal0408",
+      "body": "#### What I did\r\n\r\nSONiC-only carry patch for FRR zebra \u2014 defer RIB sweep until the metaqueue drains. Adds bounded retry logic (50 retries \u00d7 20ms = ~1s cap).\r\n\r\n**To be dropped** when the upstream startup-ordering rework ([FRRouting/frr#21550](https://github.com/FRRouting/frr/pull/21550)) lands in a future FRR tag bump.\r\n\r\n#### How I did it\r\n\r\nWhen zebra starts without `-K` (`graceful_restart=0`), the sweep timer fires with 0-second delay but the metaqueue `work_queue` has a 10ms batching hold (`ZEBRA_RIB_PROCESS_HOLD_TIME`). This causes the sweep to walk an empty RIB and miss stale routes still queued in the metaqueue.\r\n\r\nThe patch checks `zrouter.mq->size > 0` before sweeping. If the metaqueue is non-empty, it reschedules the sweep at 2\u00d7 the hold time (20ms), up to 50 retries (~1 second). After max retries, it sweeps anyway with a warning log.\r\n\r\n#### How to verify it\r\n\r\n1. Boot a SONiC VS image with this patch\r\n2. Verify stale kernel routes are properly swept after startup\r\n3. Check syslog for `RIB sweep deferred` debug messages (with `debug rib` enabled)\r\n\r\n#### Which release branch to backport\r\n\r\n202511, msft-202412\n\n**Cherry-pick tracking:**\n\n| Branch | PR | Patch # | Status |\n|--------|-----|---------|--------|\n| `master` | #27093 | 0108 | \u2705 Merged |\n| `202511` | #27210 | 0107 | \u23f3 CI pending |\n| `msft-202412` | [Azure/sonic-buildimage-msft#2260](https://github.com/Azure/sonic-buildimage-msft/pull/2260) | 0147 | \u23f3 CI pending |\r\n\r\n#### Upstream references\r\n\r\n- [FRRouting/frr#21550](https://github.com/FRRouting/frr/pull/21550) \u2014 structural fix (pending merge upstream, will supersede this patch)\r\n- [FRRouting/frr#21826](https://github.com/FRRouting/frr/pull/21826) \u2014 this targeted fix (closed in favor of [#21550](https://github.com/FRRouting/frr/pull/21550))\r\n- Fixes: #27012\r\n\n",
+      "files": [
+        {
+          "path": "src/sonic-frr/patch/0108-zebra-defer-rib-sweep-until-metaqueue-drained.patch",
+          "additions": 76,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-frr/patch/series",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-30T09:26:57Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-30T09:27:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-30T15:58:40Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-30T15:58:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-05T05:42:45Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-05T05:43:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-05T06:04:03Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-05T06:04:03Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-05T06:04:03Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-05T06:04:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-05T06:04:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-05T06:04:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-05-05T22:24:13Z",
+          "body": "@dgsudharsan @eddieruan-alibaba could you also help review/sign-off? thanks,"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-06T04:36:54Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-06T04:37:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-06T04:47:05Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-06T04:47:05Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-06T04:47:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-06T04:47:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-05-06T05:03:06Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        }
+      ]
+    }
+  ]
+}

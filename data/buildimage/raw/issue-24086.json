@@ -1,0 +1,146 @@
+{
+  "number": 24086,
+  "title": "Bug: [SmartSwitch] IP will not be assigned on midplane after DPU Image Upgrade from 202505 -> 202506+",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24086",
+  "createdAt": "2025-09-24T00:47:47Z",
+  "closedAt": "2025-10-03T21:44:57Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Bug :bug:",
+    "smartswitch"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nDHCP Server on NPU is not assigning Ip to DPU after upgrade from 202505 -> 202506+\n\n### Steps to Reproduce\n\n1) Install Image on NPU, setup smartswitch config and start dhcp_server \n2) Install 202505 on DPU / or power on DPU which has 202505 by default\n3) NPU assigns IP to DPU\n4) Install 202506 image.\n5) Check if IP is not assigned and is accessible from NPU\n\n### Actual Behavior and Expected Behavior\n\nIP will not be assigned to DPU. IP will be assigned after 3600 sec (This is lease expiration time) from the time of Step #3.  This is often too late and service will be started with incorrent database config and can lead to crash in DPU\n\n### Triage\nHappening because of this change where the Client-ID in the DHCP request is different between 202505/202506\n\nChange was made here: https://github.com/sonic-net/sonic-buildimage/pull/23805\n\nAnd the dhcp_server thinks the request is coming from a new device and it doesn't allocate the IP until the original lease expires\n\nWhere the ClientIdentifier was explicitly set to mac\n[midplane-network-dpu.network](https://github.com/sonic-net/sonic-buildimage/pull/23805/files#diff-687aa19d3525dfd9c111c920761f1967dbbdf9971463491ac40c4b2dd78ee26f)\n```\n[DHCPv4]\nClientIdentifier=mac\n```\n\n### Potential WA\nOne of these can be run after step#4, to WA this problem\n1) Reboot NPU after installing DPU\n2) Restart DHCP server service on NPU\n\n### Relevant log output\n\n```shell\n>>> 202505\n\n20:08:16.937472 bridge-midplane B   IP (tos 0xc0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 315)\n    0.0.0.0.bootpc > 255.255.255.255.bootps: BOOTP/DHCP, Request from b0:cf:0e:0e:fb:e3 (oui Unknown), length 287, xid 0x12701781, secs 64, Flags [none]\n      Client-Ethernet-Address b0:cf:0e:0e:fb:e3 (oui Unknown)\n        DHCP-Message (53), length 1: Discover\n        Client-ID (61), length 19: hardware-type 255, 7d:8b:3d:bb:00:02:00:00:ab:11:fa:f9:e1:2a:e5:84:2a:71\n        Hostname (12), length 5: \"sonic\"\n\n>>> 202506\n        \n        Client-ID (61), length 19: hardware-type 255, 01:b0:cf:0e:0e:fb:e3\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "vivekkarri",
+      "createdAt": "2025-09-24T00:49:11Z",
+      "body": "@prabhataravind, @kperumalbfn, @prsunny  FYI"
+    },
+    {
+      "author": "oleksandrivantsiv",
+      "createdAt": "2025-09-24T00:59:34Z",
+      "body": "@prsunny, @prabhataravind this is a blocker for the 202506 release from our point of view. After the upgrade, the DPU does not get an IP and SONiC does not start."
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2025-09-24T01:15:47Z",
+      "body": "@SahilChaudhari could you please take a look at this issue at priority? It looks like the client identifier change from DUID to mac address causes issues when upgrading the DPUs from 202505 (which doesn't have the change) to 202506 (with the change).\nWe have some factory shipments with 202505 image which doesn't have this fix, so cherry-picking this to 202505 also may not be sufficient. Can we revert this change?"
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2025-09-24T01:46:55Z",
+      "body": "@rameshraghupathy  for viz"
+    },
+    {
+      "author": "KrisNey-MSFT",
+      "createdAt": "2025-09-24T16:27:32Z",
+      "body": "@mukesh to take a look, see if we can revert for both platforms to work in the interim"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 24141,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/24141",
+      "title": "[DPU] Perform explicit DHCP request to work around Client ID mismatch",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-10-03T21:44:56Z",
+      "createdAt": "2025-09-26T23:02:15Z",
+      "author": "vivekkarri",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/24086\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\n#### How to verify it\r\n\r\n1. Install image and setup smartswitch config NPU\r\n2. Boot 202505 image on DPU (Client ID  = DUID)\r\n\r\n```\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 b0:cf:0e:20:ac:e3], cid=[ff:87:be:63:49:00:02:00:00:ab:11:82:02:99:5f:d6:69:f8:a8], tid=0xb1d8e420: lease 169.254.200.1 has been allocated for 3600 seconds\r\n```\r\n\r\n3. Install 202506 image on DPU (Client ID = MAC)\r\n4. Perform remote reboot on DPU\r\n```\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nWARN  ALLOC_ENGINE_V4_ALLOC_FAIL_SUBNET [hwtype=1 b0:cf:0e:20:ac:e3], cid=[01:b0:cf:0e:20:ac:e3], tid=0x6a7c428f: failed to allocate an IPv4 lease in the subnet 169.254.200.0/24, subnet-id 10000, shared network (none)\r\nWARN  ALLOC_ENGINE_V4_ALLOC_FAIL [hwtype=1 b0:cf:0e:20:ac:e3], cid=[01:b0:cf:0e:20:ac:e3], tid=0x6a7c428f: failed to allocate an IPv4 address after 1 attempt(s)\r\nWARN  ALLOC_ENGINE_V4_ALLOC_FAIL_CLASSES [hwtype=1 b0:cf:0e:20:ac:e3], cid=[01:b0:cf:0e:20:ac:e3], tid=0x6a7c428f: Failed to allocate an IPv4 address for client with classes: ALL, mtvr-bobcat-03:dpu0, UNKNOWN\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nINFO  DHCP4_LEASE_ADVERT [hwtype=1 b0:cf:0e:20:ac:e3], cid=[no info], tid=0xbc675619: lease 169.254.200.1 will be advertised\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 b0:cf:0e:20:ac:e3], cid=[no info], tid=0xbc675619: lease 169.254.200.1 has been allocated for 3600 seconds\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nINFO  DHCP4_LEASE_ADVERT [hwtype=1 b0:cf:0e:20:ac:e3], cid=[01:b0:cf:0e:20:ac:e3], tid=0x6a7c428f: lease 169.254.200.1 will be advertised\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 b0:cf:0e:20:ac:e3], cid=[01:b0:cf:0e:20:ac:e3], tid=0x6a7c428f: lease 169.254.200.1 has been allocated for 3600 seconds\r\n```\r\n\r\n5. Install another 202506 image (Client ID = MAC)\r\n6. remote reboot on DPU\r\n```\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nINFO  DHCP4_LEASE_ADVERT [hwtype=1 b0:cf:0e:20:ac:e3], cid=[01:b0:cf:0e:20:ac:e3], tid=0x15ca9721: lease 169.254.200.1 will be advertised\r\nINFO  EVAL_RESULT Expression mtvr-bobcat-03:dpu0 evaluated to 1\r\nINFO  DHCP4_LEASE_ALLOC [hwtype=1 b0:cf:0e:20:ac:e3], cid=[01:b0:cf:0e:20:ac:e3], tid=0x15ca9721: lease 169.254.200.1 has been allocated for 3600 seconds\r\n```\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/image_config/platform/rc.local",
+          "additions": 27,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-26T23:02:24Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-26T23:02:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-29T23:23:58Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-29T23:24:09Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-30T01:00:09Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-30T01:01:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-30T16:53:53Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-30T16:54:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-10-01T15:22:52Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-10-01T15:23:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mukeshmv",
+          "createdAt": "2025-10-02T21:12:46Z",
+          "body": "Changes lgtm. Should we add some comments on why this is needed? "
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2025-10-02T21:27:47Z",
+          "body": "> Changes lgtm. Should we add some comments on why this is needed?\r\n\r\nHi @mukeshmv, I've added this comment `# W/A for https://github.com/sonic-net/sonic-buildimage/issues/24086` This issue has all the details, which i thought is enough for anyone looking as to why this code is added. \r\n\r\nDoes that sound reasonable?"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2025-10-02T21:29:03Z",
+          "body": "> Latest diff looks good\r\n\r\nVerified on non-DPU platforms as well"
+        },
+        {
+          "author": "mukeshmv",
+          "createdAt": "2025-10-02T21:30:12Z",
+          "body": "> > Changes lgtm. Should we add some comments on why this is needed?\r\n> \r\n> Hi @mukeshmv, I've added this comment `# W/A for https://github.com/sonic-net/sonic-buildimage/issues/24086` This issue has all the details, which i thought is enough for anyone looking as to why this code is added.\r\n> \r\n> Does that sound reasonable?\r\n\r\nYep, this is good. Thanks!"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2025-10-03T20:44:10Z",
+          "body": "@kperumalbfn could you help merge?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-10-03T23:14:36Z",
+          "body": "Cherry-pick PR to msft-202506: https://github.com/Azure/sonic-buildimage-msft/pull/1694"
+        }
+      ]
+    }
+  ]
+}

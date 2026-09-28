@@ -1,0 +1,158 @@
+{
+  "number": 24523,
+  "title": "Bug: [Trixie] systemd-networkd.socket starts on non-smartswitch platforms",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24523",
+  "createdAt": "2025-11-14T00:31:52Z",
+  "closedAt": "2026-02-04T21:15:21Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Bug :bug:",
+    "Trixie"
+  ],
+  "assignees": [
+    "saiarcot895"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nsystemd-networkd.socket isn't expected to start on non-smartswitch npu/dpu platforms. However we see it tries to start and we see following errors in syslog. \n\n```\nERR systemd[1]: Failed to listen on systemd-networkd.socket - Network Service Netlink Socket.\nWARNING systemd[1]: systemd-networkd.socket: Failed with result 'service-start-limit-hit'.\n```\n\n\n\n### Steps to Reproduce\n\nInstall Debian 13 based sonic image on non-smartswitch platform\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior\nsystemd-networkd.socket tries to start on non-smartswitch platforms\n\n### Expected Behavior\nWe shouldn't see any errors and ideally we shouldn't start systemd-networkd.socket on non-smartswitch platforms.\n\n### Relevant log output\n\n```shell\nroot@sonic:/home/admin# systemctl status systemd-networkd.socket\n\u00d7 systemd-networkd.socket - Network Service Netlink Socket\n     Loaded: loaded (/usr/lib/systemd/system/systemd-networkd.socket; disabled; preset: enabled)\n     Active: failed (Result: service-start-limit-hit) since Thu 2025-11-13 23:33:18 UTC; 38s ago\n   Duration: 1min 8.775s\n Invocation: 0fb94c68161a4024837ff54c92e7eb71\n   Triggers: \u25cf systemd-networkd.service\n       Docs: man:systemd-networkd.service(8)\n             man:rtnetlink(7)\n     Listen: route 1361 (Netlink)\n\nroot@sonic:/home/admin# systemctl list-dependencies --reverse systemd-networkd.socket\nsystemd-networkd.socket\n\u25cb \u2514\u2500systemd-networkd.service\n```\n\nsystemd-networkd.service doesn't start as expected on non-smartswitch platforms because of ExecCondition option. However we don't such such option for the socket\n\n```\nroot@sonic:/home/admin# systemctl status systemd-networkd\n\u25cb systemd-networkd.service - Network Configuration\n     Loaded: loaded (/usr/lib/systemd/system/systemd-networkd.service; disabled; preset: enabled)\n    Drop-In: /usr/lib/systemd/system/systemd-networkd.service.d\n             \u2514\u2500override.conf\n     Active: inactive (dead) (Result: exec-condition) since Thu 2025-11-13 23:33:18 UTC; 1min 30s ago\n Invocation: 207328a3ce1d4861a43b389d393f6d37\nTriggeredBy: \u00d7 systemd-networkd.socket\n       Docs: man:systemd-networkd.service(8)\n             man:org.freedesktop.network1(5)\n    Process: 25127 ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh (code=exited, status=1/FAILURE)\n   FD Store: 0 (limit: 512)\n```\n",
+  "comments": [
+    {
+      "author": "tjchadaga",
+      "createdAt": "2025-12-03T16:30:14Z",
+      "body": "@tirupatihemanth - could you please provide details on the platform and image version where you see this?"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2025-12-05T19:42:27Z",
+      "body": "@tjchadaga  This is seen on Debian 13 Image based out of @saiarcot895's https://github.com/saiarcot895/sonic-buildimage/tree/trixie branch. This error is seen on all non-smartswitch plaforms owing to recent changes in systemd-sonic-generator in Debian 13. \n\n\n\n"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2025-12-05T23:09:08Z",
+      "body": "FYI, this has been added to the loganalyzer ignore list in https://github.com/sonic-net/sonic-mgmt/pull/21394, with a regex fix in https://github.com/sonic-net/sonic-mgmt/pull/21499."
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-01-08T00:36:31Z",
+      "body": "Closing this issue as we are ignoring it in sonic-mgmt"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-01-26T19:26:59Z",
+      "body": "Update: Reopening this issue because of sonic-mgmt test failure: test_reload_configuration_checks\n\nThis test checks for the following and the test fails because systemd-networkd.socket fails on non-smartswitch platforms.\n\n```\nadmin@sonic:~$ systemctl is-system-running\n\ndegraded\n\n\nroot@sonic:/home/admin# systemctl --failed\n  UNIT                    LOAD   ACTIVE SUB    DESCRIPTION\n_ systemd-networkd.socket loaded failed failed Network Service Netlink Socket\n\nLegend: LOAD   _ Reflects whether the unit definition was properly loaded.\n        ACTIVE _ The high-level unit activation state, i.e. generalization of SUB.\n        SUB    _ The low-level unit activation state, values depend on unit type.\n\n1 loaded units listed.\n\n```\n\nHere's the test: https://github.com/sonic-net/sonic-mgmt/blob/4e57e057828f41ca0c4ab76453dd7396c302b6e6/tests/platform_tests/test_reload_config.py#L180\n\nHere's the check: \nhttps://github.com/sonic-net/sonic-mgmt/blob/4e57e057828f41ca0c4ab76453dd7396c302b6e6/tests/common/config_reload.py#L26\n\n"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-01-26T23:49:12Z",
+      "body": "Taking a look, will have an update next week."
+    },
+    {
+      "author": "Staphylo",
+      "createdAt": "2026-01-29T10:30:24Z",
+      "body": "The file `systemd-networkd.override.conf` introduce a new `ExecCondition` to the entire `systemd-netword.service` that depends on whether there is a DPU or NPU which is an incorrect thing to do.\nhttps://github.com/sonic-net/sonic-buildimage/blob/ea0fcbf4fa89ea564ee11f47ceb080c0d830fc67/files/image_config/midplane-network/systemd-networkd.override.conf\n\nInstead a new unit should have been introduced as a dependency of `systemd-networkd.service`\nOr alternatively a new optional `ExecPre=-/some/command` via an override but IMO we should not hook into system services when possible."
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-01-30T19:58:38Z",
+      "body": "I disagree. The `Condition*=` variables (and `ExecCondition=` in this case) are literally meant to define whether a unit should run based on the current environment of the system (whether it be the architecture of the system, whether it's running in a container/VM, or some file being missing). From the man page:\n\n`Unit files may also include a number of Condition...= and Assert...= settings. Before the unit is started, systemd will verify that the specified conditions and asserts are true. If not, the starting of the unit will be (mostly silently) skipped (in case of conditions), or aborted with an error message (in case of asserts). Failing conditions or asserts will not result in the unit being moved into the \"failed\" state.`\n\nIn our case, we want to use `systemd-networkd.service` only on a DPU or NPU, but not on other systems. This would fall very well into the category of conditionally starting a service. It shouldn't matter whether it's a system service (`systemd-networkd.service` is not the only network configuration service on the system) or a regular application; systemd should treat them the same.\n\nThe issue here is the `ExecCondition=` is only available for service files; it's not available on socket files. This means whenever something or someone runs `networkctl ...` (or some subcommand that requires the use of the socket), because there's no condition saying that `systemd-networkd.socket` itself shouldn't start, it'll try to start up and eventually fail. However, what I don't understand is that something is trying to start `systemd-networkd.service` and/or `systemd-networkd.socket` very early in the boot (when `rc.local` is running), so there's some dependency chain here triggering this."
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-01-31T02:11:03Z",
+      "body": "It _seems_ that `systemd-networkd-wait-online.service` is causing `systemd-networkd.socket` to be attempted to be started. This is because `systemd-networkd-wait-online.service` is [enabled by default](https://github.com/sonic-net/sonic-buildimage/blob/master/files/build_templates/sonic_debian_extension.j2#L721) for NPU/DPU purposes. This service is bound to `systemd-networkd.service`, which then tries to start `systemd-networkd.socket`. `systemd-networkd.service` is already configured to start only on a NPU or a DPU (via `ExecCondition=`), but conditions are evaluated at the time of starting the service. This means that all of the dependencies of the service will start before the condition is evaluated to be false.\n\nOne workaround here might actually be to add a dependency to `systemd-networkd.service` (and maybe `systemd-networkd.socket`) with `ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh` in the file. That way, if it is a NPU or a DPU, then it will \"start\" successfully; if it is not a NPU and not a DPU, then it will be treated as not meeting the conditions, and won't be considered as a failure."
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-01-31T07:19:27Z",
+      "body": "I have been working on a similar dependency issue (https://github.com/sonic-net/sonic-buildimage/issues/25091). I also found that `ExecCondition` is evaluated rather late during runtime. As a result, dependency chain related issues are already triggered by the time `ExecCondition` is evaluated.\n\nThe most reliable way to stop the dependency cascade seems to be masking `systemd-networkd.service` using a systemd generator. Generators run late enough to have DPU/NPU information; but also early enough to completely remove services from the dependency graph. This prevents `wait-online` or other dependents from pulling in the socket in the first place.\n\nPR #25223 implements this generator-based masking for non-smart-switch platforms. I suspect this might resolve the socket error you are seeing as well since it cuts off the dependency chain near the source (It did remove error messages from `systemd-networkd-wait-online.service`, for more context see [#25198](https://github.com/sonic-net/sonic-buildimage/pull/25198#issuecomment-3812284846)).\n\nWhile I recognize this involves a change to the generator, it seems to be the cleanest way to prevent the dependency cascade. Open to feedback if there is a different approach."
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-01-31T07:22:23Z",
+      "body": "That actually is better, and cleaner than having a dummy service IMO."
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-01-31T07:27:00Z",
+      "body": "Glad you like the approach! I have updated the PR description to track this issue as well."
+    },
+    {
+      "author": "Staphylo",
+      "createdAt": "2026-02-02T11:33:35Z",
+      "body": "> In our case, we want to use systemd-networkd.service only on a DPU or NPU, but not on other systems. This would fall very well into the category of conditionally starting a service. It shouldn't matter whether it's a system service (systemd-networkd.service is not the only network configuration service on the system) or a regular application; systemd should treat them the same.\n\nThank you for the clarification, I did not realize that `systemd-networkd` is not running on all SONiC devices.\nSince it's a rather standard service I assumed that it ran everywhere.\nIt still feels odd to me that the smartswitch feature now completely owns the `systemd-networkd.service` when it's a system service but sure."
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-02-02T16:52:57Z",
+      "body": "I personally wish we standardized on using `systemd-networkd` (partly because of the better UX/info display that `networkctl` provides), but that'll have to be a separate task from this."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25223,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25223",
+      "title": "[systemd]: Mask systemd-networkd on non-smart-switch platforms",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-04T21:15:18Z",
+      "createdAt": "2026-01-28T06:46:40Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix #25091\r\nFix #24523\r\n\r\nAfter a successful SONiC warm-reboot, the serial console prints repeated `[DEPEND] Dependency failed for systemd-networkd-persistent-storage.service` and similar messages on non-smart-switch platforms. This is a cosmetic issue that does not affect functionality but is jarring for anyone monitoring startup output.\r\n\r\nThe root cause is that `systemd-networkd.service` uses an `ExecCondition` to skip execution on non-smart-switch platforms. However, its dependent services (`systemd-networkd-persistent-storage.service`, `systemd-networkd-wait-online.service`) still attempt to start and fail with dependency errors.\r\n\r\n#### How I did it\r\n\r\n* Added `mask_networkd_for_non_smart_switch()` function to systemd-sonic-generator that creates a symlink to `/dev/null` for `systemd-networkd.service` when not on smart-switch platforms (DPU/NPU)\r\n* The masking occurs at early boot during generator execution, before systemd loads unit files\r\n* Masking systemd-networkd directly causes all dependent services to be automatically skipped by systemd's dependency resolution\r\n* Added `validate_masked_services()` test to verify correct masking behavior across all platform configurations\r\n\r\n#### How to verify it\r\n\r\n1. Build a SONiC image with this change\r\n2. Boot on a non-smart-switch platform (no DPU/DPUS in platform.json)\r\n3. Perform a warm-reboot: `warm-reboot`\r\n4. Monitor serial console output\r\n5. Verify no \"Dependency failed for systemd-networkd-persistent-storage.service\" or similar messages appear\r\n\r\n#### Description for the changelog\r\n\r\nMask systemd-networkd.service on non-smart-switch platforms to prevent dependency failure",
+      "files": [
+        {
+          "path": "src/systemd-sonic-generator/ssg-test.cc",
+          "additions": 21,
+          "deletions": 0
+        },
+        {
+          "path": "src/systemd-sonic-generator/systemd-sonic-generator.cpp",
+          "additions": 25,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-28T06:46:49Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-28T06:47:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-01-28T16:26:23Z",
+          "body": "Hi @cpackham-atlnz, can you check if this PR solves your issues? If we mask `systemd-networkd` this should skip all its dependencies and there should be no more error messages from any `networkd` related dependencies."
+        },
+        {
+          "author": "cpackham-atlnz",
+          "createdAt": "2026-01-29T01:43:22Z",
+          "body": "@Bojun-Feng yes that seems to do the trick"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-01-29T01:51:31Z",
+          "body": "Great! Opening this up for review"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-02-03T18:28:35Z",
+          "body": "@vmittal-msft , @tjchadaga , I think we need this in 202511 branch as well"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-04T21:15:51Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25359"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-14T00:15:14Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

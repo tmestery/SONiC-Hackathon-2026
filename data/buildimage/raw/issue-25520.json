@@ -1,0 +1,88 @@
+{
+  "number": 25520,
+  "title": "Bug: CTRL-C does not abort sonic-build",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25520",
+  "createdAt": "2026-02-15T16:05:30Z",
+  "closedAt": "2026-02-26T00:38:40Z",
+  "author": "yanmarkman",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "yanmarkman"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nCTRL-C issued under the below conditions does nothing, not queued and lost:\n- BUILD sonic-build-image\n- export SONIC_BUILD_JOBS=8\n- Issued at time of *.whl target build\n\nNOTES: \n- Problems seems NEW for TRIXIE-version but not for BOOKWORM-version build\n- *.whl  is Python uninterruptible.\n- x.whl target build-time seems increased vs Bookworm time\n\n### Steps to Reproduce\n\nBuild sonic-buildimage with \"export SONIC_BUILD_JOBS=8\"\nWait for build any.whl target (preferable as [1] target)\nMake CTRL-C \n\n### Actual Behavior and Expected Behavior\n\n-\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "davidm-arista",
+      "createdAt": "2026-02-25T16:27:33Z",
+      "body": "@yanmarkman can you please review the suggestion solution in https://github.com/sonic-net/sonic-buildimage/pull/25645"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25645,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25645",
+      "title": "[build] Fix Ctrl-C not aborting build (process_log.sh SIGINT)",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-26T00:38:39Z",
+      "createdAt": "2026-02-24T16:17:43Z",
+      "author": "rustiqly",
+      "body": "## What I did\nAdd SIGINT and SIGTERM trap handlers to `scripts/process_log.sh` so that pressing Ctrl-C during a build actually terminates the build.\n\n## Why I did it\nCurrently, pressing Ctrl-C during a SONiC build (especially during the trixie phase) does not reliably abort the build. The build appears to hang or continue running in the background.\n\n**Root cause:** The `LOG` macro in `rules/functions` pipes all build output through `process_log.sh`:\n\n```makefile\nLOG = < /dev/null |& $(PROJECT_ROOT)/scripts/process_log.sh -t &>> $(PROJECT_ROOT)/$@.log\n```\n\nWhen the user presses Ctrl-C:\n1. The terminal sends SIGINT to the foreground process group\n2. `make` receives it and tries to kill child processes\n3. But `process_log.sh` 's `while IFS= read -r line` loop **does not exit on SIGINT** \u2014 bash's `read` builtin is not reliably interruptible by signals\n4. This keeps the pipe open, preventing the upstream build command from being cleaned up\n5. The build appears stuck or continues in the background\n\nFixes: #25520\n\n## How I did it\nAdded two trap handlers at the top of `process_log.sh`:\n```bash\ntrap 'exit 130' INT    # 128 + 2 (SIGINT)\ntrap 'exit 143' TERM   # 128 + 15 (SIGTERM)\n```\n\nThese ensure the script exits immediately when signaled, allowing the pipeline to tear down and make to clean up properly.\n\n## How I verified it\n1. Started a VS build with `make SONIC_BUILD_JOBS=4 target/sonic-vs.img.gz`\n2. Pressed Ctrl-C during package compilation phase\n3. Verified build processes terminate within seconds (previously would hang)\n4. Verified normal build operation is unaffected \u2014 process_log.sh still correctly timestamps and forwards all output when not interrupted\n",
+      "files": [
+        {
+          "path": "scripts/process_log.sh",
+          "additions": 6,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-24T16:17:52Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-24T16:18:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-24T17:12:54Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-24T17:13:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-25T15:14:41Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-25T15:14:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-25T17:06:05Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-25T17:06:16Z",
+          "body": "<samp>\nAzure Pipelines failed to run 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

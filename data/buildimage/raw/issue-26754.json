@@ -1,0 +1,153 @@
+{
+  "number": 26754,
+  "title": "Bug: system-health.service takes 90s to stop during cold reboot",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26754",
+  "createdAt": "2026-04-14T10:11:41Z",
+  "closedAt": "2026-07-17T18:49:04Z",
+  "author": "ganglyu",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "rustiqly"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nPR #24656 changed MonitorSystemBusTask and Sysmonitor from ProcessTaskBase to ThreadTaskBase to reduce memory footprint. This change inadvertently removed the kill() call that previously terminated the GLib.MainLoop subprocess immediately, causing system-health.service to always time out during shutdown and adding ~90 seconds to every cold reboot.\nAffected versions: All platforms, all builds after this PR was merged.\n\n\n\n### Steps to Reproduce\n\nRun cold reboot or run \"systemctl stop system-health.service\"\n\n\n\n### Actual Behavior and Expected Behavior\n\nsystem-health.service always times out during shutdown, which adds approximately 90 seconds to each cold reboot.\n\n### Relevant log output\n\n```shell\n2026 Apr 14 11:59:22.047020 sonic INFO    systemd[1]: Stopping system-health.service - SONiC system health monitor...\n2026 Apr 14 12:00:52.240603 sonic WARNING systemd[1]: system-health.service: State 'stop-sigterm' timed out. Killing.\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-04-22T15:41:44Z",
+      "body": "PR available for the fix."
+    },
+    {
+      "author": "stephenxs",
+      "createdAt": "2026-05-08T06:51:25Z",
+      "body": "@rustiqly Could you please fix the comments in the PR? Thanks."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26809,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26809",
+      "title": "[system-health] Fix 90s stop timeout during cold reboot and system-health.service stop",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-17T18:49:03Z",
+      "createdAt": "2026-04-15T22:29:00Z",
+      "author": "rustiqly",
+      "body": "Fixes #26754 by ensuring GLib.MainLoop() is cleanly quit when stopping the MonitorSystemBusTask thread.\r\n\r\n### Testing (202605)\r\n\r\n#### system-health.service takes 90s to stop during cold reboot (#26754)\r\n**Without fix**\r\nRun `systemctl stop system-health.service` then in syslog:\r\n```\r\n2026 Jul 29 05:53:16.919542 strtk5-7260-01 NOTICE healthd[20798]: Caught SIGTERM - exiting...\r\n2026 Jul 29 05:53:16.919885 strtk5-7260-01 INFO systemd[1]: Stopping system-health.service - SONiC system health monitor...\r\n2026 Jul 29 05:54:47.047726 strtk5-7260-01 WARNING systemd[1]: system-health.service: State 'stop-sigterm' timed out. Killing.\r\n2026 Jul 29 05:54:47.047889 strtk5-7260-01 NOTICE systemd[1]: system-health.service: Killing process 20798 (healthd) with signal SIGKILL.\r\n2026 Jul 29 05:54:47.048016 strtk5-7260-01 NOTICE systemd[1]: system-health.service: Killing process 20802 (healthd) with signal SIGKILL.\r\n2026 Jul 29 05:54:47.060972 strtk5-7260-01 WARNING systemd[1]: system-health.service: Main process exited, code=killed, status=9/KILL\r\n2026 Jul 29 05:54:47.061306 strtk5-7260-01 WARNING systemd[1]: system-health.service: Failed with result 'timeout'.\r\n2026 Jul 29 05:54:47.062419 strtk5-7260-01 INFO systemd[1]: Stopped system-health.service - SONiC system health monitor.\r\n2026 Jul 29 05:54:47.063224 strtk5-7260-01 INFO systemd[1]: system-health.service: Consumed 2.915s CPU time, 66.7M memory peak.\r\n```\r\n~90s to stop\r\n\r\n**With Fix**\r\nRun `systemctl stop system-health.service` then in syslog:\r\n```\r\n2026 Jul 29 05:46:59.912552 strtk5-7260-01 INFO systemd[1]: Stopping system-health.service - SONiC system health monitor...\r\n2026 Jul 29 05:47:01.081462 strtk5-7260-01 INFO systemd[1]: system-health.service: Deactivated successfully.\r\n2026 Jul 29 05:47:01.081729 strtk5-7260-01 INFO systemd[1]: Stopped system-health.service - SONiC system health monitor.\r\n2026 Jul 29 05:47:01.082306 strtk5-7260-01 INFO systemd[1]: system-health.service: Consumed 7.016s CPU time, 67.1M memory peak\r\n```\r\n~1-2s to stop\r\n\r\n#### Fast-reboot shutdown increase\r\nFix for issue described in PR https://github.com/sonic-net/sonic-mgmt/pull/26386\r\n\r\n**Without Fix**\r\nRun `fast-reboot` then in syslog:\r\n```\r\n2026 Jul 28 05:04:29.720942 strtk5-7260-01 NOTICE root: Starting fast-reboot\r\n...\r\n2026 Jul 28 05:07:57.638271 strtk5-7260-01 INFO kernel: [    0.000000] Command line: reboot=p console=ttyS0...\r\n```\r\n207.917 seconds total from starting fast-reboot to the first kernel log on the boot side.\r\n\r\n**With Fix**\r\nRun `fast-reboot` then in syslog:\r\n```\r\n2026 Jul 29 03:55:21.563157 strtk5-7260-01 NOTICE root: Starting fast-reboot\r\n...\r\n2026 Jul 29 03:57:12.781422 strtk5-7260-01 INFO kernel: [    0.000000] Command line: reboot=p console=ttyS0...\r\n```\r\n111.218 seconds total from starting fast-reboot to the first kernel log on the boot side.",
+      "files": [
+        {
+          "path": "src/system-health/health_checker/sysmonitor.py",
+          "additions": 13,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-15T22:29:08Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-15T22:29:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-16T12:33:04Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-16T12:33:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T15:35:38Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T15:35:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-17T15:36:52Z",
+          "body": "Squashed commits to fix DCO check failure. Requesting CI rerun."
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-23T13:21:21Z",
+          "body": "Seems like this PR would fix https://github.com/sonic-net/sonic-buildimage/issues/26954 as well"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T04:45:19Z",
+          "body": "Addressed the `GLib` review comment in https://github.com/sonic-net/sonic-buildimage/pull/26809 by storing the imported module on the task instance and using `self.GLib.idle_add()` during `task_stop()`.\n\nValidation:\n\n```text\npython3 -m py_compile src/system-health/health_checker/sysmonitor.py\n```\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-11T04:45:20Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T04:45:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-11T14:07:45Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T14:07:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T17:43:58Z",
+          "body": "Rechecked CI for https://github.com/sonic-net/sonic-buildimage/pull/26809.\n\nThe current required failure is `Azure.sonic-buildimage (Test Trivy vulnerability scan (docker-ptf))` from Azure build `1110889`. This looks unrelated to the system-health change in this PR:\n\n- The pipeline reported `docker-ptf was not built in this PR, setting PTF_MODIFIED to False`.\n- Trivy scanned the cached `target/docker-ptf.gz` image (`debian 12.13`) and failed on pre-existing image contents: 17 HIGH package vulnerabilities (example: `liblcms2-2` CVE-2026-41254; Go `stdlib` CVE-2026-33811) plus expected image private-key files under `/etc/ssh/ssh_host_*` and `/etc/ssl/private/ssl-cert-snakeoil.key`.\n- This PR only changes `src/system-health/health_checker/sysmonitor.py`, so it does not affect `docker-ptf` package contents.\n\nRequesting a fresh Azure run.\n\n/azp run Azure.sonic-buildimage\n"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T17:44:47Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T17:44:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T20:42:12Z",
+          "body": "CI note for https://github.com/sonic-net/sonic-buildimage/pull/26809: rerun Azure build 1111000 failed only the required `docker-ptf` Trivy scan. The failing findings are from the cached/generated `docker-ptf` image contents, not from this PR's `system_health_monitoring_config.service` change:\n\n- Debian 12.13 package CVEs, e.g. `liblcms2-2` CVE-2026-41254 and Go `stdlib` CVE-2026-33811.\n- Existing private-key findings in image defaults: `/etc/ssh/ssh_host_*_key` and `/etc/ssl/private/ssl-cert-snakeoil.key`.\n\nRe-running Azure to get a clean signal.\n\n/azp run Azure.sonic-buildimage\n"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T23:41:59Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T23:42:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-12T01:43:34Z",
+          "body": "CI update for https://github.com/sonic-net/sonic-buildimage/pull/26809: the latest required Azure failure is again isolated to `Azure.sonic-buildimage (Test Trivy vulnerability scan (docker-ptf))` in build `1111171`.\n\nI checked the log: this is the same cached/base `docker-ptf` scan issue, unrelated to the system-health service timeout change. The scan reports Debian/Go package CVEs in existing image contents (`liblcms2-2`, `wireshark*`, `linux-libc-dev`, Go `stdlib`) and the known generated/default private-key findings under `/etc/ssh/ssh_host_*_key` and `/etc/ssl/private/ssl-cert-snakeoil.key`.\n\nOther Azure jobs from the current rerun are still pending/running, so I am leaving the rerun in progress and will recheck after it finishes.\n"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "number": 7180,
+  "title": "SONiC docker containers show as \"Exited\" after config-reload",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/7180",
+  "createdAt": "2021-03-29T21:17:02Z",
+  "closedAt": "2021-07-13T10:40:18Z",
+  "author": "alexrallen",
+  "labels": [
+    "Triaged",
+    "Issue for 202012"
+  ],
+  "assignees": [
+    "stepanblyschak"
+  ],
+  "milestone": null,
+  "body": "#### Description\r\nOccasionally on `config reload` we have observed that the docker containers fail to properly restart and show as \"Exited\" when `docker ps` is run. \r\n\r\nI have debugged this and the containers that fail to start all depend on the systemd service `interfaces-config.service` which has a start job that is hanging when this bug appears. This start job has an indefinite timeout so the entire system hangs indefinitely waiting on it to start. \r\n\r\nI determined that the start job is hanging where it executes an `ifupdown` command which then executes `systemctl try-restart ntp.service`. When you execute `systemctl list-jobs` you can see that a \"nop\" job has been inserted into the queue because the ntp service is not running. However it seems to get stuck in the queue and never execute.\r\n\r\nExecution trace of the locked up interfaces-config.service start job.\r\n```\r\n           \u251c\u250011300 /bin/bash /usr/bin/interfaces-config.sh\r\n           \u251c\u250011301 /usr/bin/python /usr/sbin/ifdown --force eth0\r\n           \u251c\u250011547 /sbin/dhclient -r -pf /run/dhclient.eth0.pid -lf /var/lib/dhcp/dhclient.eth0.leases eth0\r\n           \u251c\u250011670 /bin/sh /sbin/dhclient-script\r\n           \u251c\u250011682 /bin/sh /usr/sbin/invoke-rc.d ntp try-restart\r\n           \u2514\u250011704 systemctl try-restart ntp.service\r\n```\r\n\r\nSystemd jobs showing the held up ntp nop job. \r\n```\r\nroot@r-lionfish-07:/var/log# sudo systemctl list-jobs\r\n JOB UNIT                       TYPE  STATE\r\n1875 ntp.service                nop   waiting\r\n2147 snmp.service               start waiting\r\n1997 telemetry.service          start waiting\r\n1753 syncd.service              start waiting\r\n1749 dhcp_relay.service         start waiting\r\n```\r\n\r\nI found the following systemd issue which I believe this to be an instance of:\r\nhttps://github.com/systemd/systemd/pull/13124\r\n\r\nI confirmed that the systemd version that we are running: `241` was released before this bug was reported and fixed. Additionally the infrequent nature of the systemd bug explains why we rarely see this occur in sonic in practice. \r\n\r\nI would recommend upgrading the version of systemd used by sonic to resolve this issue.  \r\n\r\nAttached below is the `show inventory` output\r\n[sonic_dump_r-lionfish-07_20210329_195525.tar.gz](https://github.com/Azure/sonic-buildimage/files/6224612/sonic_dump_r-lionfish-07_20210329_195525.tar.gz)\r\n\r\n#### Steps to reproduce the issue:\r\n1. Run the sonig-mgmt test platform_tests/test_reload_config.py\r\n\r\n#### Describe the results you received:\r\nThe test fails because many of the docker containers are shown as \"exited\" with only `bgp` and `database` containers running. \r\n\r\n#### Describe the results you expected:\r\nAll containers back up and running, test passes successfully. \r\n\r\n#### Output of `show version`:\r\n```\r\nSONiC Software Version: SONiC.SONIC.202012.53-aee4892c_Internal\r\nDistribution: Debian 10.8\r\nKernel: 4.19.0-12-2-amd64\r\nBuild commit: aee4892c\r\nBuild date: Thu Mar 25 07:17:58 UTC 2021\r\nBuilt by: sw-r2d2-bot@r-build-sonic-ci03\r\n\r\nPlatform: x86_64-mlnx_msn3420-r0\r\nHwSKU: ACS-MSN3420\r\nASIC: mellanox\r\nASIC Count: 1\r\nSerial Number: MT2012X01822            \r\nUptime: 19:55:35 up 1 day, 19:40,  1 user,  load average: 2.31, 1.45, 1.05\r\n\r\nDocker images:\r\nREPOSITORY                    TAG                                 IMAGE ID            SIZE\r\ndocker-teamd                  SONIC.202012.53-aee4892c_Internal   1d73bce4fcd8        412MB\r\ndocker-teamd                  latest                              1d73bce4fcd8        412MB\r\ndocker-nat                    SONIC.202012.53-aee4892c_Internal   4b70ff56ef58        415MB\r\ndocker-nat                    latest                              4b70ff56ef58        415MB\r\ndocker-orchagent              SONIC.202012.53-aee4892c_Internal   b3ab4b23959b        431MB\r\ndocker-orchagent              latest                              b3ab4b23959b        431MB\r\ndocker-fpm-frr                SONIC.202012.53-aee4892c_Internal   8eedb2cefa34        431MB\r\ndocker-fpm-frr                latest                              8eedb2cefa34        431MB\r\ndocker-sflow                  SONIC.202012.53-aee4892c_Internal   f73678a4a5e4        413MB\r\ndocker-sflow                  latest                              f73678a4a5e4        413MB\r\ndocker-wjh                    202012.202012.0-e663b63             bbf69da66de2        441MB\r\ndocker-wjh                    latest                              bbf69da66de2        441MB\r\ndocker-platform-monitor       SONIC.202012.53-aee4892c_Internal   9431a24cce94        693MB\r\ndocker-platform-monitor       latest                              9431a24cce94        693MB\r\ndocker-syncd-mlnx             SONIC.202012.53-aee4892c_Internal   b435d0fb66dc        666MB\r\ndocker-syncd-mlnx             latest                              b435d0fb66dc        666MB\r\ndocker-snmp                   SONIC.202012.53-aee4892c_Internal   1186f8a7345a        442MB\r\ndocker-snmp                   latest                              1186f8a7345a        442MB\r\ndocker-sonic-mgmt-framework   SONIC.202012.53-aee4892c_Internal   f82c902ebc99        620MB\r\ndocker-sonic-mgmt-framework   latest                              f82c902ebc99        620MB\r\ndocker-router-advertiser      SONIC.202012.53-aee4892c_Internal   58926fcdf5f6        401MB\r\ndocker-router-advertiser      latest                              58926fcdf5f6        401MB\r\ndocker-lldp                   SONIC.202012.53-aee4892c_Internal   175e6dcfe231        441MB\r\ndocker-lldp                   latest                              175e6dcfe231        441MB\r\ndocker-database               SONIC.202012.53-aee4892c_Internal   586be7012094        401MB\r\ndocker-database               latest                              586be7012094        401MB\r\ndocker-sonic-telemetry        SONIC.202012.53-aee4892c_Internal   4232634fe32d        491MB\r\ndocker-sonic-telemetry        latest                              4232634fe32d        491MB\r\ndocker-dhcp-relay             SONIC.202012.53-aee4892c_Internal   06444d9dd53a        405MB\r\ndocker-dhcp-relay             latest                              06444d9dd53a        405MB\r\n```",
+  "comments": [
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2021-03-30T09:08:56Z",
+      "body": "Observed the same issue and also investigated down to systemd/systemd#13124.\r\n\r\nIn my scenario the switch stuck at \"systemctl try-restart systemd-timesyncd.service\".\r\nThe assumption that it is related to systemd/systemd#13124 makes sense because I observe hostcfgd running at that time and executing few \"systemctl daemon-reload\" commands which is exactly how to reproduce the issue this change - systemd/systemd#13124 is fixing.\r\nWorkaround can be to do \"systemctl try-restart systemd-timesyncd.service\" to insert another nop job and unblock the service chain.\r\n\r\n@lguohan How can we take this fix  systemd/systemd#13124 into SONiC? We currently do not build systemd from sources or should we use newer from buster-backports?\r\n"
+    },
+    {
+      "author": "anshuv-mfst",
+      "createdAt": "2021-03-31T15:13:47Z",
+      "body": "@stepanblyschak  - could you please look into this issue, thanks. "
+    },
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2021-04-05T09:45:42Z",
+      "body": "PR - https://github.com/Azure/sonic-buildimage/pull/7228"
+    },
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2021-04-21T07:56:16Z",
+      "body": "Relevant for 202012 as systemd 247 was reverted."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 7228,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/7228",
+      "title": "[debian] install systemd version 247 from buster-backports",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-04-08T05:00:28Z",
+      "createdAt": "2021-04-05T09:31:15Z",
+      "author": "stepanblyschak",
+      "body": "Signed-off-by: Stepan Blyschak <stepanb@nvidia.com>\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nUpdate systemd to v247 in order to pick the fix for \"core: coldplug possible nop_job\" https://github.com/systemd/systemd/pull/13124\r\n\r\n#### How I did it\r\n\r\nInstall systemd, systemd-sysv from buster-backports. Pass \"systemd.unified_cgroup_hierarchy=0\" as kernel argument to force systemd to not use unified cgroup hierarchy, otherwise dockerd won't start https://github.com/moby/moby/issues/16238.\r\nAlso, chown $FILSYSTEM_ROOT for root, otherwise apt systemd installation complains, see similar https://unix.stackexchange.com/questions/593529/can-not-configure-systemd-inside-a-chrooted-environment\r\n\r\n#### How to verify it\r\n\r\nInstall on the switch, perform basic sanity tests/\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [x] 202012\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\nUpdate systemd to v247\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "build_debian.sh",
+          "additions": 5,
+          "deletions": 2
+        },
+        {
+          "path": "installer/x86_64/install.sh",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2021-04-06T04:09:36Z",
+          "body": "is there a behavior change when upgrade to 247 for the unified_cgroup_hierarchy? why is that we do not need pass this option prior to 247?"
+        },
+        {
+          "author": "stepanblyschak",
+          "createdAt": "2021-04-07T10:16:54Z",
+          "body": "@lguohan  yes, there is a behaviour change in systemd v247 comparing to 241. Systemd comes now with cgroup v2 (unified hierarchy) by default. Current docker version does not work with cgroup v2 (comming in docker 20.10). To solve this without updating docker a unified_cgroup_hierarchy is set to 0 in kernel arguments."
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2021-04-07T16:15:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-04-07T16:16:09Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "number": 28481,
+  "title": "Bug: [HA] SWBus retains stale peer connection after NPU reboot, blocking HA activation",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28481",
+  "createdAt": "2026-07-17T19:19:28Z",
+  "closedAt": "2026-07-22T18:12:15Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Bug :bug:",
+    "smartswitch"
+  ],
+  "assignees": [
+    "BYGX-wcr"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter an HA peer NPU reboot, SWBus can retain the peer's old half-open\nHTTP/2-over-TCP connection and continue routing HA messages through it.\n\nDuring HA role activation, HAMgrd sends a `VoteRequest` through the stale\nconnection. SWBus reports the message as sent, but the peer never receives it.\nAlthough the peer establishes a new connection after reboot, the stale route\nremains preferred until the old TCP connection times out.\n\nIn the observed failure:\n\n- The primary sent a `VoteRequest` through the stale connection.\n- The stale connection expired approximately 21.5 minutes after the reboot.\n- Communication resumed only after the stale route was removed.\n- HAMgrd did not recover the lost vote after reconnection.\n- The primary remained in `HA_STATE_CONNECTED`.\n- No `activate_role` pending operation was generated.\n\nThe system used:\n\n```text\nnet.ipv4.tcp_retries2 = 15\n```\n\nChanging this value globally is not the preferred fix. SWBus should replace\nstale routes when the same peer reconnects, and HAMgrd should recover\noutstanding operations after connectivity restoration.\n\n### Steps to Reproduce\n\n1. Run `ha/test_ha_npu_reboot.py::test_ha_npu_reboot` repeatedly on a\n   SmartSwitch HA topology.\n2. The failure reproduces with approximately 30% probability.\n3. When reproduced, the test fails during HA activation with:\n\n```text\nAssertionError: Timed out waiting for active pending_operation_id\nfor <primary-npu> scope <primary-scope>\n```\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior**\n\nSWBus retains and selects a stale pre-reboot connection after the peer\nreconnects. HA messages sent through this route are lost.\n\nThe primary enters `HA_STATE_CONNECTED` and sends its vote but never receives a\nreply. The peer can independently negotiate the standby role after the new\nconnection becomes usable, while the primary remains stuck.\n\nNo `activate_role` pending operation is published, causing HA activation to\ntime out.\n\n**Expected behavior**\n\nWhen a peer reconnects, SWBus should immediately invalidate or replace older\nroutes for the same peer identity.\n\nHAMgrd should retry or restart an outstanding vote operation when:\n\n- The peer reconnects.\n- The selected SWBus route changes.\n- A vote response is not received within the expected interval.\n\nThe HA pair should reach pending active/standby activation without waiting for\nthe system-wide TCP retransmission timeout.\n\n### Relevant log output\n\n```shell\n# Existing SWBus connection before the peer reboot\n19:00:29 conn_info=\"swbs-from://<secondary-peer-ip>:<old-port>\"\n  connection.state=Open\n\n# Secondary NPU reboot and recovery\n19:04:00 User requested rebooting device\n19:06:00 Issuing OS-level reboot\n19:08:33 Linux kernel started\n19:08:38 ssh.service started\n\n# Peer HAMgrD starts after reboot\n19:09:12 Starting edge runtime with URI:\n  http://<secondary-peer-ip>:23606\n\n19:09:12 Added handler for service path:\n  <secondary-peer>/hamgrd/0\n\n19:09:12 Spawning HA actors on the secondary peer\n19:09:23 Reached multi-user.target\n19:09:41 DPU reported online\n\n# Despite peer recovery, the primary retains the old SWBus route.\n\n# Primary connects and starts activation\n19:23:32 HA scope transitioned:\n  scope=<primary-scope>\n  state=HA_STATE_CONNECTED\n  reason=\"connection with peer established\"\n\n19:23:32 Sent VoteRequest to peer <secondary-scope>:\n  term=0\n  state=HA_STATE_CONNECTING\n  desired_state=DESIRED_HA_STATE_ACTIVE\n\n# Vote is routed through the stale pre-reboot connection\n19:23:32 Routing message:\n  destination=<secondary-peer>/hamgrd/0/ha-scope/<secondary-scope>\n\n19:23:32 Queue message:\n  nh_type=Remote\n  conn_info=\"swbs-from://<secondary-peer-ip>:<old-port>\"\n\n19:23:32 Sending to the remote endpoint\n\n# The secondary never receives the VoteRequest.\n\n# Old connection eventually expires\n19:25:35 connection.state=Closed(Error(Io(TimedOut)))\n\n19:25:35 decoder inner stream error:\n  h2 protocol error: error reading a body from connection\n  source: Io(Kind(TimedOut))\n\n19:25:35 Connection receive stream closed\n19:25:35 Unregistering from mux\n\n19:25:35 Remove route entry:\n  nh_type=Remote\n  conn_info=\"swbs-from://<secondary-peer-ip>:<old-port>\"\n  nh_removed=true\n\n19:25:35 Reporting connection lost\n\n# New connection becomes usable\n19:25:38 conn_id=\"swbs-to://<primary-peer-ip>:23606\"\n  connection.state=Open\n\n# Secondary proceeds toward standby\n19:25:38 HA scope transitioned:\n  scope=<secondary-scope>\n  state=HA_STATE_INITIALIZING_TO_STANDBY\n  reason=\"target standby role\"\n\n# Primary pending operation remains absent\nSTATE_DB HGET \"DASH_HA_SCOPE_STATE|<primary-scope>\" pending_operation_ids\n<empty>\n\nSTATE_DB HGET \"DASH_HA_SCOPE_STATE|<primary-scope>\" pending_operation_types\n<empty>\n\nnet.ipv4.tcp_retries2 = 15\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC Software Version: master_ha_nv.37-e21e199b9c_Internal\n\nTwo tech-support dumps were collected:\n- Primary NPU dump after the failure\n- Secondary NPU dump after the failure\n```\n\n### Attach files (if any)\n\n_No response_\n",
+  "comments": [
+    {
+      "author": "vivekkarri",
+      "createdAt": "2026-07-17T19:25:48Z",
+      "body": "@BYGX-wcr, @zjswhhh Please help take a look"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 209,
+      "repository": "sonic-net/sonic-dash-ha",
+      "url": "https://github.com/sonic-net/sonic-dash-ha/pull/209",
+      "title": "[HA] swbus: replace stale peer connection on reconnect",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-22T18:12:14Z",
+      "createdAt": "2026-07-20T21:01:42Z",
+      "author": "BYGX-wcr",
+      "body": "### Description of PR\n\nSummary:\n\nAfter an HA peer NPU reboot, SWBus can retain a half-open incoming connection and continue routing HA messages through it even after the peer establishes a new connection. Messages appear locally queued but never reach the peer, which can leave HAMgrd stuck waiting for a vote reply and prevent publication of the `activate_role` pending operation.\n\nThis change replaces older accepted connections when the same logical peer reconnects and refreshes the send proxy when an equal next-hop identity is registered again.\n\nReviewer entry points:\n\n- `crates/swbus-core/src/mux/conn_store.rs`\n- `crates/swbus-core/src/mux/multiplexer.rs`\n- `crates/swbus-core/src/mux/conn.rs`\n\nNo new dependencies are required.\n\nFixes sonic-net/sonic-buildimage#28481\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [x] Test improvement\n\n### Approach\n#### What is the motivation for this PR?\n\nServer-side connection IDs include the peer ephemeral source port. After a peer reboot, the new connection therefore has a different ID while the old half-open connection can remain in the connection store and routing table until the system TCP timeout expires.\n\nDuring that interval, SWBus can select the stale next hop. Queueing succeeds locally, so alternate routes are not attempted, but the peer never receives the message.\n\n#### How did you do it?\n\n- Serialize connection replacement and registration to avoid concurrent reconnect races.\n- When a new server-side connection is accepted, identify older server connections with the same remote service path and connection type.\n- Unregister all routes learned through each stale connection, then cancel its worker.\n- Preserve independently owned client-mode `swbs-to` connections.\n- Use `BTreeSet::replace` when updating an equal next hop so the new send proxy replaces the stale proxy retained by `insert`.\n- Add regression tests for stale server replacement, client-path preservation, and equal next-hop proxy refresh.\n\n#### How did you verify/test it?\n\nAutomated validation:\n\n```text\ncargo fmt --check --all\ncargo test -p swbus-core\ncargo clippy -p swbus-core --all-targets --all-features --no-deps -- --deny warnings\ncargo test -p swbus-edge\n```\n\n- `swbus-core`: 36 tests passed, 0 failed.\n- `swbus-edge`: 2 tests passed, 0 failed.\n- Strict Clippy completed with warnings denied.\n\nPackage and deployment validation:\n\n- Built `dash-ha` and `dash-ha-dbgsym` Debian packages.\n- Deployed both packages to `dash-hadpu0` through `dash-hadpu3` on two NVIDIA SN4280 SmartSwitches.\n- Verified all eight `swbusd` and `hamgrd` processes run the new payload.\n- Verified bidirectional SWBus connectivity with 3/3 successful pings in each direction.\n\nThe repeated physical NPU reboot reproduction test for sonic-net/sonic-buildimage#28481 remains to be run.\n\n#### Any platform specific information?\n\nNo. The connection identity and routing changes are generic SWBus behavior. Physical deployment validation was performed on NVIDIA SN4280 SmartSwitches.\n\n### Documentation\n\nNo documentation update is required. This change corrects internal connection lifecycle and route replacement behavior without changing configuration or public interfaces.\n",
+      "files": [
+        {
+          "path": "crates/swbus-core/src/mux/conn.rs",
+          "additions": 7,
+          "deletions": 1
+        },
+        {
+          "path": "crates/swbus-core/src/mux/conn_store.rs",
+          "additions": 105,
+          "deletions": 3
+        },
+        {
+          "path": "crates/swbus-core/src/mux/multiplexer.rs",
+          "additions": 37,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T21:01:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T21:01:50Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T21:02:00Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2026-07-21T21:06:41Z",
+          "body": "LGTM"
+        }
+      ]
+    }
+  ]
+}

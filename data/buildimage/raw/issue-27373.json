@@ -1,0 +1,98 @@
+{
+  "number": 27373,
+  "title": "Bug: [CmisManagerTask] Potential race condition between split ports while doing DPSM",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27373",
+  "createdAt": "2026-05-14T10:09:03Z",
+  "closedAt": "2026-07-07T08:26:57Z",
+  "author": "Junchao-Mellanox",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "Junchao-Mellanox"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nDPSM might enter Failed state due to race condition in CmisManagerTask. For example, there is 1 module split to 2 logical ports: Ethernet0 with lane(0,1,2,3) and Ethernet4 with lane(4,5,6,7). At the beginning, both ports are admin down.Think about following flow:\n1. User set Ethernet0 to admin up. CmisManagerTask starts DPSM for Ethernet0. The DPSM put the module into high power and then to ModuleReady\n2. User set Ethernet4 to admin up. CmisManagerTask starts DPSM for Ethernet4. Etherent4 calls force disable, set timeout to \"txoff_duration\" and enter \"CMIS_STATE_DP_PRE_INIT_CHECK\". In this case, the txoff_duration is 0.05s.\n3. According to CMIS standard, module should start default hardware initialization if module is in ModuleReady state and its datapath is not explicitly deinited (by calling api.set_datapath_deinit in sonic). So, Ethernet4 goes to hardware initialization and transite to  \"DataPathInit\" state.\n4. However, CmisManagerTask expects Ethernet4 to be \"DataPathInitialized\" or \"DataPathDeactivated\" state in **0.05s**. Ethernet4 will be in \"DataPathInit\" state for a few seconds and failed all the retry. \n\nThe issue is found on following module:\n\n```\n        Vendor Name: FINISAR CORP.\n        Vendor OUI: 00-90-65\n        Vendor PN: FCBN950QE2C10-MS\n```\n\n### Steps to Reproduce\n\n1. Split a module into 2 ports\n2. The txoff_duration of the module should be small, e.g. 0.5\n3. Put 2 ports to admin down\n4. Start port1 first. When port1 enter ModuleReady, start port2. (The timing is important)\n\n\n### Actual Behavior and Expected Behavior\n\nActual: port2 DPSM failed\nExpected: port DPSM pass\n\n### Relevant log output\n\n```shell\n2026 Apr 17 11:31:17.734920 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=INSERTED, Module state=ModulePwrUp, DP state={'DP1State': 'DataPathDeactivated', 'DP2State': 'DataPathDeactivated', 'DP3State': 'DataPathDeactivated', 'DP4State': 'DataPathDeactivated', 'DP5State': 'DataPathDeactivated', 'DP6State': 'DataPathDeactivated', 'DP7State': 'DataPathDeactivated', 'DP8State': 'DataPathDeactivated'}, appl 1 host_lane_count 4 retries=0\n\n2026 Apr 17 11:31:17.734920 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting appl=1\n\n2026 Apr 17 11:31:17.734920 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting host_lanemask=0xf\n\n2026 Apr 17 11:31:17.735107 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting media_lanemask=0xf\n\n\n2026 Apr 17 11:31:19.155755 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=DP_PRE_INIT_CHECK, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathDeactivated', 'DP6State': 'DataPathDeactivated', 'DP7State': 'DataPathDeactivated', 'DP8State': 'DataPathDeactivated'}, appl 1 host_lane_count 4 retries=0\n\n\n2026 Apr 17 11:31:19.155755 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=DP_PRE_INIT_CHECK, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathDeactivated', 'DP6State': 'DataPathDeactivated', 'DP7State': 'DataPathDeactivated', 'DP8State': 'DataPathDeactivated'}, appl 1 host_lane_count 4 retries=0\n\n2026 Apr 17 11:31:19.157787 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: timeout for 'DataPathDeactivated/DataPathInitialized'\n\n2026 Apr 17 11:31:19.604020 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=INSERTED, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathDeactivated', 'DP6State': 'DataPathDeactivated', 'DP7State': 'DataPathDeactivated', 'DP8State': 'DataPathDeactivated'}, appl 1 host_lane_count 4 retries=1\n\n2026 Apr 17 11:31:19.604190 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting appl=1\n\n2026 Apr 17 11:31:19.604221 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting host_lanemask=0xf\n\n2026 Apr 17 11:31:19.604359 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting media_lanemask=0xf\n\n2026 Apr 17 11:31:19.849431 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=DP_PRE_INIT_CHECK, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathInit', 'DP6State': 'DataPathInit', 'DP7State': 'DataPathInit', 'DP8State': 'DataPathInit'}, appl 1 host_lane_count 4 retries=1\n\n2026 Apr 17 11:31:19.851428 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: timeout for 'DataPathDeactivated/DataPathInitialized'\n\n2026 Apr 17 11:31:20.021496 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=INSERTED, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathInit', 'DP6State': 'DataPathInit', 'DP7State': 'DataPathInit', 'DP8State': 'DataPathInit'}, appl 1 host_lane_count 4 retries=2\n\n2026 Apr 17 11:31:20.021558 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting appl=1\n\n2026 Apr 17 11:31:20.021604 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting host_lanemask=0xf\n\n2026 Apr 17 11:31:20.021638 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting media_lanemask=0xf\n\n2026 Apr 17 11:31:20.157991 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=DP_PRE_INIT_CHECK, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathInit', 'DP6State': 'DataPathInit', 'DP7State': 'DataPathInit', 'DP8State': 'DataPathInit'}, appl 1 host_lane_count 4 retries=2\n\n2026 Apr 17 11:31:20.159936 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: timeout for 'DataPathDeactivated/DataPathInitialized'\n\n2026 Apr 17 11:31:20.281461 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=INSERTED, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathInit', 'DP6State': 'DataPathInit', 'DP7State': 'DataPathInit', 'DP8State': 'DataPathInit'}, appl 1 host_lane_count 4 retries=3\n\n2026 Apr 17 11:31:20.281546 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting appl=1\n\n2026 Apr 17 11:31:20.281664 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting host_lanemask=0xf\n\n2026 Apr 17 11:31:20.281758 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: Setting media_lanemask=0xf\n\n2026 Apr 17 11:31:21.849792 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=DP_PRE_INIT_CHECK, Module state=ModuleReady, DP state={'DP1State': 'DataPathInit', 'DP2State': 'DataPathInit', 'DP3State': 'DataPathInit', 'DP4State': 'DataPathInit', 'DP5State': 'DataPathInit', 'DP6State': 'DataPathInit', 'DP7State': 'DataPathInit', 'DP8State': 'DataPathInit'}, appl 1 host_lane_count 4 retries=3\n\n2026 Apr 17 11:31:21.851789 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: timeout for 'DataPathDeactivated/DataPathInitialized'\n\n2026 Apr 17 11:31:22.382054 sonic NOTICE pmon#CmisManagerTask[88]: Ethernet4: 200G, lanemask=0xf, CMIS state=INSERTED, Module state=ModuleReady, DP state={'DP1State': 'DataPathInitialized', 'DP2State': 'DataPathInitialized', 'DP3State': 'DataPathInitialized', 'DP4State': 'DataPathInitialized', 'DP5State': 'DataPathInitialized', 'DP6State': 'DataPathInitialized', 'DP7State': 'DataPathInitialized', 'DP8State': 'DataPathInitialized'}, appl 1 host_lane_count 4 retries=4\n\n2026 Apr 17 11:31:22.382146 sonic ERR pmon#CmisManagerTask[88]: Ethernet4: FAILED\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "vmittal-msft",
+      "createdAt": "2026-06-03T15:12:25Z",
+      "body": "@prgeor @vvolam @judyjoseph please help check this issue."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 840,
+      "repository": "sonic-net/sonic-platform-daemons",
+      "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/840",
+      "title": "[cmis] Fix issue: Potential race condition between split ports while doing DPSM",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-07T08:26:56Z",
+      "createdAt": "2026-06-29T10:07:34Z",
+      "author": "Junchao-Mellanox",
+      "body": "## Why I did it\r\n\r\nFix issue: https://github.com/sonic-net/sonic-buildimage/issues/27373\r\n\r\nCMIS datapath deinitialization should follow the expected software deinit sequence. When forcing a datapath re-init because `host_tx_ready` is false or the port is administratively down, xcvrd should request datapath deinit before disabling media-side Tx.\r\n\r\nThis keeps the forced re-init path consistent with the normal `CMIS_STATE_DP_DEINIT` flow and CMIS datapath state machine behavior.\r\n\r\n## How I did it\r\n\r\nUpdated the forced re-init path in `cmis_manager_task.py` to call `set_datapath_deinit()` before `tx_disable_channel()`.\r\n\r\nUpdated the existing `test_CmisManagerTask_task_worker_host_tx_ready_false_to_true` unit test to record the mock API call order and verify that datapath deinit is issued before Tx disable.\r\n\r\n## How to verify it\r\n\r\nRun the xcvrd unit test:\r\n\r\n```bash\r\npython3 -m pytest sonic-xcvrd/tests/test_xcvrd.py -k test_CmisManagerTask_task_worker_host_tx_ready_false_to_true",
+      "files": [
+        {
+          "path": "sonic-xcvrd/tests/test_xcvrd.py",
+          "additions": 9,
+          "deletions": 2
+        },
+        {
+          "path": "sonic-xcvrd/xcvrd/cmis/cmis_manager_task.py",
+          "additions": 2,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-29T10:07:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-29T10:07:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-29T10:12:18Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-29T10:12:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-03T01:29:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-03T01:29:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-07-21T07:50:52Z",
+          "body": "This PR has the \"Request for 202605 Branch\" label but is missing 202605-specific test results. Please:\n1. Tick the **202605** checkbox in the \"Tested branch\" section of the PR description\n2. Provide 202605 branch test evidence in the \"Test result\" section\n3. Add the label **\"Tested for 202605 branch\"** once done\n\nMaster branch test results alone are not sufficient for 202605 cherry-pick approval.\n\n*Comment on behalf of @vaibhavhd*\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T12:19:44Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T05:47:33Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-platform-daemons/pull/863"
+        }
+      ]
+    }
+  ]
+}

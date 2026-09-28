@@ -1,0 +1,115 @@
+{
+  "number": 25543,
+  "title": "Bug: Build failure due to conflict between sonic-supervisord-utilities-rs and sonic-eventd",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25543",
+  "createdAt": "2026-02-17T18:28:08Z",
+  "closedAt": "2026-04-28T10:02:29Z",
+  "author": "bhouse-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [
+    "qiluo-msft",
+    "zbud-msft"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen performing parallel builds, sonic-eventd starts up a ZMQ instance for running its tests.  If sonic-supervisord-utilities-rs is also running its tests at the same time, it will actually send events to sonic-eventd's ZMQ instance like:\n```\n{ (\"d\", \"{\\\"sonic-events-host:process-exited-unexpectedly\\\":{\\\"ctr_name\\\":\\\"swss\\\",\\\"process_name\\\":\\\"orchagent\\\",\\\"timestamp\\\":\\\"2026-02-17T17:06:20.744756Z\\\"}}\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"1\"), (\"t\", \"1771347980745085222\") }, { (\"d\", \"CONTROL_DEINIT\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"2\"), (\"t\", \"1771347980746220186\") }\n```\n\nsonic-supervisord-utilities-rs expects the EventPublisher to fail as per the comment here: https://github.com/sonic-net/sonic-buildimage/blob/5714ce93c06353c769bb24a828de98d8160af4ba/src/sonic-supervisord-utilities-rs/tests/test_listener.rs#L313 and the code ignores EventPublisher failures.\n\nThis issue was introduced as part of #24508.\n\nI'm not sure the best way to resolve it, it may be to have sonic-eventd spawn ZMQ on a non-standard port to make sure anything else trying to publish events doesn't interfere.\n\n### Steps to Reproduce\n\nmake a parallel build, notice failures in sonic-eventd test cases intermittently\n\n### Actual Behavior and Expected Behavior\n\ntest cases should not conflict with eachother\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nmaster as of 2025-02-17\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "bhouse-nexthop",
+      "createdAt": "2026-02-17T18:28:50Z",
+      "body": "@qiluo-msft please take a look, it appears your PR introduced this conflict."
+    },
+    {
+      "author": "nate-nexthop",
+      "createdAt": "2026-02-17T18:59:58Z",
+      "body": "You can reproduce various failures by entering the sonic-slave-bash and running both the sonic-eventd tests and the sonic-supervisord-utilities-rs tests at the same time.\n\nI see errors like this on the supervisord-utilities-rs tests:\n```\n     Running tests/integration_tests.rs (target/debug/deps/integration_tests-bf36b43719ef628f)\n\nrunning 16 tests\nerror: test failed, to rerun pass `--test integration_tests`\n\nCaused by:\n  process didn't exit successfully: `/sonic/src/sonic-supervisord-utilities-rs/target/debug/deps/integration_tests-bf36b43719ef628f` (signal: 11, SIGSEGV: invalid memory reference)\n```\n\nSonic-eventd failures like:\n```\n[ RUN      ] eventd.capture                                                                                                                                                                                      Capture TEST started                                                                                                                                                                                             tests/eventd_ut.cpp:407: Failure                                                                                                                                                                                 Expected equality of these values:                                                                                                                                                                                 last_evts_read.size()                                                                                                                                                                                              Which is: 7                                                                                                                                                                                                    last_evts_exp.size()                                                                                                                                                                                               Which is: 3                                                                                                                                                                                                  tests/eventd_ut.cpp:408: Failure                                                                                                                                                                                 Expected equality of these values:                                                                                                                                                                                 last_evts_read                                                                                                                                                                                                     Which is: { (\"6f62cd20-3a3c-45a3-b620-62330b8849ef\", \"22 serialization::archive 19 0 0 4 0 0 0 1 d 138 {\\\"sonic-events-host:process-exited-unexpectedly\\\":{\\\"ctr_name\\\":\\\"swss\\\",\\\"process_name\\\":\\\"orchagent\\\",\\\"timestamp\\\":\\\"2026-02-17T18:41:42.415507Z\\\"}} 1 r 36 6f62cd20-3a3c-45a3-b620-62330b8849ef 1 s 1 1 1 t 19 1771353702415632561\"), (\"b8cf514c-6bb3-487f-888d-9ca8e28824e4\", \"22 serialization::archive 19 0 0 4 0 0 0 1 d 14 CONTROL_DEINIT 1 r 36 b8cf514c-6bb3-487f-888d-9ca8e28824e4 1 s 1 4 1 t 19 1771353701199438740\"), (\"c2805186-4bab-426f-b4fe-055d5423b35d\", \"22 serialization::archive 19 0 0 4 0 0 0 1 d 14 CONTROL_DEINIT 1 r 36 c2805186-4bab-426f-b4fe-055d5423b35d 1 s 1 4 1 t 19 1771353702006800198\"), (\"eed6da9f-add3-4a14-aa9d-9186281dd817\", \"22 serialization::archive 19 0 0 4 0 0 0 1 d 14 CONTROL_DEINIT 1 r 36 eed6da9f-add3-4a14-aa9d-9186281dd817 1 s 1 2 1 t 19 1771353701608178180\"), (\"guid-0\", \"22 serialization::archive 19 0 0 3 0 0 0 1 d 52 {\\\"source0:tag4\\\":{\\\"ip\\\":\\\"10.10.20.10\\\",\\\"state\\\":\\\"down\\\"}} 1 r 6 guid-0 1 s 1 6\"), (\"guid-1\", \"22 serialization::archive 19 0 0 3 0 0 0 1 d 50 {\\\"source0:tag3\\\":{\\\"ip\\\":\\\"10.10.10.10\\\",\\\"state\\\":\\\"up\\\"}} 1 r 6 guid-1 1 s 3 109\"), (\"guid-2\", \"22 serialization::archive 19 0 0 3 0 0 0 1 d\n52 {\\\"source1:tag5\\\":{\\\"ip\\\":\\\"10.10.24.10\\\",\\\"state\\\":\\\"down\\\"}} 1 r 6 guid-2 1 s 3 119\") }\n  last_evts_exp                                                                                                                                                                                                      Which is: { (\"guid-0\", \"22 serialization::archive 19 0 0 3 0 0 0 1 d 52 {\\\"source0:tag4\\\":{\\\"ip\\\":\\\"10.10.20.10\\\",\\\"state\\\":\\\"down\\\"}} 1 r 6 guid-0 1 s 1 6\"), (\"guid-1\", \"22 serialization::archive 19 0 0 3 0 0 0 1 d 50 {\\\"source0:tag3\\\":{\\\"ip\\\":\\\"10.10.10.10\\\",\\\"state\\\":\\\"up\\\"}} 1 r 6 guid-1 1 s 3 109\"), (\"guid-2\", \"22 serialization::archive 19 0 0 3 0 0 0 1 d 52 {\\\"source1:tag5\\\":{\\\"ip\\\":\\\"10.10.24.10\\\",\\\"stat\ne\\\":\\\"down\\\"}} 1 r 6 guid-2 1 s 3 119\") }\ntests/eventd_ut.cpp:409: Failure\nExpected equality of these values:\n  overflow\n    Which is: 14\n  overflow_exp\n    Which is: 3\nCapture TEST completed\n[  FAILED  ] eventd.capture (2020 ms)\n```\n"
+    },
+    {
+      "author": "bhouse-nexthop",
+      "createdAt": "2026-02-18T01:48:50Z",
+      "body": "The ZMQ settings are pulled from swss common via its `get_config()` method with keys `XPUB_END_KEY`, `XSUB_END_KEY`, `CAPTURE_END_KEY`.  These map, respectively, to strings `xpub_path`, `xsub_path`, and `capture_path`.\n\nTheses values have defaults from `sonic-swss-common/common/events_common.cpp`:\n```\nconst map_str_str_t cfg_default = {\n    CFG_VAL(XSUB_END_KEY, \"tcp://127.0.0.1:5570\"),\n    CFG_VAL(XPUB_END_KEY, \"tcp://127.0.0.1:5571\"),\n    CFG_VAL(REQ_REP_END_KEY, \"tcp://127.0.0.1:5572\"),\n    CFG_VAL(CAPTURE_END_KEY, \"tcp://127.0.0.1:5573\"),\n    CFG_VAL(STATS_UPD_SECS, \"5\"),\n    CFG_VAL(CACHE_MAX_CNT, \"\")\n};\n```\n\nBut are overwritten by values in `/etc/sonic/init_cfg.json` by default on the first call to `get_config()` (if the data isn't already populated).  It looks like a public function of `read_init_config(const char *init_cfg_file)` can be called before the first `get_config()` to read in an alternative file (say a temporary one with a unique name) which would prevent `/etc/sonic/init_cfg.json` from being read.   The parent object is named `events`.  An example file might look like:\n\n```\n{\n  \"events\" : { \n     \"xsub_path\": \"tcp://127.0.0.1:25570\", \n     \"xpub_path\": \"tcp://127.0.0.1:25571\",\n     \"capture_path\": \"tcp://127.0.0.1:25573\"\n    }\n}\n```\n\nThe ports could also be randomly chosen if needed, but likely not a big deal."
+    },
+    {
+      "author": "bhouse-nexthop",
+      "createdAt": "2026-02-19T12:59:16Z",
+      "body": "FYI PR to fix this https://github.com/sonic-net/sonic-buildimage/pull/25558"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25558,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25558",
+      "title": "eventd: zmq: Use custom ports for test cases to prevent conflicts with other tests",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-28T10:02:27Z",
+      "createdAt": "2026-02-18T15:09:27Z",
+      "author": "bhouse-nexthop",
+      "body": "#### Why I did it\r\n\r\nBy default ZMQ ports are opened up on the standard ports SONiC uses.  When other tests run they may inject data into these ports, it can cause tests to fail due to unexpected data.  One instance identified was when sonic-supervisord-utilities-rs test were run at the same time. sonic-supervisord-ubilities-rs has logic to ignore errors in sending events as it doesn't expect the ports to be online.\r\n\r\n#### How I did it\r\n\r\nThis patch creates a temporary configuration file and injects it early into the initialization to listen on non-standard ZMQ ports.\r\n\r\nThis can fix errors during tests such as:\r\n```\r\n{ (\"d\", \"{\\\"sonic-events-host:process-exited-unexpectedly\\\":{\\\"ctr_name\\\":\\\"swss\\\",\\\"process_name\\\":\\\"orchagent\\\",\\\"timestamp\\\":\\\"2026-02-17T17:06:20.744756Z\\\"}}\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"1\"), (\"t\", \"1771347980745085222\") }, { (\"d\", \"CONTROL_DEINIT\"), (\"r\", \"29e93237-697d-4969-9a85-e332b9eb9681\"), (\"s\", \"2\"), (\"t\", \"1771347980746220186\") }\r\n```\r\n\r\n#### How to verify it\r\n\r\nRun sonic-eventd and sonic-supervisord-ubilities-rs tests simultaneously.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\nMaster as of 2026-02-18\r\n\r\n#### Description for the changelog\r\n\r\nZMQ: Use custom ports for test cases to prevent conflicts with other tests\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\nN/A\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\nFixes #25543",
+      "files": [
+        {
+          "path": "src/sonic-eventd/tests/main.cpp",
+          "additions": 21,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T15:09:35Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T15:09:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2026-02-18T17:30:25Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T17:30:28Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T17:30:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2026-02-18T17:30:45Z",
+          "body": "lost the test lottery (unrelated test case failures).  Just told it to kick off a fresh build."
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-02-18T18:12:28Z",
+          "body": "That particular test failure will be addressed by https://github.com/sonic-net/sonic-mgmt/pull/22438"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2026-02-18T18:21:10Z",
+          "body": "> sonic-net/sonic-mgmt#22438\r\n\r\nAh, nice.  I want to say we've seen this failure in our own internal sonic-mgmt runs."
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2026-02-19T12:59:52Z",
+          "body": "@saiarcot895 mind reviewing now that I won the test lottery?"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2026-02-25T19:46:13Z",
+          "body": "@lguohan can you merge this?  Thanks!"
+        }
+      ]
+    }
+  ]
+}

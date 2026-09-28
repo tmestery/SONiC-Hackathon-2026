@@ -1,0 +1,180 @@
+{
+  "number": 20214,
+  "title": "[T2] Continuous neighorch INFO logs emitted in orchagent",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/20214",
+  "createdAt": "2024-09-10T21:23:21Z",
+  "closedAt": "2025-06-04T20:27:37Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Chassis :robot:",
+    "Triaged"
+  ],
+  "assignees": [
+    "arlakshm",
+    "saksarav-nokia",
+    "arista-nwolfe"
+  ],
+  "milestone": null,
+  "body": "Seen on `202405`.\r\n\r\nIf we turn on INFO log level in orchagent:\r\n`swssloglevel -n 0 -l INFO -c orchagent`\r\n`swssloglevel -n 1 -l INFO -c orchagent`\r\n\r\nWe see these logs continuously emitted:\r\n```\r\n2024 Sep  4 16:43:06.166952 cmp214-5 INFO swss1#orchagent: :- doLagMemberTask: Failed to locate LAG cmp214-5|asic1|PortChannel106\r\n2024 Sep  4 16:43:06.166952 cmp214-5 INFO swss1#orchagent: :- doTask: Port eth1 doesn't exist\r\n2024 Sep  4 16:43:06.166968 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet-IB1 doesn't exist\r\n2024 Sep  4 16:43:06.166996 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet-IB1 doesn't exist\r\n2024 Sep  4 16:43:06.166996 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet224 doesn't exist\r\n2024 Sep  4 16:43:06.167009 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|Ethernet224 doesn't exist\r\n2024 Sep  4 16:43:06.167022 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|PortChannel106 doesn't exist\r\n2024 Sep  4 16:43:06.217314 cmp214-5 INFO swss1#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic1|PortChannel106 doesn't exist\r\n2024 Sep  4 16:43:06.217354 cmp214-5 INFO swss1#orchagent: :- doLagMemberTask: Failed to locate LAG cmp214-5|asic1|PortChannel106\r\n2024 Sep  4 16:43:06.217386 cmp214-5 INFO swss1#orchagent: :- doLagMemberTask: Failed to locate LAG cmp214-5|asic1|PortChannel106\r\n```\r\n\r\n`neighorch.cpp` checks that the given port exists in `portsorch`:\r\n```\r\n1718             if (!gPortsOrch->getPort(alias, p))\r\n1719             {\r\n1720                 SWSS_LOG_INFO(\"Port %s doesn't exist\", alias.c_str());\r\n1721                 it++;\r\n1722                 continue;\r\n1723             }\r\n```\r\n\r\n`portsorch->getPort` just checks that the given port name exists in `m_portList`:\r\n```\r\n1357 bool PortsOrch::getPort(string alias, Port &p)\r\n1358 {\r\n1359     SWSS_LOG_ENTER();\r\n1360\r\n1361     if (m_portList.find(alias) == m_portList.end())\r\n1362     {\r\n1363         return false;\r\n1364     }\r\n1365     else\r\n1366     {\r\n1367         p = m_portList[alias];\r\n1368         return true;\r\n1369     }\r\n1370 }\r\n```\r\n\r\nI added tracing into `portsorch` at every place that `m_portList` is modified and I saw that ports local to the orchagent instance aren't added with the `<LC>|<asic>|` prefix in the name.\r\nFor example focusing on `cmp214-5|asic0|Ethernet72`.\r\nThis port belongs to swss0 and we see it only added as `Ethernet72`:\r\n```\r\n2024 Sep  5 00:32:59.960825 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\r\n2024 Sep  5 00:32:59.999234 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\r\n2024 Sep  5 00:33:00.029978 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\r\n2024 Sep  5 00:33:00.147242 cmp214-5 ERR swss0#orchagent: :- setPort: NATHAN6 adding alias: Ethernet72\r\n```\r\nWhile a remote swss instance (swss1) sees it added as `cmp214-5|asic0|Ethernet72`\r\n```\r\n2024 Sep  5 00:10:25.100809 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\r\n2024 Sep  5 00:10:26.460190 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\r\n2024 Sep  5 00:32:53.094595 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\r\n2024 Sep  5 00:33:00.682463 cmp214-5 ERR swss1#orchagent: :- setPort: NATHAN6 adding alias: cmp214-5|asic0|Ethernet72\r\n```\r\n\r\nHence why only `swss0` emits this error:\r\n```\r\n2024 Sep  5 18:25:40.335690 cmp214-5 INFO swss0#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic0|Ethernet72 doesn't exist\r\n2024 Sep  5 18:25:40.335690 cmp214-5 INFO swss0#orchagent: :- doVoqSystemNeighTask: Port cmp214-5|asic0|Ethernet72 doesn't exist\r\n```\r\n\r\nSo the issue is one of the following:\r\n-We should be adding the system port name with the prefix `<LC>|<asic>|` to `m_portList` in `portsorch` for local ports\r\nOR\r\n-We should translate the system port name to strip the prefix `<LC>|<asic>|` before querying `m_portList` in `portsorch` for local ports.",
+  "comments": [
+    {
+      "author": "kenneth-arista",
+      "createdAt": "2024-09-10T22:33:30Z",
+      "body": "@arlakshm @wenyiz2021 "
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2024-09-10T22:45:12Z",
+      "body": "@arlakshm mentioned that these logs are also seen on 202205 and are likely benign.\r\nNot closing this bug though because we should probably still track these logs via a bug as these excess logs make it difficult  to debug with more verbose logging as our process will get rate-limited quicker."
+    },
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2024-09-11T15:13:18Z",
+      "body": "MSFT SONiC team will take a look. "
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2025-02-19T18:48:58Z",
+      "body": "@arista-nwolfe gentle reminder"
+    },
+    {
+      "author": "arista-hpandya",
+      "createdAt": "2025-03-10T23:11:58Z",
+      "body": "Addressed in: https://github.com/sonic-net/sonic-swss/pull/3553"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 3553,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/3553",
+      "title": "Skip \"port doesn't exist\" SWSS_LOG_INFO messages for local ports",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-06-04T20:27:36Z",
+      "createdAt": "2025-03-10T23:11:20Z",
+      "author": "arista-hpandya",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nModified the `portsorch.cpp` and `neighorch.cpp` to verify if a port shares the hostname with the local host. If so, we do not emit SWSS_INFO_LOG messages and these ports are eventually get erased from the consumer list.\r\n\r\n**Why I did it**\r\nCurrently, we store local ports and remote ports using different convention in m_portList. Remote ports follow: <dut name>|<asic>|<interface> format and local ports are saved as <interface>. Hence when <dut name>|<asic>|<interface> format is used to 'get' a local port it returns false. This generates a number of \"port not found\" info messages in the syslog.\r\n\r\n**How I verified it**\r\nTesting:\r\n- [x] Verified syntax by compiling the orchagent\r\n- [x] Tested on a multi-asic LC by running T2 tests and identified no failures related to the change. \r\n- [x] Verified the logs no longer appear in syslog when loglevel is set to INFO\r\n\r\n**Details if related**\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/20214",
+      "files": [
+        {
+          "path": "orchagent/neighorch.cpp",
+          "additions": 4,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 10,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/portsorch_ut.cpp",
+          "additions": 54,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-10T23:11:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-10T23:11:28Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-hpandya",
+          "createdAt": "2025-03-11T17:17:40Z",
+          "body": "/Azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-11T17:17:42Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-11T17:17:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-11T23:34:34Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-11T23:34:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-12T17:08:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-12T17:09:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2025-03-19T17:26:45Z",
+          "body": "Need to change the logic to ignore the systemport notifications for local ports by checking if the hostname in the system_port key is my_hostname"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-27T22:02:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-27T22:02:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-02T17:19:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-02T17:19:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-02T17:21:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-02T17:21:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-02T17:34:28Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-02T17:34:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-hpandya",
+          "createdAt": "2025-04-02T17:55:24Z",
+          "body": "The PR has been updated based on the feedback, can I get someone to review it? \r\ncc: @arlakshm "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-04T17:01:54Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

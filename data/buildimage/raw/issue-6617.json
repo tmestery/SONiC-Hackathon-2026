@@ -1,0 +1,102 @@
+{
+  "number": 6617,
+  "title": "usermod: cannot lock /etc/passwd; try again later.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/6617",
+  "createdAt": "2021-01-30T14:41:24Z",
+  "closedAt": "2021-02-06T20:27:24Z",
+  "author": "lguohan",
+  "labels": [
+    "Master Branch Quality",
+    "Issue for 202012"
+  ],
+  "assignees": [
+    "lguohan"
+  ],
+  "milestone": null,
+  "body": "<!--\r\nIf you are reporting a new issue, make sure that we do not have any duplicates\r\nalready open. You can ensure this by searching the issue list for this\r\nrepository. If there is a duplicate, please close your issue and add a comment\r\nto the existing issue instead.\r\n\r\nIf you suspect your issue is a bug, please edit your issue description to\r\ninclude the BUG REPORT INFORMATION shown below. If you fail to provide this\r\ninformation within 7 days, we cannot debug your issue and will close it. We\r\nwill, however, reopen it if you later provide the information.\r\n\r\nFor more information about reporting issues, see\r\nhttps://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n---------------------------------------------------\r\nGENERAL SUPPORT INFORMATION\r\n---------------------------------------------------\r\n\r\nThe GitHub issue tracker is for bug reports and feature requests.\r\nGeneral support can be found at the following locations:\r\n\r\n- SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n---------------------------------------------------\r\nBUG REPORT INFORMATION\r\n---------------------------------------------------\r\nUse the commands below to provide key information from your environment:\r\nYou do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n**Description**\r\n\r\n<!--\r\nBriefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n**Steps to reproduce the issue:**\r\n\r\n```\r\nuser_rw@sonic:~$ sudo bash\r\nusermod: Permission denied.\r\nusermod: cannot lock /etc/passwd; try again later.\r\nusermod: Permission denied.\r\nusermod: cannot lock /etc/passwd; try again later.\r\nroot@sonic:/home/user_rw# \r\n```\r\n\r\n**Describe the results you received:**\r\nsee warning message\r\n\r\n**Describe the results you expected:**\r\nshould not see the warning message\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\n\r\n    **Output of `show version`:**\r\n\r\n    ```\r\n    (paste your output here)\r\n    ```\r\n\r\n    **Attach debug file `sudo generate_dump`:**\r\n\r\n    ```\r\n    (paste your output here)\r\n    ```\r\n",
+  "comments": [
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-05T09:35:41Z",
+      "body": "\r\nnss_tacplus.c\r\n\r\nif i commented line 492 - 495, then the problem disappear. so the problem is that nss call usermod, and at that time the /etc/passwd is locked. so, the question is do we need to call this during sudo.\r\n\r\n```\r\n486     while(lvl >= MIN_TACACS_USER_PRIV) {\r\n487         user = &useradd_grp_list[lvl];\r\n488         if(user->info && user->secondary_grp && user->shell) {\r\n489             snprintf(buf, len, \"%s -G %s \\\"%s\\\" -g %d -c \\\"%s\\\" -d /home/%s -m -s %s\",\r\n490                 command, user->secondary_grp, name, user->gid, user->info, name, user->shell);\r\n491             if(debug) syslog(LOG_DEBUG, \"%s\", buf);\r\n492             /*\r\n493             fp = popen(buf, \"r\");\r\n494             if(!fp || -1 == pclose(fp)) {\r\n495                 syslog(LOG_ERR, \"%s: %s popen failed errno=%d %s\",\r\n496                         nssname, command, errno, strerror(errno));\r\n497                 delete_conf_line(name);\r\n498                 return -1;\r\n499             }*/\r\n500             if(debug)\r\n501                 syslog(LOG_DEBUG, \"%s: %s %s success1\", nssname, command, name);\r\n502             delete_conf_line(name);\r\n503             return 0;\r\n504         }\r\n505         lvl--;\r\n506     }\r\n```"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-05T19:03:52Z",
+      "body": "looks like the change is made in this pr. https://github.com/Azure/sonic-buildimage/pull/1804"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-05T19:43:42Z",
+      "body": "\r\nhere is the call flow difference between the original code and sonic code.\r\n```\r\nnew flow:\r\n\r\n_nss_tacplus_getpwnam_r\r\nlookup_tacacs_user\r\ngot_tacacs_user\r\nlookup_user_pw\r\n  -> lookup_pw_local (read-only)\r\n  -> create_and_modify_local_user (try to call usermod and causing the lockup issue)\r\n  -> lookup_pw_local\r\n\r\nold flow:\r\n\r\n_nss_tacplus_getpwnam_r\r\nlookup_tacacs_user\r\ngot_tacacs_user\r\n  -> find_pw_userpriv (read-only)\r\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 6705,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/6705",
+      "title": "[tacacs]: do not modify local user if there is no priviledge",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-02-06T20:27:24Z",
+      "createdAt": "2021-02-06T09:21:34Z",
+      "author": "lguohan",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n\"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\nPlease provide the following information:\r\n-->\r\n\r\n**- Why I did it**\r\nfix #6617 \r\n\r\n[tacacs]: do not modify local user if there is no priviledge\r\n    \r\n    check the uid before modify local user account.\r\n    \r\n    when run sudo, the process the invoke nss_tacplus library\r\n    does not have priviledge to modify the user profile, and\r\n    will generate below error messages:\r\n    \r\n        user_rw@sonic:~$ sudo bash\r\n        usermod: Permission denied.\r\n        usermod: cannot lock /etc/passwd; try again later.\r\n        usermod: Permission denied.\r\n        usermod: cannot lock /etc/passwd; try again later.\r\n\r\n**- How I did it**\r\ncheck uid first, and skip modify local user if uid is not root\r\n\r\n**- How to verify it**\r\nmanually verify run sudo bash.\r\n\r\n**- Which release branch to backport (provide reason below if selected)**\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [x] 202012\r\n\r\n**- Description for the changelog**\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n",
+      "files": [
+        {
+          "path": "src/tacacs/nss/Makefile",
+          "additions": 3,
+          "deletions": 14
+        },
+        {
+          "path": "src/tacacs/nss/patch/0001-Modify-user-map-profile.patch",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/0002-Enable-modifying-local-user-permission.patch",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/0003-management-vrf-support.patch",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/0004-Skip-accessing-tacacs-servers-for-local-non-tacacs-u.patch",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/0005-libnss-Modify-parsing-of-IP-addr-and-port-number-str.patch",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/0006-fix-compiling-warning-about-token-dereference.patch",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/0007-Add-support-for-TACACS-source-address.patch",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/0008-do-not-create-or-modify-local-user-if-there-is-no-pr.patch",
+          "additions": 32,
+          "deletions": 0
+        },
+        {
+          "path": "src/tacacs/nss/patch/series",
+          "additions": 8,
+          "deletions": 0
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

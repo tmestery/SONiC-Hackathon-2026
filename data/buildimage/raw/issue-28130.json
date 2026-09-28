@@ -1,0 +1,233 @@
+{
+  "number": 28130,
+  "title": "Seastone DX010 sai.profile missing SAI_STATS_ST_CAPABILITY_SUPPORTED \u2014 syncd segfault (HFTel query) on broadcom-legacy-th 13.2.1 SAI (202605)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28130",
+  "createdAt": "2026-06-28T03:31:58Z",
+  "closedAt": "2026-07-01T15:53:24Z",
+  "author": "masteinhauser",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Description\n\nOn the `broadcom-legacy-th` SAI (libsaibcm 13.2.1, which carries Tomahawk-1), syncd **segfaults\nin `libsai.so.1.0`** during orchagent init on 202605, because the Seastone DX010 sai.profile is\nmissing the `SAI_STATS_ST_CAPABILITY_SUPPORTED` guard that the Tomahawk-1 reference platform\n(Arista 7060CX-32S) already carries.\n\n202605 orchagent (`HFTelOrch::isSupportedHFTel`) **unconditionally** calls\n`sai_query_stats_st_capability(..., SAI_OBJECT_TYPE_PORT, ...)` at init (a SAI 1.14 / High-Frequency\nTelemetry API). The 13.2.1 SAI predates SAI 1.14 and **null-derefs** on that query instead of\nreturning `SAI_STATUS_NOT_IMPLEMENTED` \u2192 syncd dies \u2192 swss crash-loop \u2192 ports never plumb. There is\nno CONFIG_DB / FEATURE knob to gate the call \u2014 it is in syncd SAI-init.\n\nsairedis (`VendorSai::apiInitialize`) reads `SAI_STATS_ST_CAPABILITY_SUPPORTED` from the sai.profile\nand, when it is **`0`**, skips the query (returns NOT_IMPLEMENTED), so orchagent's existing\n\"Streaming stats not supported, HFTel disabled\" branch fires cleanly and bring-up proceeds.\n\nThe Arista 7060CX-32S (TH1 reference) HWSKU sai.profiles carry the guard; the Seastone DX010 ones\n(`device/celestica/x86_64-cel_seastone-r0/*/sai.profile`) do **not**.\n\n### Symptom (on hardware)\n\n- Before: syncd `apiInitialize: SAI_STATS_ST_CAPABILITY_SUPPORTED: NULL`, then\n  `kernel: syncd[...]: segfault at 18 ... in libsai.so.1.0`, `child /usr/bin/syncd exited status: 139`\n  (SIGSEGV), deterministic every boot; orchagent `APPLY_VIEW` then times out \u2192 SIGABRT crash-loop.\n- After adding the guard: syncd `apiInitialize: SAI_STATS_ST_CAPABILITY_SUPPORTED=0 in sai.profile,\n  disabling query_stats_st_capability for this platform`; orchagent `HFTel disabled`;\n  `create_switch` succeeds; 32\u00d7100G ports plumb; syncd/swss stable; 0 segfaults.\n\n### Proposed fix\n\nAdd to the Seastone DX010 HWSKU sai.profile(s) (mirroring the Arista 7060CX-32S TH1 reference):\n\n```\nSAI_STATS_ST_CAPABILITY_SUPPORTED=0\nSAI_STATS_EXT_SWITCH_SUPPORTED=0\n```\n\n`SAI_STATS_EXT_SWITCH_SUPPORTED=0` pre-empts a second TH1 crash on the 13.2.1 SAI:\n`sai_get_stats_ext(SAI_OBJECT_TYPE_SWITCH, ...)` during FlexCounter polling.\n\n### Environment\n\n- Branch: **202605**, kernel 6.12.41+deb13, Debian trixie.\n- HW: Celestica Seastone DX010 (BCM56960 / Tomahawk-1), `x86_64-cel_seastone-r0`.\n- libsaibcm 13.2.1.120 (`SAI_13.2.1_compat_OCP1.18.1`).\n\n### Related\n\nCompanion to the `LAZY_BUILD_INSTALLS` BDE omission in #28125 \u2014 both are needed to bring up a\nTomahawk-1 (Seastone) on a 202605 ONIE image.\n",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-06-29T22:51:34Z",
+      "body": "Seems like this is a duplicate of #28127?"
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2026-07-01T15:53:24Z",
+      "body": "@Bojun-Feng I'll close this one since this is a duplicate of #28127. Please reopen it if it's closed incorrectly."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28160,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28160",
+      "title": "[platform/broadcom]: Fix Tomahawk-1 ONIE image bring-up by adding BDE modules and SAI_STATS guards",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-06-30T03:55:13Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/28125\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/28127\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/28130\r\n\r\nOn most Broadcom Tomahawk-1 platforms (all except Arista 7060CX-32S), syncd crashes at startup with a SIGSEGV when running 202605 ONIE images. Two independent issues prevent bring-up:\r\n\r\n1. `one-image.mk` `LAZY_BUILD_INSTALLS` has never included the broadcom-legacy-th kernel module. When the legacy image was first introduced in [#25192](https://github.com/sonic-net/sonic-buildimage/pull/25192), `$(BRCM_LEGACY_OPENNSL_KERNEL)` was added to `one-aboot.mk` but never to `one-image.mk`. The subsequent rename in [#26136](https://github.com/sonic-net/sonic-buildimage/pull/26136) (`broadcom-legacy` \u2192 `broadcom-legacy-th`) naturally couldn't fix what was never there. As a result, ONIE TH1 images declare `broadcom-legacy-th` as a dependent machine but never install its BDE kernel modules, and syncd cannot attach the ASIC.\r\n\r\n2. The `SAI_STATS_ST_CAPABILITY_SUPPORTED=0` and `SAI_STATS_EXT_SWITCH_SUPPORTED=0` sai.profile guard (added to Arista 7060CX-32S in PRs [#26201](https://github.com/sonic-net/sonic-buildimage/pull/26201) and [#26217](https://github.com/sonic-net/sonic-buildimage/pull/26217)) was never propagated to any other TH1 platform. Without it, `HFTelOrch::isSupportedHFTel()` calls `sai_query_stats_st_capability()` which crashes in `brcm_sai_st_pd_ctr_cap_list_get` because TH1's streaming telemetry platform driver is uninitialized.\r\n\r\nThe sairedis runtime guard mechanism already exists ([sonic-sairedis #1788](https://github.com/sonic-net/sonic-sairedis/pull/1788)), this PR just adds the missing sai.profile keys to all affected platforms.\r\n\r\n#### How I did it\r\n\r\n- Added `$(BRCM_LEGACY_TH_OPENNSL_KERNEL)` to `$(SONIC_ONE_IMAGE)_LAZY_BUILD_INSTALLS`, so `one-image.mk` and `one-aboot.mk` are aligned.\r\n\r\n- Appended `SAI_STATS_ST_CAPABILITY_SUPPORTED=0` and `SAI_STATS_EXT_SWITCH_SUPPORTED=0` to all 30 TH1 sai.profile/sai.profile.j2 files (Accton, Alpha Networks, Broadcom reference, Celestica, Dell, Delta, Facebook, Ingrasys, Inventec, Juniper, MiTAC, Quanta), mirroring what Arista 7060CX-32S already has.\r\n\r\n#### How to verify it\r\n\r\n1. Build broadcom-legacy-th ONIE image, `dpkg -l | grep opennsl-modules-legacy-th` should be present\r\n2. Boot on any TH1 platform, syncd logs should show: `disabling query_stats_st_capability for this platform`\r\n3. orchagent logs: `Streaming stats not supported, HFTel disabled` should not result in SIGSEGV\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [x] 202605\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\nFix Tomahawk-1 ONIE image boot failure by adding missing BDE kernel module and SAI_STATS crash guards to all TH1 platforms.\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->",
+      "files": [
+        {
+          "path": "device/accton/x86_64-accton_as7312_54x-r0/Accton-AS7312-54X/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/accton/x86_64-accton_as7312_54xs-r0/Accton-AS7312-54XS/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/accton/x86_64-accton_as7712_32x-r0/Accton-AS7712-32X/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/accton/x86_64-accton_as7716_32x-r0/Accton-AS7716-32X/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/accton/x86_64-accton_as7716_32xb-r0/Accton-AS7716-32XB/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/alphanetworks/x86_64-alphanetworks_snh60a0_320fv2-r0/Alphanetworks-SNH60A0-320FV2/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/broadcom/x86_64-bcm_xlr-r0/BCM956960K/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Celestica-DX010-C32/sai.profile.j2",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Celestica-DX010-D48C8/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Seastone-DX010-10-50/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Seastone-DX010-25-50/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Seastone-DX010-50-40/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Seastone-DX010-50-50-40/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Seastone-DX010-50/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/celestica/x86_64-cel_seastone-r0/Seastone-DX010/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/dell/x86_64-dell_s6100_c2538-r0/Force10-S6100/sai.profile.j2",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "device/dell/x86_64-dell_z9100_c2538-r0/Force10-Z9100-C32/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/dell/x86_64-dell_z9100_c2538-r0/Force10-Z9100-C8D48/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/dell/x86_64-dell_z9100_c2538-r0/Force10-Z9100/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/delta/x86_64-delta_ag5648-r0/Delta-ag5648/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/delta/x86_64-delta_ag9032v1-r0/Delta-ag9032v1/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/facebook/x86_64-facebook_wedge100-r0/Facebook-W100-C32/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/ingrasys/x86_64-ingrasys_s8900_54xc-r0/INGRASYS-S8900-54XC/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/ingrasys/x86_64-ingrasys_s8900_64xc-r0/INGRASYS-S8900-64XC/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/ingrasys/x86_64-ingrasys_s9100-r0/INGRASYS-S9100-C32/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/inventec/x86_64-inventec_d7032q28b-r0/INVENTEC-D7032Q28B-C32/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/inventec/x86_64-inventec_d7054q28b-r0/INVENTEC-D7054Q28B-S48-Q6/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/juniper/x86_64-juniper_qfx5200-r0/Juniper-QFX5200-32C-S/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/mitac/x86_64-mitac_ly1200_b32h0_c3-r0/MiTAC-LY1200-B32H0-C3/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "device/quanta/x86_64-quanta_ix1b_rglbmc-r0/Quanta-IX1B-32X/sai.profile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/one-image.mk",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-30T03:55:22Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-30T03:55:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-01T06:29:20Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-07-24T07:15:06Z",
+          "body": "Hi \u2014 this PR is flagged for cherry-pick to the **202605 branch** (`Request for 202605 Branch`). To move forward with the cherry-pick, could you please:\n\n1. **Test this change on the 202605 branch** and add the test results to the PR description\n2. **Add the label `Tested for 202605 branch`** once testing is complete\n\nThis helps us track readiness and ensures we don't cherry-pick untested changes. Thanks!\n\n*Comment by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-24T12:14:26Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-18T07:40:05Z",
+          "body": "@Bojun-Feng \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\n\n1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\n2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\n3. **Add the \"Tested for 202605 branch\" label** once testing is complete\n\nAlso, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\n\nThank you!\n\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-29T16:03:21Z",
+          "body": "Hi \u2014 this PR has been pending cherry-pick to the **202605 branch** for 60 days with no activity in the last 11 days. Are you still planning to have this cherry-picked to 202605?\n\nIf yes, please respond here within **7 days** and:\n1. **Test on the 202605 branch** and add results to the PR description\n2. **Add the `Tested for 202605 branch` label**\n\nIf there is no response within 7 days, we will remove the `Request for 202605 Branch` label automatically.\n\n*Comment by @vaibhavhd via automated tooling*"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "number": 23506,
+  "title": "Bug: Orchagent crashes when Vlan add is followed by Vlan del if del is received while add is enqueued",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/23506",
+  "createdAt": "2025-07-29T02:12:44Z",
+  "closedAt": "2026-04-01T02:44:48Z",
+  "author": "dgsudharsan",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "prsunny"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThis issue happens when we get add, followed by del. Due to the optimization in orchagent processing if we get del event for the same key where there is add event, the add event will be skipped\n\nhttps://github.com/sonic-net/sonic-swss/blob/71219b0d41321093de633d5523b5e81eb7f34077/orchagent/orch.cpp#L175\n\n```\n2025-07-29.03:33:01.718992|VLAN_TABLE:Vlan1234|SET|admin_status:up|mtu:9100|mac:50:00:e6:23:f6:80|host_ifname:\n2025-07-29.03:33:03.189874|VLAN_TABLE:Vlan1234|DEL\n2025-07-29.03:33:06.404777|ROUTE_TABLE:fd00::/80|DEL\n2025-07-29.03:33:06.405223|VLAN_TABLE:Vlan1234|DEL\n```\n\nThis results in error logs and in versions before 202505 orchagent will crash\n\n```\n2025 Jul 29 03:33:06.406115 sonic ERR swss#orchagent: :- meta_sai_validate_oid: oid is set to null object id on SAI_OBJECT_TYPE_VLAN\n2025 Jul 29 03:33:06.406129 sonic ERR swss#orchagent: :- removeVlan: Failed to remove VLAN  vid:0\n2025 Jul 29 03:33:06.406129 sonic ERR swss#orchagent: :- handleSaiRemoveStatus: Encountered failure in remove operation, exiting orchagent, SAI API: SAI_API_VLAN, status: SAI_STATUS_INVALID_PARAMETER\n2025 Jul 29 03:33:06.406145 sonic NOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\n2025 Jul 29 03:33:06.407508 sonic INFO syncd#SDK: :- processSingleEvent: key: SYNCD_INVOKE_DUMP op: notify\n```\n\n### Steps to Reproduce\n\nIt can be easily reproduced by attaching orchagent to gdb and executing the below commands\n\nconfig vlan add 10\nconfig vlan remove 10\n\nNow detatch orchagent from gdb\n\n### Actual Behavior and Expected Behavior\n\nErrors are seen. Orchagent crashes in versions before 202505.\n\nExpected behavior: No crash or errors.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2025-07-29T02:15:47Z",
+      "body": "@prsunny FYI. We hit this issue during one of our tests where we add and remove vlan in succession. "
+    },
+    {
+      "author": "prgeor",
+      "createdAt": "2025-08-27T15:29:48Z",
+      "body": "@prsunny can you take a look at this OA crash issue?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4415,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4415",
+      "title": "[orchagent]: Fix VLAN removal error after SET + DEL during orchagent \u2026",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-01T02:44:47Z",
+      "createdAt": "2026-03-30T17:49:47Z",
+      "author": "yizhenzha",
+      "body": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/23506\r\n\r\n## Root Cause\r\n\r\nWhen orchagent is paused, a VLAN add+delete causes `ProducerStateTable` Lua scripts to coalesce SET+DEL into only DEL at the Redis layer, because `KEY_SET` is a Redis SET (no duplicates) and [luaDel](https://github.com/sonic-net/sonic-swss-common/blob/1e0584c4ab22924ffa8438985474389af81187b3/common/producerstatetable.cpp#L78-L81) destroys the state hash written by [luaSet](https://github.com/sonic-net/sonic-swss-common/blob/1e0584c4ab22924ffa8438985474389af81187b3/common/producerstatetable.cpp#L73). When orchagent resumes, [pops()](https://github.com/sonic-net/sonic-swss-common/blob/1e0584c4ab22924ffa8438985474389af81187b3/common/consumerstatetable.cpp#L84-L88) reads empty fields and interprets it as DEL. Orchagent then calls `removeVlan()` with an uninitialized Port (vid:0), causing `sonic ERR swss#orchagent: :- removeVlan: Failed to remove VLAN  vid:0`.\r\n\r\n**Sequence:** pause orchagent \u2192 `config vlan add 1024` \u2192 `config vlan del 1024` \u2192 resume orchagent\r\n\r\n**Result:** vlanmgrd sent both SET and DEL to APPL_DB, but orchagent received only DEL (SET coalesced away at Lua/Redis layer).\r\n\r\n## Fix\r\n\r\nWe can either fix this at the Lua/Redis layer or in orchagent after it consumes from Redis. This PR applies the fix in the orchagent layer.\r\n\r\nIn `portsorch.cpp:doVlanTask()`, if the VLAN does not exist in `m_portList`, skip the removal and erase the task from `m_toSync`.\r\n\r\n### Validation of Fix on Switch\r\n\r\n**Sequence:** pause orchagent \u2192 `config vlan add 123` \u2192 `config vlan del 123` \u2192 resume orchagent\r\n```\r\n2026 Mar 19 03:36:08.936401 sonic WARN swss#orchagent: :- doVlanTask: VLAN Vlan123 not found in m_portList, skipping removal (likely never created)\r\n```\r\n- vlanmgrd sent both SET and DEL to APPL_DB\r\n- Orchagent received only DEL (SET coalesced at Lua/Redis layer)\r\n- Fix detected Vlan123 was never created in ASIC, skipped SAI removal\r\n- No `sonic ERR swss#orchagent: :- removeVlan: Failed to remove VLAN  vid:0` error\r\n",
+      "files": [
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 6,
+          "deletions": 1
+        },
+        {
+          "path": "tests/mock_tests/portsorch_ut.cpp",
+          "additions": 92,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-30T17:49:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-30T17:50:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-30T18:23:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-30T18:23:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T18:44:46Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-31T18:44:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T20:40:47Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-31T20:40:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,155 @@
+{
+  "number": 26363,
+  "title": "Bug: [sflow][XGS] linux_bcmgenl kernel module not installed or loaded",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26363",
+  "createdAt": "2026-03-24T17:54:04Z",
+  "closedAt": "2026-04-25T00:49:58Z",
+  "author": "anders-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "Issues for 202511"
+  ],
+  "assignees": [
+    "jeffyin-dell",
+    "adyeung"
+  ],
+  "milestone": null,
+  "body": "**Is it platform specific:** broadcom\n\n**Importance or Severity:** High\n\n**Description of the bug:**\n\n`linux_bcmgenl` is a kernel module in the HSDK-GPL (sdklt) stack that creates `/proc/bcm/genl/psample/rate`. Starting with SAI 14.3, this proc file is used to configure per-port sflow sampling rates on XGS LTSW platforms. Without it, sflow is completely broken on those platforms \u2014 the PTF receives 0 samples.\n\nThe module is built by the sdklt Makefile (`bcmgenl` is in `KMODS`) but is never included in the `opennsl-modules.install` package manifest and never loaded by `opennsl-modules.init`.\n\nThe bug was introduced in #19327 (August 2024), which added `bcmgenl` to `KMODS` when upgrading XGS saibcm-modules to 10.1, but did not update `opennsl-modules.install` or `opennsl-modules.init`. Release branches 202505 and 202511 are unaffected as they use SAI 14.1, which configures sflow rates via a different mechanism that does not require bcmgenl.\n\n**Steps to Reproduce:**\n\n1. Boot a SONiC XGS LTSW device (TH5/TH6) using the latest master image (SAI 14.3+)\n2. Either:\n   - Run `tests/sflow/test_sflow.py`, or\n   - Manually enable sflow and configure a sample rate, and observe the failure logs\n\n**Actual Behavior and Expected Behavior:**\n\n*Actual:* sflow sessions fail to configure; PTF receives 0 samples. `/proc/bcm/genl/psample/rate` does not exist. `lsmod | grep bcmgenl` returns nothing.\n\n*Expected:* sflow samples are delivered to the collector. `/proc/bcm/genl/psample/rate` exists and is writable by SAI.\n\n**Relevant log output:**\n\n```\nERR syncd#syncd: [none] SAI_API_PORT:_brcm_sai_port_proc_samplerate_set:23450 cannot open knet link sample proc\nERR swss#orchagent: :- sflowAddPort: Failed to set session f000000000c4a on port 1000000000002\nERR swss#orchagent: :- sflowDestroySession: Failed to destroy sample packet session with id f000000000c4a\nERR swss#orchagent: :- sflowUpdateRate: Failed to clean old session f000000000c4a with rate 800000\n```\n\n**Fix:** #26360",
+  "comments": [
+    {
+      "author": "jeffyin-dell",
+      "createdAt": "2026-03-25T17:08:48Z",
+      "body": "@adyeung  I think this may require Broadcom's review"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26360,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26360",
+      "title": "[sflow][XGS] install and load linux_bcmgenl kernel module",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-25T00:49:57Z",
+      "createdAt": "2026-03-24T15:48:49Z",
+      "author": "anders-nexthop",
+      "body": "#### Why I did it\n\n`linux_bcmgenl` creates `/proc/bcm/genl/psample/rate`, which SAI uses to configure per-port sflow sampling rates on XGS (non-DNX) platforms. Without it, sflow is completely broken \u2014 the PTF receives 0 samples.\n\nThe module is built by the sdklt Makefile (`bcmgenl` is in `KMODS`) but was missing from the `.install` manifest and never loaded by the init script.\n\nCloses #26363\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\n- `opennsl-modules.install`: added `sdklt/build/bcmgenl/linux_bcmgenl.ko` to the installed files\n- `opennsl-modules.init`: added `modprobe linux_bcmgenl` after `linux_ngknetcb` in the load path, and `rmmod linux_bcmgenl` before `linux_ngknetcb` in the unload path\n\n#### How to verify it\n\nBuild an XGS image and run `tests/sflow/test_sflow.py`. Confirm `/proc/bcm/genl/psample/rate` exists after boot and sflow samples are received.\n\n#### Which release branch to backport (provide reason below if selected)\n\nThe `bcmgenl` sdklt module does not exist in 202505 or 202511 \u2014 backport not applicable.\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ] <!-- image version 1 -->\n\n#### Description for the changelog\n\n[sflow][XGS] install and load linux_bcmgenl kernel module so that per-port sflow sampling rates can be configured via SAI.\n\n#### Link to config_db schema for YANG module changes\n\nN/A\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n```\n    /\\_____/\\\n   /  o   o  \\\n  ( ==  ^  == )\n   )         (\n  (           )\n ( (  )   (  ) )\n(__(__)___(__)__)\n```",
+      "files": [
+        {
+          "path": "platform/broadcom/saibcm-modules/debian/opennsl-modules.init",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/saibcm-modules/debian/opennsl-modules.install",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T15:48:57Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-03-24T15:48:58Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: anders-nexthop / name: Anders Linn  (6494904c45d51d990cc3047c3df99a2127575cb6)</li></ul>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T15:49:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T16:52:15Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T16:52:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-24T19:22:38Z",
+          "body": "recheck"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-25T00:41:30Z",
+          "body": "/azpw run\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T00:41:33Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-03-25T03:10:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-25T03:10:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-25T16:40:11Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T16:40:14Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T16:40:17Z",
+          "body": "Retrying failed(or canceled) stages in build 1070660:\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t2 by Elastictest: retried.\n- Job Cancel previous test plans for same PR: retried."
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-03-25T21:59:40Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T22:00:41Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T22:03:52Z",
+          "body": "The following failed(or canceled) jobs were not retried:\n- Cancel previous test plans for same PR\nJob Cancel previous test plans for same PR is an optional job and does not block the PR merge, so it will not be retried."
+        },
+        {
+          "author": "bluecmd",
+          "createdAt": "2026-03-26T06:53:43Z",
+          "body": "Fwiw, I fixed this 11 months ago but nobody wanted to merge it at the time - https://github.com/sonic-net/sonic-buildimage/pull/22530"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-26T15:40:46Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-26T15:40:49Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-26T15:40:52Z",
+          "body": "The following failed(or canceled) jobs were not retried:\n- Cancel previous test plans for same PR\n\nJob Cancel previous test plans for same PR is an optional job and does not block the PR merge, so it will not be retried."
+        }
+      ]
+    }
+  ]
+}

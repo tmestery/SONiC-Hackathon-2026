@@ -1,0 +1,66 @@
+{
+  "number": 14546,
+  "title": "[PDDF] Unable to use desel with CPLDMUX",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/14546",
+  "createdAt": "2023-04-06T12:56:18Z",
+  "closedAt": "2023-09-11T18:36:41Z",
+  "author": "bluecmd",
+  "labels": [
+    "Triaged",
+    "BRCM"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nThe following code makes it clear that the use case of setting `cpld_desel` is not supported by the standard driver.\r\nhttps://github.com/sonic-net/sonic-buildimage/blob/9b769244d58bdc76a4074e2ddd7e64901323673f/platform/pddf/i2c/modules/cpldmux/driver/pddf_cpldmux_driver.c#L30-L36\r\n\r\nWhy is that? With PDDF being close to removing needs for custom drivers it seems odd that such a minor thing would be case for a driver fork.\r\n\r\n#### Steps to reproduce the issue:\r\n1. Have a CPLDMUX that requires a deactivation write\r\n2. Try to implement it in PDDF\r\n3. Realize it is implemented but deactivated without possibility to activate\r\n\r\n#### Describe the results you received:\r\n\r\nThe CPLDMUX does not work.\r\n\r\n#### Describe the results you expected:\r\n\r\nThe CPLDMUX can be implemented with PDDF and works.\r\n\r\n#### Output of `show version`:\r\n\r\nN/A\r\n\r\n#### Output of `show techsupport`:\r\n\r\nN/A\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\nN/A",
+  "comments": [
+    {
+      "author": "FuzailBrcm",
+      "createdAt": "2023-04-12T02:41:04Z",
+      "body": "@bluecmd \r\nThanks for pointing out. Yes the 'deselect' function should be enabled in the PDDF common cpldmux driver code.\r\n\r\nAs to why it wasn't done in the first place, I think we wanted to test the custom implementation of these functions and we tested it by 'not providing' the deselect function implementation in the common driver. After the whole thing was tested, we should have enabled it back. Looks like that didn't happen. \r\n\r\nIf the common implementation is not correct/sufficient for any platform, they can override this in a platform specific custom driver. Below is a sample custom driver for cpldmux.\r\n\r\n```\r\n#include <linux/module.h>\r\n#include <linux/i2c.h>\r\n..\r\n..\r\n#include \"pddf_cpldmux_defs.h\"\r\n\r\nextern PDDF_CPLDMUX_OPS pddf_cpldmux_ops;\r\n\r\nint cpldmux_byte_write(struct i2c_client *client, u8 regaddr, u8 val)\r\n{\r\n    /* Provide custom implementation here */\r\n}\r\n\r\nint pddf_cpldmux_deselect(struct i2c_mux_core *muxc, uint32_t chan)\r\n{\r\n    /* Provide the custom implementation here */\r\n}\r\n\r\nstatic int __init pddf_custom_cpldmux_init(void)\r\n{\r\n    pddf_cpldmux_ops.deselect = pddf_cpldmux_deselect;\r\n    pddf_cpldmux_ops.byte_write = cpldmux_byte_write;\r\n    return 0;\r\n}\r\n..\r\n..\r\n..\r\n..\r\n```\r\n"
+    },
+    {
+      "author": "FuzailBrcm",
+      "createdAt": "2023-04-12T02:53:12Z",
+      "body": "The change you pointed out can be merged. 'deselect' was disabled for testing purposes only."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 14631,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/14631",
+      "title": "[pddf] Enable deselect logic for CPLDMUX",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-09-11T18:36:40Z",
+      "createdAt": "2023-04-12T17:11:45Z",
+      "author": "bluecmd",
+      "body": "#### Why I did it\r\n\r\nThis feature was meant to be enabled but was accidentally left disabled.\r\n\r\nI also changed the default log level for normal usage to KERN_INFO as the log spam can be quite severe otherwise.\r\n\r\n##### Work item tracking\r\n\r\nFixes #14546.\r\n\r\n#### How I did it\r\n\r\nEnabled the option by default.\r\n\r\n#### How to verify it\r\n\r\n - Requires a PDDF CPLDMUX driver.\r\n - Access an I2C bus through the CPLDMUX\r\n - Observe the message that the bus was deselected.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [x] 202211\r\n\r\nI am working on stabilizing 202211 for our internal needs, so I would prefer if the change can be backported so I do not have to carry the patch internally as well.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n202211 internal build.\r\n\r\n#### Description for the changelog\r\n\r\n- [pddf] CPLDMUX now correctly allows usage of deselect logic.\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\nN/A\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n![image](https://user-images.githubusercontent.com/149442/231532223-8c7bbfc3-9183-4ad3-b3f9-3f80aa6dfec9.png)\r\n",
+      "files": [
+        {
+          "path": "platform/pddf/i2c/modules/cpldmux/driver/pddf_cpldmux_driver.c",
+          "additions": 33,
+          "deletions": 5
+        }
+      ],
+      "comments": [
+        {
+          "author": "bluecmd",
+          "createdAt": "2023-04-23T18:57:51Z",
+          "body": "Ping @FuzailBrcm - this is what we discussed in #14546 plus reducing log spam."
+        },
+        {
+          "author": "adyeung",
+          "createdAt": "2023-04-24T18:44:17Z",
+          "body": "@FuzailBrcm pls review and approve if you ok with the change "
+        },
+        {
+          "author": "bluecmd",
+          "createdAt": "2023-09-10T16:04:40Z",
+          "body": "@adyeung Can we merge this?"
+        }
+      ]
+    }
+  ]
+}

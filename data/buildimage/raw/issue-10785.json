@@ -1,0 +1,133 @@
+{
+  "number": 10785,
+  "title": "[DHCPv6] dhcpv6 packets doesn't forwarded",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/10785",
+  "createdAt": "2022-05-09T11:06:35Z",
+  "closedAt": "2022-05-24T21:37:17Z",
+  "author": "AntonHryshchuk",
+  "labels": [
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "kellyyeh"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\ndhcpv6 packets doesn't forwarded\r\n\r\nThe suspicious changes:\r\n\r\nhttps://github.com/Azure/sonic-buildimage/pull/10486\r\nhttps://github.com/Azure/sonic-buildimage/pull/10712\r\n\r\n\r\n#### Steps to reproduce the issue:\r\nReproduced on simple setup which contains the 2 Hosts and 1 Switch. The Hosts are connected by one cable directly to the switch and don't connect between themselves.\r\nHostA <-> Switch <-> HostB\r\n\r\n**The connectivity in the provided example:**\r\nHostA::enp4s0f0 <-> Switch::Ethernet64\r\nHostB::enp6s0f0<-> Switch::Ethernet0\r\n\r\n**HostA configurations:**\r\n```\r\nsudo ip link add link enp4s0f0 name enp4s0f0.690 type vlan id 690\r\nsudo ip link set enp4s0f0.690 up\r\necho \"timeout 10;\" > dhclient.conf\r\n```\r\n\r\n**HostB configurations:**\r\nUpdate the file /etc/dhcp/dhcpd6.conf:\r\n```\r\ndefault-lease-time 600;\r\nmax-lease-time 7200;\r\nlog-facility local7;\r\n\r\n# VLAN 69\r\nsubnet6 6900::/64 {\r\nrange6 6900::129 6900::254;\r\n}\r\n# VLAN 690\r\nsubnet6 6900:1::/64 {\r\nrange6 6900:1::129 6900:1::254;\r\n}\r\n```\r\n\r\n\r\n2. Cli configurations:\r\n```\r\nsudo ip link add bond0 type bond\r\nsudo ip link set dev bond0 type bond mode 4\r\nsudo ip link set enp6s0f0 down\r\nsudo ip link set enp6s0f0 master bond0\r\nsudo ip link set enp6s0f0 up\r\nsudo ip link set bond0 up\r\nsudo ip link add link bond0 name bond0.69 type vlan id 69\r\nsudo ip link set bond0.69 up\r\nsudo ip addr add 6900::2/64 dev bond0.69\r\nsudo ip route add 6900:1::/64 via 6900::1\r\nsed -e \"s/INTERFACESv6=\\\"\\\"/INTERFACESv6=\\\"bond0.69\\\"/g\" -i /etc/default/isc-dhcp-server\r\n/etc/init.d/isc-dhcp-server restart\r\n```\r\n\r\n**Switch configurations:**\r\n```\r\nsudo config portchannel add PortChannel0002\r\nsudo config portchannel member add PortChannel0002 Ethernet0\r\n\r\nsudo config vlan add 69\r\nsudo config vlan member add 69 PortChannel0002\r\nsudo config vlan add 690\r\nsudo config vlan member add 690 Ethernet64\r\n\r\nsudo config interface ip add Vlan690 6900:1::1/64\r\nsudo config interface ip add Vlan69 6900::1/64\r\n\r\nsudo sonic-db-cli CONFIG_DB HSET \"DHCP_RELAY|Vlan690\" \"dhcpv6_servers@\" \"6900::2\"\r\nsudo sonic-db-cli CONFIG_DB HSET \"VLAN|Vlan690\" \"dhcpv6_servers@\" \"6900::2\"\r\nsudo service dhcp_relay restart\r\n\r\n# validate the server\r\nshow dhcprelay_helper ipv6\r\n```\r\n\r\n#### Describe the results you received:\r\nOn the switch, the requests from the Client are not forwarded to the PortChannel member.\r\nNo answer to the request from the client (HostA):\r\n```\r\nhostA:~#timeout 10 dhclient -6 enp4s0f0.690 -v\r\n\r\nInternet Systems Consortium DHCP Client 4.4.1\r\nCopyright 2004-2018 Internet Systems Consortium.\r\nAll rights reserved.\r\nFor info, please visit https://www.isc.org/software/dhcp/\r\n\r\nListening on Socket/enp4s0f0.690\r\nSending on   Socket/enp4s0f0.690\r\nPRC: Soliciting for leases (INIT).\r\nXMT: Forming Solicit, 0 ms elapsed.\r\nXMT:  X-- IA_NA a1:17:e6:fc\r\nXMT:  | X-- Request renew in  +3600\r\nXMT:  | X-- Request rebind in +5400\r\nXMT: Solicit on enp4s0f0.690, interval 1020ms.\r\nXMT: Forming Solicit, 1020 ms elapsed.\r\nXMT:  X-- IA_NA a1:17:e6:fc\r\nXMT:  | X-- Request renew in  +3600\r\nXMT:  | X-- Request rebind in +5400\r\nXMT: Solicit on enp4s0f0.690, interval 1980ms.\r\nXMT: Forming Solicit, 3000 ms elapsed.\r\nXMT:  X-- IA_NA a1:17:e6:fc\r\nXMT:  | X-- Request renew in  +3600\r\nXMT:  | X-- Request rebind in +5400\r\nXMT: Solicit on enp4s0f0.690, interval 4090ms.\r\nXMT: Forming Solicit, 7090 ms elapsed.\r\nXMT:  X-- IA_NA a1:17:e6:fc\r\nXMT:  | X-- Request renew in  +3600\r\nXMT:  | X-- Request rebind in +5400\r\nXMT: Solicit on enp4s0f0.690, interval 7840ms.\r\n```\r\n\r\n\r\n#### Describe the results you expected:\r\nThe Client got a reply: \r\n```\r\nhostA~# timeout 10 dhclient -6 enp4s0f0.690 -v\r\nInternet Systems Consortium DHCP Client 4.4.1\r\nCopyright 2004-2018 Internet Systems Consortium.\r\nAll rights reserved.\r\nFor info, please visit https://www.isc.org/software/dhcp/\r\n\r\nListening on Socket/enp4s0f0.690\r\nSending on   Socket/enp4s0f0.690\r\nPRC: Confirming active lease (INIT-REBOOT).\r\nXMT: Forming Confirm, 0 ms elapsed.\r\nXMT:  X-- IA_NA 9b:97:3a:ce\r\nXMT:  | X-- Confirm Address 6900:1::254\r\nXMT:  V IA_NA appended.\r\nXMT: Confirm on enp4s0f0.690, interval 960ms.\r\nRCV: Reply message on enp4s0f0.690 from fe80::ba59:9fff:fea9:3400.\r\nRCV:  X-- Server ID: 00:01:00:01:2a:0b:23:a2:0c:42:a1:46:55:8a\r\nmessage status code Success: \"All addresses still on link.\"\r\nPRC: Bound to lease 00:01:00:01:2a:0b:23:a2:0c:42:a1:46:55:8a.\r\n```\r\n\r\ntcpdump on the portchannel member:\r\n```\r\n10:09:56.069132 IP6 6900:1::1.dhcpv6-server > 6900::2.dhcpv6-server: dhcp6 relay-fwd\r\n10:09:56.069673 IP6 6900::2.dhcpv6-server > 6900:1::1.dhcpv6-server: dhcp6 relay-reply\r\n10:09:57.730597 IP6 6900:1::1.dhcpv6-server > 6900::2.dhcpv6-server: dhcp6 relay-fwd\r\n10:09:57.731189 IP6 6900::2.dhcpv6-server > 6900:1::1.dhcpv6-server: dhcp6 relay-reply\r\n```\r\n#### Output of `show version`:\r\n\r\n```\r\nroot@r-51:/home/admin# show version \r\n\r\nSONiC Software Version: SONiC.202111.66-375e20338_Internal\r\nDistribution: Debian 11.3\r\nKernel: 5.10.0-8-2-amd64\r\nBuild commit: 375e20338\r\nBuild date: Sun May  8 13:46:29 UTC 2022\r\nBuilt by: sw-r2d2-bot@r-build-sonic-ci02-242\r\n\r\nPlatform: x86_64-mlnx_msn3700-r0\r\nHwSKU: ACS-MSN3700\r\nASIC: mellanox\r\nASIC Count: 1\r\nSerial Number: MT1949X06182\r\nModel Number: MSN3700-VS2F\r\nHardware Revision: A3\r\nUptime: 11:04:26 up  1:54,  1 user,  load average: 0.43, 0.64, 0.61\r\n```\r\n\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "kellyyeh",
+      "createdAt": "2022-05-09T18:31:22Z",
+      "body": "@AntonHryshchuk Can you confirm if there is an ipv6 link-local address assigned? And the output for `docker exec dhcp_relay ss -nlp | grep dhcp6relay`\r\n\r\nThanks"
+    },
+    {
+      "author": "AntonHryshchuk",
+      "createdAt": "2022-05-10T08:03:28Z",
+      "body": "@kellyyeh \r\n\r\nThe required output:\r\n```\r\nroot@r-51:/home/admin# docker exec dhcp_relay ss -nlp | grep dhcp6relay\r\np_raw              UNCONN              0                    0                                                                                                 *:Vlan690                         *         users:((\"dhcp6relay\",pid=44,fd=12))   \r\np_raw              UNCONN              0                    0                                                                                                 *:Vlan691                         *         users:((\"dhcp6relay\",pid=44,fd=15))   \r\nu_dgr              UNCONN              0                    0                                                                                                 * 233687                         * 226518   users:((\"dhcp6relay\",pid=44,fd=8))    \r\nudp                UNCONN              0                    0                                                               [fe80::1e34:daff:fe16:6800]%Vlan691:547                         [::]:*        users:((\"dhcp6relay\",pid=44,fd=17))   \r\nudp                UNCONN              0                    0                                                                                         [6910::1]:547                         [::]:*        users:((\"dhcp6relay\",pid=44,fd=16))   \r\nudp                UNCONN              0                    0                                                               [fe80::1e34:daff:fe16:6800]%Vlan690:547                         [::]:*        users:((\"dhcp6relay\",pid=44,fd=14))   \r\nudp                UNCONN              0                    0                                                                                       [6900:1::1]:547                         [::]:*        users:((\"dhcp6relay\",pid=44,fd=13)) \r\n```\r\n\r\nI reproduced the issue on different interfaces.\r\nEthernet60 <-> HostB\r\nEthernet124 <-> HostA\r\nipv6 link-local addresses are assigned to all relevant interfaces:\r\n```\r\nPortChannel0002: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc noqueue master Bridge state UP group default qlen 1000\r\n    link/ether 1c:34:da:16:68:00 brd ff:ff:ff:ff:ff:ff\r\n    inet6 fe80::1e34:daff:fe16:6800/64 scope link \r\n       valid_lft forever preferred_lft forever\r\nVlan69@Bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc noqueue state UP group default qlen 1000\r\n    link/ether 1c:34:da:16:68:00 brd ff:ff:ff:ff:ff:ff\r\n    inet 69.0.0.1/24 brd 69.0.0.255 scope global Vlan69\r\n       valid_lft forever preferred_lft forever\r\n    inet6 6900::1/64 scope global \r\n       valid_lft forever preferred_lft forever\r\n    inet6 fe80::1e34:daff:fe16:6800/64 scope link \r\n       valid_lft forever preferred_lft forever\r\nVlan690@Bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc noqueue state UP group default qlen 1000\r\n    link/ether 1c:34:da:16:68:00 brd ff:ff:ff:ff:ff:ff\r\n    inet 69.0.1.1/24 brd 69.0.1.255 scope global Vlan690\r\n       valid_lft forever preferred_lft forever\r\n    inet6 6900:1::1/64 scope global \r\n       valid_lft forever preferred_lft forever\r\n    inet6 fe80::1e34:daff:fe16:6800/64 scope link \r\n       valid_lft forever preferred_lft forever\r\nEthernet60: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc pfifo_fast master PortChannel0002 state UP group default qlen 1000\r\n    link/ether 1c:34:da:16:68:00 brd ff:ff:ff:ff:ff:ff permaddr 1c:34:da:16:68:24\r\n    inet6 fe80::1e34:daff:fe16:6800/64 scope link \r\n       valid_lft forever preferred_lft forever\r\nEthernet124: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc pfifo_fast master Bridge state UP group default qlen 1000\r\n    link/ether 1c:34:da:16:68:00 brd ff:ff:ff:ff:ff:ff permaddr 1c:34:da:16:68:44\r\n    inet6 fe80::1e34:daff:fe16:6800/64 scope link \r\n       valid_lft forever preferred_lft forever\r\n```\r\n\r\n"
+    },
+    {
+      "author": "kellyyeh",
+      "createdAt": "2022-05-11T19:50:16Z",
+      "body": "@AntonHryshchuk I confirmed the latest dhcp6relay to have no issue relaying packets. Can you confirm if relay-forward is generated? And a tcpdump/pcap of the client packets would be great."
+    },
+    {
+      "author": "AntonHryshchuk",
+      "createdAt": "2022-05-12T06:29:36Z",
+      "body": ">@AntonHryshchuk I confirmed the latest dhcp6relay to have no issue relaying packets. Can you confirm if relay-forward is generated? And a tcpdump/pcap of the client packets would be great.\r\n\r\n**The tcpdump on previous version, which works:**\r\n\r\ntcpdump on the interface to the server(interface member in LAG):\r\n```\r\nroot@r-51:/home/admin# tcpdump -i Ethernet60\r\n05:51:11.151473 IP6 fe80::1e34:daff:fe16:6800 > ff02::1:ff00:2: ICMP6, neighbor solicitation, who has 6900::2, length 32\r\n05:51:11.151621 IP6 6900::2 > fe80::1e34:daff:fe16:6800: ICMP6, neighbor advertisement, tgt is 6900::2, length 32\r\n05:51:11.151727 IP6 6900:1::1.dhcpv6-server > 6900::2.dhcpv6-server: dhcp6 relay-fwd\r\n05:51:11.152242 IP6 fe80::e42:a1ff:fe4b:b6d > ff02::1:ff00:1: ICMP6, neighbor solicitation, who has 6900::1, length 32\r\n05:51:11.152356 IP6 6900::1 > fe80::e42:a1ff:fe4b:b6d: ICMP6, neighbor advertisement, tgt is 6900::1, length 32\r\n05:51:11.152268 IP6 6900::2 > ff02::1:ff00:1: ICMP6, neighbor solicitation, who has 6900::1, length 32\r\n05:51:11.152422 IP6 6900::1 > 6900::2: ICMP6, neighbor advertisement, tgt is 6900::1, length 32\r\n05:51:11.152476 IP6 6900::2.dhcpv6-server > 6900:1::1.dhcpv6-server: dhcp6 relay-reply\r\n05:51:11.202491 IP randomtest-ch01.am.lilly.com.bgp > 40.0.0.3.46852: Flags [P.], seq 20:141, ack 19, win 494, options [nop,nop,TS val 4069217049 ecr 3065886138], length 121: BGP\r\n05:51:11.202604 IP 40.0.0.3.46852 > randomtest-ch01.am.lilly.com.bgp: Flags [.], ack 141, win 501, options [nop,nop,TS val 3065908740 ecr 4069217049], length 0\r\n05:51:12.242814 IP6 6900:1::1.dhcpv6-server > 6900::2.dhcpv6-server: dhcp6 relay-fwd\r\n05:51:12.243199 IP6 6900::2.dhcpv6-server > 6900:1::1.dhcpv6-server: dhcp6 relay-reply\r\n```\r\n\r\ntcpdump on interface to Client:\r\n```\r\nroot@r-51:/home/admin# tcpdump -i Ethernet124\r\n05:51:11.151026 IP6 fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: dhcp6 solicit\r\n05:51:11.153029 IP6 fe80::1e34:daff:fe16:6800.dhcpv6-server > fe80::e42:a1ff:fe17:e6fd.dhcpv6-client: dhcp6 advertise\r\n05:51:12.242370 IP6 fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: dhcp6 request\r\n05:51:12.243522 IP6 fe80::1e34:daff:fe16:6800.dhcpv6-server > fe80::e42:a1ff:fe17:e6fd.dhcpv6-client: dhcp6 reply\r\n05:51:12.443773 IP6 :: > ff02::1:ff00:254: ICMP6, neighbor solicitation, who has 6900:1::254, length 32\r\n05:51:16.187039 IP6 fe80::1e34:daff:fe16:6800 > fe80::e42:a1ff:fe17:e6fd: ICMP6, neighbor solicitation, who has fe80::e42:a1ff:fe17:e6fd, length 32\r\n05:51:16.187175 IP6 fe80::e42:a1ff:fe17:e6fd > fe80::1e34:daff:fe16:6800: ICMP6, neighbor advertisement, tgt is fe80::e42:a1ff:fe17:e6fd, length 24\r\n```\r\n\r\n\r\n\r\n\r\n**The tcpdump on the version, which contains the issue:**\r\ntcpdump on the interface to Server(interface member in LAG):\r\n```\r\nroot@r-51:/home/admin# tcpdump -i Ethernet60\r\n06:16:55.843543 LACPv1, length 110\r\n06:16:57.727201 IP 40.0.0.3.47204 > randomtest-ch01.am.lilly.com.bgp: Flags [P.], seq 2206273350:2206273369, ack 302363232, win 501, options [nop,nop,TS val 3067454962 ecr 3454542761], length 19: BGP\r\n06:16:57.727290 IP randomtest-ch01.am.lilly.com.bgp > 40.0.0.3.47204: Flags [.], ack 19, win 494, options [nop,nop,TS val 3454602759 ecr 3067454962], length 0\r\n06:16:57.728942 IP randomtest-ch01.am.lilly.com.bgp > 40.0.0.3.47204: Flags [P.], seq 1:20, ack 19, win 494, options [nop,nop,TS val 3454602761 ecr 3067454962], length 19: BGP\r\n06:16:57.729047 IP 40.0.0.3.47204 > randomtest-ch01.am.lilly.com.bgp: Flags [.], ack 20, win 501, options [nop,nop,TS val 3067454964 ecr 3454602761], length 0\r\n06:17:01.842083 LACPv1, length 110\r\n06:17:03.066038 ARP, Request who-has randomtest-ch01.am.lilly.com tell 40.0.0.3, length 42\r\n06:17:03.066113 ARP, Reply randomtest-ch01.am.lilly.com is-at 1c:34:da:16:68:00 (oui Unknown), length 28\r\n```\r\n\r\ntcpdump on the interface to Client:\r\n```\r\nroot@r-51:/home/admin# tcpdump -i Ethernet124\r\n06:16:49.702446 IP6 fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: dhcp6 solicit\r\n06:16:50.793704 IP6 fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: dhcp6 solicit\r\n06:16:52.895971 IP6 fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: dhcp6 solicit\r\n06:16:57.110338 IP6 fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: dhcp6 solicit\r\n```\r\n\r\n\r\n\r\n"
+    },
+    {
+      "author": "kellyyeh",
+      "createdAt": "2022-05-12T09:07:33Z",
+      "body": "@AntonHryshchuk Can you increase verbosity on client side tcpdump so I can see Solicit options? I suspect https://github.com/Azure/sonic-buildimage/pull/10486 could be the culprit, but I cannot reproduce the issue on my side. Would also appreciate if you could include the counter after sending client requests. Command is `sudo show dhcp6relay_counters counts`"
+    },
+    {
+      "author": "shlomibitton",
+      "createdAt": "2022-05-12T09:15:11Z",
+      "body": "@kellyyeh it is indeed https://github.com/Azure/sonic-buildimage/pull/10486 causing this degradation.\r\nI verified it by running the test with and without this commit and this is the root cause.\r\n\r\nfrom tcpdump with highest verbosity:\r\n\r\n09:14:38.691841 IP6 (flowlabel 0x3459f, hlim 1, next-header UDP (17) payload length: 92) fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: [udp sum ok] dhcp6 confirm (xid=4cd220 (client-ID hwaddr/time type 1 time 705627101 0c42a117e6fd) (option-request DNS-server DNS-search-list Client-FQDN SNTP-servers) (elapsed-time 0) (IA_NA IAID:2702698237 T1:0 T2:0 (IA_ADDR 6900:1::254 pltime:0 vltime:0)))\r\n\r\n09:18:06.259984 IP6 (flowlabel 0x3459f, hlim 1, next-header UDP (17) payload length: 64) fe80::e42:a1ff:fe17:e6fd.dhcpv6-client > ff02::1:2.dhcpv6-server: [udp sum ok] dhcp6 solicit (xid=c35245 (client-ID hwaddr/time type 1 time 705627101 0c42a117e6fd) (option-request DNS-server DNS-search-list Client-FQDN SNTP-servers) (elapsed-time 721) (IA_NA IAID:2702698237 T1:3600 T2:5400))"
+    },
+    {
+      "author": "kellyyeh",
+      "createdAt": "2022-05-12T09:30:36Z",
+      "body": "@shlomibitton  Thanks for the output. Confirm message type was missed. Will also file a test gap for this. Can you confirm if any relay-forward messages are generated for Solicit message types?"
+    },
+    {
+      "author": "shlomibitton",
+      "createdAt": "2022-05-12T09:47:23Z",
+      "body": "I tried to add you fix and compile, but it is not fixing the issue, SOLICIT messages also dropped.\r\n\r\n![image](https://user-images.githubusercontent.com/60430976/168042928-c932c795-b9ff-4628-9b31-172773f7bf56.png)\r\n"
+    },
+    {
+      "author": "dprital",
+      "createdAt": "2022-05-19T11:54:45Z",
+      "body": "@kellyyeh - What is the ETA for a fix ?"
+    },
+    {
+      "author": "kellyyeh",
+      "createdAt": "2022-05-20T05:29:05Z",
+      "body": "@dprital Here is the PR fix: https://github.com/Azure/sonic-buildimage/pull/10819 @shlomibitton I tested on my end to be working. Could you verify with the PR build on your end if it fixes your issue?\r\n"
+    },
+    {
+      "author": "shlomibitton",
+      "createdAt": "2022-05-23T08:10:38Z",
+      "body": "@kellyyeh I tested your fix and it is working, thanks!\r\nOnce the PR is merged we can close this issue."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 10819,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/10819",
+      "title": "[dhcp6relay] Fix option parsing and add dhcpv6 client messages",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-05-24T21:37:17Z",
+      "createdAt": "2022-05-12T09:28:43Z",
+      "author": "kellyyeh",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFixed option parsing function and added missing dhcpv6 messages.\r\nConfirm message type was not added in PR https://github.com/Azure/sonic-buildimage/pull/10486 when client side message types are checked.\r\n\r\n#### How I did it\r\n\r\n#### How to verify it\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [x] 202111\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-dhcp-relay/cli-plugin-tests/test_show_dhcp6relay_counters.py",
+          "additions": 17,
+          "deletions": 15
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/cli/show/plugins/show_dhcp_relay.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/dhcp6relay/src/relay.cpp",
+          "additions": 15,
+          "deletions": 9
+        },
+        {
+          "path": "src/dhcp6relay/src/relay.h",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "shlomibitton",
+          "createdAt": "2022-05-23T08:12:43Z",
+          "body": "@kellyyeh @yxieca can you please cherry-pick this to 202012 as well?"
+        },
+        {
+          "author": "kellyyeh",
+          "createdAt": "2022-05-23T18:18:36Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-05-23T18:18:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2022-05-24T23:15:25Z",
+          "body": "This commit could not be cleanly cherry-picked to 202012. Please submit another PR."
+        }
+      ]
+    }
+  ]
+}

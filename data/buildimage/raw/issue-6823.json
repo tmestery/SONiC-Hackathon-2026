@@ -1,0 +1,82 @@
+{
+  "number": 6823,
+  "title": "[ndppd] observing high cpu utilization ",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/6823",
+  "createdAt": "2021-02-18T23:49:34Z",
+  "closedAt": "2021-04-30T23:30:31Z",
+  "author": "prsunny",
+  "labels": [
+    "Master Branch Quality"
+  ],
+  "assignees": [
+    "theasianpianist"
+  ],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nndppd is observed to be taking high cpu utilization when system is receiving significant control plane traffic\r\n\r\n```\r\ntop - 23:05:43 up  8:44,  1 user,  load average: 6.04, 5.11, 4.63\r\nTasks: 281 total,   2 running, 245 sleeping,   0 stopped,  34 zombie\r\n%Cpu(s): 20.4 us, 24.2 sy,  0.0 ni, 53.8 id,  0.1 wa,  0.0 hi,  1.4 si,  0.0 st\r\nMiB Mem :   8026.8 total,   4625.0 free,   1829.6 used,   1572.2 buff/cache\r\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.   5865.6 avail Mem \r\n\r\n  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND                                                                                                       \r\n 5139 root      20   0    5800   3688   3432 R 100.0   0.0  18:01.10 ndppd                                                                                                         \r\n 4881 root      20   0 2039800 626552 108556 S  51.8   7.6  10:53.01 syncd                                                                                                         \r\n 1165 root      20   0  227552  36436   6792 S  12.0   0.4  73:07.25 redis-server                                                                                                  \r\n 4733 root      20   0  143116  47012  13464 S  12.0   0.6   4:01.89 python3       \r\n```\r\n\r\n#### Steps to reproduce the issue:\r\n1. Execute top command on device running latest master\r\n2.\r\n3.\r\n\r\n#### Describe the results you received:\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "theasianpianist",
+      "createdAt": "2021-04-28T02:33:13Z",
+      "body": "It looks like the root cause of this is `ndppd` loading IPv6 routes every 30 seconds: https://github.com/DanielAdolfsson/ndppd/blob/b8b2d401b9a83dae45776bb9fa95b1a5fe417d01/src/route.cc#L129\r\n\r\nBecause of all the routes announced by the T1s, the `/proc/net/ipv6_route` file is about 24k lines long. In `top`, `ndppd` CPU usage can be seen spiking every 30s (lasting for 7-8 seconds) which also corresponding with the debug logs generated on this line https://github.com/DanielAdolfsson/ndppd/blob/b8b2d401b9a83dae45776bb9fa95b1a5fe417d01/src/route.cc#L86\r\n\r\nIt does not look like there is a way to prevent `ndppd` from reading the IPv6 routes since that is part of its core feature set. However, there is theoretically a way to increase the polling interval so that the CPU spikes happen less frequently. The documentation is either out of date or incorrect, so I am investigating further along this avenue.\r\n"
+    },
+    {
+      "author": "theasianpianist",
+      "createdAt": "2021-04-28T03:04:44Z",
+      "body": "After further investigation, the `route-ttl` configuration option can be used to change how frequently kernel IPv6 routes are read. Since this value is stored internally as a [signed integer](https://github.com/DanielAdolfsson/ndppd/blob/b8b2d401b9a83dae45776bb9fa95b1a5fe417d01/src/route.cc#L27), we can delay the CPU spikes to once every 2147483647ms (about 24 days) at most."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 7456,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/7456",
+      "title": "[docker-orchagent]: Increase ndppd kernel poll interval",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-04-30T23:30:31Z",
+      "createdAt": "2021-04-28T03:16:30Z",
+      "author": "theasianpianist",
+      "body": "Signed-off-by: Lawrence Lee <lawlee@microsoft.com>\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\nFixes #6823 \r\n\r\n#### Why I did it\r\n`ndppd` by default reads `/proc/net/ipv6_route` ever 30 seconds. Since T1s advertise so many routes to ToRs, this file is extremely large, and reading it causes `ndppd`'s CPU usage to spike every 30 seconds\r\n\r\n#### How I did it\r\nIncrease the delay for reading this file to the maximum possible value (max integer value), which will result in CPU spikes every ~24 days instead of every 30 seconds\r\n\r\n#### How to verify it\r\nStart `ndppd` with the new config file, confirm that no CPU spikes are seen except at startup\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [x] 202012\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n![image](https://user-images.githubusercontent.com/6006991/116341270-70d67280-a795-11eb-8731-8bb6d7563293.png)\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-orchagent/ndppd.conf.j2",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/ndppd.conf",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/ndppd.conf",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "theasianpianist",
+          "createdAt": "2021-04-29T02:15:29Z",
+          "body": "/Azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-04-29T02:15:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "theasianpianist",
+          "createdAt": "2021-04-30T17:09:03Z",
+          "body": "/Azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-04-30T17:09:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

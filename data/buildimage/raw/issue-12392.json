@@ -1,0 +1,71 @@
+{
+  "number": 12392,
+  "title": "[logrotate] error in logs \"Failed to start Rotate log files\"",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/12392",
+  "createdAt": "2022-10-13T16:31:07Z",
+  "closedAt": "2022-12-08T22:13:13Z",
+  "author": "ppikh",
+  "labels": [
+    "Issue for 202205"
+  ],
+  "assignees": [
+    "saiarcot895"
+  ],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nError in logs happen: \"Failed to start Rotate log files\"\r\n\r\n#### Steps to reproduce the issue:\r\nIt reproduces only in case when time is 12:00AM and logrotation started\r\n\r\nThere are two triggers for logrotate - One is the default debian logrotate timer which runs daily at 12:00 AM. The second one is the logrotate by cron job which SONiC has created and runs every 10 mins.\r\n\r\nThe SONiC cron job has a logic to kill any logrotate that is running. https://github.com/sonic-net/sonic-buildimage/pull/2942\r\n\r\n```\r\n# Attempt to rotate system logs once every 10 minutes.\r\n# First kill any logrotate process(es) if they are still running, as they're most likely hung\r\n*/10 * * * * root /usr/bin/pkill -9 logrotate > /dev/null 2>&1; /usr/sbin/logrotate /etc/logrotate.conf > /dev/null 2>&1\r\n ```\r\n\r\nThe cron job in this case was aligned  in such a way in runs at 12:00:01 which is 1 sec after the default timer triggers a logrotate. Since the cron finds a logrotate already running it kills it which results in the log\r\n\r\n \r\n```\r\nOct  5 00:00:00.938784 r-tigon-21 INFO systemd[1]: Starting Rotate log files...\r\nOct  5 00:00:01.247788 r-tigon-21 WARNING systemd[1]: logrotate.service: Main process exited, code=killed, status=9/KILL\r\nOct  5 00:00:01.248858 r-tigon-21 WARNING systemd[1]: logrotate.service: Failed with result 'signal'.\r\nOct  5 00:00:01.249684 r-tigon-21 ERR systemd[1]: Failed to start Rotate log files.\r\n ```\r\n\r\nFrom cron log:\r\n```\r\nOct  5 00:00:01.226074 r-tigon-21 INFO CRON[541643]: (root) CMD (/usr/bin/pkill -9 logrotate > /dev/null 2>&1; /usr/sbin/logrotate /etc/logrotate.conf > /dev/null 2>&1)\r\n ```\r\n\r\n \r\nThis is non functional since the logrotate from cron will eventually accomplish the task. \r\n\r\nHowever given there is already a cron running in SONiC the default daily logrotate can be disabled\r\n\r\n#### Describe the results you received:\r\nGot error in logs\r\n```\r\nOct  5 00:00:01.249684 r-tigon-21 ERR systemd[1]: Failed to start Rotate log files.\r\n```\r\n\r\n#### Describe the results you expected:\r\nNo error in logs\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nSONiC.202205_rc.17-12870dde8_Internal\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\nCan not attach sysdump due to max limit of file 25Mb,\r\nIf someone want - can ask me and I will send this file in private message.\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 12921,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/12921",
+      "title": "Replace logrotate cron file with (adapted) systemd timer file",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-12-08T22:13:12Z",
+      "createdAt": "2022-12-02T20:12:18Z",
+      "author": "saiarcot895",
+      "body": "\r\n\r\nSigned-off-by: Saikrishna Arcot <sarcot@microsoft.com>\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nDebian is shipping a systemd timer unit for logrotate, but we're also packaging in a cron job, which means both of them will run, potentially at the same time. Remove our cron file, and add an override to the shipped timer file to have it be run every 10 minutes.\r\n\r\nFixes #12392.\r\n\r\n#### How I did it\r\n\r\n#### How to verify it\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [x] 202205\r\n- [x] 202211\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n#### Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "files/image_config/cron.d/logrotate",
+          "additions": 0,
+          "deletions": 3
+        },
+        {
+          "path": "files/image_config/logrotate/timerOverride.conf",
+          "additions": 2,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "saiarcot895",
+          "createdAt": "2022-12-07T01:11:07Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-12-07T01:11:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-12-08T22:13:49Z",
+          "body": "Cherry-pick PR to 202205: https://github.com/sonic-net/sonic-buildimage/pull/13008"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-02-03T15:39:48Z",
+          "body": "Cherry-pick PR to 202211: https://github.com/sonic-net/sonic-buildimage/pull/13629"
+        }
+      ]
+    }
+  ]
+}

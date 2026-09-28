@@ -1,0 +1,125 @@
+{
+  "number": 18771,
+  "title": "rsyslog_plugin is hogging the CPU when high load is seen on rsyslog",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/18771",
+  "createdAt": "2024-04-23T21:19:04Z",
+  "closedAt": "2024-05-15T01:08:15Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Bug :bug:",
+    "MSFT",
+    "Issue for 202305",
+    "Issue for 202311"
+  ],
+  "assignees": [
+    "zbud-msft"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nWhen the rsyslog is put under high load, it'll spawn multiple worker threads. Each worker thread will inturn fork a rsyslog_plugin process. The worker thread and the plugin will use a pipe on STDIN to communicate. \r\n\r\nhttps://github.com/rsyslog/rsyslog/blob/1128d320750fb6cfe57b8ad53ef1d5ddf80c81cf/plugins/omprog/omprog.c#L285\r\n\r\n```\r\nsyslog.41.gz:Apr 20 05:58:39.143367 r-tigon-17 INFO rsyslogd: main Q:Reg: high activity - starting 1 additional worker thread(s), currently 1 active worker threads. [v8.2302.0 try https://www.rsyslog.com/e/2439 ]                                                        \r\nsyslog.41.gz:Apr 20 05:59:19.286313 r-tigon-17 INFO rsyslogd: [origin software=\"rsyslogd\" swVersion=\"8.2302.0\" x-pid=\"8707\" x-info=\"https://www.rsyslog.com\"] rsyslogd was HUPed\r\nsyslog.40.gz:Apr 20 05:59:53.220370 r-tigon-17 INFO rsyslogd:  message repeated 2 times: [[origin software=\"rsyslogd\" swVersion=\"8.2302.0\" x-pid=\"8707\" x-info=\"https://www.rsyslog.com\"] rsyslogd was HUPed]\r\n```\r\n\r\nWhen the load reduces, the worker thread is destroyed but the rsyslog_plugin is not killed. The write end of the pipe is also closed\r\n\r\n```\r\nsyslog.40.gz:Apr 20 05:59:53.220370 r-tigon-17 INFO rsyslogd:  message repeated 2 times: [[origin software=\"rsyslogd\" swVersion=\"8.2302.0\" x-pid=\"8707\" x-info=\"https://www.rsyslog.com\"] rsyslogd was HUPed]                                                               \r\nsyslog.40.gz:Apr 20 05:59:53.227977 r-tigon-17 WARNING rsyslogd: omprog: program '/usr/bin/rsyslog_plugin' (pid 135130) did not terminate within timeout (5000 ms); ignoring it [v8.2302.0]                                                                                 \r\nsyslog.40.gz:Apr 20 05:59:58.496622 r-tigon-17 WARNING rsyslogd: omprog: program '/usr/bin/rsyslog_plugin' (pid 134904) did not terminate within timeout (5000 ms); ignoring it [v8.2302.0]                                                                                 \r\nsyslog.40.gz:Apr 20 05:59:58.496723 r-tigon-17 INFO rsyslogd: main Q:Reg: worker thread 55ca50b54f80 terminated, now 1 active worker threads [v8.2302.0 try https://www.rsyslog.com/e/2439 ]  \r\n```\r\n\r\nBecause the write end is closed, the getline(cin) call returns immediately. This causes rsyslog_plugin to busy wait and inturn CPU spike.\r\nhttps://github.com/sonic-net/sonic-buildimage/blob/d3b18c40de9c1c472edfc9052d0b1de0679a31bc/src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.cpp#L109\r\n\r\nOn a long running system with high rate of logs, this would lead to multiple useless rsyslog_plugin processes\r\n\r\n```\r\ntop - 03:12:31 up  1:29,  2 users,  load average: 46.16, 43.47, 38.25\r\nTasks: 386 total,  43 running, 341 sleeping,   0 stopped,   2 zombie\r\n%Cpu(s): 95.1 us,  2.8 sy,  2.1 ni,  0.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\r\nMiB Mem :  15888.1 total,   8462.3 free,   4540.2 used,   2885.6 buff/cache\r\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  10852.4 avail Mem \r\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\r\n 113785 root      20   0   99868  10932   9760 R  37.5   0.1  12:25.22 rsyslog_plugin\r\n 205539 root      20   0   99868  10980   9804 R  37.5   0.1   4:32.36 rsyslog_plugin\r\n 239979 root      20   0   99868  10884   9708 R  37.5   0.1   1:10.28 rsyslog_plugin\r\n  31880 root      20   0   99868   9908   8924 R  31.2   0.1  32:11.02 rsyslog_plugin\r\n 130609 root      20   0   99868  10852   9676 R  31.2   0.1  10:34.99 rsyslog_plugin\r\n 166464 root      20   0   99868  10888   9704 R  31.2   0.1   7:59.76 rsyslog_plugin\r\n  60126 root      20   0   99868  10852   9672 R  25.0   0.1  21:46.07 rsyslog_plugin\r\n  96171 root      20   0   99868   9880   8892 R  25.0   0.1  14:42.70 rsyslog_plugin\r\n 218871 root      20   0  165404  10836   9656 R  25.0   0.1   2:59.42 rsyslog_plugin\r\n 218872 root      20   0   99868  10108   9116 R  25.0   0.1   2:56.49 rsyslog_plugin\r\n 240818 root      20   0   99868   9956   8968 R  25.0   0.1   1:09.86 rsyslog_plugin\r\n  20484 root      20   0   99868  10964   9784 R  18.8   0.1  37:42.67 rsyslog_plugin\r\n  50569 root      20   0   99868  10992   9816 R  18.8   0.1  25:49.64 rsyslog_plugin\r\n  60218 root      20   0   99868   9984   8992 R  18.8   0.1  21:52.68 rsyslog_plugin\r\n  60310 root      20   0   99868   9940   8948 R  18.8   0.1  21:53.43 rsyslog_plugin\r\n  60311 root      20   0   99868   9888   8896 R  18.8   0.1  21:43.25 rsyslog_plugin\r\n 113940 root      20   0   99868  10056   9068 R  18.8   0.1  12:28.81 rsyslog_plugin\r\n 122118 root      20   0   99868  11072   9892 R  18.8   0.1  11:36.21 rsyslog_plugin\r\n 130864 root      20   0   99868   9936   8944 R  18.8   0.1  10:38.11 rsyslog_plugin\r\n 130865 root      20   0   99868   9764   8776 R  18.8   0.1  10:43.04 rsyslog_plugin\r\n 139055 root      20   0   99868  10840   9668 R  18.8   0.1   9:55.15 rsyslog_plugin\r\n 156907 root      20   0   99868  10000   9012 R  18.8   0.1   8:50.00 rsyslog_plugin\r\n 177107 root      20   0   99868  10876   9696 R  18.8   0.1   6:50.08 rsyslog_plugin\r\n 196262 root      20   0   99868   9916   8932 R  18.8   0.1   5:08.17 rsyslog_plugin\r\n 218870 root      20   0   99868   9964   8976 R  18.8   0.1   2:58.80 rsyslog_plugin\r\n 250023 root      20   0   99868  10844   9668 R  18.8   0.1   0:33.83 rsyslog_plugin\r\n  31751 root      20   0   99868  10012   9024 R  12.5   0.1  31:37.50 rsyslog_plugin\r\n  50444 root      20   0   99868   9968   8984 R  12.5   0.1  25:51.36 rsyslog_plugin\r\n  50455 root      20   0   99868  10056   9068 R  12.5   0.1  25:44.68 rsyslog_plugin\r\n  77543 root      20   0   99868  11012   9832 R  12.5   0.1  17:52.90 rsyslog_plugin\r\n  77700 root      20   0   99868   9812   8824 R  12.5   0.1  17:36.58 rsyslog_plugin\r\n  85992 root      20   0   99868  10920   9740 R  12.5   0.1  16:37.89 rsyslog_plugin\r\n  96018 root      20   0   99868  10908   9728 R  12.5   0.1  14:30.89 rsyslog_plugin\r\n 104532 root      20   0   99868  10940   9756 R  12.5   0.1  13:38.01 rsyslog_plugin\r\n 130863 root      20   0  165404  10952   9760 R  12.5   0.1  10:33.07 rsyslog_plugin\r\n 139590 root      20   0   99868  10024   9040 R  12.5   0.1   9:59.18 rsyslog_plugin\r\n 147852 root      20   0   99868  11020   9848 R  12.5   0.1   9:26.23 rsyslog_plugin\r\n 187155 root      20   0   99868  10044   9056 R  12.5   0.1   5:47.43 rsyslog_plugin\r\n 218423 root      20   0   99868  11004   9824 R  12.5   0.1   2:54.24 rsyslog_plugin\r\n 228543 root      20   0   99868   9968   8980 R  12.5   0.1   2:13.40 rsyslog_plugin\r\n 259539 root      20   0   99868  10900   9720 R  12.5   0.1   0:02.38 rsyslog_plugin\r\n  12754 root      20   0 1712848  78920  27184 S   6.2   0.5   0:19.14 telemetry\r\n 186646 root      20   0   99868  11024   9848 R   6.2   0.1   5:54.05 rsyslog_plugin\r\n\r\n```\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\nGenerate a situation which would cause the switch to emit a lot of logs and make sure rsyslog spawns multiple threads\r\n\r\n#### Output of `show version`:\r\nIssue seen on master & 202311. Possible on 202305 as well\r\n\r\n#### Potential Fix:\r\nRef: https://www.rsyslog.com/doc/configuration/modules/omprog.html#signalonclose \r\n\r\n> If this switch is set to \u201con\u201d, rsyslog will send a TERM signal to the child process before closing the pipe. That is, the process will first receive a TERM signal, and then an EOF on stdin.\r\n> No signal is issued if this switch is set to \u201coff\u201d (default). The child process can still detect it must terminate because reading from stdin will return EOF.\r\n\r\nWe need to set signalOnClose switch to on in rsyslog config and rsyslog_plugin will recieve a SIGTERM on parent close.\r\n\r\nrsyslog_plugin need to be updated to gracefully handle SIGTERM and exit",
+  "comments": [
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2024-04-24T15:16:43Z",
+      "body": "@zbud-msft Can you help take a look at this issue? The PR is https://github.com/sonic-net/sonic-buildimage/pull/11848. "
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2024-04-24T15:19:08Z",
+      "body": "@qiluo-msft FYI. Seems to be a code bug in rsyslog plugin."
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2024-04-24T15:20:30Z",
+      "body": "Also please check if rate limiting can work around this issue. "
+    },
+    {
+      "author": "vivekkarri",
+      "createdAt": "2024-04-25T21:51:26Z",
+      "body": "In our testing, we disable log rate limiting and that could be why we have seen this on our setups. \r\n\r\nBut the issue lies in how rsyslog creates/destroys new worker threads. According to the doc through https://www.rsyslog.com/doc/concepts/queues.html#worker-thread-pools, `$<object>QueueWorkerThreadMinimumMessages` & `$<object>QueueWorkerThreads` should be able to control this. \r\n\r\nBut we don't set this in SONiC and i couldn't find what the default limit is. IMO the issue can still exist because user has the flexibility to change the SyslogRateLimit variables and some combination might allow new worker/thread creation"
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2024-04-26T18:38:12Z",
+      "body": "@zbud-msft is looking into this issue."
+    },
+    {
+      "author": "zbud-msft",
+      "createdAt": "2024-04-26T18:56:42Z",
+      "body": "ETA: 5/15"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 18835,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/18835",
+      "title": "Close rsyslog plugin when rsyslog SIGTERM and EOF is sent to stream",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-05-15T01:08:14Z",
+      "createdAt": "2024-04-30T16:29:04Z",
+      "author": "zbud-msft",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFix #18771 \r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:27882794\r\n\r\n#### How I did it\r\n\r\nAdd signalOnClose for omprog as well as close rsyslog plugin when receives an EOF.\r\n\r\n#### How to verify it\r\n\r\nVerify rsyslog_plugin is running inside bgp or swss container\r\n\r\nRun `docker exec -it bgp supervisorctl restart rsyslogd` \r\n\r\nBefore change:\r\n\r\nThis will not kill current rsyslog_plugin process but instead rsyslogd will now break off its end of writing to cin and send EOF to rsyslog_plugin, however will not send a signal SIGTERM or SIGKILL to rsyslog_plugin. Therefore, rsyslog plugin will run in an infinite loop forever, constantly calling getline raising CPU to 100% inside docker.\r\n\r\nAfter change of adding signalOnClose=\"on\" to conf file inside omprog, rsyslogd will now send SIGTERM to rsyslog_plugin process running inside container, and rsyslog_plugin will die.\r\n\r\n? (         ): rsyslog_plugin/578637  ... [continued]: read())                                             = -1 (unknown) (INTERNAL ERROR: strerror_r(512, [buf], 128)=22)\r\n\r\n\r\nUT (will add sonic-mgmt testcase for storming events with logs)\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/rsyslog_plugin.conf.j2",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.cpp",
+          "additions": 15,
+          "deletions": 12
+        },
+        {
+          "path": "src/sonic-eventd/rsyslog_plugin/rsyslog_plugin.h",
+          "additions": 8,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-eventd/rsyslog_plugin_tests/rsyslog_plugin_ut.cpp",
+          "additions": 26,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2024-05-02T04:59:00Z",
+          "body": "can you explain why?"
+        },
+        {
+          "author": "keboliu",
+          "createdAt": "2024-05-09T02:07:59Z",
+          "body": "@zbud-msft could you please check why the checker is skipped? would you please re-trigger it?"
+        },
+        {
+          "author": "zbud-msft",
+          "createdAt": "2024-05-15T00:38:48Z",
+          "body": "@lguohan This change is to address 2 issues\r\n\r\n1) When rsyslogd is terminated, no signal is sent to child process of rsyslog_plugin meaning that rsyslog_plugin will be constantly trying to read from cin with no writer on the other end of the pipe. This leads to rsyslog_plugin process will constantly be reading via getline infinitely.\r\n\r\n2) Because rsyslog is terminated and the spawned rsyslog_plugin is still alive, when rsyslog starts backup again, and log is triggered, a new rsyslog_plugin will be spawned for that rsyslog process, which can lead to many \"ghost\" rsyslog_plugin processes that will be at high CPU usage.\r\n"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2024-05-15T01:00:12Z",
+          "body": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/18771"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-05-15T01:15:31Z",
+          "body": "Cherry-pick PR to 202311: https://github.com/sonic-net/sonic-buildimage/pull/18968"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2024-06-06T18:49:47Z",
+          "body": "Hi @zbud-msft, the change only handles `SIG_TERM`, but `EOF` of pipe is not handled yet. If `rsyslog` is killed by `SIG_KILL` or crash unexpectedly, the busy look is still there. "
+        },
+        {
+          "author": "zbud-msft",
+          "createdAt": "2024-06-06T20:39:28Z",
+          "body": "Discussed with Bing offline. From the code we are handling EOF. In loop we are checking getline(cin, line). If EOF is sent, getline(cin, line) will evaluate to false. UT also shows that we are replacing cin buffer with empty input stream, which will be treated as EOF when getline() is called by plugin->run.  "
+        }
+      ]
+    }
+  ]
+}

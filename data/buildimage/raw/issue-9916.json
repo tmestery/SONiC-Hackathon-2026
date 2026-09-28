@@ -1,0 +1,60 @@
+{
+  "number": 9916,
+  "title": "[Security] caclmgrd always allows all control plane traffic sourced from port TCP/179",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/9916",
+  "createdAt": "2022-02-04T08:28:30Z",
+  "closedAt": "2022-02-17T23:05:00Z",
+  "author": "bluecmd",
+  "labels": [
+    "Security :shield:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nI detected that all traffic that uses a source port TCP/179 will be allowed with no option of disabling this.\r\n\r\nAn attacker can trivially send packets with any source port they wish, so this would allow bypassing any control plane ACL.\r\n\r\n#### Steps to reproduce the issue:\r\n\r\n1. Use SONiC and **optionally** apply control plane ACLs (even with or without control plane ACLs this exploit is possible)\r\n\r\n#### Describe the results you received:\r\n\r\nOne of the first (i.e. highest priority) rules installed into iptables by caclmgrd is `iptables -A INPUT -p tcp --sport 179 -j ACCEPT` and `ip6tables -A INPUT -p tcp --sport 179 -j ACCEPT`.\r\n\r\nSince source port is fully controllable by the client establishing the connection, hitting this rule is trivial. Since this rule is one of the highest priority rules (higher than block IP2ME and custom control plane ACLs) it is impossible to configure SONiC to not allow this traffic.\r\n\r\n#### Describe the results you expected:\r\n\r\nControl plane traffic should not judge traffic based on source port. Leave it to conntrack.\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\nExample exploitation of an otherwise locked down IP2ME loopback address.\r\n\r\n```\r\nsudo nmap -g 179 -sS 11.11.11.111\r\nStarting Nmap 7.70 ( https://nmap.org ) at 2022-01-27 20:22 UTC\r\nNmap scan report for 11.11.11.111\r\nHost is up (0.000064s latency).\r\nNot shown: 996 closed ports\r\nPORT     STATE SERVICE\r\n22/tcp   open  ssh\r\n179/tcp  open  bgp\r\n443/tcp  open  https\r\n8080/tcp open  http-proxy\r\n\r\nNmap done: 1 IP address (1 host up) scanned in 14.91 seconds\r\n```\r\n\r\nFull disclosure: I filed this issue to help my PR fixing this #9827 move forward.\r\n",
+  "comments": [
+    {
+      "author": "bluecmd",
+      "createdAt": "2022-02-04T08:38:15Z",
+      "body": "For completeness sake, here is a default `iptables` listing with and without a simple control plane ACL applied. Notice that the `tcp spt:179` is before all the other DROPs.\r\n\r\n```\r\nadmin@sonic:~$ sudo iptables -vnL\r\nChain INPUT (policy ACCEPT 11 packets, 684 bytes)\r\n pkts bytes target     prot opt in     out     source               destination         \r\n17189 2047K ACCEPT     all  --  lo     *       127.0.0.1            0.0.0.0/0           \r\n    4   352 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 8\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 0\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 3\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 11\r\n    0     0 ACCEPT     udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp dpts:67:68\r\n    0     0 ACCEPT     udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp dpts:546:547\r\n    0     0 ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:179\r\n    0     0 ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp spt:179\r\n    0     0 DROP       all  --  *      *       0.0.0.0/0            10.1.0.1            \r\n[..]  \r\n    0     0 DROP       all  --  *      *       0.0.0.0/0            10.0.0.18           \r\n    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            TTL match TTL < 2\r\n```\r\n\r\n```\r\nadmin@sonic:~$ sudo iptables -vnL\r\nChain INPUT (policy ACCEPT 0 packets, 0 bytes)\r\n pkts bytes target     prot opt in     out     source               destination         \r\n  102  8447 ACCEPT     all  --  lo     *       127.0.0.1            0.0.0.0/0           \r\n    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 8\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 0\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 3\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 11\r\n    0     0 ACCEPT     udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp dpts:67:68\r\n    0     0 ACCEPT     udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp dpts:546:547\r\n    0     0 ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:179\r\n    0     0 ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp spt:179\r\n    0     0 ACCEPT     tcp  --  *      *       172.18.0.251         0.0.0.0/0            tcp dpt:22\r\n    0     0 DROP       all  --  *      *       0.0.0.0/0            10.1.0.1            \r\n[..]   \r\n    0     0 DROP       all  --  *      *       0.0.0.0/0            10.0.0.18           \r\n    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            TTL match TTL < 2\r\n    0     0 DROP       all  --  *      *       0.0.0.0/0            0.0.0.0/0           \r\n```\r\n\r\nThe ACL used to demo was:\r\n```json\r\n{\r\n  \"ACL_RULE\": {\r\n    \"ACL-CTRLPLANE-SSH-V4|PERMIT-BLACKBOX\": {\r\n      \"IP_TYPE\": \"ipv4any\",\r\n      \"SRC_IP\": \"172.18.0.251/32\",\r\n      \"PACKET_ACTION\": \"ACCEPT\",\r\n      \"PRIORITY\": \"1000\"\r\n    }\r\n  },\r\n  \"ACL_TABLE\": {\r\n    \"ACL-CTRLPLANE-SSH-V4\": {\r\n      \"policy_desc\": \"ACL for control plane, SSH specific IPv4\",\r\n      \"services\": [\r\n        \"SSH\"\r\n      ],\r\n      \"type\": \"CTRLPLANE\"\r\n    }\r\n  }\r\n}\r\n```\r\n\r\nThis was done on:\r\n```\r\nadmin@sonic:~$ show version\r\n\r\nSONiC Software Version: SONiC.202111.64061-dirty-20220109.192824\r\nDistribution: Debian 11.2\r\nKernel: 5.10.0-8-2-amd64\r\nBuild commit: ad7d827a5\r\nBuild date: Sun Jan  9 19:35:16 UTC 2022\r\nBuilt by: AzDevOps@sonic-build-workers-0011WU\r\n\r\nPlatform: x86_64-accton_as5712_54x-r0\r\nHwSKU: Accton-AS5712-54X\r\nASIC: broadcom\r\nASIC Count: 1\r\nSerial Number: N/A\r\nModel Number: N/A\r\nHardware Revision: N/A\r\nUptime: 17:37:01 up 7 min,  1 user,  load average: 1.49, 1.56, 0.96\r\n```"
+    },
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2022-02-16T16:53:42Z",
+      "body": "https://github.com/Azure/sonic-buildimage/pull/9827 is created to address this issue. Need merge"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 9827,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/9827",
+      "title": "[Security] caclmgrd: remove permit source port 179",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-02-17T23:05:00Z",
+      "createdAt": "2022-01-21T18:19:59Z",
+      "author": "bluecmd",
+      "body": "#### Why I did it\r\n\r\nFixes #9916.\r\n\r\nI detected that all traffic that uses a source port TCP/179 will be allowed with no option of disabling this.\r\n\r\nAn attacker can trivially send packets with any source port they wish, so this would allow bypassing any control plane ACL.\r\n\r\n#### How I did it\r\n\r\nI removed these statements. They appear to be for allowing BGP, but the needed rules are already present:\r\n\r\n - Allow destination port 179\r\n - Allow established connections\r\n\r\n#### How to verify it\r\n\r\nIf this patch is wrong BGP would not work, so test BGP and see that it works.\r\nAlso, you can check in a running instance /without/ this patch that `iptables -vnL` shows that 0 packets have been accepted into the `tcp spt:179` rule.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [x] 202012\r\n- [x] 202106\r\n- [x] 202111\r\n\r\nReason: Security patch. caclmgrd was introduced in 202012 it seems.\r\n\r\n#### Description for the changelog\r\n\r\ncaclmgrd: Remove explicit permit source port 179\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n![image](https://user-images.githubusercontent.com/149442/150579667-9b28c8d7-ed67-4b57-9b16-d731f967097f.png)\r\n",
+      "files": [
+        {
+          "path": "src/sonic-host-services/scripts/caclmgrd",
+          "additions": 0,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "bluecmd",
+          "createdAt": "2022-01-27T20:25:31Z",
+          "body": "I managed to create an easy repro. With a loopback interface configured as `11.11.11.111/32` a normal `nmap -sT 11.11.11.111` hits the DROP rule `  224 11200 DROP       all  --  *      *       0.0.0.0/0            11.11.11.111`. Scan takes very long time and no results.\r\n\r\nHowever, using `sudo nmap -g 179 -sS 11.11.11.111` allows one to bypass all control plane ACLs:\r\n```\r\nStarting Nmap 7.70 ( https://nmap.org ) at 2022-01-27 20:22 UTC\r\nNmap scan report for 11.11.11.111\r\nHost is up (0.000064s latency).\r\nNot shown: 996 closed ports\r\nPORT     STATE SERVICE\r\n22/tcp   open  ssh\r\n179/tcp  open  bgp\r\n443/tcp  open  https\r\n8080/tcp open  http-proxy\r\n\r\nNmap done: 1 IP address (1 host up) scanned in 14.91 seconds\r\n```\r\n\r\nIptables output:\r\n```\r\nChain INPUT (policy ACCEPT 22132 packets, 1362K bytes)\r\n pkts bytes target     prot opt in     out     source               destination         \r\n 339M  123G ACCEPT     all  --  lo     *       127.0.0.1            0.0.0.0/0           \r\n4019K  325M ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED\r\n    1    84 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 8\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 0\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 3\r\n    0     0 ACCEPT     icmp --  *      *       0.0.0.0/0            0.0.0.0/0            icmptype 11\r\n  297 97416 ACCEPT     udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp dpts:67:68\r\n    0     0 ACCEPT     udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp dpts:546:547\r\n    1    44 ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:179\r\n 1060 46640 ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp spt:179\r\n    0     0 DROP       all  --  *      *       0.0.0.0/0            10.0.0.11           \r\n  224 11200 DROP       all  --  *      *       0.0.0.0/0            11.11.11.111         \r\n```"
+        },
+        {
+          "author": "bluecmd",
+          "createdAt": "2022-02-01T16:02:45Z",
+          "body": "@yxieca as you are reviewing my other ACL PR, do you think you could review this one as well?"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "number": 22420,
+  "title": "Bug: 'config route add' incorrectly adds an empty string for default vrf",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/22420",
+  "createdAt": "2025-04-23T06:54:24Z",
+  "closedAt": "2025-09-10T15:08:47Z",
+  "author": "anders-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [
+    "anders-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nAfter adding a static route, `config reload` fails with a YANG validation error.\n\n```\nsudo config route add prefix 10.250.0.0/16 nexthop 10.120.20.207 \n```\ngenerates the following in ConfigDB:\n```\n\"STATIC_ROUTE\": {\n    \"default|10.250.0.0/16\": {\n        \"blackhole\": \"false\",\n        \"distance\": \"0\",\n        \"ifname\": \"\",\n        \"nexthop\": \"10.120.20.207\",\n        \"nexthop-vrf\": \"\"\n    }\n},\n```\n\nWe have \"\" passed as an entry for nexthop-vrf in our default config_db.json. Subsequent calls to `config replace` fail due to this entry.\n\n```\nadmin@tb3-dut:~$ sudo config replace /etc/sonic/config_db.json\nConfig Replacer: Config replacement starting.\nConfig Replacer: Target config length: 36417.\nConfig Replacer: Getting current config db.\nConfig Replacer: Generating patch between target config and current config db.\nConfig Replacer: Applying patch using 'Patch Applier'.\nPatch Applier: localhost: Patch application starting.\nPatch Applier: localhost: Patch: []\nPatch Applier: localhost getting current config db.\nPatch Applier: localhost: simulating the target full config after applying the patch.\nPatch Applier: localhost: validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: localhost: validating target config does not have empty tables,\n                            since they do not show up in ConfigDb.\nPatch Applier: localhost: sorting patch updates.\nFailed to replace config\nUsage: config replace [OPTIONS] TARGET_FILE_PATH\nTry \"config replace -h\" for help.\n\nError: Given patch will produce invalid config. Error: Data Loading Failed\nValue \"\" does not satisfy the constraint \"(((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt)),)*((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt))\" (range, length, or pattern).\n```\n\nWe can see from https://github.com/sonic-net/sonic-buildimage/blob/47687229f3a3cde08e9d144c1668c44a04dee41c/src/sonic-yang-models/yang-models/sonic-static-route.yang#L114 that the empty string is not a valid vrf identifier for a nexthop-vrf:\n```\n        leaf nexthop-vrf {\n          type string {\n            pattern \"((((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt)),)*((Vrf[a-zA-Z0-9_-]+)|(default)|(mgmt)))?\";\n          }\n          description\n            \"VRF name of the nexthop. This is for vrf leaking\";\n        }\n```\n\nThis can either be fixed by adding the string 'default' instead of '' for nexthops in the default vrf, or by adding '' to the YANG definition.\n\n### Steps to Reproduce\n\nsudo config route add prefix 10.250.0.0/16 nexthop 10.120.20.207 \nsudo config reload\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\n\n`config reload` fails after running `config prefix add`\n\nExpected:\n\n`config reload` should pass after running `config prefix add`\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 3862,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/3862",
+      "title": "Issue #22420: Modify 'config route add' command not to include empty \u2026",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-09-10T15:08:45Z",
+      "createdAt": "2025-04-23T07:43:41Z",
+      "author": "anders-nexthop",
+      "body": "<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\n\r\nThe config route commands accept a `nexthop-vrf` as an argument. When that argument is not specified, the commands use the empty string as the default. This violates the yang model, which only accepts vrf names of the form (`default`, `mgmt`, or `Vrf*`). In the case where a `nexthop-vrf` is not defined, we should fall back to using the same vrf given for the prefix we are adding. If that is not specified, then both prefix and nexthop will use the default vrf.\r\n\r\nFixes: [#22420](https://github.com/sonic-net/sonic-buildimage/issues/22420)\r\n\r\n#### How I did it\r\n\r\nModify the` add_route()` and `del_route()` codepaths from sonic-utilites/config/main.py to set nexthop-vrf to whatever the vrf is for the associated prefix whenever it is not explicitly specified.\r\n\r\n#### How to verify it\r\n\r\nAll unit tests pass (including all tests in `static_route_test.py`).\r\n\r\nI don't think the output of any show commands changes because of this, but it's possible there are combinations of different VRFs which would show up differently. Before this merges I'll set up some routes and nexthops with different VRFs and make sure any changes there may be are shown here.\r\n\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n",
+      "files": [
+        {
+          "path": "config/main.py",
+          "additions": 6,
+          "deletions": 4
+        },
+        {
+          "path": "tests/static_routes_test.py",
+          "additions": 144,
+          "deletions": 27
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-23T07:43:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-23T07:44:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-23T08:25:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-23T08:26:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-23T08:52:28Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-23T08:52:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-23T16:34:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-23T16:34:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-29T04:49:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-29T04:49:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-05-29T05:13:54Z",
+          "body": "@prsunny can you please review this PR?"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2025-06-03T16:26:21Z",
+          "body": "@anders-nexthop , do you know if this issue was caused by any recent PRs? "
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-06-09T19:09:04Z",
+          "body": "> @anders-nexthop , do you know if this issue was caused by any recent PRs?\r\n\r\nThis seems to have been part of the original design (https://github.com/sonic-net/sonic-utilities/pull/1534).\r\n\r\nHere is a snippet from that PR which shows that the empty string is expected for nexthop-vrf:\r\n```\r\n    def test_simple_static_route(self):\r\n        db = Db()\r\n        runner = CliRunner()\r\n        obj = {'config_db':db.cfgdb}\r\n\r\n        # config route add prefix 1.2.3.4/32 nexthop 30.0.0.5\r\n        result = runner.invoke(config.config.commands[\"route\"].commands[\"add\"], \\\r\n        [\"prefix\", \"1.2.3.4/32\", \"nexthop\", \"30.0.0.5\"], obj=obj)\r\n        print(result.exit_code, result.output)\r\n        assert ('1.2.3.4/32') in db.cfgdb.get_table('STATIC_ROUTE')\r\n        assert db.cfgdb.get_entry('STATIC_ROUTE', '1.2.3.4/32') == {'nexthop': '30.0.0.5', 'blackhole': 'false', 'distance': '0', 'ifname': '', 'nexthop-vrf': ''}\r\n\r\n        # config route del prefix 1.2.3.4/32 nexthop 30.0.0.5\r\n        result = runner.invoke(config.config.commands[\"route\"].commands[\"del\"], \\\r\n        [\"prefix\", \"1.2.3.4/32\", \"nexthop\", \"30.0.0.5\"], obj=obj)\r\n        print(result.exit_code, result.output)\r\n        assert not '1.2.3.4/32' in db.cfgdb.get_table('STATIC_ROUTE')\r\n```\r\n\r\nThe yang model was added later in https://github.com/sonic-net/sonic-buildimage/pull/11932. That change seems to assume that the nexthop-vrf will not be the empty string, and none of the test cases added there test for it. There was a recent change to the pattern (in https://github.com/sonic-net/sonic-buildimage/pull/21642), but I think the issue existed before then.\r\n"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2025-07-02T15:09:02Z",
+          "body": "@prsunny Can you please help check again?"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-08-12T19:15:09Z",
+          "body": "@prsunny can we get this request merged please?"
+        }
+      ]
+    }
+  ]
+}

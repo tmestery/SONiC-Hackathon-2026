@@ -1,0 +1,73 @@
+{
+  "number": 22437,
+  "title": "Bug: Incorrect system time due to Chrony writing local time to RTC instead of UTC",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/22437",
+  "createdAt": "2025-04-24T11:34:20Z",
+  "closedAt": "2025-05-28T20:43:05Z",
+  "author": "YairRaviv",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "saiarcot895"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n**Issue Summary:**\nOn SONiC systems configured with a local timezone, the system time is incorrect due to a mismatch in how Chrony and the Linux kernel interpret the RTC (hardware clock) time.\n\n**Background:**\nBy default, SONiC uses UTC for system operations. However, when the system timezone is set to a local time, Chrony misinterprets the intended format of the hardware RTC.\n\nLinux expects the hardware RTC to always be in UTC.\nChrony, on the other hand, checks /etc/adjtime to determine whether the RTC should be in local time or UTC.\n\nIf /etc/adjtime is missing and rtconutc is not set, Chrony assumes the RTC is in local time,\nAs a result, Chrony writes local time into the RTC.\n\nOn reboot, Linux reads the RTC assuming it\u2019s in UTC, and then applies the local timezone again.\nThis causes the system time to be offset by the timezone difference, effectively applying the offset twice.\n\nChrony fixes the incorrect system time by using a slewing mechanism, which could reach up to 200,000 ppm slewing rate for large offsets.\nThis affects processes/tests that rely on the system time.\n\n### Steps to Reproduce\n\n1. Set the system timezone to the local time zone.\n2. Reboot the device.\n3. Observe the system time drift (e.g., off by UTC to local time zone diff).\n\n### Actual Behavior and Expected Behavior\n\nActual behavior - System time is offset from the actual time due to double timezone conversion.\n\nExpected behavior - The system time should be accurate, regardless of the configured timezone.\n\n### Relevant log output\n\n```shell\nsonic_user:~$ sudo chronyc rtcdata\nRTC ref time (UTC) : Thu Apr 24 11:03:29 2025\nNumber of samples  : 5\nNumber of runs     : 3\nSample span period :   83\nRTC is fast by     : -10800.029297 seconds\nRTC gains time at  :    14.606 ppm\nsonic_user:~$\nsonic_user:~$\nsonic_user:~$ timedatectl\n               Local time: Thu 2025-04-24 17:06:18 IDT\n           Universal time: Thu 2025-04-24 14:06:18 UTC\n                 RTC time: n/a\n                Time zone: Israel (IDT, +0300)\nSystem clock synchronized: no\n              NTP service: active\n          RTC in local TZ: no\nsonic_user:~$\nsonic_user:~$\nsonic_user:~$\nsonic_user:~$ date\nThu Apr 24 05:06:33 PM IDT 2025\nsonic_user:~$\nsonic_user:~$\nsonic_user:~$\nsonic_user:~$ sudo systemctl stop chrony\nsonic_user:~$\nsonic_user:~$\nsonic_user:~$\nsonic_user:~$ timedatectl\n               Local time: Thu 2025-04-24 17:09:01 IDT\n           Universal time: Thu 2025-04-24 14:09:01 UTC\n                 RTC time: Thu 2025-04-24 14:09:10\n                Time zone: Israel (IDT, +0300)\nSystem clock synchronized: no\n              NTP service: inactive\n          RTC in local TZ: no\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "volodymyrsamotiy",
+      "createdAt": "2025-04-28T16:30:09Z",
+      "body": "@saiarcot895, could you please help to check?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22693,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/22693",
+      "title": "Tell chrony that the RTC is always in UTC",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-05-28T20:43:04Z",
+      "createdAt": "2025-05-23T19:50:26Z",
+      "author": "saiarcot895",
+      "body": "Fixes #22437\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nTell chrony that the RTC on devices is always stored in UTC and not the local time zone. For devices that are running on UTC, this won't change anything; for devices that are not running on UTC, this will correct some time issues where the kernel interprets the time in the RTC as being in UTC, but Chrony interprets that time as being in the local time zone.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: 33062976\r\n\r\n#### How I did it\r\n\r\nAdd `rtconutc` to Chrony's configuration file.\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\nTested in community by setting a non-UTC timezone for the device and making sure that after a reboot, the time is set correctly.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/image_config/chrony/chrony.conf.j2",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/chrony.conf",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/chrony_smartswitch.conf",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-23T19:50:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-23T19:50:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-30T02:24:40Z",
+          "body": "Cherry-pick PR to 202505: https://github.com/sonic-net/sonic-buildimage/pull/22785"
+        }
+      ]
+    }
+  ]
+}

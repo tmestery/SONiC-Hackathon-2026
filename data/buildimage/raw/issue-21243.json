@@ -1,0 +1,200 @@
+{
+  "number": 21243,
+  "title": "[dualtor] CRM test fails on test_crm_nexthop_group when tunnel route created for PortChannel neighbor",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21243",
+  "createdAt": "2024-12-20T11:45:01Z",
+  "closedAt": "2025-08-06T05:32:49Z",
+  "author": "stepanblyschak",
+  "labels": [
+    "Triaged",
+    "MSFT",
+    "Issue for 202405",
+    "Issue for 202411"
+  ],
+  "assignees": [
+    "Ndancejic"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nCRM test fails on test_crm_nexthop_group test case due to orchagent crash:\r\n\r\n```\r\n2024 Dec 19 18:15:25.382634 sonic ERR swss#orchagent: :- removeRoutePost: Failed to remove route prefix:2.0.4.99/32\r\n2024 Dec 19 18:15:25.382654 sonic NOTICE swss#orchagent: :- removeRoutePost: Remove Nexthop Group 2.0.0.1@PortChannel101,2.0.4.99@PortChannel101\r\n2024 Dec 19 18:15:25.382654 sonic INFO swss#orchagent: :- isMuxNexthops: No mux nexthop found\r\n2024 Dec 19 18:15:25.382666 sonic INFO swss#orchagent: :- removeRoutePost: Remove route 2.0.4.99/32 with next hop(s) 2.0.0.1@PortChannel101,2.0.4.99@PortChannel101\r\n2024 Dec 19 18:15:25.382884 sonic NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group 2.0.0.1@PortChannel101,2.0.4.10@PortChannel101\r\n2024 Dec 19 18:15:25.383167 sonic NOTICE pmon#ycabled: Async client port = Ethernet76 exception occured because of StatusCode.UNAVAILABLE tid YCableAsyncNotificationTask\r\n2024 Dec 19 18:15:25.387805 sonic INFO swss#orchagent: :- flush_removing_entries: ObjectBulker.flush removing_entries 2 rc=0 statuses[0]=0\r\n2024 Dec 19 18:15:25.387805 sonic ERR swss#orchagent: :- meta_generic_validation_remove: object 0x5000000001c67 reference count is 1, can't remove\r\n2024 Dec 19 18:15:25.387829 sonic ERR swss#orchagent: :- removeNextHopGroup: Failed to remove next hop group 5000000001c67, rv:-17\r\n2024 Dec 19 18:15:25.387840 sonic ERR swss#orchagent: :- handleSaiRemoveStatus: Encountered failure in remove operation, exiting orchagent, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_OBJECT_IN_US\r\nE\r\n2024 Dec 19 18:15:25.387846 sonic NOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\r\n```\r\n\r\nAlso, during some investigation found another flow which triggers a different crash:\r\n\r\n```\r\nfrom swsscommon import swsscommon\r\n\r\ndef to_fvs(fvs):\r\n    return swsscommon.FieldValuePairs([(k, v) for k, v in fvs.items()])\r\n\r\ndb = swsscommon.DBConnector(\"APPL_DB\", 0)\r\nntbl = swsscommon.ProducerStateTable(db, \"NEIGH_TABLE\")\r\nrtbl = swsscommon.ProducerStateTable(db, \"ROUTE_TABLE\")\r\n\r\nip = \"2.0.6.42\"\r\nip2 = \"2.0.0.2\"\r\n\r\nntbl.set(f\"PortChannel101:{ip2}\", to_fvs({\"neigh\": \"00:22:00:00:00:11\", \"family\": \"IPv4\"}))\r\nrtbl.set(\"2.0.0.0/8\", to_fvs({\"protocol\": \"kernel\", \"nexthop\": f\"0.0.0.0\", \"ifname\": \"PortChannel101\"}))\r\n\r\n\r\nntbl.set(f\"PortChannel101:{ip}\", to_fvs({\"neigh\": \"00:00:00:00:00:00\", \"family\": \"IPv4\"})) # needs to be 0 mac\r\n\r\nrtbl.set(ip, to_fvs({\"protocol\": \"kernel\", \"nexthop\": f\"{ip2},{ip}\", \"ifname\": \"PortChannel101,PortChannel101\"}))\r\n\r\n\r\nntbl.set(f\"PortChannel101:{ip}\", to_fvs({\"neigh\": \"00:11:00:00:00:22\", \"family\": \"IPv4\"}))\r\n\r\nrtbl._del(ip)\r\nntbl._del(f\"PortChannel101:{ip}\")\r\n\r\nntbl._del(f\"PortChannel101:{ip2}\")\r\nrtbl._del(\"2.0.0.0/8\")\r\n```\r\n\r\nGot failure:\r\n\r\n```\r\n27:17.657861 r-tigon-21 NOTICE swss#orchagent: :- addNeighbor: Created neighbor ip 2.0.6.42, 00:11:00:00:00:22 on PortChannel101\r\n2024 Dec 19 18:27:17.663114 r-tigon-21 NOTICE swss#orchagent: :- addNextHop: Created next hop 2.0.6.42 on PortChannel101\r\n2024 Dec 19 18:27:17.668304 r-tigon-21 NOTICE swss#orchagent: :- remove_route: Removed tunnel route to 2.0.6.42/32\r\n2024 Dec 19 18:27:17.671257 r-tigon-21 NOTICE swss#orchagent: :- addNextHopGroup: Create next hop group 2.0.0.2@PortChannel101,2.0.6.42@PortChannel101\r\n2024 Dec 19 18:27:17.674968 r-tigon-21 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"2.0.6.42/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} doesn't exist\r\n2024 Dec 19 18:27:17.675064 r-tigon-21 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1, status: SAI_STATUS_ITEM_NOT_FOUND\r\n2024 Dec 19 18:27:17.675101 r-tigon-21 ERR swss#orchagent: :- addRoutePost: Failed to set route 2.0.6.42/32 with next hop(s) 2.0.0.2@PortChannel101,2.0.6.42@PortChannel101\r\n2024 Dec 19 18:27:17.675123 r-tigon-21 ERR swss#orchagent: :- handleSaiSetStatus: Encountered failure in set operation, exiting orchagent, SAI API: SAI_API_ROUTE, status: SAI_STATUS_NOT_EXECUTED\r\n2024 Dec 19 18:27:17.675151 r-tigon-21 NOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\r\n2024 Dec 19 18:27:30.996722 r-tigon-21 NOTICE swss#orchagent: :- sai_redis_notify_syncd: invoked DUMP succeeded\r\n2024 Dec 19 18:27:32.014192 r-tigon-21 INFO swss#supervisord 2024-12-19 18:27:32,012 WARN exited: orchagent (terminated by SIGABRT (core dumped); not expected)\r\n```\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Run test:\r\n```\r\npython3 -m pytest crm/test_crm.py --inventory=\"../ansible/inventory,../ansible/veos\" --host-pattern mtvr-tigon-02,mtvr-tigon-04 --module-path ../ansible/library/ --testbed sonic-dual-tor-tigon-01-dualtor-aa --testbed_file ../ansible/testbed.yaml --allow_recover  --assert plain --log-cli-level debug --show-capture=no -ra --showlocals -v --clean-alluredir --alluredir=/tmp/allure-results --timeout 6000 --session-timeout 6000 --allure_server_addr=\"allure.nvidia.com\" --allure_server_port= --topology dualtor,any,util,t0 --skip_sanity --dynamic_update_skip_reason --random_seed=1734183076 --store_la_logs --ignore_la_failure\r\n```\r\n\r\n#### Describe the results you received:\r\n\r\nOrchagent creates tunnel route when receiving neighbor with 0 Mac on PortChannel, causing various issues when same prefix is installed via RouteOrch.\r\nOrchagent crash due to an attempt to remove NHG which is still referenced by a route.\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\nNo crashing, no tunnel route created on PortChannel.\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n\r\nSONiC Software Version: SONiC.202405_RC.60-4952d6aea_Internal\r\nSONiC OS Version: 12\r\nDistribution: Debian 12.8\r\nKernel: 6.1.0-22-2-amd64\r\nBuild commit: 51824d390\r\nBuild date: Wed Dec 18 09:24:32 UTC 2024\r\nBuilt by: sw-r2d2-bot@r-build-sonic-ci03-243\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2025-01-06T17:49:46Z",
+      "body": "@prsunny Could you please help take a look? The issue is being discussed in the weekly issue triage meeting. It's consistently happening in 202405 branch when running `test_crm.py`. "
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2025-01-06T17:50:17Z",
+      "body": "@lolyu Do we see same issue in our nightly test?"
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2025-01-06T17:52:53Z",
+      "body": "@lolyu , @Ndancejic , would you check this?"
+    },
+    {
+      "author": "dprital",
+      "createdAt": "2025-01-21T07:37:00Z",
+      "body": "Hi @Ndancejic , @lolyu  - What is the update status here ? Thnaks."
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-01-21T20:45:02Z",
+      "body": "Hi @dprital I'm able to repro this, I'll investigate further this week to determine root-cause"
+    },
+    {
+      "author": "dprital",
+      "createdAt": "2025-02-03T10:36:17Z",
+      "body": "Hi @Ndancejic , Can you please update upon progress ?"
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-02-11T00:43:18Z",
+      "body": "Hi @dprital, I have a few leads but I want to make sure I'm on the right track. I have a few questions for you\n\n1. which sonic version is your internal image is based on? I want to check with a few known issues including the one below.\n2. does the image have these patches included: \n- https://github.com/sonic-net/sonic-swss/pull/2744\n- https://github.com/sonic-net/sonic-swss/pull/2999\n\nFor the second crash I'm investigating that currently, I think it's similar to another issue we've been seeing. I'll follow up on that as well as I get more information."
+    },
+    {
+      "author": "dprital",
+      "createdAt": "2025-02-11T07:22:03Z",
+      "body": "Hi @Ndancejic , Our SONiC Image is based on Hash fbf19eb014765825650d611b7e894775e212b0ba + Additional PRs (that later on merged as well).\n\nI verified that both PRs mentioned by you are part of this image.\n\n+ @stepanblyschak  FYI"
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-02-18T23:45:12Z",
+      "body": "Hey @dprital, tried reproing a few times again and surprisingly was not successful. I looked through some internal documentation and found reference to a failure that was specifically on Mellanox-SN4700-V64 platform. I'll try again with this platform, but I wanted to confirm if this is the platform you are using for this test?"
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-02-20T23:29:45Z",
+      "body": "I have a root-cause for the second crash reported with this signature:\n```\n2024 Dec 19 18:27:17.675064 r-tigon-21 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1, status: SAI_STATUS_ITEM_NOT_FOUND\n```\n\nIt's caused by muxOrch handling of tunnel route. When PortChannel is learned as a zero-mac neighbor, orchagent assigns a tunnel route to the Peer ToR to see if the peer has this neighbor learned. However if another route with a prefix matching this neighbor ip is learned and the neighbor mac is resolved in a short period of time, dualtor logic can remove the tunnel route before our internal cache is updated. The route update will then attempt to set route, but fail because it's not present in the ASIC. I'm discussing the plan for fix this week and will update that as soon as we figure out a plan/have a PR out."
+    },
+    {
+      "author": "congh-nvidia",
+      "createdAt": "2025-02-21T06:23:16Z",
+      "body": "> Hey [@dprital](https://github.com/dprital), tried reproing a few times again and surprisingly was not successful. I looked through some internal documentation and found reference to a failure that was specifically on Mellanox-SN4700-V64 platform. I'll try again with this platform, but I wanted to confirm if this is the platform you are using for this test?\n\nHi @Ndancejic , yes we are now running the dualtor tests on Mellanox-SN4700-V64 platform and the issue reproduced in 202411 branch."
+    },
+    {
+      "author": "dprital",
+      "createdAt": "2025-02-27T12:37:30Z",
+      "body": "@Ndancejic , Do you have ETA for the fix ?"
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-02-28T21:19:28Z",
+      "body": "Hey @dprital, I think I'll need about 2 weeks to complete the fix for that issue. We're currently discussing the options for the fix. I'd say March 14th"
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2025-03-07T01:46:03Z",
+      "body": "Hi @Ndancejic, can you help me understand if this is a generic issue or Mellanox only issue? "
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2025-03-07T18:02:45Z",
+      "body": "Checked the test result on other dualtor platform. The issue is only seen on Mellanox dualtor.\n@stepanblyschak, @dprital A few questions regarding this issue\n1. Is there any special logic in handling tunnel route? \n2. I do remember there is some bulk API not supported on Mellanox. Is that related?\n\n@Ndancejic Do you consider this as a blocking issue for dualtor?"
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-03-17T22:30:54Z",
+      "body": "Hey @bingwang-ms, @dprital, I had a chance to revisit the test, there seems to be a couple of things going on. \n\nOrchagent crashes becase it attempts to remove a nexthop group that still has a route reference:\n```\n2025 Mar 14 23:21:24.888981 str3-msn4700-12 NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group 2.0.1.0@PortChannel101,2.0.0.1@PortChannel101\n2025 Mar 14 23:21:24.889360 str3-msn4700-12 NOTICE syncd#SDK: [SAI_NEXT_HOP_GROUP.NOTICE] ./src/mlnx_sai_nexthopgroup.c[5367]- mlnx_remove_next_hop_group_members: Remove NEXT_HOP_GROUP_MEMBER [OID:0x81490000002D] [ID:517]\n2025 Mar 14 23:21:24.889360 str3-msn4700-12 NOTICE syncd#SDK: [SAI_NEXT_HOP_GROUP.NOTICE] ./src/mlnx_sai_nexthopgroup.c[5367]- mlnx_remove_next_hop_group_members: Remove NEXT_HOP_GROUP_MEMBER [OID:0x81090000002D] [ID:516]\n2025 Mar 14 23:21:24.892492 str3-msn4700-12 INFO swss#orchagent: :- flush_removing_entries: ObjectBulker.flush removing_entries 2 rc=0 statuses[0]=0\n2025 Mar 14 23:21:24.892492 str3-msn4700-12 ERR swss#orchagent: :- meta_generic_validation_remove: object 0x5000000001133 reference count is 1, can't remove\n2025 Mar 14 23:21:24.892492 str3-msn4700-12 ERR swss#orchagent: :- removeNextHopGroup: Failed to remove next hop group 5000000001133, rv:-17\n2025 Mar 14 23:21:24.892492 str3-msn4700-12 ERR swss#orchagent: :- handleSaiRemoveStatus: Encountered failure in remove operation, exiting orchagent, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_OBJECT_IN_USE\n2025 Mar 14 23:21:24.892492 str3-msn4700-12 NOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\n2025 Mar 14 23:21:24.892706 str3-msn4700-12 NOTICE syncd#SDK: :- processNotifySyncd: Invoking SAI failure dump\n2025 Mar 14 23:21:41.093360 str3-msn4700-12 INFO swss#supervisord 2025-03-14 23:21:41,092 WARN exited: orchagent (terminated by SIGABRT (core dumped); not expected)\n```\n# Bulker Stopping on single failure\nbulk route removal fails on an unrelated route that does not exist:\n```\n2025 Mar 14 23:21:24.837827 str3-msn4700-12 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"2.0.2.44/3\n2\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} doesn't exist\n2025 Mar 14 23:21:24.837847 str3-msn4700-12 ERR swss#orchagent: :- flush_removing_entries: EntityBulker.flush remove entries failed, number of entries to remove: 326, status: SAI_STATUS_ITEM_NOT_FOUND\n```\n\n\nI don't see any failures for other routes, so I think one of the issues here is that the route bulk operation is failing on a single route and is not processing other routes that are left:\n```\n2025 Mar 14 23:21:24.837827 str3-msn4700-12 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"2.0.2.44/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} doesn't exist\n2025 Mar 14 23:21:24.837847 str3-msn4700-12 ERR swss#orchagent: :- flush_removing_entries: EntityBulker.flush remove entries failed, number of entries to remove: 326, status: SAI_STATUS_ITEM_NOT_FOUND\n...\n2025 Mar 14 23:21:24.839708 str3-msn4700-12 ERR swss#orchagent: :- removeRoutePost: Failed to remove route prefix:2.0.1.0/32\n2025 Mar 14 23:21:24.839735 str3-msn4700-12 NOTICE swss#orchagent: :- removeRoutePost: Remove Nexthop Group 2.0.1.0@PortChannel101,2.0.0.1@PortChannel101\n2025 Mar 14 23:21:24.839735 str3-msn4700-12 INFO swss#orchagent: :- isMuxNexthops: No mux nexthop found\n2025 Mar 14 23:21:24.839735 str3-msn4700-12 INFO swss#orchagent: :- removeRoutePost: Remove route 2.0.1.0/32 with next hop(s) 2.0.1.0@PortChannel101,2.0.0.1@PortChannel101\n```\n\n\nLooks like the routes do not get processed and therefore return task_success, which causes orchagent to believe that it is safe to remove route references, otherwise it would return and not process the nexthop group. However, entitybulker is currently configured to ignore ERROR and continue processing removal entries, I don't think this is happening in this case:\nrouteorch.cpp:\n```\nif (status != SAI_STATUS_SUCCESS)\n{\n    SWSS_LOG_ERROR(\"Failed to remove route prefix:%s\\n\", ipPrefix.to_string().c_str());\n    task_process_status handle_status = handleSaiRemoveStatus(SAI_API_ROUTE, status);\n    if (handle_status != task_success)\n    {\n        return parseHandleSaiStatusFailure(handle_status);\n    }\n}\n```\n\n\nbulker.h:\n```\nsai_status_t status = (*remove_entries)((uint32_t)count, rs.data(), SAI_BULK_OP_ERROR_MODE_IGNORE_ERROR, statuses.data());\n```\n\n# Route failure\nThe reason the route is failing to be removed is that the nexthop for this IP is unresolved when the route is added because neighbor creation has not been processed yet:\n```\n2025 Mar 14 23:18:24.662378 str3-msn4700-12 INFO swss#orchagent: :- create_entry: EntityBulker.create_entry 183, 1, 1\n2025 Mar 14 23:18:24.662395 str3-msn4700-12 INFO swss#orchagent: :- addNextHopGroup: Failed to get next hop 2.0.1.0@PortChannel101 in 2.0.1.0@PortChannel101,2.0.0.1@PortChannel101\n2025 Mar 14 23:18:24.662395 str3-msn4700-12 INFO swss#orchagent: :- addRoute: Failed to get next hop 2.0.1.0@PortChannel101 in 2.0.1.0@PortChannel101,2.0.0.1@PortChannel101, resolving neighbor\n2025 Mar 14 23:18:24.662419 str3-msn4700-12 INFO swss#orchagent: :- resolveNeighborEntry: Flushing ARP entry 'PortChannel101:2.0.1.0 --> 00:00:00:00:00:00'\n2025 Mar 14 23:18:24.662610 str3-msn4700-12 INFO swss#orchagent: :- addTempRoute: Failed to get next hop 2.0.1.0@PortChannel101 for 2.0.1.0/32\n...\n2025 Mar 14 23:18:24.758278 str3-msn4700-12 INFO syncd#SDK: [SAI_ROUTE.INFO] ./src/mlnx_sai_route.c[2033]- mlnx_route_bulk_api_impl_async: Created ROUTE_ENTRY 2.0.1.0 255.255.255.255\n...\n2025 Mar 14 23:18:24.818648 str3-msn4700-12 INFO swss#orchagent: :- addRoutePost: Post create route 2.0.1.0/32 with next hop(s) 2.0.0.1@PortChannel101\n2025 Mar 14 23:18:24.818648 str3-msn4700-12 INFO swss#orchagent: :- isMuxNexthops: No mux nexthop found\n```\nAfter some time, a zero mac neighbor entry is created to check if peer has this neighbor resolved. Since the neighbor is not resolved before test cleanup, the tunnel route is removed:\n```\n2025 Mar 14 23:18:39.645932 str3-msn4700-12 INFO swss#orchagent: :- addZeroMacTunnelRoute: Creating tunnel route for neighbor 2.0.2.44\n2025 Mar 14 23:18:39.645932 str3-msn4700-12 INFO swss#orchagent: :- createStandaloneTunnelRoute: Creating standalone tunnel route for neighbor 2.0.2.44\n2025 Mar 14 23:18:39.645932 str3-msn4700-12 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"2.0.2.44/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} already exists\n2025 Mar 14 23:18:39.645932 str3-msn4700-12 NOTICE swss#orchagent: :- create_route: Tunnel route to 2.0.2.44/32 already exists\n```\nSo when this route is being processed, the entry is not present in asic which leads to SAI_STATUS_ITEM_NOT_FOUND error.\n\n# Second crash reported\nI was also able to reproduce the second crash with just 3 commands:\n```\nsudo ip neigh replace 2.0.0.1 lladdr 11:22:33:44:55:66 dev PortChannel101\nsudo ip -4 route add 2.0.2.0/32 nexthop via 2.0.2.0 onlink dev PortChannel101 nexthop via 2.0.0.1 onlink dev PortChannel101\nsudo ip neigh replace 2.0.2.0 lladdr 11:22:33:44:55:66 dev PortChannel101\n```\nsimilarly, neighbor is not resolved, so zero mac entry and tunnel route are created:\n```\n2025 Mar 14 22:50:45.126867 str3-msn4700-11 INFO swss#orchagent: :- addZeroMacTunnelRoute: Creating tunnel route for neighbor 2.0.2.0\n2025 Mar 14 22:50:45.126867 str3-msn4700-11 INFO swss#orchagent: :- createStandaloneTunnelRoute: Creating standalone tunnel route for neighbor 2.0.2.0\n2025 Mar 14 22:50:45.126933 str3-msn4700-11 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"2.0.2.0/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} already exi\nsts\n2025 Mar 14 22:50:45.126933 str3-msn4700-11 NOTICE swss#orchagent: :- create_route: Tunnel route to 2.0.2.0/32 already exists\n2025 Mar 14 22:50:45.127013 str3-msn4700-11 INFO swss#orchagent: :- addNextHopGroup: Failed to get next hop 2.0.2.0@PortChannel101 in 2.0.2.0@PortChannel101,2.0.0.1@PortChannel101\n```\n\nIn this case though, the neighbor can be resolved and when attempt to set route, it fails due to SAI_STATUS_ITEM_NOT_FOUND:\n```\n2025 Mar 14 22:50:45.976027 str3-msn4700-11 NOTICE swss#orchagent: :- addNextHop: Created next hop 2.0.2.0 on PortChannel101\n2025 Mar 14 22:50:45.976232 str3-msn4700-11 INFO swss#orchagent: :- addNextHop: Resolved neighbor for 2.0.2.0@PortChannel101\n2025 Mar 14 22:50:45.976232 str3-msn4700-11 INFO swss#orchagent: :- increaseRouterIntfsRefCount: Router interface PortChannel101 ref count is increased to 10\n2025 Mar 14 22:50:45.976266 str3-msn4700-11 INFO swss#orchagent: :- updateNeighbor: Neighbor ADD event: 2.0.2.0 alias 'PortChannel101', installing pending SRv6 SIDs\n2025 Mar 14 22:50:45.976295 str3-msn4700-11 INFO swss#orchagent: :- removeStandaloneTunnelRoute: Removing standalone tunnel route for neighbor 2.0.2.0\n\n2025 Mar 14 22:50:45.976806 str3-msn4700-11 NOTICE syncd#SDK: [SAI_ROUTE.NOTICE] ./src/mlnx_sai_route.c[921]- mlnx_remove_route: Remove ROUTE_ENTRY 2.0.2.0 255.255.255.255\n\n2025 Mar 14 22:50:45.978346 str3-msn4700-11 NOTICE swss#orchagent: :- remove_route: Removed tunnel route to 2.0.2.0/32\n...\n2025 Mar 14 22:50:45.981912 str3-msn4700-11 INFO swss#orchagent: :- flush_creating_entries: ObjectBulker.flush creating_entries 2\n2025 Mar 14 22:50:45.981912 str3-msn4700-11 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"2.0.2.0/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} doesn't exi\nst\n2025 Mar 14 22:50:45.981912 str3-msn4700-11 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1, status: SAI_STATUS_ITEM_NOT_FOUND\n2025 Mar 14 22:50:45.981970 str3-msn4700-11 INFO swss#orchagent: :- flush_setting_entries: EntityBulker.flush setting_entries status[0]=-23(0x0x7f9b30595200)\n2025 Mar 14 22:50:45.981970 str3-msn4700-11 ERR swss#orchagent: :- addRoutePost: Failed to set route 2.0.2.0/32 with next hop(s) 2.0.2.0@PortChannel101,2.0.0.1@PortChannel101\n2025 Mar 14 22:50:45.981970 str3-msn4700-11 ERR swss#orchagent: :- handleSaiSetStatus: Encountered failure in set operation, exiting orchagent, SAI API: SAI_API_ROUTE, status: SAI_STATUS_NOT_EXECUTED\n2025 Mar 14 22:50:45.982039 str3-msn4700-11 NOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\n```\n\n# Summary\nI think there's two issues going on here:\n1. the bulker should be processing all remove_entry operations, even if SAI_STATUS_ITEM_NOT_FOUND is returned for a single entity. @dprital could you help confirm that the bulk operations are handling SAI_BULK_OP_ERROR_MODE_IGNORE_ERROR flag correctly? If so, and there is really an error with the remaining remove_entry operations, could you help confirm why handleSaiRemoveStatus is returning task_success code?\n2. routeOrch is unaware of tunnel routes created in dualtor cases (either from muxorch or StandaloneTunnelRoute) and conflicting route entries will get processed without knowledge of tunnel routes being created or removed. I'm already working on a fix for this as mentioned above, but this is a slightly different case that I'll make sure to add to testing."
+    },
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2025-03-25T15:38:22Z",
+      "body": ">  @dprital could you help confirm that the bulk operations are handling SAI_BULK_OP_ERROR_MODE_IGNORE_ERROR flag correctly?\n\n@Ndancejic SAIRedis does not handle SAI_BULK_OP_ERROR_MODE_IGNORE_ERROR flag correctly when meta validation fails this is before entering Nvidia SAI code:\n\n```\n2025 Mar 14 23:21:24.837827 str3-msn4700-12 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"2.0.2.44/3\n2\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"} doesn't exist\n```\n\nhttps://github.com/sonic-net/sonic-sairedis/blob/master/meta/Meta.cpp#L669\n\n```c++\n    for (uint32_t idx = 0; idx < object_count; idx++)                                                                   \\\n    {                                                                                                                   \\\n        sai_status_t status = meta_sai_validate_ ##ot (&ot[idx], false);                                                \\\n        CHECK_STATUS_SUCCESS(status);                                                                                   \\\n        sai_object_meta_key_t meta_key = {                                                                              \\\n            .objecttype = (sai_object_type_t)SAI_OBJECT_TYPE_ ## OT,                                                    \\\n            .objectkey = { .key = { .ot = ot[idx] } }                                                                   \\\n             };                                                                                                         \\\n        vmk.push_back(meta_key);                                                                                        \\\n        status = meta_generic_validation_set(meta_key, &attr_list[idx]);                                                \\\n        CHECK_STATUS_SUCCESS(status);                                                                                   \\\n    }                                                                                                                   \\\n    auto status = m_implementation->bulkSet(object_count, ot, attr_list, mode, object_statuses);                        \\\n    \n```\n\n`CHECK_STATUS_SUCCESS` will return from a function if encountered an error and the bulk is not executed"
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-04-23T21:23:41Z",
+      "body": "Hey @stepanblyschak I see... That leaves us with the question of why we're only seeing this on mellanox devices, I'll add some print statements and run a few tests to check the bulker function to confirm this and get back to you on the results of that. In the meantime I'm finishing up the PR to address issue 1 and will update here once I post that"
+    },
+    {
+      "author": "Ndancejic",
+      "createdAt": "2025-06-13T21:47:05Z",
+      "body": "There's 4 things here that each individually contributed to the test case failure:\n\n1. Expected neighbor entry missing from kernel, causing tunnel-route to be programmed for unresolved nexthop.\n2. tunnel-route being removed when nexthop group was deleted\n3. route bulker ending early due to ITEM_NOT_FOUND (not processing remaining bulk removes)\n4. next-hop group delete failing due to OBJECT_IN_USE causing crash.\n\nFor 1: Created a PR that will process the neighbor creation step in batches to prevent the entries from being dropped in the kernel. This eventually leads to the crash because of 2-4. I think we need to understand why this is happening specifically on SN4700 devices (is there some buffer that's overflowing?) Other than that none of the issues seem to be platform specific.\n\nhttps://github.com/sonic-net/sonic-mgmt/pull/19003\n\nFor 2: I need to look into some options here, the issue happens when we have a route with a missing nexthop. dualtor logic programs a tunnel-route, but this can conflict with the existing route.\n\nFor 3: I'll open a PR to address this. You were right, this is happening in syncd and needs to be fixed in syncd.\n\nFor 4: We have a PR coming out for orchagent that will handle OBJECT_IN_USE errors. I'll update when that's out.\n"
+    },
+    {
+      "author": "keboliu",
+      "createdAt": "2025-07-29T07:46:56Z",
+      "body": "@Ndancejic  any update on this issue?"
+    },
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2025-07-29T07:50:25Z",
+      "body": "@Ndancejic  do you plan backport fix https://github.com/sonic-net/sonic-sairedis/pull/1613 to 202505 ?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 19003,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/19003",
+      "title": "[crm] Fix test failures on SN4700 by batching neighbor creation",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-08-06T05:32:48Z",
+      "createdAt": "2025-06-13T21:36:06Z",
+      "author": "Ndancejic",
+      "body": "### Description of PR\r\ntest_crm_nexthop_group was failing on sn4700 testbeds due to a known orchagent crash. The crash is caused by a few factors:\r\n\r\n- Expected neighbor entry missing from kernel, causing tunnel-route to be programmed for unresolved nexthop.\r\n- tunnel-route being removed when nexthop group was deleted\r\n- route bulker ending early due to ITEM_NOT_FOUND (not processing remaining bulk removes)\r\n- next-hop group delete failing due to OBJECT_IN_USE.\r\n\r\nThis PR addresses the first issue.\r\n\r\nDuring neighbor generation for the test, some of the neighbor updates were being missed from APPL_DB on sn4700 devices. Previously, the neighbors were programmed in the kernel in a single ip command, this fix splits up the neighbor programming into batches in order to prevent updates from being dropped.\r\n\r\nSummary:\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/21243\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nCRM test was failing on dualtor sn4700 platforms\r\n\r\n#### How did you do it?\r\nbuffered neighbor creation to prevent updates from being dropped\r\n\r\n#### How did you verify/test it?\r\nran test case on sn4700 dualto testbed\r\n\r\n#### Any platform specific information?\r\nonly changes test run on sn4700\r\n\r\n### Documentation\r\nado: #33294907",
+      "files": [
+        {
+          "path": "tests/crm/test_crm.py",
+          "additions": 30,
+          "deletions": 11
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-13T21:36:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-13T21:36:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-13T22:15:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-13T22:15:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-13T22:44:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-13T22:44:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2025-07-08T18:37:39Z",
+          "body": "@Ndancejic Can you help me understand `During neighbor generation for the test, some of the neighbor updates were being missed from APPL_DB on sn4700 devices.` ? Is it possible that doing it in batch hides some real issue?"
+        },
+        {
+          "author": "Ndancejic",
+          "createdAt": "2025-07-08T20:18:22Z",
+          "body": "> @Ndancejic Can you help me understand `During neighbor generation for the test, some of the neighbor updates were being missed from APPL_DB on sn4700 devices.` ? Is it possible that doing it in batch hides some real issue?\r\n\r\nI noticed that some of the neighbor entries being added at the start of the test were not being notified in appdb. appdb gets these from netlink when programming neighbors through the kernel. From what I understand if there's a high volume, these can be dropped from the kernel sometimes. In this case we were programming ~2000 entries in a single `ip neigh replace` command"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-08-06T05:33:21Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-mgmt/pull/20092"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-08-08T01:01:13Z",
+          "body": "Cherry-pick PR to 202505: https://github.com/sonic-net/sonic-mgmt/pull/20138"
+        }
+      ]
+    }
+  ]
+}

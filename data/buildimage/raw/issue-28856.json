@@ -1,0 +1,111 @@
+{
+  "number": 28856,
+  "title": "Bug: [vpp] VLAN router interface (SVI) attribute update fails with SAI_STATUS_FAILURE, wedging orchagent on dual-ToR",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28856",
+  "createdAt": "2026-08-05T11:24:56Z",
+  "closedAt": "2026-08-07T01:12:55Z",
+  "author": "lolyu",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "lolyu"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\ngeneric (VPP platform / `docker-syncd-vpp`, `libsaivs`)\n\n### Importance or Severity\nHigh\n\n### Description of the bug\nOn the VPP platform, updating a `SAI_ROUTER_INTERFACE` of type **VLAN** (i.e. the `Vlan<x>` SVI, realized in VPP as a BVI) always fails with `SAI_STATUS_FAILURE`.\n\n`SwitchVpp::vpp_update_router_interface()` (vslib `vslib/vpp/SwitchVppRif.cpp`) reads `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` **before** it branches on the RIF type:\n\n```cpp\nattr.id = SAI_ROUTER_INTERFACE_ATTR_PORT_ID;\nstatus = get(SAI_OBJECT_TYPE_ROUTER_INTERFACE, object_id, 1, &attr);\nif (status != SAI_STATUS_SUCCESS) {\n    SWSS_LOG_ERROR(\"attr SAI_ROUTER_INTERFACE_ATTR_PORT_ID was not passed\");\n    return SAI_STATUS_FAILURE;   // <-- VLAN RIF has no PORT_ID => always here\n}\n```\n\nA VLAN router interface has **no** `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` (it has `SAI_ROUTER_INTERFACE_ATTR_VLAN_ID` instead), so the `get()` fails and the whole `set()` returns `SAI_STATUS_FAILURE`. The create and remove paths already branch on `TYPE == VLAN` first; only the update path does not.\n\nThe failure is reliably triggered on **dual-ToR**, where `IntfsOrch` issues a `SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS` update on the `Vlan1000` RIF (shared gateway MAC reconcile). orchagent turns the sticky SAI failure into a hard error, re-logs it continuously, and asks syncd to dump:\n\n```\nERR    swss#orchagent: :- doTask: Failed to set router interface mac 22:ad:a2:34:08:76 for port Vlan1000, rv:-1\nNOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\n```\n\norchagent then stays unhealthy (the RIF SET remains in `m_toSync` and retries forever), which stalls further programming on that Executor.\n\n### Steps to Reproduce\n1. Deploy a dual-ToR VPP KVM testbed (`vms-kvm-vpp-dual-tor` / t0-dualtor), platform `vpp`, `docker-syncd-vpp`.\n2. Bring up the `Vlan1000` SVI with a router interface (VLAN-type RIF) \u2014 normal dual-ToR minigraph does this.\n3. Let `IntfsOrch` issue a `SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS` (or MTU) update on the VLAN RIF (happens automatically during mux/gateway-MAC reconcile; can also be forced with `config interface ...` that re-derives the SVI MAC).\n4. Observe orchagent logging `Failed to set router interface mac ... for port Vlan1000, rv:-1` and issuing `SYNCD_INVOKE_DUMP`.\n\n### Actual Behavior and Expected Behavior\n**Actual:** Any attribute update to a VLAN (SVI/BVI) router interface returns `SAI_STATUS_FAILURE` because `vpp_update_router_interface()` requires `PORT_ID`. On dual-ToR this wedges orchagent with a sticky, endlessly-retried SAI failure and repeated `SYNCD_INVOKE_DUMP`.\n\n**Expected:** Updating a VLAN router interface should succeed. The update should be dispatched by RIF type (as create/remove already are) and applied to the BVI (`bvi<vlan_id>`), mirroring `vpp_create_bvi_interface()`. Supported attributes (SRC_MAC, MTU) should be applied to the BVI and persisted to the SAI object store; unsupported attributes should not fail the call.\n\n### Relevant log output\n```\n# orchagent (host syslog) \u2014 repeats until the RIF SET is satisfied\nERR    swss#orchagent: :- doTask: Failed to set router interface mac 22:ad:a2:34:08:76 for port Vlan1000, rv:-1\nNOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\n\n# /var/log/swss/sairedis.rec \u2014 VLAN RIF is created with TYPE_VLAN + VLAN_ID (no PORT_ID) ...\nc|SAI_OBJECT_TYPE_ROUTER_INTERFACE:oid:0x60000000005d7|SAI_ROUTER_INTERFACE_ATTR_VIRTUAL_ROUTER_ID=oid:0x3000000000002|SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS=00:AA:BB:CC:DD:EE|SAI_ROUTER_INTERFACE_ATTR_TYPE=SAI_ROUTER_INTERFACE_TYPE_VLAN|SAI_ROUTER_INTERFACE_ATTR_VLAN_ID=oid:0x260000000005bc|SAI_ROUTER_INTERFACE_ATTR_MTU=9100|SAI_ROUTER_INTERFACE_ATTR_NAT_ZONE_ID=0\n\n# ... then a later SRC_MAC 'set' on that same VLAN RIF is what fails in vpp_update_router_interface():\ns|SAI_OBJECT_TYPE_ROUTER_INTERFACE:oid:0x60000000005d7|SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS=22:AD:A2:34:08:76\n```\n\n### Output of `show version`, `show techsupport`\n```\nSONiC Software Version: SONiC.master.1182394-fc9ea17bb\nDistribution: Debian 13.5\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: fc9ea17bb\nPlatform: x86_64-kvm_x86_64-r0\nHwSKU: Force10-S6000\nASIC: vpp\nASIC Count: 1\n```\n\n### Fix\nDispatch the update by RIF type before the `PORT_ID` lookup and handle the VLAN case on the BVI:\n\n- sonic-sairedis: https://github.com/sonic-net/sonic-sairedis/pull/2022 \u2014 *[vpp] Handle VLAN router interface attribute updates on the BVI*\n\nRelated (dual-ToR trigger / root cause of the spurious SRC_MAC reconcile):\n- sonic-swss: https://github.com/sonic-net/sonic-swss/pull/4816 \u2014 *[dualtor][intfsorch] Preserve port MAC when updating router interface MAC*\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2022,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2022",
+      "title": "[vpp] Handle VLAN router interface attribute updates on the BVI",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-07T01:12:54Z",
+      "createdAt": "2026-08-05T06:35:09Z",
+      "author": "lolyu",
+      "body": "\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/28856\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [ ] Test improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nOn the VPP virtual switch, any SAI attribute update to a VLAN\u2011type router interface fails, wedging orchagent.\r\n\r\n`SwitchVpp::set()` routes every `SAI_OBJECT_TYPE_ROUTER_INTERFACE` set to `vpp_update_router_interface()`, which reads `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` before checking the RIF type. A VLAN RIF has no `PORT_ID` (it carries `SAI_ROUTER_INTERFACE_ATTR_VLAN_ID`), so the lookup fails and the whole `SET` returns `SAI_STATUS_FAILURE`. The existing \"skip if VLAN\" guard is placed after that lookup, so it is unreachable for a VLAN RIF.\r\n\r\nObserved on a dual\u2011ToR VPP DUT: right after the `Vlan1000` SVI RIF is created, orchagent issues a `set_router_interface_attribute(SRC_MAC)` on it. syncd logs:\r\n\r\n```\r\nsyncd:     vpp_update_router_interface: attr SAI_ROUTER_INTERFACE_ATTR_PORT_ID was not passed\r\norchagent: doTask: Failed to set router interface mac ... for port Vlan1000, rv:-1\r\norchagent: handleSaiFailure: ... SAI_API_ROUTER_INTERFACE, status: SAI_STATUS_FAILURE\r\n```\r\n\r\n`sairedis.rec` shows the exact failing sequence on the VLAN RIF:\r\n\r\n```\r\n|c| ROUTER_INTERFACE ... TYPE=SAI_ROUTER_INTERFACE_TYPE_VLAN VLAN_ID=oid:0x... (no PORT_ID)\r\n|s| ROUTER_INTERFACE ... SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS=...\r\n|E| SAI_STATUS_FAILURE\r\n|a| SYNCD_INVOKE_DUMP\r\n```\r\n\r\nSigned-off-by: Longxiang Lyu <lolv@microsoft.com>\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: 39152218\r\n\r\n#### How did you do it?\r\n\r\nMade the update path symmetric with the create/remove paths, which already branch on `SAI_ROUTER_INTERFACE_TYPE_VLAN` first and delegate to `vpp_create_bvi_interface()` / `vpp_delete_bvi_interface()`.\r\n- add update path handler `vpp_update_bvi_interface`\r\n\r\n#### How did you verify/test it?\r\n\r\n#### Any platform specific information?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "vslib/vpp/SwitchVpp.h",
+          "additions": 6,
+          "deletions": 0
+        },
+        {
+          "path": "vslib/vpp/SwitchVppFdb.cpp",
+          "additions": 100,
+          "deletions": 0
+        },
+        {
+          "path": "vslib/vpp/SwitchVppRif.cpp",
+          "additions": 5,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T06:35:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T06:35:18Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T06:35:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T06:35:30Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T06:35:41Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T06:36:03Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T08:41:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T08:41:38Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T01:45:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T01:45:37Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T12:42:48Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T12:43:00Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

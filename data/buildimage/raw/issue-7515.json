@@ -1,0 +1,60 @@
+{
+  "number": 7515,
+  "title": "[master] thermalctld leak on Arista devices makes them unreachable when memory is exhausted",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/7515",
+  "createdAt": "2021-05-04T22:25:28Z",
+  "closedAt": "2021-05-08T17:32:34Z",
+  "author": "Staphylo",
+  "labels": [
+    "Bug :bug:",
+    "Master Branch Quality"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nOn Arista devices `thermalctld` leaks memory (unclear if other vendors are affected).\r\nAt each loop iteration of `thermalctld` a few more MB are consumed (~3MiB every 60s)\r\nAfter running for a few hours, `pmon` consumes up to 75% of memory at which point the device becomes unresponsive.\r\n- Existing ssh sessions will freeze\r\n- Console becomes unresponsive\r\n- Pings still go through\r\n\r\n#### Steps to reproduce the issue:\r\n1. Install latest master image\r\n2. Wait for a few hours while monitoring (you can make this faster by filling a tmpfs to reduce available memory)\r\n    Run `docker stats` to see memory size of pmon growing\r\n    Run `watch -d -n 1 'docker exec -ti pmon sh -c \"ps aux | grep -v aux\"'` to see memory growing at pmon process level\r\n3. Witness ssh/console hanging while ping still working\r\n4. After some more time kernel will panic\r\n\r\n#### Output seen on the console after kernel panic\r\n\r\n```\r\n[17758.188885] Kernel panic - not syncing: Out of memory: system-wide panic_on_oom is enabled             \r\n[17758.188885]                                                                                            \r\n[17758.305661] CPU: 2 PID: 4197 Comm: supervisord Tainted: G           OE     4.19.0-12-2-amd64 #1 Debian 4.19.152-1                                                                                                \r\n[17758.428678] Hardware name: Intel Camelback Mountain CRB/Camelback Mountain CRB, BIOS Aboot-norcal7-rook-2x4--6128821 09/14/2017                                                                                  \r\n[17758.566281] Call Trace:                                                                                \r\n[17758.595557]  dump_stack+0x66/0x90                                                                      \r\n[17758.635242]  panic+0xe7/0x24a                                                                         \r\n[17758.670765]  out_of_memory.cold.33+0x5e/0x82                                                           \r\n[17758.721909]  __alloc_pages_slowpath+0xbd8/0xcb0                                                        \r\n[17758.776180]  __alloc_pages_nodemask+0x28b/0x2b0                                                       \r\n[17758.830450]  filemap_fault+0x333/0x780                                                                 \r\n[17758.875346]  ? alloc_set_pte+0x49e/0x560         \r\n[17758.922325]  ? filemap_map_pages+0x139/0x3a0     \r\n[17758.973494]  ext4_filemap_fault+0x2c/0x40 [ext4] \r\n[17759.028809]  __do_fault+0x36/0x130               \r\n[17759.069538]  __handle_mm_fault+0xdf9/0x11f0                                                           \r\n[17759.119642]  handle_mm_fault+0xd6/0x200           \r\n[17759.165579]  __do_page_fault+0x249/0x4f0                                                              \r\n[17759.212560]  ? page_fault+0x8/0x30                                                                     \r\n[17759.253287]  page_fault+0x1e/0x30                                                                     \r\n[17759.292974] RIP: 0033:0x54e6ba\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\nThis issue is happening consistently on master.\r\nIt is currently being looked at and this issue opened for awareness.\r\n",
+  "comments": [
+    {
+      "author": "zzhiyuan",
+      "createdAt": "2021-05-04T23:31:55Z",
+      "body": "On an Arista device I can run the following snippet python code:\r\n\r\n```\r\nimport sonic_platform\r\nchassis = sonic_platform.platform.Platform().get_chassis()\r\nwhile True:\r\n   for sfp in chassis.get_all_sfps():\r\n      sfp._get_sfputil().get_transceiver_dom_info_dict(sfp._index)\r\n```\r\n\r\nand it will result in a memory leak. I believe it is caused by:\r\n\r\nhttps://github.com/Azure/sonic-platform-common/blob/master/sonic_platform_base/sonic_sfp/sfputilbase.py\r\n\r\nThere are many methods which opens a file without using the with statement. It is possible there are stray references to the opened file which results in memory leaks."
+    },
+    {
+      "author": "zzhiyuan",
+      "createdAt": "2021-05-05T00:18:58Z",
+      "body": "In master image on sonic-buildimage, most of the leak currently is from xcvrd, caused by the same issue referenced above. This is also applicable to 202012 image and likely other vendors' products. Andy from the Arista team is making the fix. This will also benefit other vendors."
+    },
+    {
+      "author": "andywongarista",
+      "createdAt": "2021-05-07T18:41:13Z",
+      "body": "The root cause of this issue has been determined to be in Arista platform drivers rather than in sfputilbase.py. A PR to update the submodule with the fix included will be made shortly."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 7561,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/7561",
+      "title": "[Arista] Update platform drivers submodules",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-05-08T17:32:34Z",
+      "createdAt": "2021-05-07T19:00:39Z",
+      "author": "Staphylo",
+      "body": "- Fix `sonic_platform` api \"memory leak\" tied to recurring allocation. fixes #7515\r\n- Add `arista` clis to read chassis eeproms",
+      "files": [
+        {
+          "path": "platform/barefoot/sonic-platform-modules-arista",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-arista",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

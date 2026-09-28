@@ -1,0 +1,104 @@
+{
+  "number": 19058,
+  "title": "[systemd/systemd-sonic-generator] Introduction of networkd causes error log message \"Timeout occurred while waiting for network connectivity\"",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/19058",
+  "createdAt": "2024-05-23T21:38:45Z",
+  "closedAt": "2024-08-05T16:05:33Z",
+  "author": "gpunathilell",
+  "labels": [
+    "Triaged",
+    "MSFT",
+    "smartswitch"
+  ],
+  "assignees": [
+    "Pterosaur"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\nAfter the introduction of networkd in the sonic-buildimage repository in #18178, when apt-daily.service and apt-daily-upgrade.service are running we get a error log message after 30 seconds:\r\n`ERR systemd-networkd-wait-online[50532]: Timeout occurred while waiting for network connectivity`\r\n\r\nThis is due to the \r\n`ExecStartPre=-/usr/lib/apt/apt-helper wait-online` \r\nin both apt-daily.service and apt-daily-upgrade.service. In non-smartswitch systems since we do not have any interfaces managed by networkd, the apt-helper call for wait-online times out after 30 seconds (https://salsa.debian.org/apt-team/apt/-/blob/main/cmdline/apt-helper.cc#L227) and an error log is generated.\r\n\r\n#### Steps to reproduce the issue:\r\n1. Use sonic on a switch which has no interfaces managed by networkd\r\n2. `systemctl start apt-daily.service` or `systemctl start apt-daily-upgrade.service`\r\n3. `tail -f /var/log/syslog | grep systemd-networkd-wait-online`\r\n\r\n#### Describe the results you received:\r\n`ERR systemd-networkd-wait-online[50532]: Timeout occurred while waiting for network connectivity` \r\n`INFO apt-helper[11911]: E: Sub-process /lib/systemd/systemd-networkd-wait-online returned an error code (1)`\r\nis seen in the syslog after 30 seconds\r\n\r\n#### Describe the results you expected:\r\nNo errors in the logs\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\nsystemd-networkd-wait-online times out and adds an error log if no interfaces are managed by networkd :\r\nhttps://github.com/systemd/systemd/blob/c09f7e5a8208fab5680bfeba8df5707887a8c080/src/network/wait-online/manager.c#L205\r\nFurther information regarding this behaviour:\r\nhttps://www.github.com/systemd/systemd/issues/27822\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2024-05-23T22:59:06Z",
+      "body": "@Pterosaur @prgeor Can you please check this issue?"
+    },
+    {
+      "author": "Pterosaur",
+      "createdAt": "2024-07-20T07:16:24Z",
+      "body": "Hi @dgsudharsan @gpunathilell , could you please help to review this fix: https://github.com/sonic-net/sonic-buildimage/pull/19107"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 19107,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/19107",
+      "title": "[Fixbug][systemctl]: Disable networkd in non-smartswitch platform",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-08-05T16:05:32Z",
+      "createdAt": "2024-05-28T16:22:12Z",
+      "author": "Pterosaur",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/19058\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n1. Marked `systemd-networkd.service` as `/dev/null` to disable it by default.\r\n2. systemd-sonic-generator will remove this null link if the target platform is smartswitch.\r\n\r\n#### How to verify it\r\n1. According to the [issue page](https://github.com/sonic-net/sonic-buildimage/issues/19058), we shouldn't get the error log```ERR systemd-networkd-wait-online[50532]: Timeout occurred while waiting for network connectivity\r\nINFO apt-helper[11911]: E: Sub-process /lib/systemd/systemd-networkd-wait-online returned an error code (1)``` after `systemctl start apt-daily.service`\r\n2. Regress test the previous verification: https://github.com/sonic-net/sonic-buildimage/pull/18178 \r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/systemd-sonic-generator/ssg-test.cc",
+          "additions": 25,
+          "deletions": 5
+        },
+        {
+          "path": "src/systemd-sonic-generator/systemd-sonic-generator.cpp",
+          "additions": 9,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2024-07-08T13:12:31Z",
+          "body": "@Pterosaur Can you please provide ETA for merging this PR?"
+        },
+        {
+          "author": "Pterosaur",
+          "createdAt": "2024-08-02T17:42:16Z",
+          "body": "@lguohan Could you please help to merge this PR?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-05T16:10:20Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-buildimage/pull/19821"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-08T23:01:21Z",
+          "body": "@Pterosaur cherry pick PR didn't pass PR checker. Please check!!!<br>https://github.com/sonic-net/sonic-buildimage/pull/19821"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-09T23:01:09Z",
+          "body": "@Pterosaur cherry pick PR didn't pass PR checker. Please check!!!<br>https://github.com/sonic-net/sonic-buildimage/pull/19821"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-10T23:01:14Z",
+          "body": "@Pterosaur cherry pick PR didn't pass PR checker. Please check!!!<br>https://github.com/sonic-net/sonic-buildimage/pull/19821"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-11T23:41:47Z",
+          "body": "@Pterosaur cherry pick PR didn't pass PR checker. Please check!!!<br>https://github.com/sonic-net/sonic-buildimage/pull/19821"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-12T23:01:30Z",
+          "body": "@Pterosaur cherry pick PR didn't pass PR checker. Please check!!!<br>https://github.com/sonic-net/sonic-buildimage/pull/19821"
+        }
+      ]
+    }
+  ]
+}

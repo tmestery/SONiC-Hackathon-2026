@@ -1,0 +1,78 @@
+{
+  "number": 6881,
+  "title": "Default route stays with packet action DROP in hardware",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/6881",
+  "createdAt": "2021-02-24T16:48:51Z",
+  "closedAt": "2021-03-08T22:30:27Z",
+  "author": "stepanblyschak",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "qiluo-msft",
+    "shi-su"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nWhen system starts orchagent creates a default route with action DROP and no NH.\r\nWhen orchagent receives:\r\n```\r\n\"ROUTE_TABLE:0.0.0.0/0\"\r\n1) \"nexthop\"\r\n2) \"10.0.0.1\"\r\n3) \"ifname\"\r\n4) \"Ethernet0\"\r\n```\r\nOrchagent will use bulker to perform route update.\r\n\r\nFrom sairedis recording:\r\n\r\n```\r\n2021-02-24.16:08:30.526776|S|SAI_OBJECT_TYPE_ROUTE_ENTRY||{\"dest\":\"0.0.0.0/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"}|SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID=oid:0x0||{\"dest\":\"0.0.0.0/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"}|SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION=SAI_PACKET_ACTION_DROP\r\n2021-02-24.16:09:31.313458|S|SAI_OBJECT_TYPE_ROUTE_ENTRY||{\"dest\":\"0.0.0.0/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"}|SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID=oid:0x4000000000ba0||{\"dest\":\"0.0.0.0/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"}|SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION=SAI_PACKET_ACTION_FORWARD\r\n\r\n```\r\n\r\nIt looks that the order is the following:\r\n\r\n1. SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID=oid:0x4000000000ba0\r\n2. SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION=SAI_PACKET_ACTION_FORWARD\r\n\r\nThis order is invalid according to documentation of SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID (The next hop id is only effective when the packet action is one of the following: FORWARD, COPY, LOG, TRANSIT):\r\n\r\n```\r\n    /**\r\n     * @brief Next hop or next hop group id for the packet, or a router interface\r\n     * in case of directly reachable route, or the CPU port in case of IP2ME route\r\n     *\r\n     * The next hop id is only effective when the packet action is one of the\r\n     * following: FORWARD, COPY, LOG, TRANSIT.\r\n     *\r\n     * The next hop id can be a generic next hop object, such as next hop, next\r\n     * hop group. Directly reachable routes are the IP subnets that are\r\n     * directly attached to the router. For such routes, fill the router\r\n     * interface id to which the subnet is attached. IP2ME route adds a local\r\n     * router IP address. For such routes, fill the CPU port\r\n     * (#SAI_SWITCH_ATTR_CPU_PORT).\r\n     * When pointing to a next hop group which is empty, the effective routing\r\n     * action will be DROP.\r\n     *\r\n     * When it is SAI_NULL_OBJECT_ID, then packet will be dropped.\r\n     *\r\n     * @type sai_object_id_t\r\n     * @flags CREATE_AND_SET\r\n     * @objects SAI_OBJECT_TYPE_NEXT_HOP, SAI_OBJECT_TYPE_NEXT_HOP_GROUP, SAI_OBJECT_TYPE_ROUTER_INTERFACE, SAI_OBJECT_TYPE_PORT\r\n     * @allownull true\r\n     * @default SAI_NULL_OBJECT_ID\r\n     */\r\n    SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID,\r\n\r\n```\r\n\r\nSo, SAI ignore the first SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID because the packet action is initially set to DROP.\r\n\r\n\r\n```\r\nroot@r-tigon-11:/# python2 /usr/bin/sx_api_router_uc_routes_dump_all.py  | head -n 20\r\nDISCLAIMER\r\n==========\r\nThe following code is an EXAMPLE whose sole purpose is to demonstrate various capabilities  of the SDK.\r\nThis example represents a common configuration scenario and is in no way a complete guide to the demonstrated feature.\r\nFor complete documentation please refer to the SDK API Guide.\r\nThere is no guarantee that this example will run successfully on all hardware and software configurations.\r\n\r\n\r\n-----------------------------------\r\nIPv4 UC Routes\r\n-----------------------------------\r\n\r\n------------------------------------------------------------------------------------------------------------------------------------------------\r\n|      VRID|                                      IP|  Mask Len|           Type|         Action|      Trap Prio|        Eg. RIF|        ECMP ID|\r\n------------------------------------------------------------------------------------------------------------------------------------------------\r\n|         0|                                 0.0.0.0|         0|       NEXT_HOP|           DROP|            N/A|            N/A|            N/A|\r\n------------------------------------------------------------------------------------------------------------------------------------------------\r\n|         0|                                10.0.0.0|        32|          IP2ME|            N/A|            N/A|            N/A|            N/A|\r\n\r\n\r\n```\r\n\r\n```\r\n127.0.0.1:6379[1]> hgetall \"ASIC_STATE:SAI_OBJECT_TYPE_ROUTE_ENTRY:{\\\"dest\\\":\\\"0.0.0.0/0\\\",\\\"switch_id\\\":\\\"oid:0x21000000000000\\\",\\\"vr\\\":\\\"oid:0x3000000000002\\\"}\"\r\n1) \"SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION\"\r\n2) \"SAI_PACKET_ACTION_FORWARD\"\r\n3) \"SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID\"\r\n4) \"oid:0x4000000000ba0\"\r\n\r\n```\r\n\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1.  Run T0 topology and observe that default route is set with packet action drop\r\n2.\r\n3.\r\n\r\n#### Describe the results you received:\r\nDefault route stays with DROP in hardware\r\n\r\n#### Describe the results you expected:\r\nDefault route should be with action FORWARD and NH set.\r\n\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nSONiC Software Version: SONiC.SONIC.202012.25-7c00106_Internal\r\nDistribution: Debian 10.8\r\nKernel: 4.19.0-12-2-amd64\r\nBuild commit: 7c001068\r\nBuild date: Tue Feb 23 17:47:44 UTC 2021\r\nBuilt by: sw-r2d2-bot@r-build-sonic-ci02\r\n\r\nPlatform: x86_64-mlnx_msn4600c-r0\r\nHwSKU: ACS-MSN4600C\r\nASIC: mellanox\r\nASIC Count: 1\r\nSerial Number: MT2023X22082\r\nUptime: 16:47:01 up  1:15,  2 users,  load average: 0.16, 0.85, 1.27\r\n\r\nDocker images:\r\nREPOSITORY                    TAG                                IMAGE ID            SIZE\r\ndocker-teamd                  SONIC.202012.25-7c00106_Internal   47b091f3bf36        412MB\r\ndocker-teamd                  latest                             47b091f3bf36        412MB\r\ndocker-nat                    SONIC.202012.25-7c00106_Internal   37754213ae3a        415MB\r\ndocker-nat                    latest                             37754213ae3a        415MB\r\ndocker-orchagent              SONIC.202012.25-7c00106_Internal   91cbe20ced84        430MB\r\ndocker-orchagent              latest                             91cbe20ced84        430MB\r\ndocker-fpm-frr                SONIC.202012.25-7c00106_Internal   2a4fe3391719        430MB\r\ndocker-fpm-frr                latest                             2a4fe3391719        430MB\r\ndocker-sflow                  SONIC.202012.25-7c00106_Internal   d04eac434d3d        413MB\r\ndocker-sflow                  latest                             d04eac434d3d        413MB\r\ndocker-syncd-mlnx             SONIC.202012.25-7c00106_Internal   2ded5458793b        542MB\r\ndocker-syncd-mlnx             latest                             2ded5458793b        542MB\r\ndocker-snmp                   SONIC.202012.25-7c00106_Internal   85bcff89d4b2        438MB\r\ndocker-snmp                   latest                             85bcff89d4b2        438MB\r\ndocker-sonic-mgmt-framework   SONIC.202012.25-7c00106_Internal   3c7e28732851        615MB\r\ndocker-sonic-mgmt-framework   latest                             3c7e28732851        615MB\r\ndocker-router-advertiser      SONIC.202012.25-7c00106_Internal   45acb0fad0b0        397MB\r\ndocker-router-advertiser      latest                             45acb0fad0b0        397MB\r\ndocker-platform-monitor       SONIC.202012.25-7c00106_Internal   c2386b273296        689MB\r\ndocker-platform-monitor       latest                             c2386b273296        689MB\r\ndocker-lldp                   SONIC.202012.25-7c00106_Internal   a79ab0c55cbd        437MB\r\ndocker-lldp                   latest                             a79ab0c55cbd        437MB\r\ndocker-database               SONIC.202012.25-7c00106_Internal   70e66cf0a4ab        397MB\r\ndocker-database               latest                             70e66cf0a4ab        397MB\r\ndocker-dhcp-relay             SONIC.202012.25-7c00106_Internal   baade8967135        404MB\r\ndocker-dhcp-relay             latest                             baade8967135        404MB\r\ndocker-sonic-telemetry        SONIC.202012.25-7c00106_Internal   ffed640ab96a        472MB\r\ndocker-sonic-telemetry        latest                             ffed640ab96a        472MB\r\n\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n[sonic_dump_r-tigon-11_20210224_162658.tar.gz](https://github.com/Azure/sonic-buildimage/files/6037531/sonic_dump_r-tigon-11_20210224_162658.tar.gz)\r\n",
+  "comments": [
+    {
+      "author": "prsunny",
+      "createdAt": "2021-02-25T01:09:18Z",
+      "body": "@stepanblyschak , not sure I fully understand? Are you saying the default route is not getting modified in hardware when orchagent receives the default route update from APP_DB? Or are you concerned about the orchagent created \"default\" routes with DROP? AFAIK, the behavior we want is to have the default action for 0.0.0.0/0 as DROP. "
+    },
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2021-02-25T10:24:42Z",
+      "body": "Are you saying the default route is not getting modified in hardware when orchagent receives the default route update from APP_DB?\r\n\r\nYes and this is due to reordering of setting attributes SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION and SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1659,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/1659",
+      "title": "Keep attribute order in bulk mode",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-03-08T22:30:27Z",
+      "createdAt": "2021-03-03T06:21:59Z",
+      "author": "shi-su",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nKeep attributes for the same entry in the order that the attributes are set in bulk mode.\r\n\r\nFix https://github.com/Azure/sonic-buildimage/issues/6881\r\n\r\n**Why I did it**\r\nSome attributes have a dependency on others in SAI operations (e.g., setting nexthop requires packet action to be forward in route set operation). Without keeping the order of the attributes, the configuration may not be successfully applied to hardware. Therefore, it is necessary to keep the order of attributes in bulk mode.\r\n\r\n**How I verified it**\r\nVerify that sairedis applys `SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION` before `SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID` when setting default routes.\r\n\r\n```\r\n2021-03-03.06:01:12.003330|S|SAI_OBJECT_TYPE_ROUTE_ENTRY||{\"dest\":\"::/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"}|SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION=SAI_PACKET_ACTION_FORWARD||{\"dest\":\"::/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"}|SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID=oid:0x5000000000687\r\n2021-03-03.06:01:12.945653|S|SAI_OBJECT_TYPE_ROUTE_ENTRY||{\"dest\":\"0.0.0.0/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"}|SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION=SAI_PACKET_ACTION_FORWARD||{\"dest\":\"0.0.0.0/0\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"}|SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID=oid:0x5000000000683\r\n```\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/bulker.h",
+          "additions": 16,
+          "deletions": 29
+        },
+        {
+          "path": "tests/mock_tests/Makefile.am",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/bulker_ut.cpp",
+          "additions": 106,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "kcudnik",
+          "createdAt": "2021-03-03T18:58:19Z",
+          "body": "what ? order should not matter at all in any way to any component including SAI"
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-03-03T19:05:38Z",
+          "body": "> what ? order should not matter at all in any way to any component including SAI\r\n\r\nIt is reported in https://github.com/Azure/sonic-buildimage/issues/6881 that the hardware has a contract that route action must not be DROP when setting next hops (otherwise it gets ignored). The order matters if this is the case since the action must be set first in this scenario."
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2021-03-05T14:15:05Z",
+          "body": "missing unit test?"
+        }
+      ]
+    }
+  ]
+}

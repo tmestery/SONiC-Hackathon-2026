@@ -1,0 +1,418 @@
+{
+  "number": 22372,
+  "title": "Enhancement: Improve Generic Config Updater (GCU) performance",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/22372",
+  "createdAt": "2025-04-18T19:06:54Z",
+  "closedAt": "2025-05-13T17:33:46Z",
+  "author": "bhouse-nexthop",
+  "labels": [
+    "Enhancement :heavy_plus_sign:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the enhancement\n\nGeneric Configuration Updater is woefully slow, so much so that it is basically unusable in a lot of situations.\n\n### Current Behavior\n\nIn a configuration I have, it takes about 15 minutes to apply.\n\nSee PRs for detailed information.  This ticket was created to aid in visibility.\n\n### Proposed Behavior\n\nIt would be expected this to take no more than a minute or two.\n\n### Implementation\n* https://github.com/sonic-net/sonic-buildimage/pull/22254\n* https://github.com/sonic-net/sonic-utilities/pull/3831\n\nAlso a bug was discovered during the implementation that still needs to be addressed which would improve performance even further.\n* https://github.com/sonic-net/sonic-buildimage/issues/22255\n",
+  "comments": [
+    {
+      "author": "prgeor",
+      "createdAt": "2025-04-23T15:44:20Z",
+      "body": "@qiluo-msft is review the PRs"
+    },
+    {
+      "author": "bhouse-nexthop",
+      "createdAt": "2025-05-13T18:10:23Z",
+      "body": "I guess this autoclosed, but there is still https://github.com/sonic-net/sonic-utilities/pull/3831 open"
+    },
+    {
+      "author": "johndexter1",
+      "createdAt": "2025-05-14T07:01:20Z",
+      "body": "@bhouse-nexthop are you planning to backport this to 202405? This branch has the same issue"
+    },
+    {
+      "author": "bhouse-nexthop",
+      "createdAt": "2025-05-14T11:12:49Z",
+      "body": "> [@bhouse-nexthop](https://github.com/bhouse-nexthop) are you planning to backport this to 202405? This branch has the same issue\n\nI haven't tried to see how much effort it would be to backport to 202405.  Last I attempted it was a pretty clean cherry-pick back to 202411."
+    },
+    {
+      "author": "zjswhhh",
+      "createdAt": "2025-06-18T16:01:34Z",
+      "body": "Reopening as issue is not fully resolved. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 3831,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/3831",
+      "title": "Generic Configuration Updater (GCU) performance enhancements",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-11-03T05:42:39Z",
+      "createdAt": "2025-04-07T16:13:03Z",
+      "author": "bhouse-nexthop",
+      "body": "***Important***: Please review each commit (including commit message) individually.  Looking at the patch-set as a whole may cause confusion.\r\n\r\n#### What I did\r\n\r\nGeneric Configuration Updater is extremely slow, using the python profiler it was possible to determine the worst offenders where changes could be made without affecting the overall algorithm and HLD design documentation.\r\n\r\nBrief overview of changes:\r\n* Prevent copy.deepcopy() calls where possible\r\n* Don't run validation twice back to back\r\n* Move configdb path <> xpath conversion logic to sonic-yang-mgmt where it belongs and enhance it to support schema conversion (not just data) and add caching.\r\n* Sort table keys by the number of schema backlinks and must statements for the node to try better guess the right order of the patches to generate rather than doing it in alphabetical order which is likely to cause validation failures.\r\n* Add ability to Group patches together in some commits where its known they will not cause issues, these are things like grouping parameter updates under the same key.\r\n* When applying changes, do not re-read the configuration from redis twice between each applied patch (this is **extremely** slow, and actually hid a race condition).  We are mutating the configuration and a lock is held so we know the expected before and after.  There is still a final validation to ensure something didn't go sideways.\r\n\r\nDependencies:\r\n * sonic-yang-mgmt enhancements: https://github.com/sonic-net/sonic-buildimage/pull/22254\r\n * sonic-yang-mgmt parse uses/grouping: https://github.com/sonic-net/sonic-buildimage/pull/21907\r\n * sonic-utilities rely on sonic-yang-mgmt uses/grouping handling: https://github.com/sonic-net/sonic-utilities/pull/3814\r\n\r\nStats below ... (stats need both this and the sonic-utilities PR to be relevant)...\r\n\r\n<ins>**Original Performance:**</ins>\r\nDry Run:\r\n```\r\ntime sudo config replace -d ./config_db.json\r\n...\r\nreal\t2m51.588s\r\nuser\t2m23.777s\r\nsys\t0m25.300s\r\n```\r\n\r\nFull:\r\n```\r\ntime sudo config replace ./config_db.json\r\n...\r\nreal\t14m53.772s\r\nuser\t12m2.376s\r\nsys\t2m8.908s\r\n```\r\n\r\n<ins>**With Patch**:</ins>\r\nDry Run:\r\n```\r\ntime sudo config replace -d ./config_db.json\r\n...\r\nreal\t0m59.602s\r\nuser\t0m56.434s\r\nsys\t0m2.110s\r\n```\r\n\r\nFull:\r\n```\r\ntime sudo config replace ./config_db.json\r\n...\r\nreal\t1m54.303s\r\nuser\t0m58.482s\r\nsys\t0m2.545s\r\n```\r\n\r\nSo that's roughly 3x improvement for dry-run, and 7.5x improvement for full commit.  There is room for improvement on the full commit due to a `sleep(1)` being used between each patch because of a race condition found in the prior code (that was hidden due to a costly sanity check that has been removed).\r\n\r\n#### How I did it\r\n\r\nProfiling via cProfiler\r\n\r\n#### How to verify it\r\n\r\nRun sonic-utilities test cases, they still pass\r\n\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\nN/A\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\nN/A\r\n\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/22372",
+      "files": [
+        {
+          "path": "generic_config_updater/change_applier.py",
+          "additions": 36,
+          "deletions": 15
+        },
+        {
+          "path": "generic_config_updater/generic_updater.py",
+          "additions": 2,
+          "deletions": 1
+        },
+        {
+          "path": "generic_config_updater/gu_common.py",
+          "additions": 124,
+          "deletions": 553
+        },
+        {
+          "path": "generic_config_updater/patch_sorter.py",
+          "additions": 576,
+          "deletions": 95
+        },
+        {
+          "path": "tests/generic_config_updater/change_applier_test.py",
+          "additions": 8,
+          "deletions": 5
+        },
+        {
+          "path": "tests/generic_config_updater/files/patch_sorter_test_success.json",
+          "additions": 155,
+          "deletions": 385
+        },
+        {
+          "path": "tests/generic_config_updater/gcu_feature_patch_application_test.py",
+          "additions": 2,
+          "deletions": 4
+        },
+        {
+          "path": "tests/generic_config_updater/generic_updater_test.py",
+          "additions": 5,
+          "deletions": 3
+        },
+        {
+          "path": "tests/generic_config_updater/gu_common_test.py",
+          "additions": 3,
+          "deletions": 73
+        },
+        {
+          "path": "tests/generic_config_updater/gutest_helpers.py",
+          "additions": 45,
+          "deletions": 0
+        },
+        {
+          "path": "tests/generic_config_updater/multiasic_change_applier_test.py",
+          "additions": 14,
+          "deletions": 8
+        },
+        {
+          "path": "tests/generic_config_updater/patch_sorter_test.py",
+          "additions": 124,
+          "deletions": 113
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-07T16:13:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-07T16:13:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-13T18:12:28Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-13T18:12:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2025-05-13T18:12:59Z",
+          "body": "I just rebased against master to force a new build."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-14T12:52:46Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-14T12:52:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-15T12:38:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-15T12:38:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-15T14:14:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-15T14:14:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-15T14:25:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-15T14:25:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-15T14:34:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-15T14:34:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-20T13:43:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-20T13:44:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2025-05-20T14:07:00Z",
+          "body": "@qiluo-msft this PR is pretty well cleaned up, however it is depending on https://github.com/sonic-net/sonic-buildimage/pull/21907 and https://github.com/sonic-net/sonic-utilities/pull/3814 which haven't been merged yet.  Once those merge the tests that are failing due to the inability to resolve the paths that are imported via the uses clause will be fixed.\r\n\r\nIt would be great to get all this into 202505.\r\n\r\nAll GCU test cases pass when I run them with this PR *and* those 2 dependent PRs:\r\n```\r\nbrad@a59a25f02d1a:/sonic/src/sonic-utilities$ pytest tests/generic_config_updater/\r\n================================== test session starts ==================================\r\nplatform linux -- Python 3.11.2, pytest-7.2.1, pluggy-1.0.0+repack\r\nrootdir: /sonic/src/sonic-utilities/tests, configfile: pytest.ini\r\nplugins: pyfakefs-5.8.0, cov-4.0.0\r\ncollected 348 items\r\n\r\ntests/generic_config_updater/change_applier_test.py ..                            [  0%]\r\ntests/generic_config_updater/field_operation_validator_test.py .................. [  5%]\r\n......................                                                            [ 12%]\r\ntests/generic_config_updater/gcu_feature_patch_application_test.py ..             [ 12%]\r\ntests/generic_config_updater/generic_updater_test.py ............................ [ 20%]\r\n...............                                                                   [ 25%]\r\ntests/generic_config_updater/gu_common_test.py .................................. [ 34%]\r\n....................................                                              [ 45%]\r\ntests/generic_config_updater/multiasic_change_applier_test.py ......              [ 46%]\r\ntests/generic_config_updater/multiasic_generic_updater_test.py .                  [ 47%]\r\ntests/generic_config_updater/patch_sorter_test.py ............................... [ 56%]\r\n................................................................................. [ 79%]\r\n......................................................................            [ 99%]\r\ntests/generic_config_updater/service_validator_test.py ..                         [100%]\r\n\r\n================================= 348 passed in 13.38s ==================================\r\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-26T02:48:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-26T02:49:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    },
+    {
+      "number": 22254,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/22254",
+      "title": "sonic-yang-mgmt: Generic Config Updater - performance dependencies",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-05-13T17:33:45Z",
+      "createdAt": "2025-04-07T16:12:02Z",
+      "author": "bhouse-nexthop",
+      "body": "#### Why I did it\r\n\r\n***Important***: Please review each commit (including commit message) individually.  Looking at the patch-set as a whole may cause confusion.\r\n\r\nGeneric Config Updater (GCU) is notoriously slow.  These patches add some helpers for the GCU overhaul (mostly in sonic-utilities) in order to facilitate the optimizations.  These changes are in sonic-yang-mgmt plus a patch to libyang 1.\r\n\r\nChanges include:\r\n * Libyang v1 was not exposing `must` data for leaf nodes (like it does for other node types).  Patch to correct this oversight.\r\n * Loading of sonic configuration data should not mutate the user-provided data, this forces callers to know they need to deepcopy the data, plus in most instances data won't be mutated.\r\n * sonic-yang-mgmt test models should more closely mimic real sonic yang models as we can't implement other features that assume this otherwise (sonic mandates that the top-level container has the same name as the module).\r\n * Import `sonic configdb`<>`yang xpath` conversion from sonic-utilities as this should be shared code.  90% of this code is copied from the original source but does contain some bugfixes and enhancements including caching.\r\n * Make `find_schema_dependencies()` public, plus add the ability to find dependencies recursively.  This implementation is caching.\r\n * Add new `find_schema_must_count()`, with recursive capabilities to find if a node (and its children) have must clauses. This implementation is caching.\r\n\r\nsonic-utilities PR: https://github.com/sonic-net/sonic-utilities/pull/3831\r\n\r\nStats below ... (stats need both this and the sonic-utilities PR to be relevant)...\r\n\r\n<ins>**Original Performance:**</ins>\r\nDry Run:\r\n```\r\ntime sudo config replace -d ./config_db.json\r\n...\r\nreal\t2m51.588s\r\nuser\t2m23.777s\r\nsys\t0m25.300s\r\n```\r\n\r\nFull:\r\n```\r\ntime sudo config replace ./config_db.json\r\n...\r\nreal\t14m53.772s\r\nuser\t12m2.376s\r\nsys\t2m8.908s\r\n```\r\n\r\n<ins>**With Patch**:</ins>\r\nDry Run:\r\n```\r\ntime sudo config replace -d ./config_db.json\r\n...\r\nreal\t0m59.602s\r\nuser\t0m56.434s\r\nsys\t0m2.110s\r\n```\r\n\r\nFull:\r\n```\r\ntime sudo config replace ./config_db.json\r\n...\r\nreal\t1m54.303s\r\nuser\t0m58.482s\r\nsys\t0m2.545s\r\n```\r\n\r\nSo that's roughly 3x improvement for dry-run, and 7.5x improvement for full commit.  There is room for improvement on the full commit due to a `sleep(1)` being used between each patch because of a race condition found in the prior code (that was hidden due to a costly sanity check that has been removed).\r\n\r\n##### Work item tracking\r\n\r\n#### How I did it\r\n\r\nGathered profiling data using cProfile and evaluated where the largest gains could be had.\r\n\r\n#### How to verify it\r\n\r\nThis patch is standalone as it will not cause any issues in other projects which use sonic-yang-mgmt or libyang, however the performance benefits are in sonic-utilities.   Apply both this commit and the sonic-utilities PR to a local branch, build and run sonic-utilities tests.  Then create a full image, load it onto a DUT (with default configuration), and use the attached \r\n[config_db.json](https://github.com/user-attachments/files/19635712/config_db.json) to attempt a `config replace` operation (tested on Dell S5248F).\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [x] 202411\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\nmaster as of 20250521\r\n\r\n#### Description for the changelog\r\n\r\nsonic-yang-mgmt: Generic Config Updater - performance dependencies\r\n\r\n#### Link to config_db schema for YANG module changes\r\nN/A\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/22372\r\nSigned-off-by: Brad House <bhouse@nexthop.ai>\r\n",
+      "files": [
+        {
+          "path": "src/libyang/patch/libyang-leaf-must.patch",
+          "additions": 29,
+          "deletions": 0
+        },
+        {
+          "path": "src/libyang/patch/series",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-mgmt/setup.py",
+          "additions": 2,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-yang-mgmt/sonic_yang.py",
+          "additions": 130,
+          "deletions": 15
+        },
+        {
+          "path": "src/sonic-yang-mgmt/sonic_yang_ext.py",
+          "additions": 16,
+          "deletions": 7
+        },
+        {
+          "path": "src/sonic-yang-mgmt/sonic_yang_path.py",
+          "additions": 573,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/config_data.json",
+          "additions": 5,
+          "deletions": 5
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/config_data_merge.json",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/sample-yang-models/test-acl.yang",
+          "additions": 4,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/sample-yang-models/test-interface.yang",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/sample-yang-models/test-port.yang",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/sample-yang-models/test-portchannel.yang",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/sample-yang-models/test-vlan.yang",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/sample-yang-models/test-yang-structure.yang",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/test_SonicYang.json",
+          "additions": 91,
+          "deletions": 73
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/test_sonic_yang.py",
+          "additions": 51,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-07T16:12:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-07T16:12:47Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-07T20:18:08Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-07T20:18:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-08T13:18:07Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-08T13:18:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-13T18:23:01Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-13T18:23:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-17T11:17:06Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-17T11:17:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-17T14:31:49Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-17T14:32:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-17T14:32:31Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-17T14:32:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2025-04-25T23:04:14Z",
+          "body": "Thanks for the contribution in this big PR! Is it possible to split into smaller and focusing PR? It also help the reviewing and merging.\r\n\r\nSuggest several PRs:\r\n- Performance improvement only\r\n   * Loading of sonic configuration data should not mutate the user-provided data, this forces callers to know they need to deepcopy the data, plus in most instances data won't be mutated.\r\n\r\n- Test improvement\r\n   * sonic-yang-mgmt test models should more closely mimic real sonic yang models as we can't implement other features that assume this otherwise (sonic mandates that the top-level container has the same name as the module).\r\n\r\n- Refactor for better code sharing\r\n  * Import `sonic configdb`<>`yang xpath` conversion from sonic-utilities as this should be shared code.  90% of this code is copied from the original source but does contain some bugfixes and enhancements including caching.\r\n\r\n- New functionality, ideally with even smaller PR focus on one feature per PR\r\n  * Libyang v1 was not exposing `must` data for leaf nodes (like it does for other node types).  Patch to correct this oversight.\r\n  * Make `find_schema_dependencies()` public, plus add the ability to find dependencies recursively.  This implementation is caching.\r\n  * Add new `find_schema_must_count()`, with recursive capabilities to find if a node (and its children) have must clauses. This implementation is caching.\r\n"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2025-04-25T23:54:02Z",
+          "body": "It would be easy enough to do that, but that's why\r\n\r\n> Thanks for the contribution in this big PR! Is it possible to split into smaller and focusing PR? It also help the reviewing and merging.\r\n> \r\n> Suggest several PRs:\r\n> \r\n> * Performance improvement only\r\n>   \r\n>   * Loading of sonic configuration data should not mutate the user-provided data, this forces callers to know they need to deepcopy the data, plus in most instances data won't be mutated.\r\n> * Test improvement\r\n>   \r\n>   * sonic-yang-mgmt test models should more closely mimic real sonic yang models as we can't implement other features that assume this otherwise (sonic mandates that the top-level container has the same name as the module).\r\n> * Refactor for better code sharing\r\n>   \r\n>   * Import `sonic configdb`<>`yang xpath` conversion from sonic-utilities as this should be shared code.  90% of this code is copied from the original source but does contain some bugfixes and enhancements including caching.\r\n> * New functionality, ideally with even smaller PR focus on one feature per PR\r\n>   \r\n>   * Libyang v1 was not exposing `must` data for leaf nodes (like it does for other node types).  Patch to correct this oversight.\r\n>   * Make `find_schema_dependencies()` public, plus add the ability to find dependencies recursively.  This implementation is caching.\r\n>   * Add new `find_schema_must_count()`, with recursive capabilities to find if a node (and its children) have must clauses. This implementation is caching.\r\n\r\nThat's why I left it as separate commits in the PR so it would be easy to review each commit individually, perhaps you're looking at the file changes directly instead of per-commit.  Also this PR passes all sonic-mgmt tests, so we know its not breaking anything.\r\n\r\nIf you require I break it into multiple smaller PRs, I will.  Just they will *all* have to be merged before https://github.com/sonic-net/sonic-utilities/pull/3831 as it needs them.\r\n"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2025-05-09T12:27:04Z",
+          "body": "@qiluo-msft I didn't see that you responded to my last comments.  Are you requiring I break this into separate PRs?  Like I said, I left the commits themselves split for that reason in this PR."
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2025-05-13T15:05:22Z",
+          "body": "@qiluo-msft thanks for the approval.  Can this be merged so that the tests on the sister ticket https://github.com/sonic-net/sonic-utilities/pull/3831 can be run?  Thanks!"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-06-10T02:27:36Z",
+          "body": "Hi @bhouse-nexthop , please resolve the conflict and raise a PR to 202505 branch"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2025-06-10T12:07:10Z",
+          "body": "> Hi @bhouse-nexthop , please resolve the conflict and raise a PR to 202505 branch\r\n\r\n@yejianquan looks like this got merged before the 202505 branch was created, so its already included."
+        }
+      ]
+    }
+  ]
+}

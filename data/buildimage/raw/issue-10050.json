@@ -1,0 +1,216 @@
+{
+  "number": 10050,
+  "title": "ARP traffic gets dropped in VXLAN-EVPN tunnels",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/10050",
+  "createdAt": "2022-02-21T20:24:00Z",
+  "closedAt": "2025-01-29T20:58:43Z",
+  "author": "lukasstockner",
+  "labels": [
+    "Triaged",
+    "BRCM"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "#### Description\r\nWhen configuring a L2 VXLAN-EVPN overlay on Celestica Seastone2 (Trident3-based) switches in a simple test setup, ARP packets don't reach the server on the other switch.\r\n\r\nIPv4 unicast traffic works just fine after manually adding the ARP entries on the servers, IPv6 (including ND) works just fine out of the box, and other broadcast traffic (e.g. a simple ping to the broadcast address) also arrives, so the problem appears to be related to ARP itself, not BUM traffic in general.\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Deploy a 202012 or 202106 image (containing the SAI config entries mentioned in [this comment](https://github.com/Azure/sonic-buildimage/issues/8371#issuecomment-896390372)) on two Celestica Seastone2 switches, each of which is connected to one server on Ethernet128 and to the other switch on Ethernet0.\r\n2. Set up a basic L2VPN configuration:\r\n```\r\nsudo config interface ip add Loopback0 1.1.1.1/32\r\nsudo config interface ip add Ethernet0 10.100.0.1/24\r\nsudo config vlan add 1000\r\nsudo config vlan member add -u 1000 Ethernet128\r\nsudo config vxlan add vtep 1.1.1.1\r\nsudo config vxlan evpn_nvo add nvo vtep\r\nsudo config vxlan map add vtep 1000 10000\r\n```\r\n3. Configure BGP:\r\n```\r\nconfigure terminal\r\n router bgp 65100\r\n  bgp router-id 1.1.1.1\r\n  no bgp ebgp-requires-policy\r\n  bgp bestpath as-path multipath-relax\r\n  neighbor 10.100.0.2 remote-as external\r\n  !\r\n  address-family ipv4 unicast\r\n   network 1.1.1.1/32\r\n  exit-address-family\r\n  !\r\n  address-family l2vpn evpn\r\n   neighbor 10.100.0.2 activate\r\n   advertise-all-vni\r\n  exit-address-family\r\n end\r\nwrite\r\n```\r\n4. Apply equivalent config on the other switch (adjusting IPs and ASN)\r\n5. Check that BGP session is up and L2VPN info is exchanged\r\n6. Assign IPv4 and IPv6 IPs to the two servers\r\n7. Check that pings go through\r\n\r\n#### Describe the results you received:\r\nIPv6 pings to link-local and manually configured addresses work just fine, while IPv4 pings fail due to not receiving an ARP reply. After adding a static ARP table entry on both servers, IPv4 pings also work just fine, and traffic between the servers flows at line rate.\r\n\r\n#### Describe the results you expected:\r\nBoth IPv4 and IPv6 should work.\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nSONiC Software Version: SONiC.202012.0-c57ae5f80\r\nDistribution: Debian 10.11\r\nKernel: 4.19.0-12-2-amd64\r\nBuild commit: c57ae5f80\r\nBuild date: Mon Feb 21 18:41:12 UTC 2022\r\nBuilt by: lstockner@gc231-ctrlv2-control-host\r\n\r\nPlatform: x86_64-cel_seastone_2-r0\r\nHwSKU: Seastone_2\r\nASIC: broadcom\r\nASIC Count: 1\r\nSerial Number: DX030F2B031A05UB200019\r\nUptime: 02:41:41 up 26 min,  1 user,  load average: 1.29, 1.31, 1.15\r\n\r\nDocker images:\r\nREPOSITORY                    TAG                  IMAGE ID            SIZE\r\ndocker-sonic-mgmt-framework   202012.0-c57ae5f80   79440cf48d41        797MB\r\ndocker-sonic-mgmt-framework   latest               79440cf48d41        797MB\r\ndocker-fpm-frr                202012.0-c57ae5f80   28481c6294d1        412MB\r\ndocker-fpm-frr                latest               28481c6294d1        412MB\r\ndocker-orchagent              202012.0-c57ae5f80   e535c2ffebac        412MB\r\ndocker-orchagent              latest               e535c2ffebac        412MB\r\ndocker-nat                    202012.0-c57ae5f80   a18fd90d0b31        397MB\r\ndocker-nat                    latest               a18fd90d0b31        397MB\r\ndocker-sflow                  202012.0-c57ae5f80   823b96247f40        395MB\r\ndocker-sflow                  latest               823b96247f40        395MB\r\ndocker-teamd                  202012.0-c57ae5f80   3229bb6a0885        394MB\r\ndocker-teamd                  latest               3229bb6a0885        394MB\r\ndocker-sonic-telemetry        202012.0-c57ae5f80   143e2eb4c7ad        472MB\r\ndocker-sonic-telemetry        latest               143e2eb4c7ad        472MB\r\ndocker-platform-monitor       202012.0-c57ae5f80   004a6a58b2df        564MB\r\ndocker-platform-monitor       latest               004a6a58b2df        564MB\r\ndocker-snmp                   202012.0-c57ae5f80   b707dba0b738        426MB\r\ndocker-snmp                   latest               b707dba0b738        426MB\r\ndocker-iccpd                  202012.0-c57ae5f80   fd2fff9a2f9f        394MB\r\ndocker-iccpd                  latest               fd2fff9a2f9f        394MB\r\ndocker-syncd-brcm             202012.0-c57ae5f80   657db22b6b53        675MB\r\ndocker-syncd-brcm             latest               657db22b6b53        675MB\r\ndocker-lldp                   202012.0-c57ae5f80   5dd3f98d8e09        423MB\r\ndocker-lldp                   latest               5dd3f98d8e09        423MB\r\ndocker-database               202012.0-c57ae5f80   35b7c2b9bcfd        382MB\r\ndocker-database               latest               35b7c2b9bcfd        382MB\r\ndocker-dhcp-relay             202012.0-c57ae5f80   8c1beba4a4a7        396MB\r\ndocker-dhcp-relay             latest               8c1beba4a4a7        396MB\r\ndocker-router-advertiser      202012.0-c57ae5f80   ab595b3854c6        383MB\r\ndocker-router-advertiser      latest               ab595b3854c6        383MB\r\ndocker-mux                    202012.0-c57ae5f80   00619d24125d        435MB\r\ndocker-mux                    latest               00619d24125d        435MB\r\n\r\n```\r\n#### Output of `show techsupport`:\r\n[sonic_dump_localhost_20220221_201100.tar.gz](https://github.com/Azure/sonic-buildimage/files/8111875/sonic_dump_localhost_20220221_201100.tar.gz)\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\nSince a few other issues mention that L2VPN worked for them, I've tried several older versions going back to July 2021, but all of them had the same problem.\r\n\r\n202111 and master have a different issue that prevents the tunnel from coming up at all, I'll create a separate issue for that.\r\n\r\nThe logs contain an error related to setting the port status - backporting https://github.com/Azure/sonic-swss/pull/2080 fixes this, but the ARP problem remains.\r\n\r\nGiving the switches an IP on the VLAN makes the ARP requests in question show up on the Linux interfaces when using tcpdump, but there's no ARP reply to be seen.\r\n\r\nFrom spamming ARP requests from one server and checking port counters, it appears that the destination switch receives the packets and drops them instead of decapping and sending them to the second server.\r\n\r\nThe image I'm running for the output above is based on 7a35504ff, with a few platform-related fixes that I still have to upstream. None of them should have any impact on the dataplane, it's just Python platform module stuff.",
+  "comments": [
+    {
+      "author": "aseaudi",
+      "createdAt": "2022-02-24T22:54:21Z",
+      "body": "Could you do the following:\r\n\r\nswssloglevel -l INFO -a\r\nconfig vxlan map delete vtep 1000 10000\r\ntail -f /var/log/syslog &\r\nconfig vxlan map add vtep 1000 10000\r\n\r\nand send the logs showing the vxlan tunnel being created\r\n\r\nI am facing an issue [here](https://github.com/Azure/sonic-buildimage/issues/10004), might be related"
+    },
+    {
+      "author": "lukasstockner",
+      "createdAt": "2022-02-28T16:12:31Z",
+      "body": "@aseaudi I'm currently testing other images on the switches, but I think the following section from the log in the techsupport dump is what you want:\r\n```\r\nFeb 21 20:09:59.931907 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_process_route_add_mode_host_only:733 SAI Enter _brcm_sai_mptnl_process_route_add_mode_host_only\r\nFeb 21 20:09:59.931907 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_process_route_add_mode_host_only:779 SAI Exit _brcm_sai_mptnl_process_route_add_mode_host_only\r\nFeb 21 20:09:59.935666 localhost WARNING swss#orchagent: :- createTunnelHw: creation src = 1\r\nFeb 21 20:09:59.935775 localhost NOTICE swss#orchagent: :- create_tunnel: create_tunnel:encapmaplist[0]=0x29000000000613\r\nFeb 21 20:09:59.935904 localhost NOTICE swss#orchagent: :- create_tunnel: create_tunnel:encapmaplist[1]=0x29000000000615\r\nFeb 21 20:09:59.937556 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_tnl_mp_create_tunnel:3049 SAI Enter brcm_sai_tnl_mp_create_tunnel\r\nFeb 21 20:09:59.937556 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_tnl_mp_create_tunnel:3138 Setting peer_mode to 0\r\nFeb 21 20:09:59.937556 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_tnl_mp_create_tunnel:3285 Created tunnel id: 2\r\nFeb 21 20:09:59.940214 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_route_dst_tnl_cnt:911 SAI Enter _brcm_sai_mptnl_route_dst_tnl_cnt\r\nFeb 21 20:09:59.940214 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:mptnl_xgs_flexflow_create_sipdip_tnl:1696 SDK dscp_mode(UNIFORM)\r\nFeb 21 20:09:59.940214 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:mptnl_xgs_flexflow_create_sipdip_tnl:1710 SDK ttl_mode(UNIFORM)\r\nFeb 21 20:09:59.940214 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:mptnl_xgs_flexflow_create_sipdip_tnl:1775 tunnel_id (1275068419) flags (0) valid_elements (909) dscp_sel (0x1) dscp (0)\r\nFeb 21 20:09:59.941787 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_process_tnl_route_add_tunnel_event:646 SAI Enter _brcm_sai_mptnl_process_tnl_route_add_tunnel_event\r\nFeb 21 20:09:59.941787 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_find_external_best_route:596 SAI Enter _brcm_sai_mptnl_find_external_best_route\r\nFeb 21 20:09:59.941916 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_find_external_best_route:634 SAI Exit _brcm_sai_mptnl_find_external_best_route\r\nFeb 21 20:09:59.941916 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_route_add_dip_tunnel:142 SAI Enter _brcm_sai_mptnl_route_add_dip_tunnel\r\nFeb 21 20:09:59.941916 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_route_add_dip_tunnel:212 SAI Exit _brcm_sai_mptnl_route_add_dip_tunnel\r\nFeb 21 20:09:59.942038 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_tnl_route_event_add:391 SAI Enter _brcm_sai_mptnl_tnl_route_event_add\r\nFeb 21 20:09:59.943761 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_tnl_route_event_add:538 SAI Exit _brcm_sai_mptnl_tnl_route_event_add\r\nFeb 21 20:09:59.943761 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:_brcm_sai_mptnl_process_tnl_route_add_tunnel_event:668 SAI Exit _brcm_sai_mptnl_process_tnl_route_add_tunnel_event\r\nFeb 21 20:09:59.943761 localhost INFO syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_tnl_mp_create_tunnel:3313 SAI Exit brcm_sai_tnl_mp_create_tunnel\r\nFeb 21 20:09:59.944839 localhost NOTICE swss#orchagent: :- createDynamicDIPTunnel: Created P2P Tunnel remote IP 1.1.1.1 \r\nFeb 21 20:09:59.944839 localhost NOTICE swss#orchagent: :- addTunnelUser: diprefcnt for remote 1.1.1.1 = 1\r\nFeb 21 20:09:59.946139 localhost NOTICE swss#orchagent: :- addBridgePort: Add bridge port Port_EVPN_1.1.1.1 to default 1Q bridge\r\nFeb 21 20:09:59.946297 localhost ERR swss#orchagent: :- meta_sai_on_port_state_change_single: data.port_id oid:0x2a00000000061a has unexpected type: SAI_OBJECT_TYPE_TUNNEL, expected PORT, BRIDGE_PORT or LAG\r\nFeb 21 20:09:59.947895 localhost NOTICE swss#orchagent: :- addVlanMember: Add member Port_EVPN_1.1.1.1 to VLAN Vlan1000 vid:1000 pid0\r\nFeb 21 20:09:59.947895 localhost ERR swss#orchagent: :- setPortPvid: pvid setting for tunnel Port_EVPN_1.1.1.1 is not allowed\r\nFeb 21 20:09:59.948454 localhost INFO syncd#syncd: [none] SAI_API_FDB:_brcm_sai_fdb_table_add:51 fdbEvent:FDB table add: MAC:D8-5E-D3-84-76-7F  vfi 0x73e8 port:0x2a043a00000002 vlan:1000 is_static 0 is_remote 128\r\nFeb 21 20:09:59.948454 localhost INFO syncd#syncd: [none] SAI_API_FDB:brcm_sai_create_fdb_entry:707 FDB Create: MAC:D8-5E-D3-84-76-7F port_tid:0xb0000003 port_type:Port vid:0x73e8\r\nFeb 21 20:09:59.949356 localhost INFO syncd#syncd: [none] SAI_API_FDB:_brcm_sai_fdb_table_add:51 fdbEvent:FDB table add: MAC:D8-5E-D3-84-76-8F  vfi 0x73e8 port:0x2a043a00000002 vlan:1000 is_static 0 is_remote 128\r\nFeb 21 20:09:59.949415 localhost INFO syncd#syncd: [none] SAI_API_FDB:brcm_sai_create_fdb_entry:707 FDB Create: MAC:D8-5E-D3-84-76-8F port_tid:0xb0000003 port_type:Port vid:0x73e8\r\nFeb 21 20:09:59.949852 localhost NOTICE swss#orchagent: :- doTask: Get port state change notification id:2a00000000061a status:1\r\nFeb 21 20:09:59.949988 localhost ERR swss#orchagent: :- doTask: Failed to get port object for port id 0x2a00000000061a\r\n```\r\n\r\nFor me, the `oper_down` error could be fixed by applying https://github.com/Azure/sonic-swss/pull/2080, maybe also try that?\r\nThe ARP problem still persists, though."
+    },
+    {
+      "author": "aseaudi",
+      "createdAt": "2022-03-01T09:06:07Z",
+      "body": "@lukasstockner \r\nyou have the error: ERR swss#orchagent: :- meta_sai_on_port_state_change_single: data.port_id oid:0x2a00000000061a has unexpected type: SAI_OBJECT_TYPE_TUNNEL, expected PORT, BRIDGE_PORT or LAG\r\nwhat happens after that, does the VXLAN appear in the \"show vxlan remotevtep\" output ?\r\nwhat is the output of \"bridge fdb show br Bridge\" ?\r\nin my case, after the error, i get a log saying orchagent exiting, and the swss container restarts a couple of times and finally fails."
+    },
+    {
+      "author": "lukasstockner",
+      "createdAt": "2022-03-02T13:59:38Z",
+      "body": "@aseaudi After the log snippet that I posted above, swss/orchagent keeps running in my case and the tunnel is working (except for the ARP issue). See the full log in the techsupport dump for details.\r\n\r\n`show vxlan remotevtep` shows `oper_down` for me, unless I apply the PR that I linked above - in that case, it correctly shows `oper_up` instead with no actual change to the tunnel behavior.\r\n\r\n`bridge fdb show br Bridge` shows\r\n```\r\nb0:26:28:35:0e:01 dev Ethernet128 vlan 1000 master Bridge \r\n33:33:00:00:00:01 dev Ethernet128 self permanent\r\n33:33:00:00:00:02 dev Ethernet128 self permanent\r\n01:00:5e:00:00:01 dev Ethernet128 self permanent\r\n33:33:ff:97:21:ce dev Ethernet128 self permanent\r\n33:33:ff:00:00:00 dev Ethernet128 self permanent\r\n01:80:c2:00:00:0e dev Ethernet128 self permanent\r\n01:80:c2:00:00:03 dev Ethernet128 self permanent\r\n01:80:c2:00:00:00 dev Ethernet128 self permanent\r\n33:33:00:00:00:01 dev Bridge self permanent\r\n33:33:00:00:00:02 dev Bridge self permanent\r\n01:00:5e:00:00:01 dev Bridge self permanent\r\n33:33:ff:4f:8e:84 dev Bridge self permanent\r\n33:33:ff:00:00:00 dev Bridge self permanent\r\n01:80:c2:00:00:21 dev Bridge self permanent\r\n33:33:ff:97:21:ce dev Bridge self permanent\r\n0c:48:c6:97:21:ce dev Bridge vlan 1000 master Bridge permanent\r\n0c:48:c6:97:21:ce dev Bridge master Bridge permanent\r\n7e:f9:d1:ab:97:1d dev dummy vlan 1 master Bridge permanent\r\n7e:f9:d1:ab:97:1d dev dummy master Bridge permanent\r\n33:33:00:00:00:01 dev dummy self permanent\r\nb0:26:28:35:0e:00 dev vtep-1000 vlan 1000 extern_learn master Bridge \r\n00:00:00:00:00:00 dev vtep-1000 dst 2.2.2.2 self permanent\r\nb0:26:28:35:0e:00 dev vtep-1000 dst 2.2.2.2 self extern_learn \r\n```"
+    },
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2022-03-02T16:32:37Z",
+      "body": "Adam will find someone in BRCM to take a look. Thanks."
+    },
+    {
+      "author": "aseaudi",
+      "createdAt": "2022-03-05T10:01:05Z",
+      "body": "I was troubleshooting the same issue on my edgecore as8535-54x with sonic 202012, and i noticed that the arp packet is encapsulated in a vxlan packet with ttl=0 and was dropped by the next switch en route to the end vtep.\r\n\r\nSo, the ARP was dropped by the intermediate switch.\r\n\r\nI don't know if this is normal, or if this is something configurable in the sonic.\r\n\r\n```\r\n16:32:52.234085 IP (tos 0x0, id 2994, offset 0, flags [none], proto UDP (17), length 96)\r\n    [4.4.4.4](http://4.4.4.4/).61446 > 2.2.2.2.4789: [no cksum] VXLAN, flags [I] (0x08), vni 50\r\nARP, Ethernet (len 6), IPv4 (len 4), Request who-has 192.168.50.18 tell 192.168.50.11, length 46\r\n16:32:52.234183 IP (tos 0xc0, ttl 64, id 16733, offset 0, flags [none], proto ICMP (1), length 124)\r\n    10.3.4.3 > 4.4.4.4: ICMP time exceeded in-transit, length 104\r\n\tIP (tos 0x0, id 2994, offset 0, flags [none], proto UDP (17), length 96)\r\n    4.4.4.4.61446 > 2.2.2.2.4789: [no cksum] VXLAN, flags [I] (0x08), vni 50\r\nARP, Ethernet (len 6), IPv4 (len 4), Request who-has 192.168.50.18 tell 192.168.50.11, length 46\r\n```\r\nIpv6 is encapsulate in VXLAN with TTL = 64\r\n```\r\n21:40:56.806808 IP (tos 0x0, ttl 64, id 61067, offset 0, flags [none], proto UDP (17), length 122)\r\n    4.4.4.4.40641 > 2.2.2.2.4789: [udp sum ok] VXLAN, flags [I] (0x08), vni 50\r\nIP6 (hlim 255, next-header ICMPv6 (58) payload length: 32) 2001::1 > ff02::1:ff00:2: [icmp6 sum ok] ICMP6, neighbor solicitation, length 32, who has 2001::2\r\n\t  source link-address option (1), length 8 (1): f8:8e:a1:e0:72:11\r\n\t    0x0000:  f88e a1e0 7211\r\n21:40:57.830709 IP (tos 0x0, ttl 64, id 61141, offset 0, flags [none], proto UDP (17), length 122)\r\n    4.4.4.4.40641 > 2.2.2.2.4789: [udp sum ok] VXLAN, flags [I] (0x08), vni 50\r\nIP6 (hlim 255, next-header ICMPv6 (58) payload length: 32) 2001::1 > ff02::1:ff00:2: [icmp6 sum ok] ICMP6, neighbor solicitation, length 32, who has 2001::2\r\n\t  source link-address option (1), length 8 (1): f8:8e:a1:e0:72:11\r\n\t    0x0000:  f88e a1e0 7211\r\n```"
+    },
+    {
+      "author": "bluecmd",
+      "createdAt": "2022-03-06T19:09:31Z",
+      "body": "We too had issues getting ARP to work a while back but gave up debugging it. See https://github.com/kamelnetworks/sonic/issues/9 for our own notes. Basically IPv4 w/ static ARP and IPv6 worked fine, ARP did not. We assumed it was something to do with ARP suppression at the time, but that was just a hunch."
+    },
+    {
+      "author": "aseaudi",
+      "createdAt": "2022-03-09T21:23:23Z",
+      "body": "I changed the VXLAN tunnel attribute in orchagnet from the default UNIFROM_MODEL to PIPE_MODEL with TTL = 64, and now ARP and Ping is working over the P2P Vxlan Tunnel.\r\n\r\n```\r\n        attr.id = SAI_TUNNEL_ATTR_ENCAP_TTL_MODE;\r\n        attr.value.s32 = SAI_TUNNEL_TTL_MODE_PIPE_MODEL;\r\n        tunnel_attrs.push_back(attr);\r\n\r\n        attr.id = SAI_TUNNEL_ATTR_ENCAP_TTL_VAL;\r\n        attr.value.u8 = 64;\r\n        tunnel_attrs.push_back(attr);\r\n```"
+    },
+    {
+      "author": "lukasstockner",
+      "createdAt": "2022-03-10T00:04:51Z",
+      "body": "@aseaudi Fantastic find, thanks! I can confirm that that change makes it work.\r\nLooks like the code already supports specifying an `encap_ttl`, but all callers just leave it at zero."
+    },
+    {
+      "author": "jelmeronline",
+      "createdAt": "2023-08-24T19:21:42Z",
+      "body": "This issue does still exist, is there a way to define encap_ttl somewhere for P2P tunnels? Or is altering the source still the way to go?\r\nI'm experiencing it on two Dell 5248 with TD3 ASIC."
+    },
+    {
+      "author": "hanifrafif",
+      "createdAt": "2024-01-26T09:26:35Z",
+      "body": "> I changed the VXLAN tunnel attribute in orchagnet from the default UNIFROM_MODEL to PIPE_MODEL with TTL = 64, and now ARP and Ping is working over the P2P Vxlan Tunnel.\r\n> \r\n> ```\r\n>         attr.id = SAI_TUNNEL_ATTR_ENCAP_TTL_MODE;\r\n>         attr.value.s32 = SAI_TUNNEL_TTL_MODE_PIPE_MODEL;\r\n>         tunnel_attrs.push_back(attr);\r\n> \r\n>         attr.id = SAI_TUNNEL_ATTR_ENCAP_TTL_VAL;\r\n>         attr.value.u8 = 64;\r\n>         tunnel_attrs.push_back(attr);\r\n> ```\r\n\r\nSorry, where is the directory to change ttl? thanks"
+    },
+    {
+      "author": "jelmeronline",
+      "createdAt": "2024-01-27T12:23:51Z",
+      "body": "sonic-swss>orchagent>vxlanorch.cpp in the source before compiling."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 3383,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/3383",
+      "title": "[orchagent]: VXLAN: Fix oper_status and tunnel encapsulation TTL",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-29T20:58:41Z",
+      "createdAt": "2024-11-20T14:41:02Z",
+      "author": "bradh352",
+      "body": "**What I did**\r\n\r\nThis fixes 2 issues across a range of open tickets building upon patches created by others with modifications as requested by @VladimirKuk.\r\n\r\nThe first issue this resolves is the status shown for remote vteps which in the fact that it is wrong makes debugging nearly impossible:\r\n```\r\n# show vxlan remotevtep\r\n+------------+------------+-------------------+--------------+\r\n| SIP        | DIP        | Creation Source   | OperStatus   |\r\n+============+============+===================+==============+\r\n| 172.16.0.1 | 172.16.0.2 | EVPN              | oper_down    |\r\n+------------+------------+-------------------+--------------+\r\nTotal count : 1\r\n```\r\n\r\nThe remote VTEP is really up.\r\n\r\nOriginal PR for that is #2080.\r\n\r\nAlso fixes https://github.com/sonic-net/sonic-buildimage/issues/10004 or at least the error message which hurts debugging.\r\n\r\nThe next issue is in reachabiity across VXLANs.  This fixes IP/MAC learning via ARP.  The original PR for that is #3216, however it appears it has its origins in\r\nhttps://github.com/sonic-net/sonic-buildimage/issues/10050 which goes into greater detail about the issue itself.  Also there is talk about it here https://github.com/kamelnetworks/sonic/issues/9 as well as another similar patch here: https://github.com/kamelnetworks/sonic-swss/commit/02ee3e3\r\n\r\n**Why I did it**\r\n\r\nFixes #3216\r\nFixes #2080\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/10050\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/10004\r\n\r\n**How I verified it**\r\n\r\nPulled into my private sonic-swss fork:\r\nhttps://github.com/bradh352/sonic-swss/commits/bradh352/master\r\n\r\nWhich is pulled in by my private sonic-buildimage fork:\r\nhttps://github.com/bradh352/sonic-buildimage/tree/bradh352/master\r\n\r\nWhich is then automatically built when changes are made.  Then the uploaded asset of sonic-broadcom.bin is installed onto Dell S5248F switches and tested.\r\n\r\nUpdate: also now tested by me on Mellanox/NVidia SN2201\r\n\r\n**Details if related**\r\n\r\n Signed-off-by: Brad House (@bradh352)\r\n\r\nThis should also be backported to 202411, 202405\r\n",
+      "files": [
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 5,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/vxlanorch.h",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/evpn_tunnel.py",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "tests/test_vxlan_tunnel.py",
+          "additions": 3,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2024-11-20T14:41:22Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: bradh352 / name: Brad House  (bc528b60fedce5e67c1a4ebc39f8084d40119edc, f461115cb770d174ad9e108d849b95e7140818d4, 4149ce58e094f0c055900f9666326ea8339018b9, 74238d1300cc96ead8498e1ce21e319ba5697adb)</li><li>:white_check_mark: login: prsunny / name: Prince Sunny  (7ea6c7fa6adca6ce7976ea8dd72cba2bd9981615)</li></ul><!-- Date Modified: 2025-01-28 18:51:07.523163 -->"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-11-20T20:34:31Z",
+          "body": "@VladimirKuk any idea if those test failures are actually a symptom of the patch itself?  Or is it just common for things to fail in the tests from time to time?"
+        },
+        {
+          "author": "VladimirKuk",
+          "createdAt": "2024-11-20T22:04:49Z",
+          "body": "Tests do fail from time to time.\r\nAt least to me, these tests are unrelated to the change."
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-11-20T23:32:32Z",
+          "body": "@prsunny please review"
+        },
+        {
+          "author": "lukasstockner",
+          "createdAt": "2024-11-27T19:25:00Z",
+          "body": "Thank you for pushing this forward!\r\nFor the record, we've been running these changes in production for ~2 years without issues, so I'd be quite confident that they work as expected."
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-11-27T20:37:59Z",
+          "body": "@prsunny ping"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-12-04T17:17:34Z",
+          "body": "@VladimirKuk I ended up having to sprinkle your suggestion in 2 places to get it fully working. "
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-12-07T11:04:19Z",
+          "body": "@prsunny how would you like to proceed on this?  I think this is a critical issue since community SONiC doesn't support ARP/ND suppression so things just don't work at all without this."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-13T14:11:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-12-13T14:11:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-12-13T14:12:20Z",
+          "body": "@prsunny looks like the internal msconflict is resolved now since pvst was merged to main.  Please review and hopefully merge.  Thanks!"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-16T16:03:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-12-16T16:03:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-12-16T16:04:15Z",
+          "body": "rebased on top of current master to get rid of merged stuff that is now upstream"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-17T17:46:18Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-12-17T17:46:29Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2024-12-19T12:49:42Z",
+          "body": "I can't tell from the output if somehow the test failures are related to this PR.  I'm not familiar enough with the test case output to differentiate expected failures from real ones."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-20T09:40:47Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-12-20T09:40:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-06T18:46:47Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "number": 8907,
+  "title": "Can't add route with a nexthop of a PortChannel",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/8907",
+  "createdAt": "2021-10-06T09:34:44Z",
+  "closedAt": "2021-10-13T01:54:38Z",
+  "author": "DavidZagury",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\nWe no longer can add routes with a nexthop of a PortChannel.\r\nThis was possible until the refactor of add/del route functions in this PR - [config]Static routes to config_db (https://github.com/Azure/sonic-utilities/pull/1534)\r\n\r\n#### Steps to reproduce the issue:\r\n1. config portchannel add PortChannel0001\r\n2. sudo config route add prefix 20.0.0.1/32 nexthop PortChannel0001\r\n\r\n#### Describe the results you received:\r\nCommand fails with error:\r\n`Error: ip address is not valid.\r\n`\r\n#### Describe the results you expected:\r\nCommand succeed and route added successfully. \r\nRoute should be appear in \"show ip route\" output.\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\nThis was possible until the refactor of add/del route functions in this PR - [config]Static routes to config_db (https://github.com/Azure/sonic-utilities/pull/1534)\r\n\r\n",
+  "comments": [
+    {
+      "author": "d-dashkov",
+      "createdAt": "2021-10-06T10:41:21Z",
+      "body": "Started looking into it"
+    },
+    {
+      "author": "DavidZagury",
+      "createdAt": "2021-10-13T07:46:56Z",
+      "body": "@prsunny the pr that was merged is not enough to fix this issue, we still need to merge https://github.com/Azure/sonic-utilities/pull/1857"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1857,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/1857",
+      "title": "[config] Add portchannel support  for static route ",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-12-07T00:24:37Z",
+      "createdAt": "2021-10-06T11:22:07Z",
+      "author": "d-dashkov",
+      "body": "#### What I did\r\nAdded portchannels support for static routes.\r\nfix https://github.com/Azure/sonic-buildimage/issues/8907\r\n\r\n#### How I did it\r\nAdded check if nexthop is a portchannel and added check if this portchannel exists in config db.\r\n\r\n#### How to verify it\r\n```\r\nconfig portchannel add PortChannel0001\r\nsudo config route add prefix 20.0.0.1/32 nexthop PortChannel0001\r\n```\r\nAlso\r\n```\r\nsudo config route add prefix 20.0.0.1/32 nexthop PortChannel0003\r\nError: portchannel does not exist.\r\n```\r\n",
+      "files": [
+        {
+          "path": "config/main.py",
+          "additions": 9,
+          "deletions": 3
+        },
+        {
+          "path": "tests/static_routes_test.py",
+          "additions": 14,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "prsunny",
+          "createdAt": "2021-10-06T23:22:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-10-06T23:22:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "DavidZagury",
+          "createdAt": "2021-10-07T13:10:03Z",
+          "body": "I tried to cherry pick these changes, the command did passed without error, but looking for the routes in \u201cshow ip route\u201d we are still not getting the result we expects:\r\n\r\n```\r\nroot@r-leopard-56:/home/admin# config portchannel add PortChannel0001\r\nroot@r-leopard-56:/home/admin# sudo config route add prefix 20.0.0.1/32 nexthop PortChannel0001\r\nroot@r-leopard-56:/home/admin# show ip route\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\r\n\r\nS>* 0.0.0.0/0 [200/0] via 10.210.24.1, eth0, weight 1, 00:01:33\r\nC>* 10.210.24.0/22 is directly connected, eth0, 00:01:34\r\n\r\n```\r\nResults from 201911 for compression:\r\n```\r\nroot@r-lionfish-07:/home/admin# config portchannel add PortChannel0001\r\nroot@r-lionfish-07:/home/admin# sudo config route add prefix 20.0.0.1/32 nexthop PortChannel0001\r\nroot@r-lionfish-07:/home/admin# show ip route\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued route, r - rejected route\r\n\r\nS>* 0.0.0.0/0 [200/0] via 10.210.24.1, eth0, 00:02:03\r\nC>* 10.210.24.0/22 is directly connected, eth0, 00:02:03\r\nS   20.0.0.1/32 [1/0] is directly connected, PortChannel0001 inactive, 00:00:12\r\n\r\n```\r\n"
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-10-07T13:16:45Z",
+          "body": "@DavidZagury, I have already prepared a fix for bgpcfd: https://github.com/Azure/sonic-buildimage/pull/8911 Currently these changes throw an error if you try to add a portchannel as a nexthop:\r\n```\r\nOct  6 14:46:56.866738 sonic DEBUG bgp#bgpcfgd: Received message : '('20.0.0.1/32', 'SET', (('distance', '0,0,0,0,0'), ('nexthop', '10.0.0.1,PortChannel0001,PortChannel0001,PortChannel0002,PortChannel0001'), ('blackhole', 'false,false,false,false,false'), ('nexthop-vrf', ',,,,'), ('ifname', ',,,,')))'\r\nOct  6 14:46:56.867237 sonic CRIT bgp#bgpcfgd: Got an exception illegal IP address string passed to inet_pton: Traceback: Traceback (most recent call last):#012  File \"/usr/local/lib/python3.7/dist-packages/bgpcfgd/managers_static_rt.py\", line 43, in set_handler#012    ip_nh_set = IpNextHopSet(is_ipv6, bkh_list, nh_list, intf_list, dist_list, nh_vrf_list)#012  File \"/usr/local/lib/python3.7/dist-packages/bgpcfgd/managers_static_rt.py\", line 219, in __init__#012    item(dist_list, idx), item(vrf_list, idx), ))#012  File \"/usr/local/lib/python3.7/dist-packages/bgpcfgd/managers_static_rt.py\", line 172, in __init__#012    if self.blackhole != 'true' and self.is_zero_ip() and len(self.interface.strip()) == 0:#012  File \"/usr/local/lib/python3.7/dist-packages/bgpcfgd/managers_static_rt.py\", line 186, in is_zero_ip#012    return sum([x for x in socket.inet_pton(self.af, self.ip)]) == 0#012OSError: illegal IP address string passed to inet_pton\r\nOct  6 14:46:56.867404 sonic DEBUG bgp#bgpcfgd: 'SET' handler returned NOT_READY for the Manager: <class 'bgpcfgd.managers_static_rt.StaticRouteMgr'>\r\n```\r\n#8911 should prevent this and both PRs should allow the user to add portchannels as the nexthop"
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-10-19T19:37:28Z",
+          "body": "@shi-su pls review this PR"
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-10-20T03:33:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-10-20T03:33:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-10-21T13:15:46Z",
+          "body": "I believe that there was some problem in Azure pipeline with collecting logs, but I don`t have permission to restart it\r\n```\r\ncp: cannot stat '../sonic-swss/tests/log': No such file or directory\r\n##[error]Bash exited with code '1'.\r\n```\r\n"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2021-11-03T11:52:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-11-03T11:53:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "pshulik",
+          "createdAt": "2021-11-08T07:29:49Z",
+          "body": "@prsunny Could you please review these changes?"
+        }
+      ]
+    },
+    {
+      "number": 8911,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/8911",
+      "title": "[frrcfgd][bgpcfgd] Add portchannel support",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-10-13T01:54:38Z",
+      "createdAt": "2021-10-06T15:43:12Z",
+      "author": "d-dashkov",
+      "body": "#### Why I did it\r\nTo add portchannel support in frrcfgd and bgpcfgd.\r\nfix Azure/sonic-buildimage#8907\r\n\r\n#### How I did it\r\nAdded handling of the portchannel name as an IP address by adding check in is_zero_ip() to prevent parsing portchannel name with socket.inet_pton().\r\n\r\n#### How to verify it\r\n```\r\nconfig portchannel add PortChannel0001\r\nconfig portchannel add PortChannel0002\r\nsudo config route add prefix 20.0.0.1/32 nexthop PortChannel0001\r\nsudo config route add prefix 20.0.0.1/32 nexthop PortChannel0002\r\n```\r\n\r\n```\r\nadmin@sonic:~$ show ip route\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\r\n\r\nS>* 0.0.0.0/0 [200/0] via 192.168.111.3, eth0, weight 1, 00:00:45\r\nC>* 10.1.0.1/32 is directly connected, Loopback0, 00:00:46\r\nS   20.0.0.1/32 [1/0] is directly connected, PortChannel0001 inactive, weight 1, 00:00:09\r\n                      is directly connected, PortChannel0002 inactive, weight 1, 00:00:09\r\nC>* 30.0.0.0/24 is directly connected, Ethernet0, 00:00:46\r\nC>* 192.168.111.0/24 is directly connected, eth0, 00:00:46\r\n```\r\n\r\n\r\n\r\n",
+      "files": [
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_static_rt.py",
+          "additions": 11,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_static_rt.py",
+          "additions": 54,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-frr-mgmt-framework/frrcfgd/frrcfgd.py",
+          "additions": 11,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "lgtm-com",
+          "createdAt": "2021-10-07T21:18:42Z",
+          "body": "This pull request **introduces 2 alerts** when merging cdcb9fcbac46b73d9ca3439bd8a6bc06de50e0ba into 34267393b32fe48f227a3439df4518110aaf9584 - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-buildimage/rev/pr-a10a139f1fb8305d0742de09504be3cebd911e9f)\n\n**new alerts:**\n\n* 2 for Except block handles &#39;BaseException&#39;"
+        },
+        {
+          "author": "lgtm-com",
+          "createdAt": "2021-10-08T19:42:11Z",
+          "body": "This pull request **introduces 2 alerts** when merging 4dd4c17905c873c275ac06b15a5358346c4e1897 into 3855ce2849a4ddb682c33444479682ed3906c50f - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-buildimage/rev/pr-f9f294c4b0bb4b1a776f35eb6973e3f9172c11c8)\n\n**new alerts:**\n\n* 2 for Except block handles &#39;BaseException&#39;"
+        }
+      ]
+    }
+  ]
+}

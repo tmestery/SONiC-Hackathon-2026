@@ -1,0 +1,172 @@
+{
+  "number": 26483,
+  "title": "Regression: Incremental rebuild broken for signed images",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26483",
+  "createdAt": "2026-03-31T08:43:11Z",
+  "closedAt": "2026-04-23T10:11:29Z",
+  "author": "jusherma",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "regression"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Previous Working Version\n\n202505\n\n### Steps to Reproduce\n\nIn 202505 and earlier, incremental rebuild of the final sonic.bin file was possible, which enabled very fast build of multiple images with slightly different build flags. For example, building ZTP and non-ZTP images in the same workspace was possible with only a few extra minutes of build time:\n\n```\nmake init\nmake configure\nmake ENABLE_ZTP=y all\nmv target/sonic.bin target/sonic.ztp.bin\nmake ENABLE_ZTP=n all # This step only takes 10 minutes because only .bin repackaging happens\n```\n\nFrom 202511 onwards, this functionality is broken when image signing is also performed, as the `sign-file` kernel script is missing from the sonic-slave docker _container_ on the second bin build only. \n\nThis appears to be due to the lack of the linux-kbuild package in the sonic-slave-trixie docker _image_.\n\nPrior to trixie, the linux-kbuild package, which provides the `sign-file` utility, was installed into the sonic-slave docker _image_ directly by the `sonic-slave-*/Dockerfile.j2` files:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/8e65b0854512fde4be8afd4737bf69a48b05565e/sonic-slave-bookworm/Dockerfile.j2#L238\n\nHowever, the linux-kbuild install is missing from `sonic-slave-trixie/Dockerfile.j2`.\n\nInstead, the linux-kbuild package is installed into the sonic-slave-trixie _container_ during the build process, specifically in by the build_debian.sh script during the creation of the `sonic-<PLATFORM>.bin__<PLATFORM>__rfs.squashfs` target:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/8e65b0854512fde4be8afd4737bf69a48b05565e/build_debian.sh#L168-L169\n\nThis works fine for the first build. But, when building a second .bin file with slightly different flags (e.g. disabling ZTP), the rfs.squashfs target is not rebuilt, so the linux-kbuild package is never installed into the sonic-slave-trixie container. \n\nThen, when the image signing logic is invoked during the second bin generation, the requisite `sign-file` binary is not present in the container, causing the build to fail:\n\n```\nERROR: LOCAL_SIGN_FILE=/usr/lib/linux-kbuild-6.12.41+deb13/scripts/sign-file file does not exist\n```\n\nI see a few potential ways to resolve this:\n\n1. Install the linux-kbuild package in the sonic-slave-trixie docker _image_, if possible\n2. Add logic in the .bin generation step to install linux-kbuild into the sonic-slave container\n3. Force the rfs.squashfs target to rebuild when a new bin file is generated, or at least confirm the lack of squashfs rebuild is intentional (rather than due to a missing dependency)\n\n### Impact of this regression\n\nIncremental rebuild of the .bin file is not possible when image signing is needed as well. This substantially increases build time when producing, for example, ZTP and non-ZTP images from the same sources\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "jusherma",
+      "createdAt": "2026-03-31T08:45:34Z",
+      "body": "Tagging @pavannaregundi to understand if skipping installation of linux-kbuild in sonic-slave-trixie/Dockerfile.j2 was intentional (and if so, to get additional context)\n\nTagging @saiarcot895 to get context on the addition of the code to build_debian.sh that installs linux-kbuild into the sonic-slave _container_ during the squashfs generation step"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-03-31T19:32:32Z",
+      "body": "This was an intentional change that we did; since we are building our own kernel, we want to make sure the kbuild package that gets used is from the version that we build. There have also been a few cases in the past where the kernel version couldn't be updated because the Debian snapshot mirror that we use didn't have a sufficiently updated version of the linux-kbuild package.\n\nThe kbuild package that we build can be installed by adding a dependency to the `$(SONIC_INSTALLERS)` target in `slave.mk`, specifically, by adding `$(addprefix $(IMAGE_DISTRO_DEBS_PATH)/,$(LINUX_KBUILD)-install)`. This might be better than having it get installed in `build_debian.sh`, since this will be recorded as a dependency."
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-03-31T22:47:13Z",
+      "body": "I ran into the same issue while working with incremental builds on Trixie.\n\nHappy to put together a PR and test it locally."
+    },
+    {
+      "author": "jusherma",
+      "createdAt": "2026-04-01T01:00:47Z",
+      "body": "Thanks for the context @saiarcot895 and the proposed fix approach. @Bojun-Feng if you have a chance to try implementing it, that would be amazing. I'm happy to try out your change locally too if that helps"
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-04-01T01:08:09Z",
+      "body": "I _think_ it's just a one line fix, submitted a PR draft. Running builds locally right now to verify.\n\nWill post an update in the PR after validated locally."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26498,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26498",
+      "title": "[slave.mk]: Add linux-kbuild install dependency to installer target",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-23T10:11:28Z",
+      "createdAt": "2026-04-01T01:06:54Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/26483\r\n\r\nCurrently, the `linux-kbuild` package (which provides the `sign-file` utility) is only installed into the sonic-slave container during the `rfs.squashfs` build step in `build_debian.sh`.\r\n\r\nOn incremental rebuilds, the `rfs.squashfs` target is not rebuilt, so `linux-kbuild` is never re-installed into the container, causing the signing step to fail with `ERROR: LOCAL_SIGN_FILE=... file does not exist`.\r\n\r\n#### How I did it\r\n* Added `$(LINUX_KBUILD)-install` as a dependency to the `$(SONIC_INSTALLERS)` target in `slave.mk`\r\n* This ensures the `linux-kbuild` package is installed into the sonic-slave container before `.bin` generation, regardless of whether the `rfs.squashfs` target was rebuilt\r\n* This approach was suggested by @saiarcot895 as the preferred fix, since it records the dependency explicitly in make rather than relying on a side effect of the squashfs build step\r\n\r\n#### How to verify it\r\n1. Build a signed image: `make ENABLE_ZTP=y all`\r\n2. Move the output: `mv target/sonic.bin target/sonic.ztp.bin`\r\n3. Build again with different flags: `make ENABLE_ZTP=n all`\r\n4. Verify the second build completes without `sign-file` errors\r\n\r\n#### Description for the changelog\r\n* Fixed incremental rebuild failure for signed images by adding linux-kbuild install dependency to the installer target",
+      "files": [
+        {
+          "path": "build_debian.sh",
+          "additions": 0,
+          "deletions": 3
+        },
+        {
+          "path": "slave.mk",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-01T01:07:02Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-01T01:07:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "jusherma",
+          "createdAt": "2026-04-01T02:49:40Z",
+          "body": "Thanks @Bojun-Feng! I'm testing this out locally now. Do you see any value in removing the `apt install linux-kbuild` line from `build_debian.sh` as part of this fix? (cc @saiarcot895) "
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-01T06:00:13Z",
+          "body": "> Thanks @Bojun-Feng! I'm testing this out locally now. Do you see any value in removing the `apt install linux-kbuild` line from `build_debian.sh` as part of this fix? (cc @saiarcot895)\r\n\r\nYeah @jusherma that seems redundant. I'm just leaving it there for now since I just want to test the minimal fix. After validation we can probably remove it from `build_debian.sh` as a follow up.\r\n\r\nLocal build still running btw. Letting it run over night. Will post update tomorrow."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-01T15:16:31Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-01T16:14:37Z",
+          "body": "Update: Re-run build locally, verified that the `kbuild` package is indeed rebuilt on incremental rebuilds. Unfortunately I made new clones and forgot to enable signing on them, but now we know the fix works at the dependency level.\r\n\r\n<details>\r\n<summary>More Details</summary>\r\n\r\n### Setup\r\n\r\nRun these in two different directories\r\n```\r\n# Master head on 03/31/2026\r\ngit clone https://github.com/sonic-net/sonic-buildimage\r\ngit checkout b9d726a3710da24b605353359fa891b3b6375e1e \r\n\r\n# This PR, exactly one commit ahead of commit above\r\ngit clone https://github.com/Bojun-Feng/sonic-buildimage\r\ngit checkout bug/fix-incremental-rebuild-kbuild\r\ngit checkout 8c4302591ea58c256e2219fbfccd21d628292481\r\n```\r\n\r\n### Commands\r\n\r\nRun the same commands in both clones\r\n```\r\ngit submodule update --init --recursive\r\n\r\nmake init &&  \\\r\nmake configure \\\r\n  PLATFORM=vs\r\n\r\n# By default ENABLE_ZTP=n\r\nmake \\\r\n  SONIC_BUILD_JOBS=4 \\\r\n  SONIC_BUILD_RETRY_COUNT=1 \\\r\n  target/sonic-vs.img.gz\r\n\r\n# Remove artifact, rebuild with ENABLE_ZTP=y\r\nmv ./target/sonic-vs.img.gz ./target/sonic-vs.noztp.img.gz\r\n\r\nmake \\\r\n  SONIC_BUILD_JOBS=4 \\\r\n  SONIC_BUILD_RETRY_COUNT=1 \\\r\n  ENABLE_ZTP=y \\\r\n  target/sonic-vs.img.gz\r\n```\r\n\r\nIn master on rebuild:\r\n```\r\n[ 01 ] [ target/debs/trixie/sonic-ztp_1.0.0_all.deb ]\r\n[ 01 ] [ target/sonic-vs.img.gz ]\r\n```\r\n\r\nIn PR on rebuild:\r\n```\r\n[ 01 ] [ target/debs/trixie/sonic-ztp_1.0.0_all.deb ]\r\n[ 02 ] [ target/debs/trixie/linux-kbuild-6.12.41+deb13_6.12.41-1_amd64.deb-install ]\r\n[ 01 ] [ target/sonic-vs.img.gz ]\r\n```\r\n</details>\r\n\r\nI'm removing the `apt install linux-kbuild` now. Will make a new clone and build again with signing enabled to ensure this PR fixes the `sign-file` issue."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-01T16:40:52Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-01T16:41:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-01T19:17:44Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-01T19:26:56Z",
+          "body": "Seems like there is an issue with Rust versioning blocking the CI Pipeline for broadcom and marvell_prestera_armhf. I don't think it is related to our changes. Opened a separate issue for it"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-01T20:11:11Z",
+          "body": "Update: Successfully reproduced issue locally. Incremental build on PR completes normally as expected.\r\n\r\n<details>\r\n<summary>More Details</summary>\r\n\r\n### Setup\r\n\r\nRun these in two different directories\r\n```\r\n# Master head on 03/31/2026\r\ngit clone https://github.com/sonic-net/sonic-buildimage\r\ngit checkout b9d726a3710da24b605353359fa891b3b6375e1e \r\n\r\n# This PR, exactly two commit ahead of commit above\r\ngit clone https://github.com/Bojun-Feng/sonic-buildimage\r\ngit checkout bug/fix-incremental-rebuild-kbuild\r\ngit checkout 418afa1205cb5f51f61c3e5cf51237227ff40ef6\r\n\r\n# Run this once, you may want to change the path\r\nopenssl req -new -x509 -newkey rsa:2048 -keyout /home/ubuntu/temp1/dev-signing-key.pem -out /home/ubuntu/temp1/dev-signing-cert.pem -days 365 -nodes -subj \"/CN=SONiC Dev Signing Key\"\r\n```\r\n\r\n### Commands\r\n\r\nRun the same commands in both clones\r\n```\r\ngit submodule update --init --recursive\r\n\r\n# Enable signing, again you may want to change the path\r\necho 'SECURE_UPGRADE_MODE = dev\r\nSECURE_UPGRADE_DEV_SIGNING_KEY = /home/ubuntu/temp1/dev-signing-key.pem\r\nSECURE_UPGRADE_SIGNING_CERT = /home/ubuntu/temp1/dev-signing-cert.pem' >> ./rules/config.user\r\n\r\nmake init &&  \\\r\nmake configure \\\r\n  PLATFORM=vs\r\n\r\n# By default ENABLE_ZTP=n\r\nmake \\\r\n  SONIC_BUILD_JOBS=4 \\\r\n  SONIC_BUILD_RETRY_COUNT=1 \\\r\n  target/sonic-vs.img.gz\r\n\r\n# Remove artifact, rebuild with ENABLE_ZTP=y\r\nmv ./target/sonic-vs.img.gz ./target/sonic-vs.noztp.img.gz\r\n\r\nmake \\\r\n  SONIC_BUILD_JOBS=4 \\\r\n  SONIC_BUILD_RETRY_COUNT=1 \\\r\n  ENABLE_ZTP=y \\\r\n  target/sonic-vs.img.gz\r\n```\r\n\r\nIn master on rebuild:\r\n```\r\n[ 01 ] [ target/debs/trixie/sonic-ztp_1.0.0_all.deb ]\r\n[ 01 ] [ target/sonic-vs.img.gz ]\r\n\r\n[ FAIL LOG START ] [ target/sonic-vs.img.gz ]\r\n...\r\nERROR: LOCAL_SIGN_FILE=/usr/lib/linux-kbuild-6.12.41+deb13/scripts/sign-file file does not exist\r\n./scripts/signing_kernel_modules.sh: # Display Help\r\n./scripts/signing_kernel_modules.sh -l <LINUX_KERNEL_VERSION> -c <PEM_CERT> -p <PEM_PRIVATE_KEY> -s <LOCAL_SIGN_FILE> -e <LOCAL_EXTRACT_CERT> -k <KERNEL_MODULES_DIR>\r\nSign kernel modules in <KERNEL_MODULES_DIR> using private & public keys.\r\n\r\nParameters description:\r\nLINUX_KERNEL_VERSION\r\nPEM_CERT                             public key (pem format)\r\nPEM_PRIVATE_KEY                      private key (pem format)\r\nLOCAL_SIGN_FILE                      path of the sign-file tool for signing Kernel Modules, if the value is empty it will used the sign-file installed in /usr/lib/linux-kbuild-<version>/scripts\r\nLOCAL_EXTRACT_CERT                   path of the extract-cert tool for Extract X.509 certificate, if the value is empty it will used the extract-cert installed in /usr/lib/linux-kbuild-<version>/scripts\r\nKERNEL_MODULES_DIR                   root directory of all the kernel modules to be sign by the script, if the value empty it will use the call script location as root.\r\n\r\nRuns examples:\r\n1. ./scripts/signing_kernel_modules.sh -l 5.10.0-8-2 -c cert.pem -p priv-key.pem\r\n2. ./scripts/signing_kernel_modules.sh -l 5.10.0-8-2 -c cert.pem -p priv-key.pem -k fsroot-mellanox -e /usr/lib/linux-kbuild-5.10/scripts/extract-cert -s /usr/lib/linux-kbuild-5.10/scripts/sign-file\r\n+ sudo LANG=C chroot ./fsroot-vs umount /proc\r\n+ true\r\n[  FAIL LOG END  ] [ target/sonic-vs.img.gz ]\r\n```\r\n\r\nIn PR on rebuild:\r\n```\r\n[ 01 ] [ target/debs/trixie/sonic-ztp_1.0.0_all.deb ]\r\n[ 02 ] [ target/debs/trixie/linux-kbuild-6.12.41+deb13_6.12.41-1_amd64.deb-install ]\r\n[ 01 ] [ target/sonic-vs.img.gz ]\r\n```\r\n</details>\r\n\r\nI believe the PR is ready for review.\r\n\r\n@jusherma for viz. Please let me know if you run into any issues when testing this locally."
+        },
+        {
+          "author": "jusherma",
+          "createdAt": "2026-04-01T23:28:22Z",
+          "body": "> Update: Successfully reproduced issue locally. Incremental build on PR completes normally as expected.\r\n> More Details\r\n> \r\n> I believe the PR is ready for review.\r\n> \r\n> @jusherma for viz. Please let me know if you run into any issues when testing this locally.\r\n\r\nThanks @Bojun-Feng! Weirdly, I'm no longer able to reproduce this issue when testing with the baseline `master` code. Not sure what happened... Did you experience this at all in your testing?"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-01T23:34:41Z",
+          "body": "> Thanks @Bojun-Feng! Weirdly, I'm no longer able to reproduce this issue when testing with the baseline `master` code. Not sure what happened... Did you experience this at all in your testing?\r\n\r\nI've been using commit https://github.com/sonic-net/sonic-buildimage/commit/b9d726a3710da24b605353359fa891b3b6375e1e, which was the master head when this PR was first created:\r\n\r\n```git checkout b9d726a3710da24b605353359fa891b3b6375e1e```\r\n\r\nWhen building on that commit without the PR fix, I ran into a different docker timeout issue that resolved itself after waiting and building again with auto-retry. On the second build I was able to replicate the issue.\r\n\r\nAdditionally, there is an issue with Rust blocking builds with `docker-restapi-watchdog` (it's mentioned above). My virtual switch builds don't include them, but they are blocking the CI/CD pipelines.\r\n\r\nI haven't tested on the current master or 202505/202511 branches. Hope this helps."
+        },
+        {
+          "author": "jusherma",
+          "createdAt": "2026-04-01T23:38:34Z",
+          "body": "> > Thanks @Bojun-Feng! Weirdly, I'm no longer able to reproduce this issue when testing with the baseline `master` code. Not sure what happened... Did you experience this at all in your testing?\r\n> \r\n> I've been using commit [b9d726a](https://github.com/sonic-net/sonic-buildimage/commit/b9d726a3710da24b605353359fa891b3b6375e1e), which was the master head when this PR was first created:\r\n> \r\n> `git checkout b9d726a3710da24b605353359fa891b3b6375e1e`\r\n> \r\n> When building on that commit without the PR fix, I ran into a different docker timeout issue that resolved itself after waiting and building again with auto-retry. On the second build I was able to replicate the issue.\r\n> \r\n> Additionally, there is an issue with Rust blocking builds with `docker-restapi-watchdog` (it's mentioned above). My virtual switch builds don't include them, but they are blocking the CI/CD pipelines.\r\n> \r\n> I haven't tested on the current master or 202505/202511 branches. Hope this helps.\r\n\r\nThanks! Let me give that a try"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-02T03:08:19Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "jusherma",
+          "createdAt": "2026-04-02T10:42:29Z",
+          "body": "@Bojun-Feng I'm not sure why, but I couldn't reproduce this with baseline code from master. But I can reproduce it with 202511 baseline code, and I confirmed that patching your changes onto 202511 fixed the issue. Thanks!"
+        },
+        {
+          "author": "jusherma",
+          "createdAt": "2026-04-02T10:43:21Z",
+          "body": "@yxieca Can you help add the 202511 label to this so it gets cherry picked in?"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-02T15:11:17Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-04-02T16:25:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-02T16:26:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

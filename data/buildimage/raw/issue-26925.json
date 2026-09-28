@@ -1,0 +1,94 @@
+{
+  "number": 26925,
+  "title": "Regression: PTF docker image does not support ptf_nn_agent with pynng",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26925",
+  "createdAt": "2026-04-21T09:00:19Z",
+  "closedAt": "2026-05-26T08:51:36Z",
+  "author": "auspham",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "regression"
+  ],
+  "assignees": [
+    "yejianquan"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Previous Working Version\n\nprevious docker-ptf version\n\n### Steps to Reproduce\n\nptf_nn_agent cannot start due to\n\n```\nroot@50159ae68f06:~# /usr/bin/python /opt/ptf_nn_agent.py --device-socket 0@tcp://127.0.0.1:10900 -i 0-3@eth3\nCannot find pynng package, please ins\n```\n\nThis is because of https://github.com/p4lang/ptf/pull/234 drops support for nnpy.\n\n\n### Impact of this regression\n\nptf related container will fail\n\n### Relevant log output\n\n```shell\nif (hostname_res.is_failed or 'exception' in hostname_res) and not module_ignore_errors:\n>           raise RunAnsibleModuleFail(\"run module {} failed\".format(module_name), hostname_res)\nE           tests.common.errors.RunAnsibleModuleFail: run module command failed, Ansible Results =>\nE           failed = True\nE           changed = True\nE           rc = 7\nE           cmd = ['supervisorctl', 'restart', 'ptf_nn_agent']\nE           start = 2026-04-21 06:06:35.673222\nE           end = 2026-04-21 06:06:36.799536\nE           delta = 0:00:01.126314\nE           msg = non-zero return code\nE           invocation = {'module_args': {'_raw_params': 'supervisorctl restart ptf_nn_agent', '_uses_shell': False, 'expand_argument_vars': True, 'stdin_add_newline': True, 'strip_empty_ends': True, 'argv': None, 'chdir': None, 'executable': None, 'creates': None, 'removes': None, 'stdin': None}}\nE           _ansible_no_log = False\nE           stdout =\nE           ptf_nn_agent: stopped\nE           ptf_nn_agent: ERROR (spawn error)stderr =\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-05-06T15:22:53Z",
+      "body": "@yejianquan @opcoder0 could you please help provide a long term fix here to move away from nnpy?"
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-05-08T00:40:18Z",
+      "body": "@StormLiangMS for viz"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 24811,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24811",
+      "title": "[copp] Fix _install_nano to handle Debian Trixie (missing python2 packages)",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-05-26T08:51:35Z",
+      "createdAt": "2026-05-22T10:30:13Z",
+      "author": "ZhaohuiS",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nFix `test_copp.py` failure on master-branch images using Debian Trixie (13) by adding `trixie` to the OS version detection in `_install_nano()`.\r\n\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/26925 (partially \u2014 addresses the test-side failure)\r\n\r\nADO: 38090279\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nThe syncd container in master images now uses **Debian Trixie (13)**, which has completely removed Python 2 packages (`python-pip`, `python-dev`, `python-setuptools`).\r\n\r\nIn `copp_utils.py::_install_nano()`, the version detection only checks for `bookworm` before routing to the modern python3 installation path (`_install_nano_bookworm`). Since Trixie is neither \"bookworm\" nor \"bullseye\", it falls into the legacy `else` branch that tries to install Python 2 packages:\r\n\r\n`\r\nE: Package 'python-pip' has no installation candidate\r\nE: Package 'python-dev' has no installation candidate\r\nE: Package 'python-setuptools' has no installation candidate\r\n`\r\n\r\nThis causes `test_copp.py::TestCOPP::test_policer` to fail on ALL master-branch testbeds since the image switched to Trixie.\r\n\r\n#### How did you do it?\r\n\r\nAdded `trixie` to the VERSION_CODENAME check in `_install_nano()`:\r\n\r\n`python\r\n# Before:\r\nif \"bookworm\" in dut.shell(...)['stdout'].lower():\r\n    _install_nano_bookworm(...)\r\n\r\n# After:\r\ncodename = dut.shell(...)['stdout'].lower()\r\nif \"bookworm\" in codename or \"trixie\" in codename:\r\n    _install_nano_bookworm(...)\r\n`\r\n\r\nThis routes Trixie to the same `_install_nano_bookworm()` path which uses python3-pip and works on both Bookworm and Trixie.\r\n\r\n#### How did you verify/test it?\r\n\r\n- Confirmed the error in nightly test plan `6a02bfaa9f3385605e3ddb2b` (Arista-7260CX3-C64, master, May 12)\r\n- Verified `_install_nano_bookworm()` uses python3 packages that exist in Trixie\r\n- The `libnanomsg-dev` package is available in Trixie (confirmed via packages.debian.org)\r\n\r\n#### Any platform specific information?\r\nAffects all platforms running master images with Debian Trixie syncd containers.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n\r\n### Documentation\r\nN/A",
+      "files": [
+        {
+          "path": "tests/copp/copp_utils.py",
+          "additions": 5,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-22T10:30:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-22T10:30:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-23T10:15:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-23T10:16:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-26T05:50:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-26T05:50:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-26T06:42:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-26T06:43:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

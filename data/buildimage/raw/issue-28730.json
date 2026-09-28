@@ -1,0 +1,103 @@
+{
+  "number": 28730,
+  "title": "Bug: [warm-reboot] CLI counter clear baselines restored to wrong path after warm reboot",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28730",
+  "createdAt": "2026-07-30T17:17:32Z",
+  "closedAt": "2026-09-07T09:18:24Z",
+  "author": "nazariig",
+  "labels": [
+    "Bug :bug:",
+    "warmboot :boot:",
+    "Triaged"
+  ],
+  "assignees": [
+    "nazariig"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter warm-reboot, CLI counter clear baselines stored under `/tmp/cache` are not restored\ncorrectly. As a result, counters that were cleared before the reboot (for example via\n`sonic-clear counters` and related clear commands) cannot show post-clear values after\nthe system comes back, because the persisted snapshot is restored to the wrong path.\n\n### Investigation and suspected root cause\n\nSONiC persists CLI counter clear baselines across warm-reboot by saving `/tmp/cache` to\n`/host/counters` before reboot, then restoring it after warmboot finalization.\n\n#### Save path (before reboot)\n\n`warm-reboot` / `fast-reboot` / `express-reboot` save the cache as follows:\n\n```bash\n# sonic-utilities/scripts/warm-reboot\n\nfunction save_counters_folder() {\n    if [[ \"$REBOOT_TYPE\" = \"warm-reboot\" ]]; then\n        counters_folder=\"/host/counters\"\n        counters_cache=\"/tmp/cache\"\n        if [[ ! -d $counters_folder ]]; then\n            mkdir $counters_folder\n        fi\n        if [[ -d $counters_cache ]]; then\n           cp -rf $counters_cache $counters_folder\n        fi\n    fi\n}\n```\n\nThat produces:\n\n```text\n/tmp/cache/<app>/<uid>/...  \u2192  /host/counters/cache/<app>/<uid>/...\n```\n\n#### Broken restore path (after reboot)\n\n`finalize-warmboot.sh` previously restored the snapshot like this:\n\n```bash\n# sonic-buildimage/files/image_config/warmboot-finalizer/finalize-warmboot.sh\n\ncache_counters_folder=\"/host/counters\"\nif [[ -d $cache_counters_folder ]]; then\n    mv $cache_counters_folder /tmp/cache\n    chown -R admin:admin /tmp/cache\nfi\n```\n\nBecause the saved layout already contains a nested `cache/` directory, this move yields:\n\n```text\n/tmp/cache/cache/<app>/<uid>/...\n```\n\ninstead of the path expected by `UserCache`:\n\n```text\n/tmp/cache/<app>/<uid>/...\n```\n\n```python\n# sonic-utilities/utilities_common/cli.py\n\nclass UserCache:\n    CACHE_DIR = \"/tmp/cache/\"\n```\n\nCLI tools therefore do not find the restored baselines and treat counters as if they were\nnever cleared.\n\n#### Correct restore path\n\nRestore must copy the nested `cache` directory back to `/tmp/`, not rename\n`/host/counters` itself:\n\n```bash\n# sonic-buildimage/files/image_config/warmboot-finalizer/finalize-warmboot.sh\n\ncache_counters_folder=\"/host/counters\"\nif [[ -d $cache_counters_folder/cache ]]; then\n    cp -rf $cache_counters_folder/cache /tmp/\n    chown -R admin:admin /tmp/cache\n    rm -rf $cache_counters_folder\nfi\n```\n\nResulting layout:\n\n```text\n/host/counters/cache/...  \u2192  /tmp/cache/...\n```\n\nwhich matches the pre-reboot `UserCache` location.\n\n### Steps to Reproduce\n\n- Clear counters:\n```\nsonic-clear counters\nsonic-clear dropcounters\nsonic-clear pfccounters\nsonic-clear queuecounters\nsonic-clear rifcounters\n```\n- Confirm cleared baselines are present under `/tmp/cache`\n- Perform warm-reboot\n- After boot completes, check interface / related counters again\n- Observe that previously cleared counters can reappear with pre-clear values, and that\n  restored files (if present) are under `/tmp/cache/cache` instead of `/tmp/cache`\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior:\nAfter warm-reboot, counter clear baselines are restored under the wrong path\n(`/tmp/cache/cache/...`). CLI tools looking at `/tmp/cache/...` do not see the saved\nbaselines, so cleared counters can show stale pre-clear values.\n\n### Expected Behavior:\nAfter warm-reboot, `/tmp/cache` is restored with the same layout as before reboot\n(`/tmp/cache/<app>/<uid>/...`), and cleared counter baselines remain in effect.\n\n### Relevant log output\n\n```shell\n# Before reboot (save)\nSaving counters folder before warmboot...\n# /tmp/cache -> /host/counters/cache\n\n# After reboot (broken restore)\nRestoring counters folder after warmboot...\n# /host/counters -> /tmp/cache\n# resulting path: /tmp/cache/cache/...\n```\n\n### Output of `show version`, `show techsupport`\n\n* N/A\n\n### Attach files (if any)\n\n* N/A",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 28752,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28752",
+      "title": "[warmboot]: Fix counter snapshot restoration",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-07T09:18:23Z",
+      "createdAt": "2026-07-31T14:54:05Z",
+      "author": "nazariig",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n## The bug\r\n\r\nAfter warm-reboot, CLI counter clear baselines under `/tmp/cache` are not restored correctly.  \r\nCounters cleared before reboot (e.g. `sonic-clear counters`) cannot show post-clear values after boot.  \r\nThe persisted snapshot is restored to the wrong path.\r\n\r\nSONiC saves `/tmp/cache` to `/host/counters` before warm-reboot.  \r\nIt then restores that snapshot after warmboot finalization.\r\n\r\n### Save path (before reboot)\r\n\r\n`warm-reboot` / `fast-reboot` / `express-reboot` save the cache as follows:\r\n\r\n```bash\r\n# sonic-utilities/scripts/warm-reboot\r\n\r\nfunction save_counters_folder() {\r\n    if [[ \"$REBOOT_TYPE\" = \"warm-reboot\" ]]; then\r\n        counters_folder=\"/host/counters\"\r\n        counters_cache=\"/tmp/cache\"\r\n        if [[ ! -d $counters_folder ]]; then\r\n            mkdir $counters_folder\r\n        fi\r\n        if [[ -d $counters_cache ]]; then\r\n           cp -rf $counters_cache $counters_folder\r\n        fi\r\n    fi\r\n}\r\n```\r\n\r\nThat produces:\r\n\r\n```text\r\n/tmp/cache/<app>/<uid>/...  \u2192  /host/counters/cache/<app>/<uid>/...\r\n```\r\n\r\n### Broken restore path (after reboot)\r\n\r\n`finalize-warmboot.sh` previously restored the snapshot like this:\r\n\r\n```bash\r\n# sonic-buildimage/files/image_config/warmboot-finalizer/finalize-warmboot.sh\r\n\r\ncache_counters_folder=\"/host/counters\"\r\nif [[ -d $cache_counters_folder ]]; then\r\n    mv $cache_counters_folder /tmp/cache\r\n    chown -R admin:admin /tmp/cache\r\nfi\r\n```\r\n\r\nThe saved layout already contains a nested `cache/` directory.  \r\nThis move therefore yields:\r\n\r\n```text\r\n/tmp/cache/cache/<app>/<uid>/...\r\n```\r\n\r\ninstead of the path expected by `UserCache`:\r\n\r\n```text\r\n/tmp/cache/<app>/<uid>/...\r\n```\r\n\r\n```python\r\n# sonic-utilities/utilities_common/cli.py\r\n\r\nclass UserCache:\r\n    CACHE_DIR = \"/tmp/cache/\"\r\n```\r\n\r\nCLI tools do not find the restored baselines.  \r\nThey treat counters as if they were never cleared.\r\n\r\n### The fix\r\n\r\nRestore must copy the nested `cache` directory back to `/tmp/`.  \r\nDo not rename `/host/counters` itself:\r\n\r\n```bash\r\n# sonic-buildimage/files/image_config/warmboot-finalizer/finalize-warmboot.sh\r\n\r\ncache_counters_folder=\"/host/counters\"\r\nif [[ -d $cache_counters_folder/cache ]]; then\r\n    cp -rf $cache_counters_folder/cache /tmp/\r\n    chown -R admin:admin /tmp/cache\r\n    rm -rf $cache_counters_folder\r\nfi\r\n```\r\n\r\nResulting layout:\r\n\r\n```text\r\n/host/counters/cache/...  \u2192  /tmp/cache/...\r\n```\r\n\r\nThis matches the pre-reboot `UserCache` location.\r\n\r\n#### Previous path layout (broken)\r\n\r\n```\r\n# Before reboot (save)\r\nSaving counters folder before warmboot...\r\n# /tmp/cache -> /host/counters/cache\r\n\r\n# After reboot (broken restore)\r\nRestoring counters folder after warmboot...\r\n# /host/counters -> /tmp/cache\r\n# resulting path: /tmp/cache/cache/...\r\n```\r\n\r\n#### New path layout (fixed)\r\n\r\n```\r\n# Before reboot (save)\r\nSaving counters folder before warmboot...\r\n# /tmp/cache -> /host/counters/cache\r\n\r\n# After reboot (fixed restore)\r\nRestoring counters folder after warmboot...\r\n# /host/counters/cache -> /tmp/cache\r\n# resulting path: /tmp/cache/<app>/<uid>/...\r\n```\r\n\r\n#### Why I did it\r\n\r\n* Fixed counter clear baselines not surviving warm-reboot due to incorrect restore path\r\n\r\n#### Work item tracking\r\n\r\n* N/A\r\n\r\n#### How I did it\r\n\r\n* Updated `finalize-warmboot.sh` to restore `/host/counters/cache` into `/tmp/cache`\r\n* Avoid moving `/host/counters` itself to `/tmp/cache`\r\n\r\n#### How to verify it\r\n\r\n1. Clear counters:\r\n```\r\nsonic-clear counters\r\nsonic-clear dropcounters\r\nsonic-clear pfccounters\r\nsonic-clear queuecounters\r\nsonic-clear rifcounters\r\n```\r\n2. Confirm cleared baselines are present under `/tmp/cache`\r\n3. Perform warm-reboot\r\n4. After boot, verify files are under `/tmp/cache/<app>/<uid>/...`\r\n5. Confirm they are not under `/tmp/cache/cache/...`\r\n6. Confirm cleared counter baselines remain in effect\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n\r\n#### Tested branch\r\n\r\n<!--\r\n- Select each branch where the change was tested.\r\n- If you request a backport/cherry-pick, select the base branch and the tested\r\n  target release branch(es).\r\n-->\r\n\r\n- [x] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\n\r\n<!--\r\n- Provide the tested image version and test evidence for each selected branch.\r\n- e.g.\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n\r\n* N/A\r\n\r\n#### Description for the changelog\r\n\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n* N/A\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n* N/A\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n```\r\n      .---.        .-----------\r\n     /     \\  __  /    ------\r\n    / /     \\(  )/    -----\r\n   //////   ' \\/ `   ---\r\n  //// / // :    : ---\r\n // /   /  /`    '--\r\n//          //..\\\\\r\n       ====UU====UU====\r\n           '//||\\\\`\r\n             ''``\r\n```",
+      "files": [
+        {
+          "path": "files/image_config/warmboot-finalizer/finalize-warmboot.sh",
+          "additions": 3,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T14:54:14Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T14:54:15Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T14:54:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T18:12:33Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "nazariig",
+          "createdAt": "2026-08-03T09:22:19Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-03T09:23:15Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-03T09:23:18Z",
+          "body": "Retrying failed(or canceled) stages in build 1180444:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-multi-asic-t1 by Elastictest: retried.\n- Job impacted-area-kvmtest-t0-sonic by Elastictest: retried."
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2026-08-23T15:00:30Z",
+          "body": "@nazariig  please open github issue and then all the informaiton on the bug shold be there.\r\nthe PR description should align to the PR template and all the explaination of what is all about should be in the relevant issue. once it is done, tag me so i can move forward an merge.\r\n\r\n@yxieca  in case you would like to review it as well or assing someone on your behalf "
+        },
+        {
+          "author": "nazariig",
+          "createdAt": "2026-08-25T09:10:25Z",
+          "body": "> @nazariig please open github issue and then all the informaiton on the bug shold be there. the PR description should align to the PR template and all the explaination of what is all about should be in the relevant issue. once it is done, tag me so i can move forward an merge.\r\n> \r\n> @yxieca in case you would like to review it as well or assing someone on your behalf\r\n\r\n@liat-grozovik the issue: https://github.com/sonic-net/sonic-buildimage/issues/28730"
+        },
+        {
+          "author": "nazariig",
+          "createdAt": "2026-09-02T13:30:38Z",
+          "body": "@vaibhavhd can you please help to review & merge?"
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2026-09-05T00:55:13Z",
+          "body": "\ufeffHi @nazariig \u2014 approving this for 202605. Since this warmboot counter snapshot restoration bug appears to be covered by branch/manual validation but not by an automated regression test in this PR, could you please create a follow-up test-gap issue and PR to cover this case? @StormLiangMS for test-gap tracking.\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T09:19:01Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-buildimage/pull/29393"
+        }
+      ]
+    }
+  ]
+}

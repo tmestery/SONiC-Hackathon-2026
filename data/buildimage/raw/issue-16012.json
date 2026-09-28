@@ -1,0 +1,69 @@
+{
+  "number": 16012,
+  "title": "[multi-asic] show acl table command gets data from host config db and not from asic namespace db",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/16012",
+  "createdAt": "2023-08-01T22:17:21Z",
+  "closedAt": "2023-08-18T04:08:46Z",
+  "author": "judyjoseph",
+  "labels": [
+    "Chassis :robot:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "arlakshm",
+    "bingwang-ms"
+  ],
+  "milestone": null,
+  "body": "\r\n#### Description\r\n\"show acl table\" which uses acl-loader gets data from host config db alone for multi-asic devices. The ACL entries in host need not have all the interfaces which is valid in the namespaces.\r\n\r\nInstead we need to connect to each namespace and get the ACLs\r\n\r\n#### Steps to reproduce the issue:\r\n1. show acl table DATAACL\r\n2.\r\n3.\r\n\r\n#### Describe the results you received:\r\n```\r\nadmin@str2--lc1-1:~$ show acl table DATAACL\r\nName     Type    Binding         Description    Stage    Status\r\n-------  ------  --------------  -------------  -------  --------------------------------------\r\nDATAACL  L3      PortChannel102 DATAACL        ingress  {'asic0': 'Active', 'asic1': 'Active'}\r\n                 PortChannel106\r\n```\r\n\r\n#### Describe the results you expected:\r\n```\r\nadmin@str2--lc1-1:~$ show acl table DATAACL\r\nName     Type    Binding         Description    Stage    Status\r\n-------  ------  --------------  -------------  -------  --------------------------------------\r\nDATAACL  L3      Ethernet128     DATAACL        ingress  {'asic0': 'Active', 'asic1': 'Active'}\r\n                 Ethernet184\r\n                 PortChannel102\r\n                 PortChannel106\r\n```\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nadmin@str2--lc1-1:~$ show version \r\n\r\nSONiC Software Version: SONiC.20220530.38\r\nSONiC OS Version: 11\r\nDistribution: Debian 11.7\r\nKernel: 5.10.0-18-2-amd64\r\nBuild commit: 4115919589\r\nBuild date: Fri Jul 28 01:24:14 UTC 2023\r\nBuilt by: cloudtest@8ec96c8ac000000```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2937,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/2937",
+      "title": "[chassis][multi-asic]Fix show acl table for masic",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-08-18T04:08:45Z",
+      "createdAt": "2023-08-02T20:25:17Z",
+      "author": "arlakshm",
+      "body": "<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/16012\r\nThe `show acl table` command currently get the ports from host config_db on multi asic platforms.\r\nThis  host config_db will not the phyiscal ports in the binding ports because the host doesnt have any front panel ports on the host.  This causes the `show acl table`  not to display the phyiscal ports in the output on multi asic devices/linecards.\r\n\r\nThe test `iface_namingmode/test_iface_namingmode.py::test_show_acl_table` fails because of this issue.\r\n\r\nDetails from the test failure\r\n```\r\niface_namingmode/test_iface_namingmode.py::test_show_acl_table[alias-sonic-lc1-1] \r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> PDB set_trace (IO-capturing turned off) >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n> /var/src/sonic-mgmt-int/tests/iface_namingmode/test_iface_namingmode.py(818)test_show_acl_table()\r\n-> for item in minigraph_acls['DataAcl']:\r\n(Pdb) list \r\n813  \r\n814         acl_table = dutHostGuest.shell('SONIC_CLI_IFACE_MODE={} show acl table DATAACL'.format(ifmode))['stdout']\r\n815         logger.info('acl_table:\\n{}'.format(acl_table))\r\n816  \r\n817         import pdb;pdb.set_trace()\r\n818  ->     for item in minigraph_acls['DataAcl']:\r\n819             if item in setup['physical_interfaces']:\r\n820                 if mode == 'alias':\r\n821                     assert setup['port_name_map'][item] in acl_table\r\n822                 elif mode == 'default':\r\n823                     assert item in acl_table\r\n(Pdb) minigraph_acls['DataAcl']\r\n[u'Ethernet32', u'Ethernet40', u'Ethernet208', u'Ethernet216', u'Ethernet128', u'Ethernet184']\r\n(Pdb) setup['port_name_map']\r\n{u'Ethernet8': 'TestAlias0', u'Ethernet184': 'TestAlias1', u'Ethernet280': 'TestAlias2', u'Ethernet248': 'TestAlias3', u'Ethernet104': 'TestAlias4', u'Ethernet240': 'TestAlias5', u'Ethernet264': 'TestAlias6', u'Ethernet96': 'TestAlias7', u'Ethernet168': 'TestAlias8', u'Ethernet120': 'TestAlias9', u'Ethernet144': 'TestAlias10', u'Ethernet208': 'TestAlias11', u'Ethernet160': 'TestAlias12', u'Ethernet224': 'TestAlias13', u'Ethernet56': 'TestAlias14', u'Ethernet128': 'TestAlias15', u'Ethernet72': 'TestAlias16', u'Ethernet32': 'TestAlias17', u'Ethernet16': 'TestAlias18', u'Ethernet0': 'TestAlias19', u'Ethernet192': 'TestAlias20', u'Ethernet200': 'TestAlias21', u'Ethernet88': 'TestAlias22', u'Ethernet80': 'TestAlias23', u'Ethernet112': 'TestAlias24', u'Ethernet256': 'TestAlias25', u'Ethernet152': 'TestAlias26', u'Ethernet136': 'TestAlias27', u'Ethernet272': 'TestAlias28', u'Ethernet48': 'TestAlias29', u'Ethernet232': 'TestAlias30', u'Ethernet216': 'TestAlias31', u'Ethernet176': 'TestAlias32', u'Ethernet40': 'TestAlias33', u'Ethernet64': 'TestAlias34', u'Ethernet24': 'TestAlias35'}\r\n(Pdb) acl_table\r\nu\"Name     Type    Binding         Description    Stage    Status\\n-------  ------  --------------  -------------  -------  --------------------------------------\\nDATAACL  L3      PortChannel102  DATAACL        ingress  {'asic0': 'Active', 'asic1': 'Active'}\\n                 PortChannel106\"\r\n(Pdb) mode\r\n'alias'\r\n```\r\n#### How I did it\r\nFor the `show acl table` command the following approach is followed\r\n- for single asic, get the all the acl_tables from config_db on the host **_(No change)_**\r\n-  for multi asic:\r\n    - get the control_plane acl info from host.\r\n    - get the dataplane and everflow acl table from each namespace and append the ports. \r\n\r\n\r\n#### How to verify it\r\n- Verify with updated UT\r\n- test on chassis multi asic linecard\r\n\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n",
+      "files": [
+        {
+          "path": "acl_loader/main.py",
+          "additions": 25,
+          "deletions": 1
+        },
+        {
+          "path": "tests/mock_tables/asic2/config_db.json",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/show_acl_test.py",
+          "additions": 6,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "rlhui",
+          "createdAt": "2023-08-18T04:09:08Z",
+          "body": "@arlakshm , please help create ado, thx."
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2023-09-05T17:53:07Z",
+          "body": "MSFT ADO 25067638"
+        },
+        {
+          "author": "gechiang",
+          "createdAt": "2023-09-05T18:58:01Z",
+          "body": "@yxieca , @StormLiangMS , Can you help approve this bug fix for the corresponding requested branches?\r\nThanks!"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "number": 23765,
+  "title": "Bug: ndppd keeps spinning even with vlan interface config",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/23765",
+  "createdAt": "2025-08-20T16:07:55Z",
+  "closedAt": "2025-09-11T01:08:39Z",
+  "author": "kalash-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThis is similar to the issue reported in https://github.com/sonic-net/sonic-buildimage/issues/6823 where ndppd keeps spinning at 100% when route scale is high. The difference here is that there are no vlan interfaces in the config, so the fix merged earlier (https://github.com/sonic-net/sonic-buildimage/pull/7456) doesn't apply.\n\n```\ntop - 01:15:01 up  3:05,  4 users,  load average: 1.46, 1.37, 1.50\nTasks: 439 total,   2 running, 424 sleeping,   0 stopped,  13 zombie\n%Cpu(s):  1.1 us,  7.0 sy,  0.0 ni, 91.9 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\nMiB Mem :  31905.2 total,  18852.7 free,   7100.6 used,   6758.9 buff/cache\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  24804.6 avail Mem\n\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n  12865 root      20   0   49744  47412   3280 R 100.0   0.1 118:54.07 ndppd\n  10372 root      20   0 4416380   1.5g 530956 S  10.0   4.8  54:07.61 syncd\n   7566 tss       20   0  706904 329344   9092 S   7.0   1.0  34:45.71 redis-server\n  19618 root      20   0   74692  48088   8092 S   3.0   0.1   2:55.88 python3\n  19585 root      20   0   65920  48700  17676 S   2.7   0.1   4:07.26 python3\n```\n\nWe need to add `route-ttl` option in the j2 template outside of the `if VLAN_INTERFACE` block\n\n### Steps to Reproduce\n\n- Have a route scale of about 500K routes in system and do not have any vlan interfaces in config.\n\n### Actual Behavior and Expected Behavior\n\n- ndppd should not keep spinning like crazy.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23767,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/23767",
+      "title": "[docker-orchagent]: Increase ndppd route-ttl option in ndppd.conf.j2 unconditionally ",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-09-11T01:08:38Z",
+      "createdAt": "2025-08-20T16:37:04Z",
+      "author": "kalash-nexthop",
+      "body": "\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\n`route-ttl` option in `ndppd` is a global option, but the `ndppd.conf.j2` template adds it conditional on vlan interfaces with prefix length > 0 being present. This causes `route-ttl` to not get set on POC setups without VLAN interfaces, causing ndppd to keep spinning reading route table in case of route scale. Keeping this option out of the `if VLAN_INTERFACE` block in jinja template.\r\n\r\nfixes #23765\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\ntake `route-ttl` knob out of the `if VLAN_INTERFACE` block to set it unconditionally.\r\n\r\n#### How to verify it\r\n\r\nHave a very large number of routes (~500k used in our testing) with no VLAN_INTERFACE in config_db. ndppd does not show up spinning at 100% anymore.\r\n\r\nBefore:\r\n\r\n```\r\nadmin@sonic:~$ sonic-db-cli ASIC_DB keys \"*ROUTE_ENTRY*\" | wc -l\r\n506841\r\n\r\ntop inside swss container:\r\n\r\ntop - 01:15:01 up  3:05,  4 users,  load average: 1.46, 1.37, 1.50\r\nTasks: 439 total,   2 running, 424 sleeping,   0 stopped,  13 zombie\r\n%Cpu(s):  1.1 us,  7.0 sy,  0.0 ni, 91.9 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\r\nMiB Mem :  31905.2 total,  18852.7 free,   7100.6 used,   6758.9 buff/cache\r\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  24804.6 avail Mem\r\n\r\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\r\n  12865 root      20   0   49744  47412   3280 R 100.0   0.1 118:54.07 ndppd\r\n  10372 root      20   0 4416380   1.5g 530956 S  10.0   4.8  54:07.61 syncd\r\n   7566 tss       20   0  706904 329344   9092 S   7.0   1.0  34:45.71 redis-server\r\n```\r\n\r\nAfter:\r\n\r\n```\r\nadmin@sonic:~$ sonic-db-cli ASIC_DB keys \"*ROUTE_ENTRY*\" | wc -l\r\n500012\r\n\r\nadmin@sonic:~$ sonic-db-cli APPL_DB keys \"*ROUTE_TABLE*\" | wc -l\r\n500004\r\nadmin@sonic:~$\r\n\r\ntop inside swss container:\r\n\r\nTasks:  23 total,   1 running,  22 sleeping,   0 stopped,   0 zombie\r\n%Cpu(s): 19.9 us,  2.9 sy,  0.0 ni, 77.1 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st\r\nMiB Mem :  31905.2 total,  15919.4 free,   9908.2 used,   6887.4 buff/cache\r\nMiB Swap:      0.0 total,      0.0 free,      0.0 used.  21997.0 avail Mem\r\n\r\n    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\r\n      1 root      20   0   42008  36684  10440 S   0.0   0.1   0:27.13 supervisord\r\n     42 root      20   0  130984  32620  17140 S   0.0   0.1   0:03.65 python3\r\n     45 root      20   0  221836   6912   3444 S   0.0   0.0   3:21.87 rsyslogd\r\n     50 root      20   0   88208   6260   5640 S   0.0   0.0   0:02.87 portsyncd\r\n     55 root      20   0  865364 627232  21600 S   0.0   1.9  24:39.90 orchagent\r\n     88 root      20   0   88500   7760   6976 S   0.0   0.0   0:02.83 coppmgrd                                                                                                                                                                                                     115 root      20   0    4436   3280   2904 S   0.0   0.0   0:03.49 arp_update\r\n    116 root      20   0   88360   7664   6796 S   0.0   0.0   0:01.42 neighsyncd                                                                                                                                                                                                   120 root      20   0   88508   7992   7204 S   0.0   0.0   0:02.86 vlanmgrd\r\n    122 root      20   0   88652   7988   7128 S   0.0   0.0   0:03.03 intfmgrd\r\n    123 root      20   0   88344   6516   5888 S   0.0   0.0   0:02.69 fabricmgrd\r\n    125 root      20   0   88584   7992   7156 S   0.0   0.0   0:02.93 portmgrd\r\n    129 root      20   0   88708   7828   6992 S   0.0   0.0   0:15.42 buffermgrd\r\n    140 root      20   0   88476   7864   7056 S   0.0   0.0   0:02.79 vrfmgrd\r\n    150 root      20   0   88384   6372   5744 S   0.0   0.0   0:02.76 nbrmgrd\r\n    156 root      20   0   88516   7880   7120 S   0.0   0.0   0:02.82 vxlanmgrd\r\n    167 root      20   0   88240   6368   5744 S   0.0   0.0   0:01.39 fdbsyncd\r\n    171 root      20   0   88468   7660   6920 S   0.0   0.0   0:02.84 tunnelmgrd\r\n   1972 root      20   0    5788   1968   1796 S   0.0   0.0   0:01.12 ndppd\r\n```\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-orchagent/ndppd.conf.j2",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-config-engine/tests/data/ndppd/empty_vlan_interfaces.json",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_j2files.py",
+          "additions": 13,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-08-20T16:37:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-08-20T16:37:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-08-26T18:48:30Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-08-26T18:48:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-08T22:02:42Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-08T22:02:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-08T22:04:33Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-08T22:04:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2025-09-10T15:36:18Z",
+          "body": "@kperumalbfn could you pls help review?"
+        },
+        {
+          "author": "kalash-nexthop",
+          "createdAt": "2025-09-10T19:31:59Z",
+          "body": "> @kperumalbfn could you pls help review?\r\n\r\nThanks @prabhataravind @kperumalbfn . Appreciate it. Let me know if you have any questions about this simple change, and I will be happy to clarify."
+        }
+      ]
+    }
+  ]
+}

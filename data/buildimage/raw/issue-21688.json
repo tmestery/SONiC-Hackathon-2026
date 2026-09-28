@@ -1,0 +1,150 @@
+{
+  "number": 21688,
+  "title": "warm/fast-reboot fails on latest master due to error in PortsOrch::bake(): Invalid port table",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21688",
+  "createdAt": "2025-02-10T11:29:40Z",
+  "closedAt": "2025-02-18T18:45:46Z",
+  "author": "stepanblyschak",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "**Description**\n\nWarm or fast reboot fails with the following error log:\n\n```\n2025 Feb 10 09:33:07.111055 sonic NOTICE swss#orchagent: :- bake: foundPortConfigDone = 1\n2025 Feb 10 09:33:07.111080 sonic NOTICE swss#orchagent: :- bake: foundPortInitDone = 1\n2025 Feb 10 09:33:07.111395 sonic NOTICE swss#orchagent: :- bake: m_portTable->getKeys 263\n2025 Feb 10 09:33:07.111403 sonic NOTICE swss#orchagent: :- bake: portCount = 257, m_portCount = 0\n2025 Feb 10 09:33:07.111403 sonic ERR swss#orchagent: :- bake: Invalid port table: portCount, expecting 257, got 261\n```\n\nPORT_TABLE contains PortChannel oper_status entries which are not expected by portsorch:\n\n```\nadmin@sonic:~$ redis-cli -n 0 keys 'PORT_TABLE:Port*'\n1) \"PORT_TABLE:PortChannel103\"\n2) \"PORT_TABLE:PortChannel102\"\n3) \"PORT_TABLE:PortConfigDone\"\n4) \"PORT_TABLE:PortInitDone\"\n5) \"PORT_TABLE:PortChannel101\"\n6) \"PORT_TABLE:PortChannel104\"\n```\n\n```\nadmin@r-moose-01:~$ redis-cli -n 0 hgetall 'PORT_TABLE:PortChannel103'\n1) \"oper_status\"\n2) \"up\"\n```\n\n**Reproduction**\n\n1. Build latest master sonic-buildimage and update sonic-swss to latest master\n2. Load T0 config with PortChannels\n3. Do warm or fast-reboot\n4. Observe error in the log\n\n**RCA**\n\nLikelly caused by PR https://github.com/sonic-net/sonic-swss/pull/3383 which moves ```updateDbPortOperStatus()``` to run for all port types:\n\n```diff\n+    updateDbPortOperStatus(port, status);\n+\n     if (port.m_type == Port::PHY)\n     {\n-        updateDbPortOperStatus(port, status);\n```\n\nhttps://github.com/sonic-net/sonic-swss/pull/3383/files?diff=unified&w=0#diff-bb736c6a11da68afacf95d761fb52a3c11726cdd72c967d4803b8c9b1a6dcb69R8271",
+  "comments": [
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2025-02-10T11:32:43Z",
+      "body": "@bradh352 @VladimirKuk @srj102 @prsunny "
+    },
+    {
+      "author": "bradh352",
+      "createdAt": "2025-02-10T12:30:48Z",
+      "body": "Ah, @VladimirKuk suggested the move outside the if block, and I didn't fully evaluate what port types that call was fully valid for.  I'll submit a PR correction to put that under an if block for PHY and TUNNEL types."
+    },
+    {
+      "author": "bradh352",
+      "createdAt": "2025-02-10T12:41:53Z",
+      "body": "can you try https://github.com/sonic-net/sonic-swss/pull/3505"
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2025-02-12T16:08:06Z",
+      "body": "Discussed in issue triage meeting, issue is fixed by https://github.com/sonic-net/sonic-swss/pull/3505.  PR is pending merge"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 3505,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/3505",
+      "title": "portsorch: don't call updateDbPortOperStatus on all port types",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-02-18T18:45:45Z",
+      "createdAt": "2025-02-10T12:40:27Z",
+      "author": "bradh352",
+      "body": "**What I did**\r\n\r\nOnly call `updateDbPortOperStatus()` on PHY and TUNNEL ports.\r\n\r\n**Why I did it**\r\n\r\nPORT_TABLE contains PortChannel oper_status entries which are not expected by portsorch which leads to warm/fastreboot failures like:\r\n```\r\n2025 Feb 10 09:33:07.111055 sonic NOTICE swss#orchagent: :- bake: foundPortConfigDone = 1\r\n2025 Feb 10 09:33:07.111080 sonic NOTICE swss#orchagent: :- bake: foundPortInitDone = 1\r\n2025 Feb 10 09:33:07.111395 sonic NOTICE swss#orchagent: :- bake: m_portTable->getKeys 263\r\n2025 Feb 10 09:33:07.111403 sonic NOTICE swss#orchagent: :- bake: portCount = 257, m_portCount = 0\r\n2025 Feb 10 09:33:07.111403 sonic ERR swss#orchagent: :- bake: Invalid port table: portCount, expecting 257, got 261\r\n```\r\n\r\nRegression caused by #3383\r\n\r\n**How I verified it**\r\n\r\nAsked @stepanblyschak to verify who reported issue.\r\n\r\n**Details if related**\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/21688\r\n\r\nSigned-off-by: Brad House (@bradh352)",
+      "files": [
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 4,
+          "deletions": 1
+        },
+        {
+          "path": "tests/test_portchannel.py",
+          "additions": 6,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-10T12:40:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-10T12:40:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-10T12:41:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-10T12:41:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2025-02-10T13:30:12Z",
+          "body": "> Looks good to me, can you cover this with a VS test?\r\n\r\nI'm not at all familiar with the vs testing framework.   It would be a lot easier in test_portchannel.py to check to make sure there are no PortChannel entries in the port table.  Would that be acceptable since that would have caught this regression?"
+        },
+        {
+          "author": "stepanblyschak",
+          "createdAt": "2025-02-10T13:37:39Z",
+          "body": "> > Looks good to me, can you cover this with a VS test?\r\n> \r\n> I'm not at all familiar with the vs testing framework. It would be a lot easier in test_portchannel.py to check to make sure there are no PortChannel entries in the port table. Would that be acceptable since that would have caught this regression?\r\n\r\nSure"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-10T13:49:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-10T13:49:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2025-02-10T13:52:46Z",
+          "body": "> > > Looks good to me, can you cover this with a VS test?\r\n> > \r\n> > \r\n> > I'm not at all familiar with the vs testing framework. It would be a lot easier in test_portchannel.py to check to make sure there are no PortChannel entries in the port table. Would that be acceptable since that would have caught this regression?\r\n> \r\n> Sure\r\n\r\nTest added, I haven't tested locally but CI here should validate I didn't make a typo or something."
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2025-02-10T16:43:44Z",
+          "body": "@stepanblyschak \r\n> > > > Looks good to me, can you cover this with a VS test?\r\n> > > \r\n> > > \r\n> > > I'm not at all familiar with the vs testing framework. It would be a lot easier in test_portchannel.py to check to make sure there are no PortChannel entries in the port table. Would that be acceptable since that would have caught this regression?\r\n> > \r\n> > \r\n> > Sure\r\n> \r\n> Test added, I haven't tested locally but CI here should validate I didn't make a typo or something.\r\n\r\nLooks like all tests passed.  Can you approve?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-10T16:56:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-10T16:56:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2025-02-10T19:57:17Z",
+          "body": "@stepanblyschak maybe now approve it? :)"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2025-02-12T16:08:26Z",
+          "body": "@prsunny Can you help review?"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2025-02-18T18:45:29Z",
+          "body": "@prgeor, @vaibhavhd  for viz"
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2025-02-18T19:16:56Z",
+          "body": "Has someone verified that the warm-reboot issue does not exist with the TUNNEL oper status still present in the DB? The failure was seen due to portchannel in the DB and that I believe is fixed. But, we may still have a problem with TUNNEL status in DB. That test_wr_arp validates that part by running warm-reboot with VXLAN tunnel programmed. Please check."
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2025-02-18T20:24:37Z",
+          "body": "> Has someone verified that the warm-reboot issue does not exist with the TUNNEL oper status still present in the DB? The failure was seen due to portchannel in the DB and that I believe is fixed. But, we may still have a problem with TUNNEL status in DB. That test_wr_arp validates that part by running warm-reboot with VXLAN tunnel programmed. Please check.\r\n\r\nThe tunnel port type gets routed to a different table so there's no way it could cause the same issue:\r\nhttps://github.com/sonic-net/sonic-swss/blob/d3d95abec269b459f95ef7ad6086698e6a1133a6/orchagent/portsorch.cpp#L3427-L3442"
+        }
+      ]
+    }
+  ]
+}

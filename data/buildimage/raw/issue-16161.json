@@ -1,0 +1,136 @@
+{
+  "number": 16161,
+  "title": "[Dual-ToR]  Tunnel route creation/removal causes packet duplication during  interfaces recovering from DOWN to UP",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/16161",
+  "createdAt": "2023-08-15T08:44:14Z",
+  "closedAt": "2025-05-08T09:51:07Z",
+  "author": "ayurkiv-nvda",
+  "labels": [
+    "Triaged",
+    "Dual ToR Platform :gemini:",
+    "MSFT",
+    "Issue for 202205",
+    "Issue for 202211"
+  ],
+  "assignees": [
+    "lolyu"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nProblem is related to https://github.com/sonic-net/sonic-buildimage/issues/16085\r\nFound during running community test **dualtor_io/test_link_failure.py::test_active_link_admin_down_config_reload_link_up_downstream_standby[active-active]**\r\n\r\n\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Config Active-Active Dual-ToR setup, make sure that both switches have all mux ports active.\r\n2. Shutdown ALL mux interface:\r\n```\r\nconfig interface shutdown Ethernet4\r\nconfig interface shutdown Ethernet8\r\nconfig interface shutdown Ethernet12\r\nconfig interface shutdown Ethernet16\r\nconfig interface shutdown Ethernet20\r\nconfig interface shutdown Ethernet24\r\nconfig interface shutdown Ethernet28\r\nconfig interface shutdown Ethernet32\r\nconfig interface shutdown Ethernet36\r\nconfig interface shutdown Ethernet40\r\nconfig interface shutdown Ethernet44\r\nconfig interface shutdown Ethernet48\r\nconfig interface shutdown Ethernet52\r\nconfig interface shutdown Ethernet56\r\nconfig interface shutdown Ethernet60\r\nconfig interface shutdown Ethernet64\r\nconfig interface shutdown Ethernet68\r\nconfig interface shutdown Ethernet72\r\nconfig interface shutdown Ethernet76\r\nconfig interface shutdown Ethernet80\r\nconfig interface shutdown Ethernet84\r\nconfig interface shutdown Ethernet88\r\nconfig interface shutdown Ethernet92\r\nconfig interface shutdown Ethernet96\r\n```\r\n3. `config save -y`\r\n4. `config reload -y `\r\n5. Run continuous traffic from T1 to the server via Standby ToR via all interfaces\r\n6.  Statup ALL mux interfaces:\r\n```\r\nconfig interface startup Ethernet4\r\nconfig interface startup Ethernet8\r\nconfig interface startup Ethernet12\r\nconfig interface startup Ethernet16\r\nconfig interface startup Ethernet20\r\nconfig interface startup Ethernet24\r\nconfig interface startup Ethernet28\r\nconfig interface startup Ethernet32\r\nconfig interface startup Ethernet36\r\nconfig interface startup Ethernet40\r\nconfig interface startup Ethernet44\r\nconfig interface startup Ethernet48\r\nconfig interface startup Ethernet52\r\nconfig interface startup Ethernet56\r\nconfig interface startup Ethernet60\r\nconfig interface startup Ethernet64\r\nconfig interface startup Ethernet68\r\nconfig interface startup Ethernet72\r\nconfig interface startup Ethernet76\r\nconfig interface startup Ethernet80\r\nconfig interface startup Ethernet84\r\nconfig interface startup Ethernet88\r\nconfig interface startup Ethernet92\r\nconfig interface startup Ethernet96\r\n```\r\n\r\n#### Describe the results you received:\r\n```\r\nE       Failed:\r\nE       Traffic to server 192.168.0.6 was duplicated 3 times. Allowed number of duplications: 0\r\nE       Traffic to server 192.168.0.18 was duplicated 23 times. Allowed number of duplications: 0\r\nE       Traffic to server 192.168.0.36 was duplicated 18 times. Allowed number of duplications: 0\r\n```\r\n\r\nAfter **step#4**  `config reload -y ` according to https://github.com/sonic-net/sonic-buildimage/issues/16085, routes to tunnel are not created ( traffic generated on **step#5** will not reach the destination). There are no routes for mux IPs (192.168.0.2, 192.168.0.4, 192.168.0.6, ... 192.168.0.48):\r\n\r\nInterface startup (`config interface startup Ethernet4`, etc) will trigger a tunnel route creation event for all mux interfaces.\r\nShortly after this, when port is UP the tunnel route will be removed.\r\nDUT also will start sending ARP requests. Or it may receive an ARP reply during GARP notification (once in 10s)\r\n\r\nThere is a time gap between removing tunnel route  and new FDB entry (~150ms)\r\nIf, during this period neighbor is known, there is no FDB in the table, and packets are sent - these packets will be flooded on all interfaces currently UP on VLAN.\r\n\r\nIn our case, traffic is flooded on a few interfaces (192.168.0.6, 192.168.0.18, 192.168.0.36)\r\n\r\n**Flow**:\r\n```\r\n13:31:43.466725 r-tigon-20 NOTICE swss#orchagent: :- create_route: Created tunnel route to 192.168.0.18/32 \r\n----> Created tunnel route to active ToR\r\n\r\n13:31:43.934 ---> last dropped packet (traffic if forwarded via tunnel now)\r\n.....\r\n13:31:50.784794 00:aa:bb:cc:dd:ee > 62:b6:5a:e7:5e:09, ethertype IPv4 (0x0800), length 117: 192.168.79.109.1234 > 192.168.0.18.5000: Flags [S], seq 0:46, win 8192, length 46\r\n13:31:51.038380 00:aa:bb:cc:dd:ee > 62:b6:5a:e7:5e:09, ethertype IPv4 (0x0800), length 117: 192.168.72.180.1234 > 192.168.0.18.5000: Flags [S], seq 0:46, win 8192, length 46\r\n13:31:51.292395 00:aa:bb:cc:dd:ee > 62:b6:5a:e7:5e:09, ethertype IPv4 (0x0800), length 117: 192.168.92.144.1234 > 192.168.0.18.5000: Flags [S], seq 0:46, win 8192, length 46\r\n13:31:51.546852 00:aa:bb:cc:dd:ee > 62:b6:5a:e7:5e:09, ethertype IPv4 (0x0800), length 117: 192.168.95.214.1234 > 192.168.0.18.5000: Flags [S], seq 0:46, win 8192, length 46\r\n13:31:51.800451 00:aa:bb:cc:dd:ee > 62:b6:5a:e7:5e:09, ethertype IPv4 (0x0800), length 117: 192.168.110.134.1234 > 192.168.0.18.5000: Flags [S], seq 0:46, win 8192, length 46\r\n\r\n13:31:51.989434 62:b6:5a:e7:5e:09 > 00:aa:bb:cc:dd:ee, ethertype ARP (0x0806), length 60: Reply 192.168.0.18 is-at 62:b6:5a:e7:5e:09, length 46 \r\n---> ARP sent to DUT, FDB entry will be created soon.\r\n\r\n13:31:52.010704 r-tigon-20 NOTICE swss#orchagent: :- remove_route: Removed tunnel route to 192.168.0.18/32 \r\n---> remove tunnel route to Active ToR\r\n\r\n13:31:52.053375 62:b6:5a:e7:5e:09 > 00:aa:bb:cc:dd:ee, ethertype ARP (0x0806), length 60: Reply 192.168.0.18 is-at 62:b6:5a:e7:5e:09, length 46  \r\n----> another one ARP packet is sent to DUT\r\n13:31:52.053383 00:aa:bb:cc:dd:ee > 62:b6:5a:e7:5e:09, ethertype IPv4 (0x0800), length 117: 192.168.72.197.1234 > 192.168.0.18.5000: Flags [S], seq 0:46, win 8192, length 46 \r\n---> this packet is flooded on all interfaces in VLAN that are UP (We see a lot of copies of this packet on ports).\r\nAt this moment, tunnel already removed, but we don't have an FDB entry with MAC 62:b6:5a:e7:5e:09 \r\n\r\n13:31:52.093 - still no FDB entry in the table\r\n\r\n13:31:52.211 - FDB entry \"62:b6:5a:e7:5e:09 Ethernet36\" appeared in the table\r\n\r\n13:31:52.305934 00:aa:bb:cc:dd:ee > 62:b6:5a:e7:5e:09, ethertype IPv4 (0x0800), length 117: 192.168.69.188.1234 > 192.168.0.18.5000: Flags [S], seq 0:46, win 8192, length 46  \r\n---> Traffic successfully reached the server directly (without a tunnel route), continuing the normal flow without flooding\r\n\r\n```\r\nNOTE:\r\nDehavior described for **192.168.0.18**.\r\nIt is identical to **192.168.0.36**\r\n**BUT** there are no **create_route/remove_route** logs for **192.168.0.6** even though the traffic behavior for **192.168.0.6** is identical to **192.168.0.18** and  **192.168.0.36**. It is currently not clear to me what is the reason of the missing logs. I think I will do few more tests and will update the ticket.\r\n\r\n#### Describe the results you expected:\r\nNo duplication.  \r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n202211.66-1e1974709_Internal\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2023-08-21T18:15:55Z",
+      "body": "@ayurkiv-nvda can you confirm that the reported 'duplicate' was from vlan flooding?\r\n\r\nIf this is the case, in real life, these IO would be flooded to different servers and being dropped by all but the actual receiver.\r\n\r\n@prsunny I think in dualtor case, the vlan flooding should be disabled?"
+    },
+    {
+      "author": "lolyu",
+      "createdAt": "2023-08-22T09:23:19Z",
+      "body": "Hi @ayurkiv-nvda, could you please share the logs?\r\nWith `proxy_arp` enabled on the Vlan interface, the flooding should be disabled, could you please check if `proxy_arp` is enabled like the below?\r\n```\r\n> hgetall VLAN_INTERFACE|Vlan1000\r\n1) \"grat_arp\"\r\n2) \"enabled\"\r\n3) \"proxy_arp\"\r\n4) \"enabled\"\r\n```"
+    },
+    {
+      "author": "ayurkiv-nvda",
+      "createdAt": "2023-08-22T09:43:33Z",
+      "body": "> @ayurkiv-nvda can you confirm that the reported 'duplicate' was from vlan flooding?\r\n> \r\n> If this is the case, in real life, these IO would be flooded to different servers and being dropped by all but the actual receiver.\r\n> \r\n> @prsunny I think in dualtor case, the vlan flooding should be disabled?\r\n\r\nYes, this is a simultaneous flood to all ports in VLAN that are currently in UP state (no FDB but neighbor exists)\r\n"
+    },
+    {
+      "author": "ayurkiv-nvda",
+      "createdAt": "2023-08-22T23:27:39Z",
+      "body": "> \r\n\r\nYes, we have proxy arp enabled on our Dual-ToR setup\r\n```\r\n127.0.0.1:6379[4]> hgetall VLAN_INTERFACE|Vlan1000\r\n1) \"grat_arp\"\r\n2) \"enabled\"\r\n3) \"proxy_arp\"\r\n4) \"enabled\"\r\n```\r\n\r\nBut as far as I know, proxy arp packet flooding is related to broadcast flooding\r\nIn our case unicast packet is flooded"
+    },
+    {
+      "author": "lolyu",
+      "createdAt": "2023-08-23T08:21:55Z",
+      "body": "![image](https://github.com/sonic-net/sonic-buildimage/assets/35479537/70babe62-ec83-459e-991f-a740125b8fd4)\r\n\r\nWith the log, SONiC behaved as expected."
+    },
+    {
+      "author": "lolyu",
+      "createdAt": "2023-08-24T16:14:51Z",
+      "body": "```\r\ndualtor_io/test_link_failure.py::test_active_link_admin_down_config_reload_link_up_downstream_standby[active-active] PASSED                                                                                                          [100%]\r\n```\r\nI could not reproduce this with public 202211 image:  https://sonic-build.azurewebsites.net/ui/sonic/pipelines/1/builds/342905/artifacts?branchName=202211\r\n```\r\n$ show version\r\n\r\nSONiC Software Version: SONiC.202211.342905-adb43ff1f\r\nSONiC OS Version: 11\r\nDistribution: Debian 11.7\r\nKernel: 5.10.0-18-2-amd64\r\nBuild commit: adb43ff1f\r\nBuild date: Sun Aug 20 15:13:07 UTC 2023\r\nBuilt by: AzDevOps@vmss-soni001TF1\r\n```\r\n@ayurkiv-nvda, could you please share the link to the 202211 image you are using?"
+    },
+    {
+      "author": "ayurkiv-nvda",
+      "createdAt": "2023-08-29T11:52:49Z",
+      "body": "@lolyu I used **202211.66-1e1974709_Internal**\r\n\r\nI think it is here:\r\nhttps://sonic-build.azurewebsites.net/ui/sonic/pipelines/1/builds/332681/artifacts/502366?branchName=202211&artifactName=sonic-buildimage.mellanox\r\n\r\nI will check  SONiC.202211.342905-adb43ff1f also, maybe it was fixed in earliest build"
+    },
+    {
+      "author": "ayurkiv-nvda",
+      "createdAt": "2023-09-18T16:18:09Z",
+      "body": "I checked it on SONiC.202211.342905-adb43ff1f , 202211.362946-9ffa92cc6  and 202211.70-e7ce179b7_Internal\r\nThe issue is no longer reproduced on this branch\r\nBut on 202205 problem is still exist"
+    },
+    {
+      "author": "ayurkiv-nvda",
+      "createdAt": "2023-11-06T15:55:32Z",
+      "body": "Managed to reproduce it on `202211.72-cf66a45b8_Internal`\r\nIt looks like issue is still exist on `202211`, reproduce rate is ~30%\r\n\r\nDo we have some progress with this bug?"
+    },
+    {
+      "author": "lolyu",
+      "createdAt": "2023-11-16T07:55:37Z",
+      "body": "@ayurkiv-nvda, the issue is that, after the port admin up, when the neighbor is added and tunnel route is removed, the fdb is not there, right?\r\nAnd this could be confirmed from the techsupport you shared:\r\n192.168.0.18 Ethernet32 62:B6:5A:E7:5E:09\r\n```\r\n2023-08-14.13:31:52.002726|c|SAI_OBJECT_TYPE_NEIGHBOR_ENTRY:{\"ip\":\"192.168.0.18\",\"rif\":\"oid:0x6000000000b59\",\"switch_id\":\"oid:0x21000000000000\"}|SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS=62:B6:5A:E7:5E:09\r\n2023-08-14.13:31:52.006085|c|SAI_OBJECT_TYPE_NEXT_HOP:oid:0x4000000000c24|SAI_NEXT_HOP_ATTR_TYPE=SAI_NEXT_HOP_TYPE_IP|SAI_NEXT_HOP_ATTR_IP=192.168.0.18|SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID=oid:0x6000000000b59\r\n2023-08-14.13:31:52.008355|r|SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"192.168.0.18/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"}\r\n2023-08-14.13:31:52.026528|c|SAI_OBJECT_TYPE_NEIGHBOR_ENTRY:{\"ip\":\"192.168.0.19\",\"rif\":\"oid:0x6000000000b59\",\"switch_id\":\"oid:0x21000000000000\"}|SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS=A6:5D:44:EC:7B:84\r\n2023-08-14.13:31:52.029167|c|SAI_OBJECT_TYPE_NEXT_HOP:oid:0x4000000000c25|SAI_NEXT_HOP_ATTR_TYPE=SAI_NEXT_HOP_TYPE_IP|SAI_NEXT_HOP_ATTR_IP=192.168.0.19|SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID=oid:0x6000000000b59\r\n2023-08-14.13:31:52.031427|r|SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"192.168.0.19/32\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000002\"}\r\n**2023-08-14.13:31:52.095415|n|fdb_event|[{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x26000000000b24\\\",\\\"mac\\\":\\\"62:B6:5A:E7:5E:09\\\",\\\"switch_id\\\":\\\"oid:0x21000000000000\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_LEARNED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x3a000000000b31\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]|**\r\n```\r\nThe tunnel route is removed at `2023-08-14.13:31:52.031427`, and the fdb event comes at `2023-08-14.13:31:52.095415`"
+    },
+    {
+      "author": "ayurkiv-nvda",
+      "createdAt": "2023-12-07T08:52:12Z",
+      "body": "Hello @lolyu \r\nYes, sometimes there is a time gap between removing tunnel route and new FDB entry (~150ms)\r\nIf, during this period neighbor is known, there is no FDB in the table, and packets are sent - these packets will be flooded on all interfaces currently UP on VLAN."
+    },
+    {
+      "author": "lolyu",
+      "createdAt": "2023-12-07T09:56:58Z",
+      "body": "Hi @ayurkiv-nvda, thanks for the clarification. The current dualtor-io test infrastructure cannot tell which port the packet is received, and the testcase will complain with error if this unknown unicast flood happens. This should be a test infrastructure gap.\r\n\r\nSo let's mark this as a to-do item."
+    },
+    {
+      "author": "lolyu",
+      "createdAt": "2023-12-12T02:54:38Z",
+      "body": "> * Config Active-Active Dual-ToR setup, make sure that both switches have all mux ports active.\r\n\r\nHi @ayurkiv-nvda, could you please have this fixed as it is specific to mlnx platform."
+    },
+    {
+      "author": "congh-nvidia",
+      "createdAt": "2025-04-08T07:59:00Z",
+      "body": "Hi @ayurkiv-nvda, I think you can close this issue as https://github.com/sonic-net/sonic-buildimage/issues/16085 is fixed and the test is all passing in 202411."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 18829,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/18829",
+      "title": "[dualtor-io] Fix `test_active_link_admin_down_config_reload_link_up_downstream_standby` on Cisco/MLNX",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-06-06T01:20:39Z",
+      "createdAt": "2025-06-05T11:52:32Z",
+      "author": "lolyu",
+      "body": "\u2026\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes # (issue)\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nTo fix https://github.com/sonic-net/sonic-buildimage/issues/16161.\r\n\r\nWork Item: 33161901\r\n\r\nSigned-off-by: Longxiang Lyu <lolv@microsoft.com>\r\n\r\n#### How did you do it?\r\nAllow duplications on MLNX/Cisco platforms.\r\n\r\n#### How did you verify/test it?\r\n```\r\ndualtor_io/test_link_failure.py::test_active_link_down_downstream_active[active-standby] PASSED                                                                                                                                                                        [100%]\r\n\r\n============================================================================================================================== warnings summary ==============================================================================================================================\r\n```\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/dualtor_io/test_link_failure.py",
+          "additions": 9,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-05T11:52:40Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-05T11:52:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-06T02:11:36Z",
+          "body": "@lolyu PR conflicts with 202411 branch"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-06T06:22:25Z",
+          "body": "@lolyu PR conflicts with 202505 branch"
+        }
+      ]
+    }
+  ]
+}

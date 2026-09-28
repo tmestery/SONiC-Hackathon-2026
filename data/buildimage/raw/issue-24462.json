@@ -1,0 +1,117 @@
+{
+  "number": 24462,
+  "title": "Bug: Control plane fails to use backup route when connected route link goes down",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24462",
+  "createdAt": "2025-11-07T08:57:28Z",
+  "closedAt": "2026-06-24T18:03:21Z",
+  "author": "rminnikanti",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "StormLiangMS"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nIn the data path, when a link goes down, any directly connected routes are removed, allowing the system to switch to alternative BGP-learned routes. However, in the control plane (kernel), connected routes remain active even when the link is down, leading to traffic failures.\n\n### Steps to Reproduce\n\nHave configuration to have two routes to same destination and shutdown the link with direct connect route.\n\n```bash\nroot@sonic:/home/admin# ip route\ndefault via 10.28.60.1 dev eth0\n1.1.1.0/30 dev Ethernet0 proto kernel scope link src 1.1.1.1\n**10.10.10.0/30 dev PortChannel02 scope link linkdown**                               <-- Connected route\n**10.10.10.0/30 via 1.1.1.2 dev Ethernet0 proto bgp src 100.100.100.1 metric 20**     <-- BGP learnt route\n10.28.60.0/24 dev eth0 proto kernel scope link src 10.28.60.43\n100.100.100.2 via 1.1.1.2 dev Ethernet0 proto bgp src 100.100.100.1 metric 20\n240.127.1.0/24 dev docker0 proto kernel scope link src 240.127.1.1 linkdown\n```\n\n```bash\n#show ip route\nCodes: K - kernel route, C - connected, S - static, R - RIP,\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\n       F - PBR, f - OpenFabric,\n       > - selected route, * - FIB route, q - queued route, r - rejected route\nK>*0.0.0.0/0 [0/0] via 10.28.60.1, eth0, 02:47:55\nC>*1.1.1.0/30 is directly connected, Ethernet0, 02:47:28\nB>*10.10.10.0/30 [200/0] via 1.1.1.2, Ethernet0, 02:20:56                    <-- BGP learnt route\nC>*10.28.60.0/24 is directly connected, eth0, 02:47:55\nK 10.28.60.0/24 [0/0] is directly connected, eth0, 02:47:55\nC>*100.100.100.1/32 is directly connected, Loopback0, 02:47:51\nB>*100.100.100.2/32 [200/0] via 1.1.1.2, Ethernet0, 02:43:44\nK 240.127.1.0/24 [0/0] is directly connected, docker0, inactive 02:47:55\n```\n\nPing an IP in the subnet\n```bash\n# ping 10.10.10.2\nPING 10.10.10.2 (10.10.10.2) 56(84) bytes of data.\n^C\n--- 10.10.10.2 ping statistics ---\n3 packets transmitted, 0 received, 100% packet loss, time 2044ms\n```\n\n### Actual Behavior and Expected Behavior\n\nControl path and data path behavior must be the same. Kernel should also skip using\nconnected routes whose link is down\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n# show ver\n\nSONiC Software Version: SONiC.202505.130-dirty-20251104.181622\nSONiC OS Version: 12\nDistribution: Debian 12.12\nKernel: 6.1.0-29-2-amd64\nBuild commit: 8a5c9269b\nBuild date: Tue Nov  4 21:01:59 UTC 2025\nBuilt by: marvell@sonic-build-vm\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27420,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27420",
+      "title": "sysctl: enable ignore_routes_with_linkdown for IPv4 and IPv6",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-24T18:03:20Z",
+      "createdAt": "2026-05-17T13:03:30Z",
+      "author": "rminnikanti",
+      "body": "Fixes #24462 \r\n\r\nToday in Sonic, control path continues to use connected routes even when the link is down, despite alternative routes being available, causing traffic failure. This behavior differs from data path, which removes the downed connected route and switches to alternatives.\r\n\r\nEnabling ignore_routes_with_linkdown sysctl aligns control and data path behavior by allowing control path to fallback to BGP-learned routes with lower metrics. \r\n\r\nOnce the link is restored, the connected route is reused. \r\n\r\nThis behavior follows FRR documentation and standard Linux network manager practices.\r\n\r\n#### Why I did it\r\nTo avoid control path traffic failure and have common behavior across control and data path\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nEnabled ignore_routes_with_linkdown sysctl parameter\r\n#### How to verify it\r\n```bash\r\nroot@sonic:/home/admin# ip route\r\ndefault via 10.28.60.1 dev eth0\r\n1.1.1.0/30 dev Ethernet0 proto kernel scope link src 1.1.1.1\r\n**10.10.10.0/30 dev PortChannel02 scope link linkdown**                               <-- Connected route\r\n**10.10.10.0/30 via 1.1.1.2 dev Ethernet0 proto bgp src 100.100.100.1 metric 20**     <-- BGP learnt route\r\n10.28.60.0/24 dev eth0 proto kernel scope link src 10.28.60.43\r\n100.100.100.2 via 1.1.1.2 dev Ethernet0 proto bgp src 100.100.100.1 metric 20\r\n240.127.1.0/24 dev docker0 proto kernel scope link src 240.127.1.1 linkdown\r\n```\r\n\r\n```bash\r\n#show ip route\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued route, r - rejected route\r\nK>*0.0.0.0/0 [0/0] via 10.28.60.1, eth0, 02:47:55\r\nC>*1.1.1.0/30 is directly connected, Ethernet0, 02:47:28\r\nB>*10.10.10.0/30 [200/0] via 1.1.1.2, Ethernet0, 02:20:56                    <-- BGP learnt route\r\nC>*10.28.60.0/24 is directly connected, eth0, 02:47:55\r\nK 10.28.60.0/24 [0/0] is directly connected, eth0, 02:47:55\r\nC>*100.100.100.1/32 is directly connected, Loopback0, 02:47:51\r\nB>*100.100.100.2/32 [200/0] via 1.1.1.2, Ethernet0, 02:43:44\r\nK 240.127.1.0/24 [0/0] is directly connected, docker0, inactive 02:47:55\r\n```\r\n\r\n```bash\r\nroot@sonic:/home/admin# ping 10.10.10.2\r\nPING 10.10.10.2 (10.10.10.2) 56(84) bytes of data.\r\n64 bytes from 10.10.10.2: icmp_seq=1 ttl=63 time=0.229 ms\r\n```\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [X] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n- [202511] <!-- image version 1 -->\r\n\r\n\r\n#### Description for the changelog\r\n[sysctl]: Enable ignore_routes_with_linkdown to avoid using routes of linkdown interface\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/image_config/sysctl/90-sonic.conf",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-18T04:19:56Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-05-18T04:35:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-18T04:35:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-22T08:56:39Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-22T08:56:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rminnikanti",
+          "createdAt": "2026-05-25T07:14:13Z",
+          "body": "PR check `Test impacted-area-kvmtest-t1-lag` failing because `autorestart/test_container_autorestart.py` PTF test is failing.\r\nThe failure is not related to this PR. \r\n\r\nThis check is also failing in recent PRs such as - https://github.com/sonic-net/sonic-buildimage/pull/27528 ."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-29T05:52:26Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-29T05:52:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-05-29T15:06:09Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-01T15:04:27Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T11:45:21Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T11:45:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-06-24T18:03:54Z",
+          "body": "> LGTM..\r\n> \r\n> @prsunny @abdosi could you please also help take a look if any concerns/history behind it.\r\n\r\n@prsunny , @StormLiangMS  do we need this in 202511 and beyond?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-25T11:14:01Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-06-30T00:29:47Z",
+          "body": "> > LGTM..\r\n> > @prsunny @abdosi could you please also help take a look if any concerns/history behind it.\r\n> \r\n> @prsunny , @StormLiangMS do we need this in 202511 and beyond?\r\n\r\nIMO, lets not backport as this is a critical behavior change and lets validate the behavior in master. "
+        }
+      ]
+    }
+  ]
+}

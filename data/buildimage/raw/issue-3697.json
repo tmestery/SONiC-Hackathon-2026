@@ -1,0 +1,206 @@
+{
+  "number": 3697,
+  "title": "Boot type during config reload after fast reboot is invalid",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/3697",
+  "createdAt": "2019-11-01T13:21:36Z",
+  "closedAt": "2019-11-12T20:59:14Z",
+  "author": "nazariig",
+  "labels": [],
+  "assignees": [
+    "pavel-shirshov"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\nAfter the fast reboot, on the next config reload, the system behaves in the same way as during the fast reboot flow. \r\n\r\nIt seems that the boot type detection logic in sonic-buildimage and sonic-sairedis are not aligned:\r\n\r\nsonic-buildimage/files/scripts/syncd.sh\r\n```bash\r\nfunction getBootType()\r\n{\r\n    # same code snippet in files/build_templates/docker_image_ctl.j2\r\n    case \"$(cat /proc/cmdline)\" in\r\n    *SONIC_BOOT_TYPE=warm*)\r\n        TYPE='warm'\r\n        ;;\r\n    *SONIC_BOOT_TYPE=fastfast*)\r\n        TYPE='fastfast'\r\n        ;;\r\n    *SONIC_BOOT_TYPE=fast*|*fast-reboot*)\r\n        TYPE=$(awk '{ if ($1 <= 180) print \"fast\"; else print \"cold\" }' /proc/uptime)\r\n        ;;\r\n    *)\r\n        TYPE='cold'\r\n    esac\r\n    echo \"${TYPE}\"\r\n}\r\n```\r\n\r\nsonic-sairedis/syncd/scripts/syncd_init_common.sh\r\n```bash\r\ncase \"$(cat /proc/cmdline)\" in\r\n  *SONIC_BOOT_TYPE=fastfast*)\r\n    if [ -e /var/warmboot/warm-starting ]; then\r\n        FASTFAST_REBOOT='yes'\r\n    fi\r\n    ;;\r\n  *SONIC_BOOT_TYPE=fast*|*fast-reboot*)\r\n     FAST_REBOOT='yes'\r\n    ;;\r\n  *)\r\n     FAST_REBOOT='no'\r\n     FASTFAST_REBOOT='no'\r\n    ;;\r\nesac\r\n\r\n...\r\n\r\nfunction set_start_type()\r\n{\r\n    if [ x\"$WARM_BOOT\" == x\"true\" ]; then\r\n        CMD_ARGS+=\" -t warm\"\r\n    elif [ x\"$FAST_REBOOT\" == x\"yes\" ]; then\r\n        CMD_ARGS+=\" -t fast\"\r\n    elif [ x\"$FASTFAST_REBOOT\" == x\"yes\" ]; then\r\n        CMD_ARGS+=\" -t fastfast\"\r\n    fi\r\n}\r\n```\r\n\r\n**Steps to reproduce the issue:**\r\n1. fast-reboot\r\n2. config reload -y\r\n\r\n**Describe the results you received:**\r\n```bash\r\nroot@sonic:/home/admin# docker exec -ti syncd bash\r\nroot@sonic:/# ps -aux | grep [s]yncd\r\nroot        23  5.1  2.5 1265152 207064 pts/0  Sl   13:15   0:04 /usr/bin/syncd -u -p /tmp/sai.profile -t fast -r -m /usr/share/sonic/hwsku/port_config.ini\r\n```\r\n\r\n**Describe the results you expected:**\r\n```bash\r\nroot@sonic:/home/admin# docker exec -ti syncd bash\r\nroot@sonic:/# ps -aux | grep [s]yncd\r\nroot        23  5.1  2.5 1265152 207064 pts/0  Sl   13:15   0:04 /usr/bin/syncd -u -p /tmp/sai.profile -t cold -r -m /usr/share/sonic/hwsku/port_config.ini\r\n```\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\n* N/A",
+  "comments": [
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2019-11-05T17:23:22Z",
+      "body": "@pavel-shirshov Instead of checking uptime? Can we check /proc/cmdline once on database postStartAction and put a mark in new state DB table (lets say 'FAST_REBOOT|system' entry to be aligned with warm reboot). Every service doing start checks the database. On config reload the state DB is cleared. What do you think?"
+    },
+    {
+      "author": "pavel-shirshov",
+      "createdAt": "2019-11-07T23:34:58Z",
+      "body": "@stepanblyschak \r\n\r\nI think that it wouldn't be enough.\r\nIf someone restart bgp container without reloading config, bgpd will think we're still in fast-reboot mode.\r\nI think we should disable FAST-REBOOT mode in 3 minutes. \r\n\r\nWe can as you propose put the key into the DB and remove it in 3 minutes (or by config reload).\r\nIn the scripts we will check the key.\r\nWill it work for you?\r\n"
+    },
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2019-11-08T09:34:44Z",
+      "body": "@pavel-shirshov I wasn't aware about BGP case, a new fastboot-finalizer service (similarly to warmboot-service) can remove the key after 3 min. It will work for me."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 3741,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/3741",
+      "title": "Save fast-reboot state into the db",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2019-12-04T22:10:20Z",
+      "createdAt": "2019-11-12T17:29:02Z",
+      "author": "pavel-shirshov",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n\"closes #xxxx\"\r\n\r\nPlease provide the following information:\r\n-->\r\nFixes https://github.com/Azure/sonic-buildimage/issues/3697\r\n\r\n**- What I did**\r\n1. Put a flag for fast-reboot to the db\r\n2. Using this flag in other part of SONiC to start in Fast-reboot mode\r\n\r\n**- How I did it**\r\n1. Using EXPIRE feature of db\r\n2. If we reload a config, the state in the db will be removed.\r\n\r\n**- How to verify it**\r\nBuild your DUT and test on your dut.\r\n\r\n**- Description for the changelog**\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-base-stretch/Dockerfile.j2",
+          "additions": 7,
+          "deletions": 1
+        },
+        {
+          "path": "dockers/docker-orchagent/Dockerfile.j2",
+          "additions": 0,
+          "deletions": 7
+        },
+        {
+          "path": "dockers/docker-sonic-telemetry/Dockerfile.j2",
+          "additions": 1,
+          "deletions": 8
+        },
+        {
+          "path": "dockers/docker-teamd/Dockerfile.j2",
+          "additions": 1,
+          "deletions": 8
+        },
+        {
+          "path": "files/build_templates/docker_image_ctl.j2",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "files/scripts/syncd.sh",
+          "additions": 6,
+          "deletions": 1
+        },
+        {
+          "path": "rules/docker-base-stretch.mk",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-quagga",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "yxieca",
+          "createdAt": "2019-11-12T17:43:59Z",
+          "body": "Looks generally good to me. I am wondering what is your plan of using the EX 180 information?\r\n\r\nWe might want to run a test fast-reboot -> make sure it is executed as fast-reboot. Then restart swss, make sure it is a cold restart."
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-12T17:50:44Z",
+          "body": "@yxieca This is instruction to redis to remove the key in 180 seconds.\r\n"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2019-11-12T17:52:55Z",
+          "body": "I see. Interesting. Do we need this expiry? swss restart should clear the db including this key, right?"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-12T17:56:09Z",
+          "body": "@yxieca But if we restart bgpd only it will be always fast-reboot start of bgpd"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2019-11-12T17:58:17Z",
+          "body": "Good point!"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-15T21:46:24Z",
+          "body": "retest broadcom please"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-15T21:46:34Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2019-11-17T04:37:10Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2019-11-17T04:37:18Z",
+          "body": "retest broadcom please"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-18T23:57:58Z",
+          "body": "retest vs please"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-18T23:58:08Z",
+          "body": "retest broadcom please"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-19T16:06:48Z",
+          "body": "retest vs please"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-26T23:43:35Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-27T20:31:46Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2019-11-27T22:41:59Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2019-12-02T02:44:54Z",
+          "body": "can you rebase and resolve conflict?"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2019-12-04T12:46:51Z",
+          "body": "for master we are using frr, so sonic-frr init should be modified. I will let pavel fix that."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2019-12-13T03:07:04Z",
+          "body": "Separate PR was created for 201811 branch due to merge conflicts."
+        }
+      ]
+    },
+    {
+      "number": 529,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/529",
+      "title": "Enable FastReboot if we have key \"FAST_REBOOT|system\" in State db",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2019-11-12T20:59:14Z",
+      "createdAt": "2019-11-12T17:48:50Z",
+      "author": "pavel-shirshov",
+      "body": "Enable fast-reboot only if \"FAST_REBOOT|system\" key exists in STATE db.\r\nThis PR is required to be included into https://github.com/Azure/sonic-buildimage/pull/3741 to fix https://github.com/Azure/sonic-buildimage/issues/3697",
+      "files": [
+        {
+          "path": "syncd/scripts/syncd_init_common.sh",
+          "additions": 6,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "yxieca",
+          "createdAt": "2019-11-18T21:02:27Z",
+          "body": "Backed out from 201811 branch until the whole change is ready."
+        }
+      ]
+    }
+  ]
+}

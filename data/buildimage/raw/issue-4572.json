@@ -1,0 +1,119 @@
+{
+  "number": 4572,
+  "title": "BGPv6 Neighbor configuration on config_db not generated to frr.conf",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/4572",
+  "createdAt": "2020-05-11T14:30:39Z",
+  "closedAt": "2020-07-31T17:40:40Z",
+  "author": "Ezrickd",
+  "labels": [
+    "Bug :bug:",
+    "Issue for 201911",
+    "bgp"
+  ],
+  "assignees": [
+    "pavel-shirshov"
+  ],
+  "milestone": null,
+  "body": "bgp neighbor at 2019 image from March is creating frr config for ipv6 afi neighbor atatement.\r\nwhen moving to newest image BGP ipv6 unicast neighbor statement is not created.\r\n\r\nchecking at BGP container I see that there are new folders :\r\nAt BGP Docker it is pointing to /usr/share/sonic/templates/bgpd/templates/general/instance.conf.j2\r\n\r\nwhen on erlier build it was all on /usr/share/sonic/templates/\r\n\r\nmy configuration is simple.\r\n\r\n       \"2001:0:0:0:192:168:0:74\": {\r\n            \"asn\": \"3230003333\",\r\n            \"holdtime\": \"10\",\r\n            \"keepalive\": \"3\",\r\n            \"local_addr\": \"2001:0:0:0:192:168:0:75\",\r\n            \"name\": \"t1s9003_p20\",\r\n            \"nhopself\": \"0\",\r\n            \"rrclient\": \"0\"\r\n        },\r\nroot@sonic-01:~# show ipv6 bgp summary\r\n% No BGP neighbors found\r\n\r\nwhen running older version like March 201911 image it works,.. ",
+  "comments": [
+    {
+      "author": "pavel-shirshov",
+      "createdAt": "2020-05-11T16:36:53Z",
+      "body": "Hi @Ezrickd\r\n\r\nCan you please share your `show version` output, `vtysh -c 'show run'`output, and `cat /etc/sonic/config_db.json`?\r\n\r\nThanks"
+    },
+    {
+      "author": "Ezrickd",
+      "createdAt": "2020-05-11T21:13:57Z",
+      "body": "thank you Pavel.\r\nattached show commands.\r\n[show commands.txt](https://github.com/Azure/sonic-buildimage/files/4612142/show.commands.txt)\r\n"
+    },
+    {
+      "author": "Ezrickd",
+      "createdAt": "2020-05-19T08:26:20Z",
+      "body": "Hi Pavel \r\nFound the issue it is a Bug.\r\nIPv6 address is trancating the traling zero to double colon as allowed for IPv6 address.\r\nthe IPv6 local address is paresed as user inserted it , thus the local address is not found on ipv6 local device and neighbor is not created.\r\n\r\nas you can see from the example only if i will configre the local address as trancated zero's to match the ipv6 interface BGP neighbor will be created at FRR.\r\n\r\nhere is an example:\r\n\r\nroot@sonic:~# show ipv6 interfaces\r\nPortChannel1             2001:face::10/127                       up/down       AE-2100-11      2001:face::9\r\nPortChannel17            2001::192:168:0:97/127                  up/down       N/A             N/A\r\n\r\nconfig_db bgp neighbor:\r\n        \"2001:0:0:0:192:168:0:96\": {\r\n            \"admin_status\": \"up\",\r\n            \"asn\": \"65501\",\r\n            \"holdtime\": \"10\",\r\n            \"keepalive\": \"3\",\r\n            \"local_addr\": \"2001:0:0:0:192:168:0:97\",\r\n            \"name\": \"AE-2100-11\",\r\n            \"nhopself\": \"0\",\r\n            \"rrclient\": \"0\"\r\n        },\r\n        \"2001:face::9\": {\r\n            \"admin_status\": \"up\",\r\n            \"asn\": \"65501\",\r\n            \"holdtime\": \"10\",\r\n            \"keepalive\": \"3\",\r\n            \"local_addr\": \"2001:face::10\",\r\n            \"name\": \"AE-2100-11\",\r\n            \"nhopself\": \"0\",\r\n            \"rrclient\": \"0\"\r\n        }\r\n    \"PORTCHANNEL_INTERFACE\": {\r\n        \"PortChannel1\": {},\r\n        \"PortChannel17\": {},\r\n        \"PortChannel1|192.168.0.65/31\": {},\r\n        \"PortChannel1|2001:face::10/127\": {},\r\n        \"PortChannel17|192.168.0.97/31\": {},\r\n        \"PortChannel17|2001:0:0:0:192:168:0:97/127\": {},\r\n\r\n## If I will change the BGP local Address to trancated zeros, it will be installed.\r\nchange the BGP local address to match the interface ipv6 address \r\n\r\n        \"2001:0:0:0:192:168:0:96\": {\r\n            \"admin_status\": \"up\",\r\n            \"asn\": \"65501\",\r\n            \"holdtime\": \"10\",\r\n            \"keepalive\": \"3\",\r\n            \"local_addr\": \"2001::192:168:0:97\",\r\n            \"name\": \"AE-2100-11\",\r\n            \"nhopself\": \"0\",\r\n            \"rrclient\": \"0\"\r\n        },\r\n        \"2001:face::9\": {\r\n            \"admin_status\": \"up\",\r\n            \"asn\": \"65501\",\r\n            \"holdtime\": \"10\",\r\n            \"keepalive\": \"3\",\r\n            \"local_addr\": \"2001:face::10\",\r\n            \"name\": \"AE-2100-11\",\r\n            \"nhopself\": \"0\",\r\n            \"rrclient\": \"0\"\r\n        }\r\n    },\r\n\r\n:/etc/sonic# show ipv6 interfaces\r\nInterface      Master    IPv6 address/mask                       Admin/Oper    BGP Neighbor    Neighbor IP\r\n-------------  --------  --------------------------------------  ------------  --------------  -----------------------\r\nBridge                   fe80::38dc:7bff:fe47:35ee%Bridge/64     up/down       N/A             N/A\r\nLoopback0                2001:face:face::1/128                   up/up         N/A             N/A\r\n                         fe80::18ad:ccff:fea1:c117%Loopback0/64\r\nPortChannel1             2001:face::10/127                       up/down       AE-2100-11      2001:face::9\r\nPortChannel17            2001::192:168:0:97/127                  up/down       AE-2100-11      2001:0:0:0:192:168:0:96\r\n\r\nroot@l-csi-4700-01:/etc/sonic# show ipv6 bgp summary\r\n\r\nIPv6 Unicast Summary:\r\nBGP router identifier 1.1.1.1, local AS number 65001 vrf-id 0\r\nBGP table version 1\r\nRIB entries 1, using 184 bytes of memory\r\nPeers 2, using 41 KiB of memory\r\nPeer groups 2, using 128 bytes of memory\r\n\r\nNeighbor           V         AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd\r\n2001::192:168:0:96 4      65501       0       0        0    0    0    never       Active\r\n2001:face::9       4      65501       0       0        0    0    0    never       Active\r\n"
+    },
+    {
+      "author": "paulnice",
+      "createdAt": "2020-06-09T22:53:07Z",
+      "body": "@Ezrickd Thank you for your investigation.\r\nLet me try to find the issue in the bgpcfgd. I think what we need is to have all ipv6 addresses to be converted to the one canonical format. Otherwise it is hard to compare them.\r\nOr we have to have all ip addresses as objects, not strings."
+    },
+    {
+      "author": "pavel-shirshov",
+      "createdAt": "2020-07-01T04:54:39Z",
+      "body": "Can you please try this fix https://github.com/Azure/sonic-buildimage/pull/4876 "
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2020-07-28T20:24:20Z",
+      "body": "@Ezrickd, will you please confirm if this issue is fixed? Thanks."
+    },
+    {
+      "author": "Ezrickd",
+      "createdAt": "2020-07-28T20:35:11Z",
+      "body": "Is the fix present in 201911 ?\r\n\r\nI am using only this for now. If so can\r\nYou advise on when it was merged.\r\n\r\nEzrickd\r\n\r\nSent from my iPhone\r\nSorry for his typing errors (-;\r\n\r\nOn 28 Jul 2020, at 23:24, rlhui <notifications@github.com> wrote:\r\n\r\n\ufeff\r\n\r\n@Ezrickd<https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2FEzrickd&data=02%7C01%7Cezrick%40mellanox.com%7C6ebba41241d64335494c08d83334407f%7Ca652971c7d2e4d9ba6a4d149256f461b%7C0%7C0%7C637315646799130973&sdata=rWt1HXfg5XzCWLmsH6XWtqbmzAjblZ3KjX9%2BRt1P5Tc%3D&reserved=0>, will you please confirm if this issue is fixed? Thanks.\r\n\r\n\u2014\r\nYou are receiving this because you were mentioned.\r\nReply to this email directly, view it on GitHub<https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2FAzure%2Fsonic-buildimage%2Fissues%2F4572%23issuecomment-665264198&data=02%7C01%7Cezrick%40mellanox.com%7C6ebba41241d64335494c08d83334407f%7Ca652971c7d2e4d9ba6a4d149256f461b%7C0%7C0%7C637315646799130973&sdata=tatz%2BGjPbmILDrqu95EEUTo6OH5tfzL96wpVpxhJtQE%3D&reserved=0>, or unsubscribe<https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2Fnotifications%2Funsubscribe-auth%2FAMGJOK74F2K5SBCU2NSJFDLR54XYJANCNFSM4M6CB3SQ&data=02%7C01%7Cezrick%40mellanox.com%7C6ebba41241d64335494c08d83334407f%7Ca652971c7d2e4d9ba6a4d149256f461b%7C0%7C0%7C637315646799140969&sdata=icL0bBnjfqECvLzExY%2B0JipqX0CCKYJSuttLVH%2BEM8k%3D&reserved=0>.\r\n"
+    },
+    {
+      "author": "liat-grozovik",
+      "createdAt": "2020-07-30T17:34:27Z",
+      "body": "@rlhui please confirm the fix is already merged to 201911 otherwise Ezrik cannot verify it. Or you can let me know which exactly fix you would like me to include in a build for him to test."
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2020-07-30T17:42:04Z",
+      "body": "@liat-grozovik , @Ezrickd, actually the PR to fix this is not yet merged.  Pavel has a question if you could try it.  Before it's merged, please see if it's feasible for you to pull in his PR to your repo and test it, if issue is still found?"
+    },
+    {
+      "author": "pavel-shirshov",
+      "createdAt": "2020-07-31T05:20:00Z",
+      "body": "You don't need to build any image\r\nJust donwload file https://raw.githubusercontent.com/Azure/sonic-buildimage/b6c395c864bcb12b688fb120661544a1c7da8fa1/src/sonic-bgpcfgd/bgpcfgd and put it into bgp container instead of the old one\r\n```\r\ndocker cp bgpcfgd bgp:/usr/local/bin/bgpcfgd\r\n```\r\n"
+    },
+    {
+      "author": "Ezrickd",
+      "createdAt": "2020-07-31T07:27:34Z",
+      "body": "Hi Pavel.\r\ntested the new bgpcfgd file, \r\nworks Great ! \r\ntested with all \"zero\" and mixed \"zero & double colon\" \r\nin every test case the Ipv6 is truncated to double colon and FRR config is matching the IPv6 address.\r\nExcellent.\r\nEzrickd\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4876,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/4876",
+      "title": "Fix for ipv6 local-addr problem",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-07-31T17:40:40Z",
+      "createdAt": "2020-07-01T04:54:24Z",
+      "author": "pavel-shirshov",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n\"closes #xxxx\"\r\n\r\nPlease provide the following information:\r\n-->\r\n\r\nFixes: https://github.com/Azure/sonic-buildimage/issues/4572\r\n\r\n**- Why I did it**\r\nOne ipv6 address could be represented in many ways. We must convert all incoming ipv6 addresses in one canonical way of the representation.\r\n\r\n**- How I did it**\r\nI convert ipv6 address to the canonical way before I saved it in the bgpcfgd.\r\n\r\n**- How to verify it**\r\nBuild an image, run on your dut. create bgp_ipv6 neighbor which is not canonical, for example \"fc02:0000:0000::1\r\nAnd check that bgpcfgd created session \"fc02::1\"\r\n\r\n**- Description for the changelog**\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n",
+      "files": [
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2020-07-01T09:48:42Z",
+          "body": "is this required for 201911 branch? if yes, can you add label? can you provide description of the fix?"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2020-07-01T17:44:38Z",
+          "body": "@lguohan I'll do. Currently I want to test it, but my testbed is broken. I need to restore it first."
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2020-07-25T10:09:03Z",
+          "body": "can you rebase?"
+        },
+        {
+          "author": "pavel-shirshov",
+          "createdAt": "2020-07-27T19:27:42Z",
+          "body": "@lguohan Done."
+        }
+      ]
+    }
+  ]
+}

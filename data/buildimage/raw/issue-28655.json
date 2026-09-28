@@ -1,0 +1,214 @@
+{
+  "number": 28655,
+  "title": "Warm/fast reboot non-functional on Nexthop NH-4010/NH-4210: ASIC power-cycled on syncd stop, SAI warm-boot state file not configured",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28655",
+  "createdAt": "2026-07-28T17:55:55Z",
+  "closedAt": "2026-08-14T21:35:56Z",
+  "author": "wren-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "BRCM"
+  ],
+  "assignees": [
+    "adyeung"
+  ],
+  "milestone": null,
+  "body": "**Description**\n\nWarm reboot and fast reboot do not work on the Nexthop NH-4010 and NH-4210 platforms, for two reasons:\n\n1. The hwsku `sai.profile` files for NH-4010 (x86_64-nexthop_4010-r1) and NH-4210 (x86_64-nexthop_4210-r0021) are missing the Broadcom SAI warm-boot state file keys (`SAI_KEY_WARM_BOOT_WRITE_FILE` / `SAI_KEY_WARM_BOOT_READ_FILE`), so SAI never writes or restores `/var/warmboot/sai-warmboot.bin` across the kexec.\n2. The per-platform `syncd.service.d` overrides (`nh-4010/.../ge-override.conf`, `nh-4210/.../sea-eagle-override.conf`) run `ExecStopPost=/usr/local/bin/asic_init.sh` unconditionally. This power-cycles the ASIC on every syncd stop \u2014 including the syncd stop that happens during warm/fast reboot orchestration \u2014 destroying the preserved dataplane state.\n\n**Steps to reproduce**\n\n1. Boot an NH-4010 or NH-4210 with a current image built from this repo (also reproduces on the msft-202512 branch).\n2. Run `fast-reboot` (or `warm-reboot`).\n\n**Observed behavior**\n\nThe ASIC is power-cycled during shutdown, so the dataplane is not preserved and the reboot degrades to a cold-boot-like path. (An additional, separate issue on 202512-based images \u2014 a hard reset ~55s after the kexec boot \u2014 is what makes sonic-mgmt `test_fast_reboot` fail its reboot-cause check there; that is tracked separately. This issue covers the missing plumbing itself.)\n\n**Expected behavior**\n\nWarm/fast reboot keeps the ASIC and dataplane intact across kexec, and `show reboot-cause` reports the corresponding cause afterwards.\n",
+  "comments": [
+    {
+      "author": "adyeung",
+      "createdAt": "2026-08-12T23:13:27Z",
+      "body": "@wren-nexthop please raise CSP ticket for SAI support "
+    },
+    {
+      "author": "wren-nexthop",
+      "createdAt": "2026-08-14T06:54:53Z",
+      "body": "CSP filed: CS00012475674 (SONiC warm boot qualification for Tomahawk6 and Tomahawk5 SAI/SDK combinations)."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28656,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28656",
+      "title": "[Nexthop] Enable warm/fast reboot plumbing on NH-4010 and NH-4210",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-14T21:35:55Z",
+      "createdAt": "2026-07-28T17:58:02Z",
+      "author": "wren-nexthop",
+      "body": "#### Why I did it\n\nResolves #28655\n\nWarm and fast reboot are non-functional on the Nexthop NH-4010 and NH-4210 platforms:\n\n1. The hwsku `sai.profile` files are missing the Broadcom SAI warm-boot state file keys, so SAI never writes/restores `/var/warmboot/sai-warmboot.bin` across the kexec.\n2. The per-platform `syncd.service.d` overrides run `ExecStopPost=/usr/local/bin/asic_init.sh` unconditionally, power-cycling the ASIC on every syncd stop \u2014 including during warm/fast reboot orchestration, which destroys the preserved dataplane.\n3. On the post-kexec boot, `pre_pddf_init.sh` runs `asic_init.sh` unconditionally, fully resetting the ASIC after a warm reboot and destroying the dataplane state the shutdown side preserved. In addition, ASIC interrupts left enabled by the pre-kexec kernel can fire when the driver reloads \u2014 before userspace remaps the BARs \u2014 and panic the kernel.\n\nNote: this PR fixes the missing plumbing itself (SAI state preservation, no ASIC power-cycle mid-orchestration, warm-aware boot-time init). The `test_fast_reboot` reboot-cause failure seen in CI on 202512-based images turned out to have an additional cause \u2014 a hard reset ~55s after the kexec boot, under separate investigation \u2014 so this PR alone is not expected to flip that test; it is a prerequisite for correct warm/fast reboot behavior.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**: N/A\n\n#### How I did it\n\n- Add `SAI_KEY_WARM_BOOT_WRITE_FILE` / `SAI_KEY_WARM_BOOT_READ_FILE` (`/var/warmboot/sai-warmboot.bin`) to the NH-4010 (x86_64-nexthop_4010-r1) and NH-4210 (x86_64-nexthop_4210-r0021) sai.profiles.\n- Add `common/utils/syncd_post_stop.py` and point the `ge-override.conf` / `sea-eagle-override.conf` `ExecStopPost` at it. The script checks STATE_DB `WARM_RESTART_ENABLE_TABLE|system` / `FAST_RESTART_ENABLE_TABLE|system` (and `/host/warmboot/dump.rdb`) and skips the ASIC power-cycle while warm/fast reboot is in progress; on any other syncd stop it execs `asic_init.sh` exactly as before. Scripts in `common/utils/` are installed to `/usr/local/bin` by the existing debian rules.\n- Add `common/utils/asic_init_wrapper.py`, invoked from `pre_pddf_init.sh` in place of `asic_init.sh`. On `SONIC_BOOT_TYPE=warm` it skips the ASIC reset and disables the ASIC's INTx/MSI/MSI-X at the PCI config-space level so a stale interrupt cannot fire while the driver reloads; on cold boot or fast-reboot post-kexec (`SONIC_BOOT_TYPE=fast-reboot`) it execs `asic_init.sh` exactly as before, and any wrapper failure falls back to the full ASIC init. The supporting setpci/interrupt-disable helpers live in `nexthop/pcie_lib.py`, with unit tests for both the library and the wrapper.\n\nCold boot and syncd-crash recovery behavior is unchanged.\n\n#### How to verify it\n\nValidated internally on NH-4210 (O256): with these changes `fast-reboot` completes successfully and sonic-mgmt `platform_tests/test_reboot.py::test_fast_reboot` passes, including the `show reboot-cause` check. Without them the ASIC is power-cycled during shutdown and the test fails as described above. NH-4010 has been running this configuration internally with warm/fast reboot tests enabled in nightly CI.\n\nAdditionally, the CI image built from this PR (Azure build 1177884, `master-28656.1177884`) was installed on NH-4010 hardware via ONIE and the plumbing verified in place: the warm-boot keys land in the sai.profiles, `syncd_post_stop.py` is installed and wired as the syncd `ExecStopPost`, and on a plain (non-warm) syncd stop it logs `syncd stop without warm/fast reboot: power-cycling ASIC to reinitialize` and runs the full ASIC init exactly as before. The `asic_init_wrapper.py` paths were exercised on the same hardware: ASIC BDF discovery from the platform `pcie-variables.yaml`, the warm-path INTx/MSI/MSI-X disable (verified via the PCI Command register), and the cold-path fallthrough to `asic_init.sh`. `test/unit` for `sonic-platform-modules-nexthop` passes (369 tests).\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [x] 202512\n- [ ] 202605\n- [ ] 202608\n\nReason: Nexthop NH-4010/NH-4210 ship on 202512-based images, which currently lack this plumbing entirely (verified: no warm-boot keys in the sai.profiles, unconditional asic_init.sh ExecStopPost). The change only touches Nexthop vendor directories (`device/nexthop`, `platform/broadcom/sonic-platform-modules-nexthop`) \u2014 no common code, no other platforms affected.\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): #28655\nFailure type: product bug (warm/fast reboot non-functional on Nexthop platforms)\n\n#### Tested branch\n\n- [x] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [x] 202512\n- [ ] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n\n- master: the CI image built from this PR was installed on NH-4010 hardware via ONIE and the plumbing verified in place (see \"How to verify it\"). Also validated on NH-4210 (O256) hardware running an internal image built from master with these changes \u2014 `fast-reboot` completes successfully, and sonic-mgmt `platform_tests/test_reboot.py::test_fast_reboot` passes including the `show reboot-cause` check. NH-4010 runs this configuration in internal nightly CI with warm/fast reboot tests enabled.\n- 202512: applied these exact files on NH-4210 (P128) hardware running an image built from the 202512 branch \u2014 configuration applies cleanly, syncd picks up the warm-boot keys, cold boot and BGP/interface health unaffected. End-to-end `test_fast_reboot` on this branch is currently blocked by a separate platform issue (an unexpected reset ~55s after the kexec boot, pending the watchdog upstreaming); A/B runs confirmed this PR neither causes nor masks that issue.\n\n#### Description for the changelog\n\n[Nexthop] Enable warm/fast reboot on NH-4010 and NH-4210: add SAI warm-boot state file keys, skip the syncd-stop ASIC power-cycle during warm/fast reboot orchestration, and make boot-time ASIC init warm-aware (skip re-init and quiesce stale PCI interrupts on the post-kexec boot).\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no YANG/config_db changes.\n",
+      "files": [
+        {
+          "path": "device/nexthop/x86_64-nexthop_4010-r1/NH-4010-128x400G-2x25G/sai.profile",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4010-r1/NH-4010-256x200G-2x25G/sai.profile",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4010-r1/NH-4010/sai.profile",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4210-r0021/NH-4210-F-O256/sai.profile",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4210-r0021/NH-4210-F-P128/sai.profile",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/nexthop/pcie_lib.py",
+          "additions": 166,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/utils/asic_init_wrapper.py",
+          "additions": 164,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/utils/pre_pddf_init.sh",
+          "additions": 10,
+          "deletions": 1
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/utils/syncd_post_stop.py",
+          "additions": 70,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/nh-4010/etc/systemd/system/syncd.service.d/ge-override.conf",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/nh-4210/etc/systemd/system/syncd.service.d/sea-eagle-override.conf",
+          "additions": 1,
+          "deletions": 2
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_pcie_lib.py",
+          "additions": 142,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/utils/test_asic_init_wrapper.py",
+          "additions": 110,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-28T17:58:11Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-28T17:58:12Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-28T17:58:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-28T18:12:33Z",
+          "body": "This PR has backport request for branch(es): 202512.<br>Added label(s) for branch(es) msft-202512.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-28T18:12:35Z",
+          "body": "This PR has backport request label(s) for branch(es): msft-202512, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202512: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-28T18:23:04Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-28T22:49:53Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T00:12:44Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): msft-202512. Added label(s): Tested for msft-202512 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-07-29T04:11:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T04:12:06Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n1 pipeline(s) were filtered out due to trigger conditions.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T23:02:10Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T23:02:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-11T17:53:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "gechiang",
+          "createdAt": "2026-08-12T15:22:51Z",
+          "body": "@adyeung , can you help review/approve?"
+        },
+        {
+          "author": "adyeung",
+          "createdAt": "2026-08-12T23:16:29Z",
+          "body": "@geans-pin please help review "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-12T23:40:26Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-12T23:40:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-14T01:01:32Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-14T01:01:48Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "wren-nexthop",
+          "createdAt": "2026-08-14T14:49:56Z",
+          "body": "/azpw retry"
+        }
+      ]
+    }
+  ]
+}

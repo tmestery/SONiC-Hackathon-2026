@@ -1,0 +1,52 @@
+{
+  "number": 9473,
+  "title": "[\"SFLOW\"] | after reload config_db.json sflow going to disabled state",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/9473",
+  "createdAt": "2021-12-08T15:15:08Z",
+  "closedAt": "2021-12-09T23:08:24Z",
+  "author": "ihorchekh",
+  "labels": [
+    "Triaged",
+    "regression"
+  ],
+  "assignees": [
+    "arlakshm"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\nAfter reload config_db.json sflow going to disabled state.\r\nCommand `show feature status` shows sflow in disabled state after `config reload -y`\r\n\r\n**Steps to reproduce the issue:**\r\n1. Check that sflow enabled in config_db.json\r\n*if it has `\"state\": \"disabled\"` change to `\"enabled\"`\r\n>        \"sflow\": {\r\n>             \"auto_restart\": \"enabled\",\r\n>             \"has_global_scope\": \"True\",\r\n>             \"has_per_asic_scope\": \"False\",\r\n>             \"has_timer\": \"False\",\r\n>             \"high_mem_alert\": \"disabled\",\r\n>             \"state\": \"enabled\"\r\n>         },\r\n2. Reboot device\r\n3. Check `show feature status`\r\n4. Reload config: `config reload -y`\r\n5. Check `show feature status`\r\n\r\n**Actual result**\r\nCommand `show feature status` shows sflow in **disabled** state after `config reload -y`\r\n\r\n**Expected result**\r\nCommand `show feature status` shows sflow in **enabled** state after `config reload -y`\r\n\r\n\r\n**Output of show version:**\r\n`SONiC.master.51908-dirty-20211117.173456`\r\n\r\n**Output of show techsupport:**\r\n[sonic_dump_r-tigon-11_20211208_150029.tar.gz](https://github.com/Azure/sonic-buildimage/files/7676934/sonic_dump_r-tigon-11_20211208_150029.tar.gz)",
+  "comments": [
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2021-12-08T16:11:53Z",
+      "body": "Nvidia team will debug further according to comments from issue tirage meeting"
+    },
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2021-12-08T20:53:09Z",
+      "body": "config reload -y\r\nRunning command: rm -rf /tmp/dropstat-*\r\nDisabling container monitoring ...\r\nStopping SONiC target ...\r\nRunning command: /usr/local/bin/sonic-cfggen  -j /etc/sonic/config_db.json  -j /etc/sonic/init_cfg.json  --write-to-db\r\nRunning command: /usr/local/bin/db_migrator.py -o migrate\r\nRunning command: /usr/local/bin/sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t /usr/share/sonic/templates/sonic-environment.j2,/etc/sonic/sonic-environment\r\n\r\n\r\nIn the above execution from latest master sonic-cfggen is taking config_db.json first followed by init_cfg.json which will make default values in init_cfg.json override user configuration values. In 202106 we find below is the order\r\n\r\nif [ \"$(systemctl is-enabled swss.service)\" == \"enabled\" ]; then echo \"hello\"; fi\r\n\r\n        if namespace is None:\r\n            if os.path.isfile(INIT_CFG_FILE):\r\n                command = \"{} -j {} -j {} --write-to-db\".format(SONIC_CFGGEN_PATH, INIT_CFG_FILE, file)\r\n\r\n\r\nHowever, the order was reversed in this PR https://github.com/Azure/sonic-utilities/pull/1781. Is there any specific reason for it? If not, can you please make the order as earlier so user config takes precedence over default?\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1964,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/1964",
+      "title": "preserve old order for config reload",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-12-09T23:08:24Z",
+      "createdAt": "2021-12-09T18:04:09Z",
+      "author": "arlakshm",
+      "body": "Signed-off-by: Arvindsrinivasan Lakshmi Narasimhan <arlakshm@microsoft.com>\r\n\r\n<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\nFixes https://github.com/Azure/sonic-buildimage/issues/9473\r\n#### How I did it\r\nPreserve the old order of the config reload\r\n\r\n#### How to verify it\r\nManual tests\r\n- change `SFLOW` feature state\r\n```\r\nadmin@vlab-01:~$ show feature status\r\nFeature         State            AutoRestart     SetOwner\r\n--------------  ---------------  --------------  ----------\r\nbgp             enabled          enabled\r\ndatabase        always_enabled   always_enabled\r\ndhcp_relay      enabled          enabled         local\r\ngbsyncd         enabled          enabled\r\nlldp            enabled          enabled\r\nmacsec          disabled         enabled\r\nmgmt-framework  enabled          enabled\r\nmux             always_disabled  enabled\r\nnat             disabled         enabled\r\npmon            enabled          enabled\r\nradv            enabled          enabled\r\nsflow           disabled         enabled\r\nsnmp            enabled          enabled\r\nswss            enabled          enabled\r\nsyncd           enabled          enabled\r\nteamd           enabled          enabled\r\ntelemetry       enabled          enabled\r\n```\r\n```\r\nadmin@vlab-01:~$ sudo config feature state sflow enabled\r\nadmin@vlab-01:~$ show feature status\r\nFeature         State            AutoRestart     SetOwner\r\n--------------  ---------------  --------------  ----------\r\nbgp             enabled          enabled\r\ndatabase        always_enabled   always_enabled\r\ndhcp_relay      enabled          enabled         local\r\ngbsyncd         enabled          enabled\r\nlldp            enabled          enabled\r\nmacsec          disabled         enabled\r\nmgmt-framework  enabled          enabled\r\nmux             always_disabled  enabled\r\nnat             disabled         enabled\r\npmon            enabled          enabled\r\nradv            enabled          enabled\r\nsflow           enabled          enabled\r\nsnmp            enabled          enabled\r\nswss            enabled          enabled\r\nsyncd           enabled          enabled\r\nteamd           enabled          enabled\r\ntelemetry       enabled          enabled\r\n```\r\n- save config and do config reload\r\n```\r\nadmin@vlab-01:~$ sudo config save\r\nExisting files will be overwritten, continue? [y/N]: y\r\nRunning command: /usr/local/bin/sonic-cfggen -d --print-data > /etc/sonic/config_db.json\r\nadmin@vlab-01:~$ sudo config reload -y\r\nRunning command: rm -rf /tmp/dropstat-*\r\nDisabling container monitoring ...\r\nStopping SONiC target ...\r\nRunning command: /usr/local/bin/sonic-cfggen  -j /etc/sonic/init_cfg.json  -j /etc/sonic/config_db.json  --write-to-db\r\nRunning command: /usr/local/bin/db_migrator.py -o migrate\r\nRunning command: /usr/local/bin/sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t /usr/share/sonic/templates/sonic-environment.j2,/etc/sonic/sonic-environment\r\nRestarting SONiC target ...\r\nEnabling container monitoring ...\r\nReloading Monit configuration ...\r\nReinitializing monit daemon\r\n```\r\n\r\n- verify the feature state is same as before config reload\r\n```\r\nadmin@vlab-01:~$ show feature status\r\nFeature         State            AutoRestart     SetOwner\r\n--------------  ---------------  --------------  ----------\r\nbgp             enabled          enabled\r\ndatabase        always_enabled   always_enabled\r\ndhcp_relay      enabled          enabled         local\r\ngbsyncd         enabled          enabled\r\nlldp            enabled          enabled\r\nmacsec          disabled         enabled\r\nmgmt-framework  enabled          enabled\r\nmux             always_disabled  enabled\r\nnat             disabled         enabled\r\npmon            enabled          enabled\r\nradv            enabled          enabled\r\nsflow           enabled          enabled\r\nsnmp            enabled          enabled\r\nswss            enabled          enabled\r\nsyncd           enabled          enabled\r\nteamd           enabled          enabled\r\ntelemetry       enabled          enabled\r\n```\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n",
+      "files": [
+        {
+          "path": "config/main.py",
+          "additions": 5,
+          "deletions": 3
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

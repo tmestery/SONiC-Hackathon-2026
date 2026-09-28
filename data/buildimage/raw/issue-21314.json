@@ -1,0 +1,235 @@
+{
+  "number": 21314,
+  "title": "SNMP request timeout when CPU utilization is high",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21314",
+  "createdAt": "2025-01-01T09:37:05Z",
+  "closedAt": "2025-01-08T02:49:50Z",
+  "author": "yejianquan",
+  "labels": [
+    "P0",
+    "Chassis :robot:",
+    "chassis-packet"
+  ],
+  "assignees": [
+    "yejianquan"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nSNMP request timeout when CPU utilization is high\r\nTest module[snmp/test_snmp_cpu.py] in sonic-mgmt repo stably reproduce this issue.\r\nCurrently the issue is only seen on Cisco 8800 chassis.\r\nSuspectation is on the RP card, including backend ports, there're too much interfaces.\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Use 'yes' command to simulate 100% utilization on all CPU processors.\r\n2. Send snmp requests, the timeout generate been seen on interface snmp request.\r\n3. SNMP request time out and fail.\r\n\r\n#### Describe the results you received:\r\nAfter simulated 100% CPU utilization.\r\nargs.json contains mgmt-ip of the RP card.\r\njianquanye@sonic-mgmt-jianquanye:/var/src/sonic-mgmt-int/tests$ python ../ansible/library/snmp_facts.py args.json \r\nTraceback (most recent call last):\r\n  File \"../ansible/library/snmp_facts.py\", line 1075, in <module>\r\n    main()\r\n  File \"../ansible/library/snmp_facts.py\", line 496, in main\r\n    for oid, val in varBinds:\r\nValueError: too many values to unpack (expected 2)\r\njianquanye@sonic-mgmt-jianquanye:/var/src/sonic-mgmt-int/tests$ \r\n\r\n#### Describe the results you expected:\r\nSNMP can successfully pass even with 100% CPU utilization\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "yejianquan",
+      "createdAt": "2025-01-02T04:52:14Z",
+      "body": "https://github.com/sonic-net/sonic-snmpagent/pull/345\r\nhttps://github.com/sonic-net/sonic-buildimage/pull/21316\r\nThese 2 PRs will fix the image issue, the SNMP request will be always success even if CPU utilization is 100%.\r\n\r\nhttps://github.com/sonic-net/sonic-mgmt/pull/16290\r\nThis PR enhances the test so that it can pass on Cisco chassis"
+    },
+    {
+      "author": "yejianquan",
+      "createdAt": "2025-01-02T08:57:25Z",
+      "body": "The short RCA is because MIB Updaters and SONiC SNMP AgentX share the same python Asyncio/Coroutine.\r\nThe AgentX can't respond to snmpd request during MIB Updaters updating.\r\nOn Cisco chassis RP, there are lots of interfaces(600+), so the update is slower compared with other platforms.\r\nOn 100% CPU utilization, the update is slower and the snmpd request timeout, becuase AgentX can't respond.\r\n\r\nMore details in PR https://github.com/sonic-net/sonic-snmpagent/pull/345"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 345,
+      "repository": "sonic-net/sonic-snmpagent",
+      "url": "https://github.com/sonic-net/sonic-snmpagent/pull/345",
+      "title": "Fix snmp agent not-responding issue when high CPU utilization",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-14T00:36:37Z",
+      "createdAt": "2025-01-02T01:16:15Z",
+      "author": "yejianquan",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n\"closes #xxxx\"\r\n\r\nPlease provide the following information:\r\n-->\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/21314\r\nThe SNMP agent and MIB updaters are basic on Asyncio/Coroutine,\r\n  the mib updaters share the same Asyncio event loop with the SNMP agent client.\r\n  Hence during the updaters executing, the agent client can't receive/respond to new requests.\r\n\r\nWhen the CPU utilization is high (In some stress test we make CPU 100% utilization), the updates are slow, and this causes the snmpd request to be timeout because the agent got suspended during updating.\r\n\r\n\r\n**- What I did**\r\nDecrease the MIB update frequency when the update execution is slow.\r\npros:\r\n   1.  The snmp request can success even if 100% CPU utilization.\r\n   2. The snmpd request seldomly fails due to timeout, combined with https://github.com/sonic-net/sonic-buildimage/pull/21316 , we have 4*5 = 20s time windows for the SNMP agent to wait for the MIB updates finish and respond to snmpd request. \r\n   3. Relief the CPU cost when CPU is high, the can avoid CPU becomes more crowded.\r\n\r\n\r\ncons:\r\n   1. Tested on pizzabox (4600c), the updaters are very fast, generally finished within 0.001~0.02s, the chagne won't actually affect the frequency and interval.\r\n   2. On Cisco chassis, the update of SNMP data could be delayed for 10~20s(at most 60s in extreme situation). Per my oberservation, most of the updater finishes within 0.5s. But for\r\n         1.a ciscoSwitchQosMIB.QueueStatUpdater, generally finishs in 0.5-2s, expected to be delayed to 5-20s\r\n         1.b PhysicalTableMIBUpdater, generally finishs in 0.5-1.5s, expected to be delayed to 5-1.5s\r\n         1.c ciscoPfcExtMIB.PfcPrioUpdater, generally finishs in 0.5-3s, expected to be delayed to 5-30s\r\n       \r\n\r\n\r\n**- How I did it**\r\nIn get_next_update_interval, we compute the interval based on current execution time.\r\nRoughly, we make the 'update interval'/'update execution time' >= UPDATE_FREQUENCY_RATE(10)\r\nMore specifically, if the execution time is 2.000001s, we sleep 21s before next update round.\r\nAnd the max interval won't be longer than MAX_UPDATE_INTERVAL(60s).\r\n\r\n**- How to verify it**\r\nTest on Cisco chassis, test_snmp_cpu.py which triggers 100% CPU utilization test whether snmp requests work well.\r\n\r\n**- Description for the changelog**\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n",
+      "files": [
+        {
+          "path": "src/ax_interface/agent.py",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/ax_interface/constants.py",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "src/ax_interface/mib.py",
+          "additions": 42,
+          "deletions": 2
+        },
+        {
+          "path": "src/ax_interface/util.py",
+          "additions": 29,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic_ax_impl/__main__.py",
+          "additions": 4,
+          "deletions": 3
+        },
+        {
+          "path": "src/sonic_ax_impl/main.py",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic_ax_impl/utils/__init__.py",
+          "additions": 0,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic_ax_impl/utils/arg_parser.py",
+          "additions": 39,
+          "deletions": 0
+        },
+        {
+          "path": "tests/test_agent.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/test_arg_parser.py",
+          "additions": 152,
+          "deletions": 0
+        },
+        {
+          "path": "tests/test_utils.py",
+          "additions": 54,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-02T01:16:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-02T01:16:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-01-02T02:56:28Z",
+          "body": "Hi @SuvarnaMeenakshi , could you help to review this PR?\r\nThe only concern is the potential delay of SNMP data, described in cons.\r\nDo you think the delay would result in risk in production env?"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-01-02T02:56:53Z",
+          "body": "FYI @abdosi @vperumal  @anamehra "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T07:48:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-08T07:48:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T08:28:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-08T08:28:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T10:56:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-08T10:56:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T11:16:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-08T11:16:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-01-09T02:18:02Z",
+          "body": "Hi @qiluo-msft  @SuvarnaMeenakshi \r\nLimited the scope of dynamic frequency, please help to review again, thanks!"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-14T00:37:23Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-snmpagent/pull/346"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-14T00:37:24Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-snmpagent/pull/347"
+        }
+      ]
+    },
+    {
+      "number": 21316,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/21316",
+      "title": "Update snmpd.conf.j2 prolong agentXTimeout to avoid timeout failure in high CPU utilization scenario",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-08T02:49:49Z",
+      "createdAt": "2025-01-02T02:11:11Z",
+      "author": "yejianquan",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/21314\r\nUpdate and prolong the timeout of the requests between snmpd and SNMP AgentX.\r\n\r\nIn SONiC SNMP AgentX, the MIB updaters and AgentX client shares the same AsyncIO/Coroutine event loop.\r\nDuring the MIB updaters update the SNMP values, the AgentX client can't respond to the snmpd request.\r\n\r\nThe default value of snmpd request is 1s(timeout) * 5(retries)\r\n\r\nWhen the CPU is high, the MIB updaters are slow, 1s timeout is not enough, even if it retries 5 times.\r\nHence update to 5s(timeout) * 4(retries), the time windows = 20s, which makes sure the SNMP request can be handled even with 100% CPU utilization.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **30112399**:\r\n\r\n#### How I did it\r\nUpdate the default value(https://linux.die.net/man/5/snmpd.conf):\r\n\r\nagentXTimeout 1(default value) -> 5\r\nagentXRetries 5(default value) -> 4\r\n\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\nTest on Cisco chassis, test_snmp_cpu.py which triggers 100% CPU utilization test whether snmp requests work well.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [x] 202405\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [x] 202405\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-snmp/snmpd.conf.j2",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-02T02:14:30Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-02T02:14:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-01-02T06:02:41Z",
+          "body": "/run ms_conflict\r\n"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2025-01-02T06:08:12Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "liushilongbuaa",
+          "createdAt": "2025-01-02T10:09:01Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T02:51:09Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-buildimage/pull/21349"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-08T02:51:09Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-buildimage/pull/21350"
+        }
+      ]
+    }
+  ]
+}

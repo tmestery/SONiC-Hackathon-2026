@@ -1,0 +1,82 @@
+{
+  "number": 28163,
+  "title": "Bug:[docker-ptf] Incorrect quoting in easy-install.pth generation breaks switch_sai_thrift import in PTF virtualenv",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28163",
+  "createdAt": "2026-06-30T06:25:07Z",
+  "closedAt": "2026-07-03T06:20:06Z",
+  "author": "aman05382",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "lipxu"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n## Description\n\nThe recent change (https://github.com/sonic-net/sonic-buildimage/pull/27947) to dynamically resolve the `python-saithrift` egg path introduces an incorrect quoting issue when generating `easy-install.pth`.\n\nThe generated line becomes:\n\n```python\nimport glob, sys; sys.path.extend(glob.glob('\"/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg\"'))\n```\n\nNotice that the glob pattern contains embedded double quotes:\n\n```python\n'\"/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg\"'\n```\n\nAs a result,\n\n```python\nglob.glob('\"/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg\"')\n```\n\nreturns an empty list, so the `saithrift` egg is never added to the virtualenv's `sys.path`.\n\nConsequently, PTF fails with:\n\n```\nModuleNotFoundError: No module named 'switch_sai_thrift'\n```\n\n\n\n\n\n## Root Cause\n\nThe shell quoting used while generating `easy-install.pth` results in embedded quotes around the glob pattern. Those quotes become part of the Python string, causing `glob.glob()` to search for a path literally beginning with `\"`, which never matches any installed `saithrift` egg.\n\n\n### Steps to Reproduce\n\n## Steps to Reproduce\n\nInside the PTF container:\n\n```bash\ncat /root/env-python3/lib/python3.11/site-packages/easy-install.pth\n```\n\nObserved:\n\n```python\nimport glob, sys; sys.path.extend(glob.glob('\"/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg\"'))\n```\n\nVerify the glob expansion:\n\n```bash\n/root/env-python3/bin/python - <<'EOF'\nimport glob\nprint(glob.glob('\"/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg\"'))\nprint(glob.glob('/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg'))\nEOF\n```\n\nOutput:\n\n```\n[]\n['/usr/lib/python3/dist-packages/saithrift-0.9-py3.11.egg']\n```\n\nThe virtualenv import fails:\n\n```bash\n/root/env-python3/bin/python -c \"import switch_sai_thrift.switch_sai_rpc\"\n```\n\nResult:\n\n```\nModuleNotFoundError: No module named 'switch_sai_thrift'\n```\n\nwhile the system Python succeeds because it already includes the system site-packages:\n\n```bash\npython -c \"import switch_sai_thrift.switch_sai_rpc; print('SUCCESS')\"\n```\n\nOutput:\n\n```\nSUCCESS\n```\n\n### Actual Behavior and Expected Behavior\n\n## Expected Behavior\n\n`easy-install.pth` should contain a valid executable `.pth` line without the extra embedded quotes so that the `saithrift` egg is added to `sys.path` during interpreter startup.\n\nExpected content:\n\n```python\nimport glob, sys; sys.path.extend(glob.glob('/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg'))\n```\n\nWith this correction, the following succeeds:\n\n```bash\n/root/env-python3/bin/python -c \"import switch_sai_thrift.switch_sai_rpc; print('SUCCESS')\"\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "aman05382",
+      "createdAt": "2026-06-30T06:33:27Z",
+      "body": "<img width=\"928\" height=\"441\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/1b84a69f-bd02-4530-8fe5-1f69da5ebe8d\" />"
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2026-06-30T21:19:49Z",
+      "body": "@lipxu Can you check this issue?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28176,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28176",
+      "title": "[docker-ptf] Fix easy-install.pth quoting that breaks switch_sai_thrift import",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-03T06:20:05Z",
+      "createdAt": "2026-06-30T22:27:10Z",
+      "author": "lipxu",
+      "body": "#### Why I did it\n\nFollow-up fix to #27947. That PR replaced the hardcoded saithrift egg path in the `docker-ptf` virtualenv with a dynamic glob `.pth` line, but the shell quoting used the `'\"'\"'` single-quote-escape idiom **inside a double-quoted `echo`**. Since single quotes are already literal inside double quotes, that idiom injected literal double quotes into the generated `easy-install.pth`:\n\n```python\nimport glob, sys; sys.path.extend(glob.glob('\"/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg\"'))\n```\n\n`glob.glob()` then searches for a path that literally begins with a `\"`, matches nothing, and the saithrift egg is never added to the PTF virtualenv `sys.path`:\n\n```\nModuleNotFoundError: No module named 'switch_sai_thrift'\n```\n\nThis breaks the qos saithrift tests (`qos/test_qos_sai.py`, `qos/test_qos_probe.py` \u2014 `ReleaseAllPorts`) on **all** platforms, since the system Python sees system site-packages but the venv interpreter does not.\n\nReported in sonic-net/sonic-buildimage#28163.\n\n#### How I did it\n\nIn `dockers/docker-ptf/Dockerfile.j2` (py3 branch), drop the `'\"'\"'` escape idiom and use a plain single quote, so the emitted line is correct:\n\n```python\nimport glob, sys; sys.path.extend(glob.glob('/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg'))\n```\n\nSingle quotes are already literal inside the double-quoted `echo`; no escaping is needed.\n\n#### How to verify it\n\nRun the exact `RUN` block from the Dockerfile and inspect the generated `.pth`, then import `switch_sai_thrift` through the venv interpreter (no system site-packages):\n\n```bash\ncat /root/env-python3/lib/python*/site-packages/easy-install.pth\n# import glob, sys; sys.path.extend(glob.glob('/usr/lib/python3/dist-packages/saithrift-0.9-py3.*.egg'))   # no embedded quotes\n/root/env-python3/bin/python -c \"import switch_sai_thrift.switch_sai_rpc; print('SUCCESS')\"\n```\n\nValidated locally with a faithful harness (real venv without system-site-packages + saithrift egg):\n- fixed line \u2192 import OK, `.pth` has no embedded `\"`\n- old buggy line \u2192 `ModuleNotFoundError` (negative control)\n- fixed line + `py3.13`-named egg under a `py3.x` venv \u2192 import OK (preserves #27947's cross-py3.x purpose)\n\nFixes #28163\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+      "files": [
+        {
+          "path": "dockers/docker-ptf/Dockerfile.j2",
+          "additions": 4,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-30T22:27:19Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-30T22:27:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-01T00:54:27Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-01T00:54:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lipxu",
+          "createdAt": "2026-07-01T12:03:40Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-01T12:03:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

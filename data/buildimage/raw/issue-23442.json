@@ -1,0 +1,250 @@
+{
+  "number": 23442,
+  "title": "Bug: [Chassis] route_check takes more than 120secs",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/23442",
+  "createdAt": "2025-07-23T16:21:06Z",
+  "closedAt": "2026-04-10T01:07:31Z",
+  "author": "saksarav-nokia",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "deepak-singhal0408"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n Since the bgp_suppress_fib_pending is enabled in master,  route_check.py calls check_frr_pending_routes which executes the following commands to get the routes from frr for each name space. \nSince T2 chassis has ~51K routes, these commands takes longer and the current TIMEOUT_SECONDS=120 is not enough. We tried with 300 secs and it works most of the time except the test cases which does port flap(ex: test_lldp_entry_table_after_flap)\n\n v4_route_cmd = ['show', 'ip', 'route', '-n', namespace, 'json']\n v6_route_cmd = ['show', 'ipv6', 'route', '-n', namespace, 'json']\n\n### Steps to Reproduce\n\nRun OC in T2 chassis\n\n### Actual Behavior and Expected Behavior\n\nrotue_check with pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\ngithub master\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2026-04-03T21:06:20Z",
+      "body": "Hi @deepak-singhal0408 , As i briefly mentioned to you, we are seeing the route_check failure in latest master and i believe it is introduced by the following PR's .\n Updating the existing github issue instead of creating new issue.\n\nhttps://github.com/sonic-net/sonic-utilities/pull/4205\nhttps://github.com/sonic-net/sonic-utilities/pull/4294\n\nWe have ~50K ipv4 routes and ~50K ipv6 routes in each namespace in our chassis and the route_check takes ~21 mins.  Also the CPU is always more than 100% for the whole time.  After reverting these 2 PR's in our baseline , the route check takes only ~2 mins.\n\nI believe the longer time is due to the ijson changes which process the routes 1 by 1  and also the IJSON_BACKEND=python seems to be slower\nI think we should revert these 2 PR's until the route_check is optimized and bring down the duration to less than 2 minutes. Many sonic-mgmt tests are failing due to the route_check failure.\n\n@arlakshm mentioned that we might disable the fib_pending feature, so that the routes in the frr will not be checked.\n\n@venkit-nexthop, Did you test your PR's with scaled ipv4 and ipv6 routes in multi asic system?\n\n"
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-04-03T21:28:10Z",
+      "body": "> Hi [@deepak-singhal0408](https://github.com/deepak-singhal0408) , As i briefly mentioned to you, we are seeing the route_check failure in latest master and i believe it is introduced by the following PR's . Updating the existing github issue instead of creating new issue.\n> \n> [sonic-net/sonic-utilities#4205](https://github.com/sonic-net/sonic-utilities/pull/4205) [sonic-net/sonic-utilities#4294](https://github.com/sonic-net/sonic-utilities/pull/4294)\n> \n> We have ~50K ipv4 routes and ~50K ipv6 routes in each namespace in our chassis and the route_check takes ~21 mins. Also the CPU is always more than 100% for the whole time. After reverting these 2 PR's in our baseline , the route check takes only ~2 mins.\n> \n> I believe the longer time is due to the ijson changes which process the routes 1 by 1 and also the IJSON_BACKEND=python seems to be slower I think we should revert these 2 PR's until the route_check is optimized and bring down the duration to less than 2 minutes. Many sonic-mgmt tests are failing due to the route_check failure.\n> \n> [@arlakshm](https://github.com/arlakshm) mentioned that we might disable the fib_pending feature, so that the routes in the frr will not be checked.\n> \n> [@venkit-nexthop](https://github.com/venkit-nexthop), Did you test your PR's with scaled ipv4 and ipv6 routes in multi asic system?\n\n@saksarav-nokia we dont have multi asic. But I tested this with 50k ipv4 and 50k ipv6 routes. I had sent the results in this PR. With my change it ran faster than what was there before. In our environment we have tested this with much higher scale and are not facing any issues (~500K routes).\nHow many namespaces do you have? The C backend for IJSON is faster but it does not work in the CI environment.\n\n$ show ip route summary | grep Total\nTotals               50011                50010\n$ show ipv6 route summary | grep Total\nTotals               50026                50026\n\n\nNEW\n====\n$ /usr/bin/time -v route_check.py\n:\n:\nCommand exited with non-zero status 255\n        Command being timed: \"route_check.py\"\n        User time (seconds): 13.60\n        System time (seconds): 3.51\n        Percent of CPU this job got: 77%\n        Elapsed (wall clock) time (h:mm:ss or m:ss): 0:22.01\n        Average shared text size (kbytes): 0\n        Average unshared data size (kbytes): 0\n        Average stack size (kbytes): 0\n        Average total size (kbytes): 0\n        Maximum resident set size (kbytes): 120900\n        Average resident set size (kbytes): 0\n        Major (requiring I/O) page faults: 1\n        Minor (reclaiming a frame) page faults: 47548\n        Voluntary context switches: 272236\n        Involuntary context switches: 273\n        Swaps: 0\n        File system inputs: 132\n        File system outputs: 0\n        Socket messages sent: 0\n        Socket messages received: 0\n        Signals delivered: 0\n        Page size (bytes): 4096\n        Exit status: 255\n        \nOLD\n===\n$ /usr/bin/time -v /tmp/route_check.py\n:\n:\nCommand exited with non-zero status 255\n        Command being timed: \"/tmp/route_check.py\"\n        User time (seconds): 15.79\n        System time (seconds): 4.55\n        Percent of CPU this job got: 100%\n        Elapsed (wall clock) time (h:mm:ss or m:ss): 0:20.33\n        Average shared text size (kbytes): 0\n        Average unshared data size (kbytes): 0\n        Average stack size (kbytes): 0\n        Average total size (kbytes): 0\n        Maximum resident set size (kbytes): 1307688\n        Average resident set size (kbytes): 0\n        Major (requiring I/O) page faults: 88\n        Minor (reclaiming a frame) page faults: 709034\n        Voluntary context switches: 286976\n        Involuntary context switches: 483\n        Swaps: 0\n        File system inputs: 798\n        File system outputs: 0\n        Socket messages sent: 0\n        Socket messages received: 0\n        Signals delivered: 0\n        Page size (bytes): 4096\n        Exit status: 255"
+    },
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2026-04-03T21:44:31Z",
+      "body": "@venu-nexthop , we have 2 asics . \nI tried modifying the route_check.py script to just process for one asic and still took almost 9 minutes. "
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-04-03T21:58:04Z",
+      "body": "> [@venu-nexthop](https://github.com/venu-nexthop) , we have 2 asics . I tried modifying the route_check.py script to just process for one asic and still took almost 9 minutes.\n\n@saksarav-nokia is this specific to your environment? As you can see from the results I posted, it took us only about 22 secs to process the 50K ipv4 and 50k ipv6 routes.\n\n@deepak-singhal0408 is there a way to check this in some other environment as well?"
+    },
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2026-04-03T23:42:28Z",
+      "body": "@venu-nexthop , we have max topology with two asics . Each asic has 18 front panel ports and 1 inband port. So total 36 front panel ports and 2 inband port and all are up. We have 26 eBGP neighbors and also IBGP to all other asics in all Line cards in the chassis.  All eBGp neighbors are advertising all the ipv4 and ipv6 routes to the DUT.\nAlso the flex counter polling is enabled for all types of stats counters. Also fabric counter and stats polling is enabled\n\n\n\n"
+    },
+    {
+      "author": "venkit-nexthop",
+      "createdAt": "2026-04-04T15:50:11Z",
+      "body": "> [@venu-nexthop](https://github.com/venu-nexthop) , we have max topology with two asics . Each asic has 18 front panel ports and 1 inband port. So total 36 front panel ports and 2 inband port and all are up. We have 26 eBGP neighbors and also IBGP to all other asics in all Line cards in the chassis. All eBGp neighbors are advertising all the ipv4 and ipv6 routes to the DUT. Also the flex counter polling is enabled for all types of stats counters. Also fabric counter and stats polling is enabled\n\n@saksarav-nokia \nMy initial change did not use ijson. I had a simple parser implemented. Do you want to try that out? We dont see any slow downs in our environment. But you can try that version of the change. \nRefer to https://github.com/sonic-net/sonic-utilities/pull/4205/commits\nYou can take the version of the file at commit 79c2a56d0045f9fe0a67e6c1cf765e6facaa32c0 and give it a try?"
+    },
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2026-04-06T02:10:36Z",
+      "body": "@venkit-nexthop , Yes i can try that. But i believe you should revert the PR's until we find the right fix to address this,"
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-04-06T08:22:23Z",
+      "body": "@saksarav-nokia , thanks for highlighting this regression.. \n\n@venkit-nexthop , @saksarav-nokia, \nIt looks like ijson itself is not the problem but its pure python backend for ijson is the actual culprit.. did some local benchmarking, and could see that compared to full json.loads(original) the new python-based code is ~15-20x slower.. \n\nyajl2_c is a pre-compiled CPython C extension for ijson. it should work under monit's contraints.. @saiarcot895 could you help check/confirm this?\nThis C extension seems to be ~1.5 times faster than pre ijson code.\n\nOur local chassis based setups are currently occupied on other release branches testings.. dont have anything spare to try this out in short time..\n\n@saksarav-nokia , could you please help try below..\n\nin route_check.py--\n---Remove these 2 lines..\n os.environ.setdefault('IJSON_BACKEND', 'python')\n import ijson\n\n++++Add in its place:\n try:\n     import ijson.backends.yajl2_c as ijson\n except ImportError:\n     import ijson.backends.python as ijson\n\n>> regrading revert, \nActually, we are actively trying to see if we can enable fib-suppression feature asap (and making active changes in this area). So reverting the whole PR will get us back to original problem.. high memory consumption (1G+ on scaled setups) as part of this command.  \n\nwe can take a call based on your feedback..\n"
+    },
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2026-04-06T15:40:48Z",
+      "body": "@deepak-singhal0408 , I tried with the following changes as you suggested and i see a huge improvement.  I had to install libyajl-dev package.\n\ndiff --git a/scripts/route_check.py b/scripts/route_check.py\nindex cf4ba75e..3d7cdc95 100755\n--- a/scripts/route_check.py\n+++ b/scripts/route_check.py\n@@ -47,8 +47,12 @@ import signal\n import traceback\n import subprocess\n import concurrent.futures\n-os.environ.setdefault('IJSON_BACKEND', 'python')\n-import ijson  # noqa: E402\n+try:\n+    import ijson.backends.yajl2_c as ijson\n+except ImportError:\n+    import ijson.backends.python as ijson\n\nHere is the measurement for same 51K routes. This was 21 mins with python as backend.\nadmin@ixre-egl-board202:~$ time sudo /usr/local/bin/route_check.py\n**real\t1m12.910s**\nuser\t0m0.000s\nsys\t0m0.032s\n\nLet me know if you want me to create a PR\n"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-04-06T16:42:28Z",
+      "body": "If we do use `ijson`, can we set `IJSON_BACKEND=yajl2` environment variable only for the monit service (as an override file for the monit service), and just have `import ijson`, as highlighted in https://github.com/sonic-net/sonic-utilities/pull/4205#issuecomment-3862988626? This resulted in hardcoding using the Python backend."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-04-06T19:09:31Z",
+      "body": "> If we do use `ijson`, can we set `IJSON_BACKEND=yajl2` environment variable only for the monit service (as an override file for the monit service), and just have `import ijson`, as highlighted in [sonic-net/sonic-utilities#4205 (comment)](https://github.com/sonic-net/sonic-utilities/pull/4205#issuecomment-3862988626)? This resulted in hardcoding using the Python backend.\n\n@saiarcot895, \n1. yajl2 uses ctypes., its like calling C library through a translator (local benchmarking showed its just ~2 times faster that Pure python backend)..\n2. only overrididing for monit service, means we wont get any benefits during manual runs.."
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-04-06T19:33:55Z",
+      "body": "\n> 1. yajl2 uses ctypes., its like calling C library through a translator (local benchmarking showed its just ~2 times faster that Pure python backend)..\n\nThere are different methods available for ijson to use yajl2. By default, it will use whichever is the first one available: a C extension to use yajl2, wrappers around yajl2 using CFFI, wrappers around yajl2 using ctypes, wrappers around yajl1 using ctypes (this one won't be used on our systems, since we don't have yajl1, or a pure Python backend. The pure Python backend is the slowest here; all of the other ones _will_ be faster.\n\n> 2. only overrididing for monit service, means we wont get any benefits during manual runs..\n\nThis is incorrect. The override for the monit service was because since the C extension to use yajl2 wasn't present on the system, it will try to use yajl2 with CFFI. However, using CFFI means that a RWX memory section has to be mapped, which is generally considered a security risk, and the default configuration of Monit blocks such memory sections. Using ctypes doesn't require this. That's what setting `IJSON_BACKEND=yajl2` does.\n\nFor the most performance, I recommend this, in this order:\n\n* In sonic-buildimage, for the Trixie slave container *and* the final image build, install `python3-ijson` from the Debian repos (preferably *not* via `pip`, please).\n* Remove `os.environ.setdefault('IJSON_BACKEND', 'python')` from `route_check.py`.\n\nWith this, the C extension library will be available, and that should get used in all cases. Additionally, assuming that that library doesn't make any RWX memory sections, monit should be happy as well."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-04-06T21:00:54Z",
+      "body": "> [@deepak-singhal0408](https://github.com/deepak-singhal0408) , I tried with the following changes as you suggested and i see a huge improvement. I had to install libyajl-dev package.\n> \n> diff --git a/scripts/route_check.py b/scripts/route_check.py index cf4ba75e..3d7cdc95 100755 --- a/scripts/route_check.py +++ b/scripts/route_check.py @@ -47,8 +47,12 @@ import signal import traceback import subprocess import concurrent.futures -os.environ.setdefault('IJSON_BACKEND', 'python') -import ijson # noqa: E402 +try:\n> \n> * import ijson.backends.yajl2_c as ijson\n>   +except ImportError:\n> * import ijson.backends.python as ijson\n> \n> Here is the measurement for same 51K routes. This was 21 mins with python as backend. admin@ixre-egl-board202:~$ time sudo /usr/local/bin/route_check.py **real 1m12.910s** user 0m0.000s sys 0m0.032s\n> \n> Let me know if you want me to create a PR\n\nThanks a lot @saksarav-nokia for quickly validating this. Will take care of the PR (thanks for the offer)."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-04-06T21:11:26Z",
+      "body": "> > 1. yajl2 uses ctypes., its like calling C library through a translator (local benchmarking showed its just ~2 times faster that Pure python backend)..\n> \n> There are different methods available for ijson to use yajl2. By default, it will use whichever is the first one available: a C extension to use yajl2, wrappers around yajl2 using CFFI, wrappers around yajl2 using ctypes, wrappers around yajl1 using ctypes (this one won't be used on our systems, since we don't have yajl1, or a pure Python backend. The pure Python backend is the slowest here; all of the other ones _will_ be faster.\n> \n> > 2. only overrididing for monit service, means we wont get any benefits during manual runs..\n> \n> This is incorrect. The override for the monit service was because since the C extension to use yajl2 wasn't present on the system, it will try to use yajl2 with CFFI. However, using CFFI means that a RWX memory section has to be mapped, which is generally considered a security risk, and the default configuration of Monit blocks such memory sections. Using ctypes doesn't require this. That's what setting `IJSON_BACKEND=yajl2` does.\n> \n> For the most performance, I recommend this, in this order:\n> \n> * In sonic-buildimage, for the Trixie slave container _and_ the final image build, install `python3-ijson` from the Debian repos (preferably _not_ via `pip`, please).\n> * Remove `os.environ.setdefault('IJSON_BACKEND', 'python')` from `route_check.py`.\n> \n> With this, the C extension library will be available, and that should get used in all cases. Additionally, assuming that that library doesn't make any RWX memory sections, monit should be happy as well.\n\n Thanks @saiarcot895 for the suggestion.  this looks clean.. So, \nFor the final image build, we'll install python3-ijson from Debian repos and remove the IJSON_BACKEND=python\noverride\n \u2014 ijson auto-detect will pick yajl2_c. \nThe sonic-slave change isn't needed since the PR checker tests mock out the ijson code path entirely. (can take this up as separate activity)."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4436,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4436",
+      "title": "Fix route_check.py ijson performance regression",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-10T01:10:49Z",
+      "createdAt": "2026-04-07T09:47:41Z",
+      "author": "deepak-singhal0408",
+      "body": "#### What I did\n\nRemove the forced `IJSON_BACKEND=python` override in `route_check.py`. The pure-Python\nijson backend is slow, causing route_check to take 21 minutes on chassis platforms with\n100K+ routes (reported in sonic-net/sonic-buildimage#23442).\n\nThe companion sonic-buildimage PR installs `python3-ijson` from Debian repos, which\nprovides the fast `yajl2_c` C extension backend. With this backend available, ijson\nauto-detects it \u2014 delivering 24\u00d7 better performance while remaining safe under monit's\n`MemoryDenyWriteExecute=true`.\n\nFixes sonic-net/sonic-buildimage#23442\n\n#### How I did it\n\nRemoved `os.environ.setdefault('IJSON_BACKEND', 'python')` from `scripts/route_check.py`\n(line 50).\n\n#### How to verify it\n\n1. Build a VS image with the companion sonic-buildimage PR\n2. On the DUT, verify: `python3 -c \"import ijson; print(ijson.backend)\"` \u2192 `yajl2_c`\n3. Run `sudo route_check.py` \u2014 completes in seconds instead of minutes\n4. Check `sudo monit summary` \u2014 `routeCheck` shows OK (no crash)\n\n**Unit test results (37/37 passed):**\n```\ntests/route_check_test.py::TestRouteCheck::test_route_check_default_namespace PASSED\ntests/route_check_test.py::TestRouteCheck::test_route_check_multi_asic PASSED\n... (all 37 tests passed in 85.38s)\n```\n\n**On-box validation (KVM VS testbed):**\n- `ijson.backend` = `yajl2_c` \u2705\n- `MemoryDenyWriteExecute=true` active, no crash \u2705\n- `routeCheck` monit status: OK \u2705\n- `route_check.py` manual run: 4.3s \u2705\n\n**Nokia on-box validation (reported by @saksarav-nokia on issue #23442):**\n- Route check time: 21 min \u2192 1 min 12 sec\n\n#### Previous command output (if the output of a command-line utility has changed)\n\nN/A \u2014 no CLI output changes.\n\n#### New command output (if the output of a command-line utility has changed)\n\nN/A",
+      "files": [
+        {
+          "path": "scripts/route_check.py",
+          "additions": 7,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-07T09:47:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-07T09:48:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-07T17:03:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-07T17:04:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-04-07T17:06:55Z",
+          "body": "**Merge order:** This PR should merge **after** the companion sonic-buildimage PR (sonic-net/sonic-buildimage#26633), which installs `python3-ijson` from Debian repos and removes the pip-installed copy. Without that PR, removing the forced python backend would cause ijson to auto-detect `yajl2_cffi`, which crashes under monit's `MemoryDenyWriteExecute=true`."
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-04-07T17:07:05Z",
+          "body": "**Merge order:** The companion sonic-buildimage PR (sonic-net/sonic-buildimage#26633) should merge **before** this one. That PR installs `python3-ijson` from Debian repos (with the `yajl2_c` C extension) and removes the pip-installed copy. Once that's in place, this PR's removal of the forced `python` backend lets ijson auto-detect `yajl2_c`.\n\nIf this PR merges first without the buildimage change, ijson would auto-detect `yajl2_cffi` (from pip's copy), which crashes under monit's `MemoryDenyWriteExecute=true`."
+        },
+        {
+          "author": "mlok-nokia",
+          "createdAt": "2026-04-13T20:06:13Z",
+          "body": "@deepak-singhal0408  Do we need this one for 202511?  Thanks\r\n"
+        },
+        {
+          "author": "anamehra",
+          "createdAt": "2026-04-29T17:51:37Z",
+          "body": "> @deepak-singhal0408 Do we need this one for 202511? Thanks\r\n\r\nMay we have this and any related fix in 202511 as well. Thanks"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-05-01T16:48:52Z",
+          "body": "> > @deepak-singhal0408 Do we need this one for 202511? Thanks\r\n> \r\n> May we have this and any related fix in 202511 as well. Thanks\r\n\r\n@anamehra @mlok-nokia , created 202511 PRs to bring in this change and other relevant changes..\r\nhttps://github.com/sonic-net/sonic-utilities/pull/4509\r\nhttps://github.com/sonic-net/sonic-buildimage/pull/27100"
+        }
+      ]
+    },
+    {
+      "number": 26633,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26633",
+      "title": "Fix route_check ijson performance by using Debian python3-ijson with yajl2_c backend",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-10T01:07:29Z",
+      "createdAt": "2026-04-07T09:47:50Z",
+      "author": "deepak-singhal0408",
+      "body": "#### Why I did it\nFixes #23442\n\n`route_check.py` takes 21+ minutes on Nokia chassis platforms with 100K+ routes because [sonic-utilities PR #4294](https://github.com/sonic-net/sonic-utilities/pull/4294) forced `IJSON_BACKEND=python` (pure-Python parser). The forced backend was a workaround for `yajl2_cffi` crashing under monit's `MemoryDenyWriteExecute=true` (CFFI JIT requires RWX memory).\n\nThe proper fix is to use the `yajl2_c` backend (C extension, NOT cffi) \u2014 it's 24\u00d7 faster than `python` and fully compatible with `MemoryDenyWriteExecute=true`.\n\n**Benchmark (50K routes, 10.1 MB JSON):**\n| Backend | Time | MemoryDenyWriteExecute safe? |\n|---------|------|------------------------------|\n| python (current) | 3.16s | \u2705 Yes |\n| yajl2_c (this fix) | 0.13s | \u2705 Yes |\n| yajl2_cffi | 2.24s | \u274c No (crashes) |\n\n#### How I did it\n**Three-layer fix** \u2014 all three are needed because the build system has multiple mechanisms that force ijson version:\n\n**1. Relaxed exact version pins in setup.py** (`==3.2.3` \u2192 `>=3.2.3`)\n- `src/sonic-yang-mgmt/setup.py` \u2014 `install_requires` and `tests_require`\n- `src/sonic-yang-models/setup.py` \u2014 `tests_require` and `extras_require[\"testing\"]`\n\nWithout this, pip rejects Debian's ijson 3.4.0 (because 3.4.0 \u2260 3.2.3) and downloads 3.2.3 from PyPI.\n\n**2. Early `apt-get install python3-ijson`** in `sonic_debian_extension.j2`\n- Installs Debian's `python3-ijson` (3.4.0) with the `yajl2_c` C extension **before** `sonic-yang-mgmt` is pip-installed\n- This way pip sees \"Requirement already satisfied\" and doesn't download from PyPI\n\n**3. Removed `ijson==3.2.3` from build constraint file** (`files/build/versions-public/host-image/versions-py3`)\n- `sonic-build-hooks` intercepts all pip3 commands and injects `--constraint versions-py3`\n- Even with `>=3.2.3` in setup.py and apt's 3.4.0 pre-installed, the constraint file forced pip to download and install 3.2.3 from PyPI, **replacing** apt's 3.4.0\n- Removing `ijson==3.2.3` from the constraint file allows pip to accept the pre-installed 3.4.0\n\n#### How to verify it\n\n**Build log evidence** (from this PR's VS image build):\n```\nLine 722: Get:1 .../python3-ijson_3.4.0-1_amd64.deb  \u2190 apt installs 3.4.0 with yajl2_c\nLine 740: Requirement already satisfied: ijson>=3.2.3 in /usr/lib/python3/dist-packages (3.4.0)  \u2190 pip accepts it!\n```\n\nCompare to **before** (without constraint file fix): `Downloading ijson-3.2.3.tar.gz` \u2192 pip replaced apt's 3.4.0 with pure-Python 3.2.3.\n\n**KVM testbed verification:**\n```\nadmin@sonic:~$ python3 -c \"import ijson; print(ijson.backend)\"\nyajl2_c\nadmin@sonic:~$ python3 -c \"import ijson; print(ijson.__file__)\"\n/usr/lib/python3/dist-packages/ijson/__init__.py   \u2190 Debian package, not pip\n```\n\n#### Companion PR\n- **sonic-utilities PR**: https://github.com/sonic-net/sonic-utilities/pull/4436 (removes forced `IJSON_BACKEND=python` from route_check.py)\n- \u26a0\ufe0f **Merge order**: This buildimage PR must merge **first**, then the utilities PR. If reversed, images would lose the forced python backend while pip's ijson (without yajl2_c) is still installed.\n\n#### Which release branch to backport\nMaster (and any branch where [sonic-utilities#4294](https://github.com/sonic-net/sonic-utilities/pull/4294) was cherry-picked)",
+      "files": [
+        {
+          "path": "files/build/versions-public/host-image/versions-py3",
+          "additions": 0,
+          "deletions": 1
+        },
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-mgmt/setup.py",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-yang-models/setup.py",
+          "additions": 2,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-07T09:48:04Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-07T09:48:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-04-07T17:06:54Z",
+          "body": "**Merge order:** This PR should merge **before** the companion sonic-utilities PR (sonic-net/sonic-utilities#4436). The utilities PR removes the forced `IJSON_BACKEND=python` override \u2014 without the Debian `python3-ijson` package installed by this PR, ijson would auto-detect `yajl2_cffi` which crashes under monit's `MemoryDenyWriteExecute=true`."
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-04-07T17:07:05Z",
+          "body": "**Merge order:** This PR should merge **before** the companion sonic-utilities PR (sonic-net/sonic-utilities#4436). This PR makes the fast `yajl2_c` backend available. The utilities PR then removes the forced `python` backend override to use it.\n\nIf the utilities PR merges first, images built before this PR merges would lose the forced python backend fallback while pip's ijson (without the C extension) is still present \u2014 causing ijson to auto-detect `yajl2_cffi`, which crashes under monit's `MemoryDenyWriteExecute=true`."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T02:41:30Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T02:41:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T03:01:24Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T03:01:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T06:03:02Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T06:03:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-04-10T00:20:39Z",
+          "body": "@rlhui @lguohan could you please help merge this PR.. thanks,"
+        }
+      ]
+    }
+  ]
+}

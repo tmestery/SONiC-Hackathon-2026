@@ -1,0 +1,351 @@
+{
+  "number": 25382,
+  "title": "Bug: rsyslog service takes long time to restart at boot in Debian 13 causing test which depend on syslog to fail",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25382",
+  "createdAt": "2026-02-06T19:20:30Z",
+  "closedAt": "2026-04-04T14:54:12Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT",
+    "Trixie"
+  ],
+  "assignees": [
+    "saiarcot895"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAt the startup of sonic we have rsyslog-config.service which restarts the rsyslog.service. During this restart the amount it takes to stop the rsyslog service increased from ~1sec to ~4seconds in Debian 13. \n\n```\nroot@sonic:/var/log# journalctl -u rsyslog\nFeb 06 01:52:38 sonic systemd[1]: Stopping rsyslog.service - System Logging Service...\nFeb 06 01:52:42 sonic systemd[1]: rsyslog.service: Deactivated successfully.\nFeb 06 01:52:42 sonic systemd[1]: Stopped rsyslog.service - System Logging Service.\nFeb 06 01:52:42 sonic systemd[1]: Starting rsyslog.service - System Logging Service...\nFeb 06 01:52:43 sonic systemd[1]: Started rsyslog.service - System Logging Service.\n```\n\nThis delay in rsyslog restart is causing some tests which depend on syslog at startup to fail. For instance consider the test: test_fast_reboot https://github.com/sonic-net/sonic-mgmt/blob/8f460cb453c315e1a3d7e68e2aae6436ae9dcd7b/tests/platform_tests/test_advanced_reboot.py#L88\n\nIt fails with error because the test checks for the presence of LAG_READY messages in syslog for each portchannel present. When teamd emits these messages if the rsyslog service is down we don't see all of these messages causing the test to fail\n\n```\nFailed: Advanced-reboot failure. Failed test: test_fast_reboot[sonic], failure summary:\n[('test_fast_reboot[sonic]None', ['FAIL: Event LAG_READY was found 5 times, when expected exactly 8 times'])]\n```\n\nHere are the lag messages immediately after rsyslog restart but we missed three out of 8 portchannels \n```\nsyslog:2844:2026 Feb  6 01:52:43.229801 sonic NOTICE teamd#tlm_teamd: :- try_add_lag: The LAG 'PortChannel104' has been added.\nsyslog:2855:2026 Feb  6 01:52:43.289550 sonic NOTICE teamd#tlm_teamd: :- try_add_lag: The LAG 'PortChannel105' has been added.\nsyslog:2881:2026 Feb  6 01:52:43.353699 sonic NOTICE teamd#tlm_teamd: :- try_add_lag: The LAG 'PortChannel106' has been added.\nsyslog:2895:2026 Feb  6 01:52:43.395552 sonic NOTICE teamd#tlm_teamd: :- try_add_lag: The LAG 'PortChannel107' has been added.\nsyslog:2919:2026 Feb  6 01:52:43.460182 sonic NOTICE teamd#tlm_teamd: :- try_add_lag: The LAG 'PortChannel108' has been added.\n\n```\n\nwhereas on Debian 12 we see\n\n```\nFeb 06 02:26:58 sonic systemd[1]: Stopping rsyslog.service - System Logging Service...\nFeb 06 02:26:59 sonic systemd[1]: rsyslog.service: Deactivated successfully.\nFeb 06 02:26:59 sonic systemd[1]: Stopped rsyslog.service - System Logging Service.\nFeb 06 02:26:59 sonic systemd[1]: Starting rsyslog.service - System Logging Service...\nFeb 06 02:26:59 sonic systemd[1]: Started rsyslog.service - System Logging Service.\n```\n\nSystemd security sandboxing directives are the root cause of the slow rsyslog shutdown on Debian 13. rsyslog unit file in Debian 13 has the following additional directives present by default\n\n```\nNoNewPrivileges=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectHome=yes\nProtectSystem=full\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectClock=yes\nProtectControlGroups=yes\nProtectHostname=yes\n```\n\nOnce these features were disabled with an override unitfile the amount of time it takes for rsyslog service to stop becomes less than a second and we were able to receive all the LAG messages.\n\n```\n# /etc/systemd/system/rsyslog.service.d/override.conf\n[Service]\nPrivateTmp=no\nPrivateDevices=no\nProtectHome=no\nProtectSystem=no\nProtectKernelTunables=no\nProtectKernelModules=no\nProtectClock=no\nProtectControlGroups=no\nProtectHostname=no\n```\nThis test shouldn't depend on syslog to detect portchannels are up, it should find an alternate way. Community must make a decision here.\n\n### Steps to Reproduce\n\n1. Restart the switch\n2. After startup check: journcalctl -u rsyslog \n3. Check for \"try_add_lag\" messages (example shown above) saying PortChannel is added. (Reproduction should be on a switch with PortChannels)\n4. No. of try_add_lag messages must match No. of PortChannels on the system. But we miss some of them. \n\n### Actual Behavior and Expected Behavior\n\nExpected behaviour is the test to pass",
+  "comments": [
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-02-06T22:08:46Z",
+      "body": "A more reliable approach to check port channels up is needed as mentioned in this related bug\nhttps://github.com/sonic-net/sonic-mgmt/issues/11311"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-02-06T22:11:39Z",
+      "body": "Having a longer downtime for rsyslog service in Debian 13 means that there is more chance for this error to happen. There is already a bug related to this earlier here:\nhttps://github.com/sonic-net/sonic-buildimage/issues/17792"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25506,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25506",
+      "title": "[rsyslog] Fix Trixie restart delay with conditional restart",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-04T14:54:10Z",
+      "createdAt": "2026-02-14T17:21:11Z",
+      "author": "rustiqly",
+      "body": "#### Why I did it\nOn Debian 13 (Trixie), `rsyslog.service` includes systemd sandboxing directives (`PrivateTmp`, `ProtectSystem`, `ProtectKernelTunables`, etc.) that add ~4 seconds of overhead per restart due to namespace setup/teardown. This causes syslog-dependent tests to fail by missing log messages during the extended restart window.\n\nFixes #25382\n\n#### How I did it\nInstead of always restarting rsyslog after generating the config, we now:\n\n1. Generate the config to a unique temp file (`mktemp`)\n2. Compare with the existing `/etc/rsyslog.conf` using `cmp -s`\n3. **Config changed** (or first boot): install the new config and restart rsyslog\n4. **Config unchanged**: send `SIGHUP` to rsyslog to re-open log files without a full restart\n\nThe `SIGHUP` fallback is critical \u2014 it ensures rsyslog re-opens its file handles even when the config has not changed (needed after log rotation or `/var/log` remounts), while completely avoiding the 4-second namespace teardown/setup cycle. This preserves the upstream Trixie sandboxing directives.\n\nAdditional hardening:\n- `mktemp` for unique temp files with `trap`-based cleanup on exit\n- Explicit first-boot handling (missing `/etc/rsyslog.conf`)\n- Error handling on `cp` failure (do not restart with stale config)\n\n#### How to verify it\n1. Build a VS image with this change\n2. Boot and verify rsyslog is running: `systemctl status rsyslog`\n3. Run `config reload` \u2014 rsyslog should NOT restart (config unchanged), only SIGHUP:\n   ```\n   journalctl -u rsyslog --since \"1 min ago\"\n   # Should show rsyslog re-opening files, NOT a stop/start cycle\n   ```\n4. Change a syslog config (e.g., add a remote server), run `config reload` \u2014 rsyslog should do a full restart\n5. Run `syslog/test_logrotate.py` \u2014 both test cases should pass (SIGHUP re-opens files after /var/log remount)",
+      "files": [
+        {
+          "path": "files/image_config/rsyslog/rsyslog-config.sh",
+          "additions": 28,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-14T17:21:20Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-14T17:21:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-14T20:14:49Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-14T20:15:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T04:21:09Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T04:21:20Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2026-02-18T09:26:38Z",
+          "body": "@saiarcot895 do you think this PR can be used to fix the issue related to the slowness? "
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-02-19T19:03:05Z",
+          "body": "No. From the man page:\r\n\r\n```\r\nHUP\r\n    This lets rsyslogd perform close all open files.\r\n```\r\n\r\nSIGHUP does not reload the config."
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-02-20T23:12:44Z",
+          "body": "@rustiqly  rsyslogd v8.2504.0 doesn't support reload and HUP behavior isn't implemented to reload the config. \r\n\r\nWe don't want to remove the sandboxing features and also we don't want the 4 second delay on every restart/warm-restart/fast-restart because rsyslog configuration doesn't change on every reboot. I suggest an alternate way:\r\n\r\nWe can add a check in rsyslog-config.sh script to restart the rsyslog service only when there is a change in the rsyslog.conf file that was currently loaded into rsyslog service.  We accept the delay in the cases where we actually change the configuration (or on first boot). Changing rsyslog configuration often is not a frequent use case AFAIK. This approach should fix all the sonic-mgmt errors we currently see on various restart/warm-restart tests. Something like this:\r\n\r\n```\r\nsonic-cfggen -d -t /usr/share/sonic/templates/rsyslog.conf.j2 \\\r\n    -a \"{\\\"udp_server_ip\\\": \\\"$udp_server_ip\\\", \\\"hostname\\\": \\\"$hostname\\\", \\\"docker0_ip\\\": \\\"$docker0_ip\\\", \\\"forward_with_osversion\\\": \\\"$syslog_with_osversion\\\", \\\"os_version\\\": \\\"$os_version\\\", \\\"syslog_counter\\\": \\\"$syslog_counter\\\"}\" \\\r\n    > /tmp/rsyslog.conf.new\r\n\r\nif ! cmp -s /tmp/rsyslog.conf.new /etc/rsyslog.conf; then\r\n    cp /tmp/rsyslog.conf.new /etc/rsyslog.conf\r\n    systemctl restart rsyslog\r\nfi\r\nrm -f /tmp/rsyslog.conf.new\r\n```\r\n\r\n@saiarcot895  do you agree?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-23T17:39:11Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-23T17:39:17Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-02-23T17:39:20Z",
+          "body": "Thanks @tirupatihemanth and @saiarcot895 \u2014 you're absolutely right that SIGHUP doesn't reload rsyslog config. Reworked the approach completely:\n\n**Before:** Attempted `reload-or-restart` with SIGHUP (doesn't work)\n**After:** Conditional restart \u2014 generate config to temp file, compare with current, only restart when config changed.\n\n```bash\nsonic-cfggen ... > /tmp/rsyslog.conf.new\nif ! cmp -s /tmp/rsyslog.conf.new /etc/rsyslog.conf; then\n    cp /tmp/rsyslog.conf.new /etc/rsyslog.conf\n    systemctl restart rsyslog\nfi\nrm -f /tmp/rsyslog.conf.new\n```\n\nThis avoids the ~4s Trixie sandboxing delay on reboot/warm-restart/fast-restart where rsyslog config is unchanged. Removed the systemd ExecReload override entirely.\n\nUpdated PR title and description to match."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-23T17:41:01Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-23T17:41:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-02-23T19:27:57Z",
+          "body": "**Local logic verification:**\n\n```\n=== Test: config unchanged \u2192 no restart ===\nSKIP (config unchanged) \u2705\n\n=== Test: config changed \u2192 restart ===  \nRESTART (config changed) \u2705\n\n=== Test: no existing config (first boot) \u2192 restart ===\nRESTART (first boot, no existing config) \u2705\n```\n\nThree cases tested:\n1. **Config unchanged** (reboot/warm-restart) \u2192 skip restart, avoid 4s Trixie delay \u2705\n2. **Config changed** (syslog server modified) \u2192 restart as before \u2705\n3. **First boot** (no existing config) \u2192 restart to apply initial config \u2705\n\nVS VM is currently offline so couldn't test end-to-end, but the `cmp -s` logic handles all edge cases correctly."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-24T15:01:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-24T15:01:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-24T17:03:32Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-24T17:03:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-02-24T22:19:57Z",
+          "body": "LGTM. @rustiqly please take a look at checkers"
+        }
+      ]
+    },
+    {
+      "number": 18113,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/18113",
+      "title": "[rsyslog]: Use RELP instead of UDP for forwarding from container to host",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-06T21:07:54Z",
+      "createdAt": "2024-02-16T23:09:41Z",
+      "author": "saiarcot895",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nWhen the host's rsyslog is restarted (for example, to regenerate the config after some changes, or as part of some automated script), there is a chance that some syslog messages from the containers are lost. Most of the time, this isn't an issue. However, if there are test cases that expect all syslogs to be present (such as the advanced-reboot test case), then this can cause a problem. Additionally, this could affect debuggability of issues where a rsyslog restart happens in the middle.\r\n\r\nThere are two options for reliable message transport in rsyslog: TCP and RELP. With TCP, while the protocol knows whether a syslog message has been delivered or not, the application doesn't know, because there is no feedback from the remote side saying the message was received. This means that there is still a chance that messages could be lost when the connection is broken (if, for example, the host rsyslog gets restarted), because after the connection is established, the sender rsyslog (in the container) doesn't know if the message has been received or not.\r\n\r\nRELP builds on top of TCP, and adds a feedback mechanism where the remote side notifies the sender whether the message has actually been received or not. This makes it much less likely to lose a message. There is one known possible case where a message (or messages) could be lost: the network is down, and rsyslog gets restarted. This at least requires both the network and rsyslog to have an issue, rather than just one. There is also a slim possibility where a message could get duplicated; this should be mostly fine (hopefully).\r\n\r\nRELP does require that both sides are using a recent version of rsyslogd (at least 7.3.16, which looks like it was released more than 10 years ago), but since we use Debian on both the container and the host, it should be fine.\r\n\r\nTherefore, switch to using RELP when sending syslog messages from the container to the host. Also, enable a linked list queue on the sending queues on both the container rsyslog and on the host rsyslog. This means that if the sending of a log message fails (either because there is no network/route to the destination, or, thanks to RELP, messages are not getting acknowledged as received), it will be queued in that linked list and retried later.\r\n\r\nAdditionally, since messages that were generated in the past could now be delivered later, change the timestamp that is recorded into `/var/log/syslog` to be the timestamp that the log message was generated (i.e. sent from the original application) rather than the log message was received by this rsyslogd instance. This more accurately reflects when an event happened, and with queueing and RELP now involved, the difference could be on the scale of seconds. This does mean that messages in `/var/log/syslog` may appear out-of-order at times.\r\n\r\n#### User-facing behavior changes\r\n\r\nThis PR will change the timestamp that is recorded into `/var/log/syslog` to be the timestamp that the syslog message was generated, rather than when the syslog message was received by rsyslogd on the host. This means that some messages in `/var/log/syslog` may appear out-of-order. For example,\r\n\r\n```\r\n2026 Mar 31 02:46:05.498008 vlab-01 NOTICE swss#orchagent: :- doTask: Removed pending neighbor DEL operation for PortChannel101:fc00::72 after SET operation\r\n2026 Mar 31 02:46:05.594737 vlab-01 NOTICE swss#orchagent: :- flushFdbEntries: flush key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000, fields: 1\r\n2026 Mar 31 02:46:05.594760 vlab-01 NOTICE swss#orchagent: :- recordFlushFdbEntries: flush key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000, fields: 1\r\n2026 Mar 31 02:46:05.185039 vlab-01 NOTICE syncd#syncd: message repeated 20 times: [ :- get: get switch attr: SAI_SWITCH_ATTR_FDB_AGING_TIME]\r\n2026 Mar 31 02:46:05.596281 vlab-01 NOTICE syncd#syncd: :- flushFdbEntries: generating fdb flush notifications\r\n2026 Mar 31 02:46:05.596312 vlab-01 NOTICE syncd#syncd: :- flushFdbEntries: flushing 24 dynamic entries\r\n2026 Mar 31 02:46:05.596323 vlab-01 NOTICE syncd#syncd: :- meta_sai_on_fdb_flush_event_consolidated: processing consolidated fdb flush event of type: SAI_FDB_ENTRY_TYPE_DYNAMIC\r\n2026 Mar 31 02:46:05.598454 vlab-01 NOTICE syncd#syncd: :- meta_sai_on_fdb_flush_event_consolidated: fdb flush took 0.002123 sec\r\n```\r\n\r\nThe syslog message at `02:46:05.185039` was processed and logged after the message at `02:46:05.594760` (although in this particular case, I suppose there's a chance that rsyslogd held the \"message repeated x times\" message until it had the final count and then sent it, and the message generated timestamp could be from when the first instance of that message was logged).\r\n\r\nHere is a more egregious case:\r\n\r\n```\r\n2026 Mar 31 02:44:45.160717 vlab-01 DEBUG unix_chkpwd: nss_tacplus: user_priv[13] { gid=0, info=NULL, group=NULL, shell=NULL }\r\n2026 Mar 31 02:44:45.160750 vlab-01 DEBUG unix_chkpwd: nss_tacplus: user_priv[14] { gid=0, info=NULL, group=NULL, shell=NULL }\r\n2026 Mar 31 02:44:45.160811 vlab-01 DEBUG unix_chkpwd: nss_tacplus: user_priv[15] { gid=1000, info=remote_user_su, group=sudo,docker, shell=/bin/bash }\r\n2026 Mar 31 02:44:32.725033 vlab-01 NOTICE swss#orchagent: :- start: Performing SaiRedis log rotate\r\n2026 Mar 31 02:44:45.160420 vlab-01 NOTICE swss#orchagent: :- addNextHopGroup: Create next hop group 10.0.0.59@PortChannel102,10.0.0.61@PortChannel103,10.0.0.63@PortChannel104\r\n2026 Mar 31 02:44:45.372153 vlab-01 INFO python3.13[191789]: ansible-ansible.legacy.command Invoked with _raw_params=vtysh -c \"show ip route 192.223.168.0/25 json\" _uses_shell=True expand_argument_vars=True stdin_add_newline=True strip_empty_ends=True argv=None chdir=None executable=None creates=None removes=None stdin=None\r\n2026 Mar 31 02:44:45.687503 vlab-01 DEBUG sudo: nss_tacplus: server[0] { addr=10.250.0.102:49, key=t*****, timeout=5 }\r\n```\r\n\r\nThe log rotate message was processed 13 seconds after it was initially generated. I'm not sure why there's so much of a delay in this case.\r\n\r\nFixes #17792\r\nFixes #25382\r\nMay help with sonic-net/sonic-mgmt#11311\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: 28314311\r\n\r\n#### How I did it\r\n\r\nModify the `rsyslog.conf` file on the host and the container to use RELP instead of UDP.\r\n\r\nIn addition, update the syntax used for the config files to the (newer) RainierScript format, which, among other things, makes it easier to set settings for specific outputs.\r\n\r\nAlso, enable retries for messages that failed to be forwarded, retrying for up to 60 times before dropping the message.\r\n\r\nFinally, modify `rsyslog.conf` to write the timestamp that the log message was generated, not when it was received. This makes it a bit easier to correlate events, at the cost of making the logs look out of order.\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\nStop rsyslogd on the host, make sure that the containers generate some syslogs, restart rsyslogd on the host, and verify no logs were lost.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "build_debian.sh",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "dockers/docker-base-bookworm/Dockerfile.j2",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "dockers/docker-base-bookworm/etc/rsyslog.conf",
+          "additions": 10,
+          "deletions": 13
+        },
+        {
+          "path": "dockers/docker-base-bullseye/Dockerfile.j2",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "dockers/docker-base-bullseye/etc/rsyslog.conf",
+          "additions": 10,
+          "deletions": 13
+        },
+        {
+          "path": "dockers/docker-base-trixie/Dockerfile.j2",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "dockers/docker-base-trixie/etc/rsyslog.conf",
+          "additions": 10,
+          "deletions": 13
+        },
+        {
+          "path": "dockers/docker-platform-monitor/etc/rsyslog.conf",
+          "additions": 10,
+          "deletions": 13
+        },
+        {
+          "path": "files/image_config/rsyslog/rsyslog-container.conf.j2",
+          "additions": 10,
+          "deletions": 31
+        },
+        {
+          "path": "files/image_config/rsyslog/rsyslog.conf.j2",
+          "additions": 22,
+          "deletions": 28
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/rsyslog.conf",
+          "additions": 13,
+          "deletions": 16
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/rsyslog_same_ip.conf",
+          "additions": 95,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/rsyslog_with_docker0.conf",
+          "additions": 15,
+          "deletions": 18
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_j2files.py",
+          "additions": 16,
+          "deletions": 12
+        },
+        {
+          "path": "src/sonic-containercfgd/containercfgd/containercfgd.py",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-containercfgd/tests/mock_rsyslog.conf",
+          "additions": 12,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "saiarcot895",
+          "createdAt": "2024-06-24T16:05:17Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-06-24T16:05:19Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-06-24T16:05:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2024-08-01T20:47:16Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-01T20:47:18Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-08-01T20:47:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2024-08-30T15:28:35Z",
+          "body": "/azpw ms_checker"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2024-08-30T15:28:49Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-30T15:28:52Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-08-30T15:29:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2024-09-25T23:16:08Z",
+          "body": "> what about `platform/vs/docker-sonic-vs/etc/rsyslog.conf` don't need this change?\r\n\r\nStrictly speaking, it doesn't need this change, because the logs aren't actually being forwarded anywhere. It'll forward it to localhost port 514, but there likely won't be anything listening on this port. That container doesn't end up on the device.\r\n\r\nIt would be nice to update the syntax there to have it use the new syntax, but I'll keep that separate for now."
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2024-10-14T21:19:14Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-10-14T21:19:16Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-10-14T21:19:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2024-10-23T22:14:58Z",
+          "body": "This is kind of new feature. Is it possible to config for new behavior or old behavior?"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2025-02-15T11:55:52Z",
+          "body": "@saiarcot895  is there any plan to have this fix some how handled and merged?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-23T03:36:18Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-23T03:36:29Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-25T16:40:23Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-25T16:40:34Z",
+          "body": "<samp>\nAzure Pipelines failed to run 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "number": 27728,
+  "title": "Bug: hsflowd crashes (SIGSEGV / stack overflow) on high-port-count systems after PR #27368",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27728",
+  "createdAt": "2026-06-04T20:54:10Z",
+  "closedAt": "2026-06-22T23:54:21Z",
+  "author": "DannyIsa",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "yxieca"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n### Summary\nOn a switch with many ports (seen on a 514-port system), `hsflowd` crashes with SIGSEGV\nsoon after startup. It's a stack overflow from infinite recursion in the Redis write path.\nPR #27368 didn't cause the bug but exposes it; small switches (e.g. 32 ports) are unaffected.\n\n### Crash evidence\n`type=ANOM_ABEND ... comm=\"hsflowd\" exe=\"/usr/sbin/hsflowd\" sig=11` (no further hsflowd logs).\n\n### Root cause\nIn `mod_sonic.c`, the hiredis `addWrite` hook does the write **synchronously**:\n\n```c\nstatic void db_addWriteCB(void *magic) {\n  HSPSonicDBClient *db = (HSPSonicDBClient *)magic;\n  db->writes++;\n  redisAsyncHandleWrite(db->ctx);   // synchronous write inside the addWrite hook\n}\n```\n\nWhen many port queries are sent at once, the socket send buffer fills and `send()` returns\n`EWOULDBLOCK`. hiredis then re-calls the `addWrite` hook to retry. Because the hook is\nsynchronous and never returns to the event loop, the socket never drains, so it keeps\nretrying and recurses into itself until the stack overflows:\n\n### Related\n#25896 - hsflowd isn't restarted after a crash, so this turns into a permanent, silent sFlow outage.\n\n### Steps to Reproduce\n\n1. Run a SONiC image that includes PR #27368.\n2. Use a high-port-count system (~500 ports; reproduced on 514 ports).\n3. Configure sFlow.\n4. Start the sflow container so hsflowd runs port discovery.\n\n### Actual Behavior and Expected Behavior\n\n-\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2026-06-05T00:28:23Z",
+      "body": "Thanks @DannyIsa, great analysis! Will post a fix shortly."
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2026-06-05T22:44:11Z",
+      "body": "@DannyIsa  I am unable to organically repro the issue even by lower the socket send buffer to 2k. Can you check what is special on your system?\n\nWhat is the repro rate on your system?\n\nCan you help test the fix on the system that hit the issue?"
+    },
+    {
+      "author": "DannyIsa",
+      "createdAt": "2026-06-06T11:54:10Z",
+      "body": "Did you try to test it on a high port system?\n\nThe repro rate is 31.2% failure rate.\n\nI'll test the fix RN and update.\n\nThanks!"
+    },
+    {
+      "author": "DannyIsa",
+      "createdAt": "2026-06-10T08:11:36Z",
+      "body": "@yxieca I've tested your fix and got 100% pass rate."
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2026-06-12T20:16:41Z",
+      "body": "> Did you try to test it on a high port system?\n> \n> The repro rate is 31.2% failure rate.\n> \n> I'll test the fix RN and update.\n> \n> Thanks!\n\nInteresting, I don't have easy access to high port count system."
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2026-06-12T20:16:54Z",
+      "body": "> [@yxieca](https://github.com/yxieca) I've tested your fix and got 100% pass rate.\n\nThanks for the help!"
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2026-06-17T15:37:21Z",
+      "body": "@yxieca @DannyIsa it looks like this issue has been resolved (patch accepted into hsflowd itself, version bump in SONic), can we close it if there is no further action needed?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27739,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27739",
+      "title": "[sflow] Fix hsflowd db_addWriteCB recursion / stack overflow on high-port-count switches",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-22T23:54:20Z",
+      "createdAt": "2026-06-05T12:44:57Z",
+      "author": "yxieca",
+      "body": "#### Why I did it\n\nFixes a SIGSEGV regression in `hsflowd` (sflow container) observed on high-port-count switches after #27368 enabled batched port discovery.\n\nOn a 514-port system, `mod_sonic`'s `db_addWriteCB()` calls `redisAsyncHandleWrite()` synchronously with no re-entry protection. When the redis socket send buffer fills up under the burst of commands queued by the batched `mapPorts()` path, `write()` returns `EWOULDBLOCK`; hiredis re-arms the writable hook by calling `addWrite` again, which recurses straight back into `db_addWriteCB()`. With 500+ commands in flight the kernel can't drain the socket fast enough, the C stack is exhausted, and `hsflowd` SIGSEGVs.\n\nCloses #27728. Refs #27330, #27368.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nTwo patches added under `src/sflow/hsflowd/patch/`, applied via the existing `series` file (no build-system changes):\n\n- **`0010-mod_sonic-fix-write-recursion.patch`** \u2014 the actual fix.\n  - Adds `inWrite` and `writeDeferred` bits to `HSPSonicDBClient`.\n  - `db_addWriteCB()`: if we're already inside a write, set `writeDeferred = YES` and return instead of recursing into `redisAsyncHandleWrite()`. Otherwise set `inWrite = YES`, call the real handler, clear the flags.\n  - Two drain paths for the deferred output:\n    1. `db_readCB()` \u2014 after each successful read, if `obuf` still has bytes queued and we're not already writing, do one non-recursive `redisAsyncHandleWrite()`. The kernel has typically freed buffer space by the time a read returns.\n    2. `evt_poll_tick()` \u2014 slow-path safety net that walks every `dbInstances` client and drains any with non-empty `obuf`, guarded by the same `inWrite` flag.\n- **`0009-mod_sonic-debug-sndbuf.patch`** \u2014 debug-only knob. Adds a `HSP_SONIC_SNDBUF` env var that calls `setsockopt(SO_SNDBUF)` immediately after each redis client connects, used to reproduce the back-pressure on small-port-count test platforms (no behavioral change when the var is unset).\n\nThe fix is intentionally minimal: it does not touch the batched-dispatch behavior added by #27368, it only makes the write path safe against the back-pressure that batching can produce.\n\n#### How to verify it\n\nThree layers of validation:\n\n1. **Positive control (unfixed binary actually crashes under back-pressure).** On a 32-port `sonic-vs` testbed I built `hsflowd` from PR #27368 master without this fix (md5 `f503ba8352d8a8ce19ba50fe788514eb`) and ran it with an `LD_PRELOAD` shim that intercepts redis socket `write()`/`send()` and forces them to return `EAGAIN`. After ~262k `EAGAIN`-returning sends the process **dumps core (SIGSEGV)**, reproducing the reported stack overflow.\n2. **Negative control (fixed binary survives the same forcing).** Same testbed, same shim, same env (`HSP_EAGAIN=1 HSP_EAGAIN_AFTER=20`), but with the fixed binary (md5 `22696c3fbdba03961050facb791db611`). `hsflowd` survives the full 25-second window and exits **cleanly on SIGTERM**, no core file.\n3. **Full sflow regression on `sonic-vs` T0.** Built `target/sonic-vs.img.gz` from this commit (build commit `585d58222` = this PR on top of master), deployed onto a `vms-kvm-t0` testbed with converged cEOS neighbors (4\u00d7T1 BGP, 6400 prefixes), ran `tests/sflow/test_sflow.py` (16 tests including `TestReboot` warm-reboot and fast-reboot classes):\n   - `/var/log/hsflowd.crash` stays **0 bytes** for the entire run.\n   - **Zero** `hsflowd` segfault / abort / core / kill events in syslog across the full run.\n   - sflow counters stream cleanly through the collector throughout, sample JSON parses (e.g. `ifInOctets=182,843,660 / 307,996 pkts` on Ethernet112).\n   - BGP stays 4\u00d7T1 Established through the entire test.\n\nRemaining test failures in the sonic-vs sflow suite are unrelated to this change (long-standing PTF parser fragility around `ast.literal_eval` on raw-byte JSON lines from `sflowtool -j`, plus expected post-warm-reboot inventory breakage \u2014 same failure profile as the unrelated baseline on master).\n\nAsking the original reporter on #27728 to confirm on the 514-port hardware as well; the PR can land on master in the meantime since the recursion path is exercised on every release branch.\n\n#### Which release branch to backport (provide reason below if selected)\n\nThis is a real-world crash on existing hardware running #27368, so it should be backported wherever #27368 (or its precursor batched-dispatch code) is present. Please check the matrix of release branches that picked up #27368 and tick accordingly.\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ] master \u2014 `SONiC.fix_sflow-write-recursion-guard.0-585d58222` (= this PR head + a test-only ycabled-skip workaround dropped before submission)\n\n#### Description for the changelog\n\n[sflow] Fix `hsflowd` `db_addWriteCB()` recursion / stack overflow under redis send-buffer back-pressure on high-port-count switches (regression from #27368).\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no YANG / config_db schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83e\udda6\n",
+      "files": [
+        {
+          "path": "src/sflow/hsflowd/patch/0009-mod_sonic-debug-sndbuf.patch",
+          "additions": 43,
+          "deletions": 0
+        },
+        {
+          "path": "src/sflow/hsflowd/patch/0010-mod_sonic-fix-write-recursion-via-evbus.patch",
+          "additions": 184,
+          "deletions": 0
+        },
+        {
+          "path": "src/sflow/hsflowd/patch/series",
+          "additions": 2,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-05T12:45:04Z",
+          "body": "This PR was created by an AI agent (sonic-image) on behalf of @yxieca. The fix, validation methodology (LD_PRELOAD EAGAIN shim controls + full sonic-vs sflow regression), and PR description were all produced by the agent; @yxieca is the human reviewer and owner. Please ping @yxieca for any review changes."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-05T12:45:05Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T12:45:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-05T22:18:13Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T22:18:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-05T22:18:42Z",
+          "body": "Follow-up commit `f03d70f` replaces the surgical re-entry guard with the structurally correct fix.\n\n**What changed**\n\nThe first commit (8137d5a) added an `inWrite` re-entry guard inside `db_addWriteCB` plus opportunistic drain sites. That stops the SIGSEGV, but the underlying race remains: `db_addWriteCB` still calls `redisAsyncHandleWrite()` synchronously, and the deferred-write retry depends on a slow-path `evt_poll_tick` drain (~1s worst case). It also carried a dead `writeDeferred` flag that nothing read.\n\nThe follow-up commit does what the original `db_addWriteCB` comment hinted at: register the redis fd's writable readiness with evbus, so writes are driven by the event loop instead of called synchronously from the addWrite hook.\n\n- evbus gains an optional `EVWriteCB` and a per-socket `want_write` flag. `busRead()` builds a `writefds` set from sockets that have `want_write` set and dispatches their `writeCB` when `pselect()` reports them writable.\n- mod_sonic registers `db_writeCB` at socket-add time and toggles `want_write` from the hiredis `addWrite`/`delWrite` hooks. The hooks themselves no longer call `redisAsyncHandleWrite()` at all - they just flip the readiness flag, so synchronous recursion from within the write path is structurally impossible.\n\nProgress is bounded by pselect cycles instead of the 1s tick. The `writeDeferred` flag and the tick-drain safety net are removed.\n\n**Patch 0009**\n\nPatch 0009 (`HSP_SONIC_SNDBUF` debug knob) stays in the source tree but is commented out in `series`. It is the forensic harness used to validate this fix - reviewers can apply it manually and set `HSP_SONIC_SNDBUF=<bytes>` to reduce the redis socket send buffer for repro investigations. It is not applied by the default build.\n\n**Validation**\n\n- LD_PRELOAD `write_eagain_shim.so` + unfixed binary (master) - SIGSEGV (262K recursive frames). Validated in the first round on this PR.\n- LD_PRELOAD `write_eagain_shim.so` + this fix - completes cleanly, exit 124 after the 30s timeout, no core, port discovery finishes, sflow enters waitConfig steady state.\n- Normal sflow workload on sonic-vs T0 with 32 ports + cEOS converged peers: 32 ports discovered, no crash, BGP 4xARISTA01-04T1 stayed established (9h13m uptime preserved across hsflowd restart).\n- Tried to reproduce organically on the 32-port vlab by faking up to 633 PORT_TABLE entries and shrinking SO_SNDBUF down to the kernel minimum - the recursion does not trigger on this testbed because local redis-server drains the unix socket faster than the burst can build backpressure. The LD_PRELOAD shim test (above) remains the controlled reproducer; #27728 is the field witness.\n\n---\n_Posted by an AI agent on behalf of @yxieca._\n"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-05T22:41:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T22:41:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-12T20:19:48Z",
+          "body": "@dgsudharsan @DannyIsa please help review the fix. Thanks!"
+        },
+        {
+          "author": "sflow",
+          "createdAt": "2026-06-13T07:53:25Z",
+          "body": "Just saw this.  I am delighted with the evbus solution, which I clearly should have added a long time ago. I have tested it and upstreamed these changes into the hsflowd repo https://github.com/sflow/host-sflow. I then tagged a new hsflowd release v2.1.26-1.  Should sonic-buildimage now use v2.1.26-1 instead of v2.1.25-6? This new release also includes a small change that would allow sonic-buildimage hsflowd patch 0007 to be removed as well:  in the new release the \"crash signals\" are only sigaction'd if \"-C\" is on the command line.  Since there is no \"-C\" on the command line used by SONiC, the patch 0007 is no longer required. So if we can move to v2.1.26-1 then the only remaining patch would be the one that adjusts the Debian package parameters."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-16T22:14:45Z",
+          "body": "Closing this PR because #27806 supersedes it on master.\n\nI verified that #27806 upgrades `host-sflow` to upstream `v2.1.26-1`, and that upstream tag already contains this PR's redis write-recursion / high-port-count SIGSEGV fix via commit:\n\nhttps://github.com/sflow/host-sflow/commit/41f10e6a2068ff15856e2bd1f1af2df1a506461b\n\nThe upstream code now drives redis writes through evbus writable readiness (`db_writeCB` + `EVSocketSetWantWrite`) instead of calling `redisAsyncHandleWrite()` synchronously from `db_addWriteCB()`, which is the same fix this PR carried as a SONiC downstream patch.\n\nSo the local downstream patch from this PR is no longer needed on master once #27806 is merged. If older release branches need the crash fix without taking the full hsflowd/sflowtool upgrade, this PR's patch can still be reused as the minimal backport-friendly fix.\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-17T17:59:10Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-17T17:59:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-17T22:40:52Z",
+          "body": "@sflow @DannyIsa can you review / sign off?\r\n"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-07-21T07:50:38Z",
+          "body": "This PR has the \"Request for 202605 Branch\" label but is missing 202605-specific test results. Please:\n1. Tick the **202605** checkbox in the \"Tested branch\" section of the PR description\n2. Provide 202605 branch test evidence in the \"Test result\" section\n3. Add the label **\"Tested for 202605 branch\"** once done\n\nMaster branch test results alone are not sufficient for 202605 cherry-pick approval.\n\n*Comment on behalf of @vaibhavhd*\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T12:14:14Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T05:21:00Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-buildimage/pull/28673"
+        }
+      ]
+    }
+  ]
+}

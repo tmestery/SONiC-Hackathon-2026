@@ -1,0 +1,87 @@
+{
+  "number": 8306,
+  "title": "\"show vlan config\" command display wrong member information",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/8306",
+  "createdAt": "2021-08-02T11:56:58Z",
+  "closedAt": "2021-11-19T02:03:12Z",
+  "author": "tomer-israel",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "qiluo-msft"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n\"show vlan config\" may display wrong information about vlan members after generating vlan members configuration from minigraph and removing vlan members.\r\n\r\nthe problem is related to a change in the vlan schema that was changed on this PR:\r\nhttps://github.com/Azure/sonic-utilities/pull/1038\r\n \r\nIn the new schema, we no longer use the \u201cmembers\u201d field on the VLAN table:\r\n```\r\n    \"VLAN\": {\r\n        \"Vlan1000\": {\r\n           \u2026.. \r\n           \"members\": [\r\n                \"Ethernet8\",\r\n                \"Ethernet16\",\r\n                \"Ethernet24\",\r\n                \"Ethernet32\"\r\n            ],\r\n           \"vlanid\": \"1000\"\r\n       }\r\n```\r\n\r\nAnd the member info is taken only from vlan members tables:\r\n   ```\r\n \"VLAN_MEMBER\": {\r\n        \"Vlan1000|Ethernet8\": {\r\n            \"tagging_mode\": \"untagged\"\r\n        },\r\n        \"Vlan1000|Ethernet16\": {\r\n            \"tagging_mode\": \"untagged\"\r\n        },\r\n        \u2026\u2026\r\n```\r\n\r\nWe can see that on the new implementation we don\u2019t add the new members to the \u201cmembers\u201d field on the VLAN table.\r\n\r\nIn the load_minigraph script we still generate this \u201cmembers\u201d field on the VLAN table and when we remove member from a vlan it will remove the VLAN_MEMBER table only, the \u201cmembers\u201d field on the VLAN table is not changing and the member that was removed is still there.\r\n\r\nOn this scenario when we run show command we see members exist on this vlan although it was removed.. \r\nWe see this problematic situation because the show command is still using this \u201cmembers\u201d field when it displays the vlan member information. The \u201cmembers\u201d field info from the VLAN table is added to the VLAN_MEMBER tables info and together it displayed.\r\n\r\n\r\n#### Steps to reproduce the issue:\r\n1. load minigraph file with vlan members configuration\r\n2. remove the vlan member\r\n3. \"show vlan config\" will still display the removed vlan member\r\n\r\nExample to vlan member configuration on the minigraph xml file:\r\n```\r\n...\r\n      <VlanInterfaces>\r\n        <VlanInterface>\r\n          <Name>Vlan1000</Name>\r\n      <AttachTo>etp2;etp3;etp4;etp5;etp6;etp7;etp8;etp9;etp10;etp11;etp12;etp13;etp14;etp15;etp16;etp17;etp18;etp19;etp20;etp21;etp22;etp23;etp24;etp25</AttachTo>\r\n          <NoDhcpRelay>False</NoDhcpRelay>\r\n          <StaticDHCPRelay>0.0.0.0/0</StaticDHCPRelay>\r\n          <Type i:nil=\"true\"/>\r\n          <DhcpRelays>192.0.0.1;192.0.0.2;192.0.0.3;192.0.0.4</DhcpRelays>\r\n          <VlanID>1000</VlanID>\r\n          <Tag>1000</Tag>\r\n          <Subnets>192.168.0.0/21</Subnets>\r\n        </VlanInterface>\r\n      </VlanInterfaces>\r\n...\r\n```\r\nExample for removal member command:\r\n`sudo config vlan member del 1000 Ethernet8`\r\n\r\n#### Describe the results you received:\r\n```\r\nadmin@r-leopard-01:~$ show vlan config \r\nName        VID  Member       Mode\r\n--------  -----  -----------  --------\r\nVlan1000   1000  Ethernet8    ?\r\nVlan1000   1000  Ethernet16   untagged\r\nVlan1000   1000  Ethernet24   untagged\r\nVlan1000   1000  Ethernet32   untagged\r\nVlan1000   1000  Ethernet40   untagged\r\nVlan1000   1000  Ethernet48   untagged\r\nVlan1000   1000  Ethernet56   untagged\r\n...\r\n```\r\n\r\n#### Describe the results you expected:\r\n```\r\nadmin@r-leopard-01:~$ show vlan config \r\nName        VID  Member       Mode\r\n--------  -----  -----------  --------\r\nVlan1000   1000  Ethernet16   untagged\r\nVlan1000   1000  Ethernet24   untagged\r\nVlan1000   1000  Ethernet32   untagged\r\nVlan1000   1000  Ethernet40   untagged\r\nVlan1000   1000  Ethernet48   untagged\r\nVlan1000   1000  Ethernet56   untagged\r\n...\r\n```\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nroot@r-leopard-01:/home/admin# show version\r\n\r\nSONiC Software Version: SONiC.202012.139-5651977f6_Internal\r\nDistribution: Debian 10.10\r\nKernel: 4.19.0-12-2-amd64\r\nBuild commit: 5651977f6\r\nBuild date: Fri Jul 30 08:36:44 UTC 2021\r\nBuilt by: sw-r2d2-bot@r-build-sonic-ci02-244\r\n\r\nPlatform: x86_64-mlnx_msn4700-r0\r\nHwSKU: ACS-MSN4700\r\nASIC: mellanox\r\nASIC Count: 1\r\nSerial Number: MT2022X08595\r\nUptime: 11:37:39 up  6:05,  2 users,  load average: 0.99, 0.76, 0.73\r\n\r\ndocker-snmp                   202012.139-5651977f6_Internal   34fc889a4fa5        443MB\r\ndocker-snmp                   latest                          34fc889a4fa5        443MB\r\ndocker-teamd                  202012.139-5651977f6_Internal   5704cb77f7a4        412MB\r\ndocker-teamd                  latest                          5704cb77f7a4        412MB\r\ndocker-router-advertiser      202012.139-5651977f6_Internal   31e9971905fc        401MB\r\ndocker-router-advertiser      latest                          31e9971905fc        401MB\r\ndocker-platform-monitor       202012.139-5651977f6_Internal   38ccaf5ba3d8        722MB\r\ndocker-platform-monitor       latest                          38ccaf5ba3d8        722MB\r\ndocker-lldp                   202012.139-5651977f6_Internal   848812823ed4        441MB\r\ndocker-lldp                   latest                          848812823ed4        441MB\r\ndocker-dhcp-relay             202012.139-5651977f6_Internal   210634cc0157        408MB\r\ndocker-dhcp-relay             latest                          210634cc0157        408MB\r\ndocker-database               202012.139-5651977f6_Internal   08ff987b833e        401MB\r\ndocker-database               latest                          08ff987b833e        401MB\r\ndocker-orchagent              202012.139-5651977f6_Internal   66f04e8a0b14        430MB\r\ndocker-orchagent              latest                          66f04e8a0b14        430MB\r\ndocker-nat                    202012.139-5651977f6_Internal   a80e2a4ba1ea        415MB\r\ndocker-nat                    latest                          a80e2a4ba1ea        415MB\r\ndocker-sonic-telemetry        202012.139-5651977f6_Internal   ee61da4e3b31        491MB\r\ndocker-sonic-telemetry        latest                          ee61da4e3b31        491MB\r\ndocker-sonic-mgmt-framework   202012.139-5651977f6_Internal   54a7d05d10cb        621MB\r\ndocker-sonic-mgmt-framework   latest                          54a7d05d10cb        621MB\r\ndocker-fpm-frr                202012.139-5651977f6_Internal   e456b89b413d        430MB\r\ndocker-fpm-frr                latest                          e456b89b413d        430MB\r\ndocker-sflow                  202012.139-5651977f6_Internal   f2ebb9f36217        413MB\r\ndocker-sflow                  latest                          f2ebb9f36217        413MB\r\ndocker-sonic-restapi          202012.139-5651977f6_Internal   9c0974ce2fa5        352MB\r\ndocker-sonic-restapi          latest  \r\n```\r\n#### Output of `show techsupport`:\r\n\r\n[sonic_dump_r-leopard-01_20210714_123802 (1).tar.gz](https://github.com/Azure/sonic-buildimage/files/6916569/sonic_dump_r-leopard-01_20210714_123802.1.tar.gz)\r\n\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n\r\n\r\n",
+  "comments": [
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2021-08-04T15:24:01Z",
+      "body": "@qiluo-msft please help to take a look. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 9237,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/9237",
+      "title": "[minigraph] No longer generate the \u201cmembers\u201d field on the VLAN table in ConfigDB",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-11-19T02:03:12Z",
+      "createdAt": "2021-11-11T20:51:51Z",
+      "author": "qiluo-msft",
+      "body": "#### Why I did it\r\nThis field is deprecated.\r\nFixes https://github.com/Azure/sonic-buildimage/issues/8306\r\nFixes https://github.com/Azure/sonic-buildimage/issues/9121\r\n\r\n#### How I did it\r\n\r\n#### How to verify it\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "src/sonic-config-engine/minigraph.py",
+          "additions": 4,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_cfggen.py",
+          "additions": 4,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_minigraph_case.py",
+          "additions": 0,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2021-11-15T17:48:00Z",
+          "body": "@tomer-israel Could you also help review?"
+        },
+        {
+          "author": "theasianpianist",
+          "createdAt": "2021-11-15T21:02:10Z",
+          "body": "There may still be some sonic-mgmt tests or utilities that use this field, are we concerned with those?"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2021-11-15T22:34:36Z",
+          "body": "Then it should be a bug and we need to fix if any. Are you aware of any usage?"
+        },
+        {
+          "author": "ganglyu",
+          "createdAt": "2021-11-16T01:42:46Z",
+          "body": "> Then it should be a bug and we need to fix if any. Are you aware of any usage?\r\n\r\ntest_vlan is still using this field."
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2021-11-18T01:22:51Z",
+          "body": "@praveen-li Please help review"
+        },
+        {
+          "author": "praveen-li",
+          "createdAt": "2021-11-18T01:57:52Z",
+          "body": "> Then it should be a bug and we need to fix if any. Are you aware of any usage?\r\n\r\nWe would have come to know about sonic-utilities tests at build time itself. As I know there are none, which failed. Looks good to me, we need these changes. Thx for fixing it."
+        }
+      ]
+    }
+  ]
+}

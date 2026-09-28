@@ -1,0 +1,167 @@
+{
+  "number": 25827,
+  "title": "[sonic-vpp][Control Plane][t1-lag] ssh - Enable control plane testing on VPP KVM testbed",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25827",
+  "createdAt": "2026-03-02T10:01:27Z",
+  "closedAt": "2026-06-29T03:18:34Z",
+  "author": "yejianquan",
+  "labels": [
+    "sonic-vpp",
+    "P4"
+  ],
+  "assignees": [
+    "aaronber0614"
+  ],
+  "milestone": null,
+  "body": "> :robot: *Created by DevAce, Jianquan's AI Agent, on his behalf.*\n\n## Description\n\nEnable ssh control plane testing on the SONiC-VPP KVM testbed.\n\n## Test Module Coverage\n\n| Feature | sonic-vpp | vpp | Status | Notes |\n|---------|:---:|:---:|--------|-------|\n| `ssh` | --- | --- | Control plane | --- |\n\n\n## Priority\n\n**P4** --- Not data plane related. For tests already passing on VPP KVM testbed, add them to the VPP test suite. Otherwise lower priority as VS can handle sanity.\n\n## Acceptance Criteria\n\n- [ ] ssh test module passes on VPP KVM testbed\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25279,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25279",
+      "title": "tests: fix SSH tests for VPP platform and enable in CI pipeline",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-29T03:18:33Z",
+      "createdAt": "2026-06-10T18:50:36Z",
+      "author": "aaronber0614",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nFix 2 SSH tests (test_ssh_default_password, test_ssh_stress) to pass on the VPP KVM t1-lag testbed and add all 4 SSH tests to the VPP CI pipeline.\r\n\r\nFixes sonic-net/sonic-buildimage#25827\r\n\r\n### Type of change\r\n\r\n- [X] Bug fix\r\n- [X] Test case improvement\r\n\r\n### Back port request\r\n\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nWhen running SSH tests on the VPP KVM t1-lag testbed, test_ssh_default_password and test_ssh_stress fail because TACACS is configured in PAM (`/etc/pam.d/common-auth-sonic`) with `auth_err=die`, which kills the PAM chain before `pam_unix` can authenticate locally. Additionally, test_ssh_stress uses hardcoded credentials that don't match the DUT. These issues are not VPP-specific, but the fixes improve robustness for both environments.\r\n\r\n#### How did you do it?\r\n\r\n**Actual test failures fixed:**\r\n\r\n1. **test_ssh_default_password** \u2014 Added `disable_tacacs_for_test` autouse fixture that backs up the PAM file, comments out TACACS lines, resets password to match `DEFAULT_SSH_CONNECT_PARAMS`, and in teardown resets the password to `password` and restores the PAM file from backup. The fixture is conditional \u2014 only modifies PAM if `pam_tacplus` lines are active (no-op otherwise). This follows the same pattern as `test_ssh_limit.py` which also disables TACACS before testing local auth (line 129-130). TACACS authentication is separately tested by the dedicated `tests/tacacs/` suite (test_rw_user, test_ro_user, test_authorization, etc.).\r\n\r\n2. **test_ssh_stress** \u2014 Hardcoded admin/password credentials don't match the DUT. Replaced with DEFAULT_SSH_CONNECT_PARAMS lookup via get_image_type() in both start_SSH_connection() and work() functions and all call sites. Added TACACS disable/restore via AAA config and password management to the setup_teardown fixture (restores password first, then re-enables TACACS, to avoid Ansible reconnect issues). Added device_type(\"vpp\") mark.\r\n\r\n**CI pipeline:**\r\n\r\n3. Added all 4 SSH tests (`test_ssh_ciphers`, `test_ssh_default_password`, `test_ssh_limit`, `test_ssh_stress`) to the `t1-lag-vpp:` section of `pr_test_scripts.yaml`.\r\n \r\n **Note:** The PAM/TACACS fixture is conditional \u2014 only modifies PAM if TACACS is actively configured. TACACS SSH authentication coverage is not reduced \u2014 it is comprehensively tested in `tests/tacacs/`.\r\n\r\n#### How did you verify/test it?\r\n\r\nRan all 4 SSH test files (`test_ssh_ciphers.py`, `test_ssh_default_password.py`, `test_ssh_limit.py`, `test_ssh_stress.py`) on both VPP and VS testbeds using pytest from the sonic-mgmt container:\r\n\r\n```bash\r\ncd /mnt/sonic/github.com/sonic-mgmt/tests\r\nbash run_tests.sh \r\n  -n vms-kvm-vpp-t1-lag \r\n  -d vlab-vpp-01 \r\n  -c \"ssh/test_ssh_default_password.py ssh/test_ssh_limit.py ssh/test_ssh_stress.py ssh/test_ssh_ciphers.py\" \r\n  -f ../ansible/vtestbed.yaml \r\n  -i ../ansible/veos_vtb \r\n  -t any \r\n  -e \"--skip_sanity --disable_loganalyzer --neighbor_type=eos\" \r\n  -u\r\n```\r\n\r\n **VPP testbed** (vms-kvm-vpp-t1-lag, DUT: vlab-vpp-01):\r\n - 45 tests: 32 passed, 13 xfailed, 0 failures, 0 errors\r\n - test_ssh_default_password: PASSED\r\n - test_ssh_limit: PASSED\r\n - test_ssh_stress: PASSED\r\n - test_ssh_ciphers: all variants passed/xfailed as expected\r\n\r\n**VS testbed** (vms-kvm-t1-lag, DUT: vlab-03):\r\n- test_ssh_default_password: PASSED\r\n- test_ssh_limit: PASSED\r\n- test_ssh_stress: PASSED (framework teardown ERROR from pre-existing `shell_cmds` module path issue \u2014 not caused by this PR)\r\n- test_ssh_ciphers: PASSED (8 passed + xfailed/xpassed variants)\r\n\r\n#### Any platform specific information?\r\n\r\nPassword management uses `DEFAULT_SSH_CONNECT_PARAMS` which is platform-agnostic (returns credentials based on image type).\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nNot a new test case \u2014 these are existing tests being fixed and enabled for VPP. Topology: t1-lag (VPP and VS).\r\n\r\n### Documentation\r\n\r\nNo documentation changes required.\r\n\r\nSigned-off-by: Aaron Bernardino <aaronber@microsoft.com>\r\n",
+      "files": [
+        {
+          "path": ".azure-pipelines/pr_test_scripts.yaml",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 4,
+          "deletions": 3
+        },
+        {
+          "path": "tests/ssh/test_ssh_ciphers.py",
+          "additions": 7,
+          "deletions": 3
+        },
+        {
+          "path": "tests/ssh/test_ssh_default_password.py",
+          "additions": 38,
+          "deletions": 0
+        },
+        {
+          "path": "tests/ssh/test_ssh_limit.py",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/ssh/test_ssh_stress.py",
+          "additions": 41,
+          "deletions": 9
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-06-10T18:50:44Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: Copilot / name: Copilot (4e63a37a0a9f7e35be6a876423ebe5207586de85)</li><li>:white_check_mark: login: aaronber0614 / name: Aaron Bernardino (4e63a37a0a9f7e35be6a876423ebe5207586de85)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T18:50:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T18:51:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-10T20:58:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-10T20:58:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "aaronber0614",
+          "createdAt": "2026-06-11T00:03:18Z",
+          "body": "ssh tests passed :\r\nvpp -  https://elastictest.org/scheduler/testplan/6a300d6d2296f2ad62e48ef7?searchTestCase=ssh\r\nnon-vpp - https://elastictest.org/scheduler/testplan/6a300c8c03b7f75ed1c22fc2?searchTestCase=ssh"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T13:15:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T13:15:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T13:22:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T13:22:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T14:20:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T14:21:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-22T19:19:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-22T19:19:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2026-06-23T10:04:39Z",
+          "body": "In the PR test : https://elastictest.org/scheduler/testplan/6a398def5074ed9889204c1d?searchTestCase=ssh&leftSideViewMode=detail&testcase=ssh%2Ftest_ssh_ciphers.py&type=console\r\n2 from the 4 are still skipped, is it expected?\r\n<img width=\"1209\" height=\"897\" alt=\"image\" src=\"https://github.com/user-attachments/assets/9ef7cd59-be70-4e6a-af1f-bd96e93ff370\" />\r\n\r\n"
+        },
+        {
+          "author": "aaronber0614",
+          "createdAt": "2026-06-23T14:53:07Z",
+          "body": "> In the PR test : https://elastictest.org/scheduler/testplan/6a398def5074ed9889204c1d?searchTestCase=ssh&leftSideViewMode=detail&testcase=ssh%2Ftest_ssh_ciphers.py&type=console 2 from the 4 are still skipped, is it expected? <img alt=\"image\" width=\"1209\" height=\"897\" src=\"https://private-user-images.githubusercontent.com/4735332/611742173-9ef7cd59-be70-4e6a-af1f-bd96e93ff370.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3ODIyMjY1OTIsIm5iZiI6MTc4MjIyNjI5MiwicGF0aCI6Ii80NzM1MzMyLzYxMTc0MjE3My05ZWY3Y2Q1OS1iZTcwLTRlNmEtYWYxZi1iZDk2ZTkzZmYzNzAucG5nP1gtQW16LUFsZ29yaXRobT1BV1M0LUhNQUMtU0hBMjU2JlgtQW16LUNyZWRlbnRpYWw9QUtJQVZDT0RZTFNBNTNQUUs0WkElMkYyMDI2MDYyMyUyRnVzLWVhc3QtMSUyRnMzJTJGYXdzNF9yZXF1ZXN0JlgtQW16LURhdGU9MjAyNjA2MjNUMTQ1MTMyWiZYLUFtei1FeHBpcmVzPTMwMCZYLUFtei1TaWduYXR1cmU9OTEzMzU5MDY4ZjBiM2JlODY2MWEwMmNjMzE2MjJmNGM4NWMxMzBhNjA0NDMzN2ZkMmZmNDlkMzdiZWQ5YTA2MCZYLUFtei1TaWduZWRIZWFkZXJzPWhvc3QmcmVzcG9uc2UtY29udGVudC10eXBlPWltYWdlJTJGcG5nIn0.-_TEJ6ITOpslTrHS26KeTzPYhywHgkPYZ-4iEINBg6w\">\r\n\r\nNo I want to enable all 4.  My earlier revert also reverted the the pytest mark. Let me re-test . Thanks"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T16:07:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-23T16:07:58Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "aaronber0614",
+          "createdAt": "2026-06-23T20:37:29Z",
+          "body": "Hi @yejianquan,\r\n\r\nThanks for flagging the skipped tests. Here's the status:\r\n\r\n**Root cause of skips:**\r\nFor CI builds, both `test_ssh_default_password` and `test_ssh_stress` are unconditionally skipped in `tests_mark_conditions.yaml` \u2014 this applies to ALL topologies (not just VPP). The skip reasons are:\r\n- `test_ssh_default_password`: \"no longer appropriate after password rotation\"\r\n- `test_ssh_stress`: known paramiko issue (https://github.com/paramiko/paramiko/issues/1508)\r\n\r\nThe fixes in this PR actually address the password rotation issue (the fixture captures the original password and restores it after test).  I'll check if the paramiko issue is still really happening but based on my local tests, I haven't seen intermittent issues that pointed to that issue. However, we might still want to skip it so we don't get flaky tests.  Let me try and unskip them now and see CI test results. "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T20:42:34Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

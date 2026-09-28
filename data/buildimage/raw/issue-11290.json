@@ -1,0 +1,80 @@
+{
+  "number": 11290,
+  "title": "[chassis] Remote ASIC SYSTEM_INTERFACE is not created if it is received before remote SYSTEM_LAG from the Chassis DB",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/11290",
+  "createdAt": "2022-06-29T19:23:45Z",
+  "closedAt": "2022-07-27T18:40:36Z",
+  "author": "sanmalho-git",
+  "labels": [
+    "Chassis :robot:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nIn a Sonic chassis the Chassis DB is used to exchange SYSTEM_LAG and SYSTEM_INTERFACE on the LAG from one asic to another. The asic where the LAG and the Interface are local \u2013 creates entries in the Chassis DB. These tables are subscribed to and received by the OrchAgent on the other ASICs. Sometimes it is possible that the OrchAgent received the SYSTEM_INTERFACE entry (for a LAG) before it receives the entry for the SYSTEM_LAG (on which the interface is to be created). In this scenario it is expected that the OrchAgent waits until the LAG creation and then then create the ROUTER_INTERFACE on top of it. But because of a bug in the IntfsOrch code for handling remote system interface \u2013 the ROUTER_INTERFACE is never created.\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Validate that neighbor entry for all the eBGP peers on all the asics are present on all the asics in the chassis.  For a T2 topology, this can be done as below:\r\n\r\n```\r\nadmin@sonic:~$ sudo ip netns exec asic0 ip neigh show | grep 10.0.0  | wc -l\r\n52\r\nadmin@ixre-egl-board7:~$ sudo ip netns exec asic0 ip neigh show | grep fc00  | wc -l\r\n52\r\n```\r\n2.  Reboot the supervisor card on a T2 chassis, which in turn would cause all the linecards to reboot.\r\n3.  After all cards rebooted and eBGP's are up, validate that neighbor entry for all the eBGP peers on all the asics are present on all the asics in the chassis\r\n4.\r\n\r\n#### Describe the results you received:\r\nNumber of ip neigh entries for ipv4 and ipv6 eBGP peers in a T2 topology don't add up to 104 on all the asics.\r\n\r\n#### Describe the results you expected:\r\nNumber of ip neigh entries for ipv4 and ipv6 eBGP peers in a T2 topology should add up to 104 on all the asics.\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2364,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2364",
+      "title": "Fix for System interface for remote asic LAG not getting created if received prior to SYSTEM_LAG creation from Chassis DB",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-07-27T18:40:35Z",
+      "createdAt": "2022-06-30T15:53:01Z",
+      "author": "skeesara-nokia",
+      "body": "\r\n<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nChanged interface and neighbor orch code in orchagent which handle updates from Chassis DB for system interface and remote neighbors. Fixes https://github.com/Azure/sonic-buildimage/issues/11290\r\n\r\n**Why I did it**\r\nIf an update from the Chassis DB for a system interface or a remote neighbor is received prior to receiving an update for the creation of the SYSTEM LAG or SYSTEM_PORT - the current code incorrectly treats this as an update from the local asic and ignores it. As a result the SYSTEM_INTERFACE or the Remote neighbor is not creating when this specific sequence of updates are received.\r\n\r\nThis change correctly verifies that an update is from the local asic before ignoring it.\r\n\r\n**How I verified it**\r\nPrior to the fix - adding a the system_interface to the Chassis DB before adding the corresponding System LAG would result in the ROUTER_INTERFACE never getting created by SAI. After the fix the ROUTER_INTERFACE is correctly created for this scenario.\r\n\r\nThe sonic-mgmt supervisor reset tests that were failing prior to this fix - passed after the fix was applied.\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/intfsorch.cpp",
+          "additions": 17,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/intfsorch.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/neighorch.cpp",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "judyjoseph",
+          "createdAt": "2022-07-12T19:59:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-07-12T20:00:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2022-07-19T22:23:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-07-19T22:23:29Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2022-07-26T16:43:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-07-26T16:43:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

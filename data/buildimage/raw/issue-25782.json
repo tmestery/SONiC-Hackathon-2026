@@ -1,0 +1,183 @@
+{
+  "number": 25782,
+  "title": "[sonic-vpp][Data Plane][t1-lag] MPLS - Enable data plane testing on VPP KVM testbed",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25782",
+  "createdAt": "2026-03-02T09:39:27Z",
+  "closedAt": "2026-09-18T00:14:17Z",
+  "author": "yejianquan",
+  "labels": [
+    "sonic-vpp",
+    "P3"
+  ],
+  "assignees": [
+    "augusdn"
+  ],
+  "milestone": null,
+  "body": "> :robot: *Created by DevAce, Jianquan's AI Agent, on his behalf.*\n\n## Description\n\nEnable mpls data plane testing on the SONiC-VPP KVM testbed.\n\n## Test Module Coverage\n\n| Feature | sonic-vpp | vpp | Status | Notes |\n|---------|:---:|:---:|--------|-------|\n| `mpls` | :x: | :white_check_mark: | Blocked on sonic-vpp | --- |\n\n\n## Priority\n\n**P2** --- VPP supports the data plane, but sonic-vpp integration work is needed.\n\n## Acceptance Criteria\n\n- [ ] Implement MPLS support in sonic-vpp\n- [ ] MPLS test module passes on VPP KVM testbed\n",
+  "comments": [
+    {
+      "author": "lguohan",
+      "createdAt": "2026-03-06T19:14:38Z",
+      "body": "not sure sonic support MPLS."
+    },
+    {
+      "author": "augusdn",
+      "createdAt": "2026-06-26T01:34:20Z",
+      "body": "### Proposal for maintainers: evaluate closing this as \"Not Applicable\" \u2014 the MPLS data-plane test has never passed on any SONiC platform\r\n\r\nWhile implementing this ticket (enable MPLS data-plane testing on the sonic-vpp KVM testbed), I gathered test-history evidence that suggests `tests/mpls/test_mpls.py` may not be a viable/maintained target. Sharing it so maintainers can decide whether to enable it on VPP or mark this not applicable.\r\n\r\n**Evidence \u2014 internal nightly/PR results, full available history 2023-06-24 \u2192 2026-06-25:**\r\n- The 4 cases (`test_pop_label`, `test_swap_label`, `test_push_label`, `test_swap_labelstack`): **62,530 executions, 0 passed** \u2014 across every topology, ASIC, and platform. No pass, ever.\r\n- Dominant outcome is **skipped**, reason *\"MPLS feature is not enabled with image version\"* (the `'mpls' not in feature_status` conditional-mark gate). Current images don't enable the `mpls` feature on any platform.\r\n- Secondary skip is *\"Unsupported topology\"* \u2014 the conftest gate `if tbinfo['topo']['name'] not in ('t1')` uses a **string instead of a tuple**, so the substring check skips all `t1-lag*` variants (and effectively only bare `t1` ever passes the gate).\r\n\r\n**The only platform that ever actually executed it** \u2014 Broadcom Tomahawk (`Arista-7060CX-32S-C32`, `t1`), and only on older release images where the `mpls` feature happened to be enabled \u2014 still **failed every run**:\r\n- `test_pop_label` \u2192 `TypeError: object of type 'Mask' has no len()`. This is a test-code bug: `expected_mask_ip_packet()` wraps the packet in `mask.Mask()` **twice**.\r\n- `test_swap_label` / `test_push_label` / `test_swap_labelstack` \u2192 *\"Did not receive expected packet on any of ports \u2026\"* (no MPLS forwarding observed).\r\n- All four also error on teardown via LogAnalyzer matching MPLS-related error syslogs.\r\n\r\n**VPP work done so far:** I implemented the VPP SAI MPLS backend (sonic-sairedis `vslib/vpp`: `SAI_OBJECT_TYPE_INSEG_ENTRY` \u2192 VPP MPLS FIB, RIF MPLS-enable via `SAI_ROUTER_INTERFACE_ATTR_ADMIN_MPLS_STATE`, and lazy creation of VPP MPLS table 0) plus the sonic-mgmt test enablement (topology gate fix, PortChannel\u2192member PTF-port resolution for t1-lag, and the double-`Mask` bug fix). The VPP data plane itself is verified working via manual injection (VPP packet trace: `mpls-input \u2192 mpls-lookup \u2192 label-disposition (pop) \u2192 ip4-rewrite \u2192 tx`, and ptf captured the popped packet). However, the automated suite still fails with the same *\"no packet received\"* as on Broadcom hardware \u2014 i.e. the failure mode is **not** VPP-specific.\r\n\r\n**Why this may be Not Applicable:**\r\n1. No passing baseline exists on any SONiC platform in 3 years (0 / 62,530).\r\n2. It fails on real hardware too (test bug + no-forwarding + error logs), so VPP is not behind hardware here.\r\n3. The `mpls` feature isn't enabled in current images on any platform \u2192 universal skip.\r\n4. The test appears unmaintained (the `Mask` bug breaks `test_pop_label` wherever it runs).\r\n\r\n**Caveat:** the \"no packet\" failures on Broadcom could be a shared test/harness defect rather than proof an ASIC cannot do MPLS \u2014 but either way, the test does not pass anywhere, which is the relevant bar for enabling it on a new platform.\r\n\r\n**Question for maintainers:** should we (a) close this as Not Applicable, or (b) keep it open pending first enabling the `mpls` feature in images and fixing `tests/mpls/test_mpls.py` so it can pass on at least one platform? Happy to contribute the test/\u200bbackend fixes if there's a path to a green baseline.\r\n"
+    },
+    {
+      "author": "yue-fred-gao",
+      "createdAt": "2026-06-26T14:15:30Z",
+      "body": "I don't want to see your effort is wasted just because the test is broken. MPLS is probably not popular in hyperscalers but there might be areas it is still in deployment. How much work to fix the sonic-mgmt test? The second option is investigating if sai_test in SAI has coverage in MPLS. In summary, I think we should try to commit your change and make sure there is test coverage to protect it."
+    },
+    {
+      "author": "augusdn",
+      "createdAt": "2026-07-08T11:24:16Z",
+      "body": "@yejianquan @yue-fred-gao \u2014 I'm wrapping up the MPLS data-plane work here and getting\r\nthe PRs ready. The VPP SAI backend is in good shape: `tests/mpls/test_mpls.py` passes\r\npop, swap, and swap_labelstack on a VPP KVM t1-lag testbed. Before I open the PRs I'd\r\nlike your call on two things.\r\n\r\n**1. test_push_label \u2014 skip or implement?**\r\n\r\nPop/swap/swap_labelstack cover MPLS disposition, which is what the VPP SAI backend\r\nimplements, and those pass. `test_push_label` is the odd one out: it exercises\r\nIP-to-label imposition, and it doesn't work end to end today. The gap isn't in the VPP\r\nbackend \u2014 orchagent creates the push next hop fine, but the test injects a route\r\nstraight into ROUTE_TABLE and RouteOrch never installs that protocol-less route into\r\nASIC_DB, so the SAI route never reaches syncd. As far as I can tell test_push_label has\r\nnever passed on any platform.\r\n\r\nMy plan is to skip just test_push_label (with that reason spelled out) and let the other\r\nthree run, then file a separate issue for the orchagent side. Does that work for closing\r\nthis, or do you want the push path implemented as part of this? If it's in scope I'd\r\nrather know now, since it lands in a different area than the VPP backend.\r\n\r\n**2. Where should the `mpls` feature be enabled for the vpp testbed?**\r\n\r\nThe tests are gated by the `'mpls' not in feature_status` condition, so the feature has\r\nto be turned on somewhere. Right now I enable it in sonic-mgmt through\r\ngenerate_golden_config_db (same pattern otel/bmp use), but it might be cleaner to enable\r\nit in the sonic-vpp image itself. Do you have a preference on which layer it should live\r\nat? If it belongs in the image I'll drop the sonic-mgmt change.\r\n\r\nFor sequencing: the sairedis backend PR is the prerequisite \u2014 it needs to land and get\r\npicked up in the sonic-vpp image before the test-enablement PR, otherwise vpp CI would\r\nrun pop/swap with no backend. I'll reference it as a pre-requisite PR.\r\n\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26619,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26619",
+      "title": "[mpls][sonic-vpp] Enable MPLS data-plane tests on the VPP t1-lag testbed",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-18T00:14:15Z",
+      "createdAt": "2026-07-28T08:22:15Z",
+      "author": "augusdn",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nFixes sonic-net/sonic-buildimage#25782\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/27874\r\n\r\nEnable the existing MPLS data-plane tests on SONiC-VPP `t1-lag-vpp`.\r\nThe current test policy enables this module only for `asic_type == 'vpp'`,\r\nwithout using `feature_status` or adding an MPLS FEATURE entry.\r\nThe lossy-topology restriction remains, and `test_push_label` is temporarily\r\nskipped while #27874 is open.\r\n\r\nThe VPP MPLS backend in sonic-net/sonic-sairedis#2008 and kernel-module\r\nautoload in sonic-net/sonic-buildimage#29152 have merged. This PR does not\r\nregister a service or run `modprobe` in test setup.\r\n\r\n### Type of change\r\n\r\n- [ ] Bug fix\r\n- [x] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n### Back port request\r\n\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A - no backport requested.\r\nFailure type: other (platform test enablement)\r\n\r\n### Tested branch\r\n\r\n- [x] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n\r\n- Earlier end-to-end evidence for parent commit `143b5951a`: image\r\n  `SONiC.master.1203001-8f708f027`, Testplan ID:\r\n  `6a8f1793d025e08c23cc52a3`. MPLS module: **3 passed, 1 skipped**.\r\n  Pop, swap and swap-labelstack passed; push-label was skipped.\r\n- Latest marker-only update: the production marker resolver was exercised\r\n  in a Linux sonic-mgmt container across **448 MPLS scenarios**, covering\r\n  VPP, VS, hardware ASIC values, unknown ASIC values, missing/present\r\n  FEATURE information, lossy topologies and both YAML load orders.\r\n  These were validation-only checks; no unit-test file change is included.\r\n- Latest combined feedback update, tested from an isolated worktree at the PR\r\n  head with only `tests/mpls/conftest.py` and the main condition file changed:\r\n  **3 passed, 1 skipped**. The skip reason referenced #27874. No new\r\n  `setIntfMpls` syslog error or core file appeared.\r\n- Conditional-mark sort, flake8, Python syntax and `git diff --check` passed.\r\n  CI will rerun on the updated head.\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nVPP MPLS forwarding is available, but the existing tests were skipped by the\r\nFEATURE-presence check and a separate blanket VPP skip. Following review\r\ndiscussion, use an explicit VPP-only test policy instead of manufacturing a\r\nFEATURE entry for a protocol without a standalone MPLS service.\r\n\r\nCollected results for this module from 11 March through 7 September 2026\r\ncontained successful forwarding cases only on VPP. This supports the current\r\ntest policy; it does not establish that other SONiC platforms cannot support\r\nMPLS. Historical Juniper validation is documented in #3483.\r\n\r\n#### How did you do it?\r\n\r\n| File | Change |\r\n|---|---|\r\n| `tests/common/plugins/conditional_mark/tests_mark_conditions.yaml` | Skip the MPLS module when `asic_type not in ['vpp']` or the topology is lossy. Use #27874 as the temporary `test_push_label` skip condition. |\r\n| `tests/common/plugins/conditional_mark/tests_mark_conditions_sonic_vpp.yaml` | Remove the blanket MPLS skip so all MPLS mark conditions live in the main file. |\r\n| `tests/mpls/conftest.py` | Gate on topology type `t1`; determine applicability from configured IPv4 T0/T2 BGP peers; fail if a supported layout has no active interface for either role; resolve PortChannels to their member PTF ports. No FEATURE registration or test-side module loading. |\r\n| `tests/mpls/test_mpls.py` | Pass the resolved egress-port list to packet verification and remove a duplicate mask wrapper. |\r\n| `.azure-pipelines/pr_test_scripts.yaml` | Add `mpls/test_mpls.py` to the `t1-lag-vpp` selection. |\r\n\r\nThe shared rule is now:\r\n\r\n```yaml\r\nmpls:\r\n  skip:\r\n    reason: \"MPLS tests are currently enabled only for VPP; skipped on lossy topologies\"\r\n    conditions_logical_operator: or\r\n    conditions:\r\n      - \"asic_type not in ['vpp']\"\r\n      - *lossyTopos\r\n```\r\n\r\nNon-VPP platforms are skipped regardless of whether an MPLS FEATURE entry\r\nexists. This is a deliberate test-scope decision, not an equivalent rewrite\r\nfor custom images that register that entry.\r\n\r\n`test_push_label` is temporarily skipped while #27874 remains open. The issue\r\ntracks the observed forwarding failure without treating it as VPP-specific.\r\nOnce the issue checker observes #27874 as closed, this targeted skip stops\r\napplying; the general VPP-only and lossy-topology rules still apply. Existing\r\npytest issue-status caches may need clearing, and failed status lookups retain\r\nthe skip.\r\n\r\n#### How did you verify/test it?\r\n\r\nSee the Test result section. Selection was checked using the actual\r\n`load_conditions()` and `find_all_matches()` functions with the production\r\nYAML, not a separate reimplementation. No unit-test file changes are included.\r\nThe combined marker and topology-health changes were also run against the\r\n`t1-lag-vpp` DUT from an isolated worktree, producing 3 passed and 1 skipped.\r\n\r\n#### Any platform specific information?\r\n\r\nThe MPLS module is currently enabled only for VPP. The existing `t1` topology\r\nrequirement and lossy-topology exclusion still apply. Push-label is\r\ntemporarily skipped by #27874.\r\nOther platform enablement would require an explicit update to this policy.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nNot a new data-plane test. The existing module is enabled for `t1-lag-vpp`.\r\n\r\n### Documentation\r\n\r\nThe skip reason and this description document the VPP-only test policy.\r\nThe existing MPLS test plan remains applicable.",
+      "files": [
+        {
+          "path": ".azure-pipelines/pr_test_scripts.yaml",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 10,
+          "deletions": 2
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions_sonic_vpp.yaml",
+          "additions": 0,
+          "deletions": 11
+        },
+        {
+          "path": "tests/mpls/conftest.py",
+          "additions": 40,
+          "deletions": 6
+        },
+        {
+          "path": "tests/mpls/test_mpls.py",
+          "additions": 4,
+          "deletions": 5
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-28T08:22:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-28T08:22:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "github-actions",
+          "createdAt": "2026-07-28T08:22:39Z",
+          "body": "<!-- skip-expiry-conditional-mark-review-note -->\n@StormLiangMS @wangxin @yxieca A user wants to merge changes to the conditional mark files into `master`. Please review."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-28T08:22:41Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T10:46:48Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T10:47:05Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "augusdn",
+          "createdAt": "2026-07-30T04:54:05Z",
+          "body": "### CI status on build [1178163](https://dev.azure.com/mssonic/mgmt/_build/results?buildId=1178163) (commit `e90f906`)\r\n\r\nTwo Elastictest jobs are red. Neither is a defect in this PR \u2014 details below so reviewers aren't misled.\r\n\r\n---\r\n\r\n#### 1. `impacted-area-kvmtest-t1-lag-vpp` \u2014 expected until sonic-sairedis#2008 merges\r\n\r\nPlan [`6a69dd2a101ed2146e809527`](https://elastictest.org/scheduler/testplan/6a69dd2a101ed2146e809527) \u2192 `mpls/test_mpls.py failed for RUN_TEST_CASE_FAILED`.\r\n\r\nThis PR adds `mpls/test_mpls.py` to the `t1-lag-vpp` list in `.azure-pipelines/pr_test_scripts.yaml`, so CI now runs it against the **stock master `sonic-vs`/vpp image**, which does not yet contain the VPP MPLS data-plane backend. That backend is https://github.com/sonic-net/sonic-sairedis/pull/2008, which is still open. This job cannot go green until #2008 merges and `mssonicbld` bumps `src/sonic-sairedis` in sonic-buildimage.\r\n\r\nIt has already been validated end-to-end pre-merge. Using a throwaway sonic-buildimage PR that pinned both submodules (build `1177040`), the combined run is green:\r\n\r\n* Plan [`6a69da68f481df03c4e59c5e`](https://elastictest.org/scheduler/testplan/6a69da68f481df03c4e59c5e) \u2014 **SUCCESS**, 22 tests, 17 passed / 5 skipped, 0 failed\r\n  * `test_pretest.py` \u2014 13 tests, 9 passed / 4 skipped\r\n  * `mpls/test_mpls.py` \u2014 4 tests, **3 passed / 1 skipped** (`test_mpls_push_label`, skipped via `tests_mark_conditions_sonic_vpp.yaml`)\r\n  * `test_posttest.py` \u2014 5 tests, 5 passed\r\n\r\nThis PR is therefore kept in **draft** until #2008 lands.\r\n\r\n---\r\n\r\n#### 2. `impacted-area-kvmtest-t0-sonic` \u2014 pre-existing, unrelated to this PR\r\n\r\nPlan [`6a69dcfcf481df03c4e59c61`](https://elastictest.org/scheduler/testplan/6a69dcfcf481df03c4e59c61) \u2192 the only failing module is\r\n`macsec/test_macsec_recovery.py::test_dirty_container_kill_preserves_sak_consistency[256_XPN_SCI]`.\r\n\r\nIt is a **LogAnalyzer teardown ERROR, not a test assertion failure** \u2014 the test's own cases pass, then teardown trips on an unignored syslog line:\r\n\r\n```\r\nE   Failed: Got matched syslog in processes \"analyze_logs--<MultiAsicSonicHost vlab-02>\" exit code:\"1\"\r\nE   match: 1, expected_match: 0\r\nE   2026 Jul 29 12:10:45 vlab-02 ERR macsec#wpa_supplicant[92]: KaY: Reject distributed SAK since I'm a key server\r\n```\r\n\r\nThe test deliberately kills the `macsec` container, and the resulting `wpa_supplicant` `ERR` is not in the test's LogAnalyzer ignore list.\r\n\r\nWhy it is not attributable to this PR:\r\n\r\n* It was added upstream on 2026-07-22 by #24903 (`f335de7a8`, `[macsec] Add dirty-restart SAK regression test`), seven days before this run.\r\n* This PR touches **no** macsec, LogAnalyzer, or syslog code. Full diff is 7 files: `pr_test_scripts.yaml`, `generate_golden_config_db.py`, `tests_mark_conditions_sonic_vpp.yaml`, `tests/mpls/conftest.py`, `tests/mpls/test_mpls.py`, `tests/test_pretest.py`, `tests/test_posttest.py`.\r\n* In the very same t0-sonic plan, **`test_pretest.py` PASSED on both testbeds**, and the other five macsec modules (`test_interop_protocol`, `test_macsec_pfc`, `test_dataplane`, `test_deployment`, `test_fault_handling`) all passed \u2014 so the changes to the shared `test_pretest.py` / `test_posttest.py` are benign here.\r\n\r\nThe reason this PR runs macsec at all is that it modifies the shared `tests/test_pretest.py` and `tests/test_posttest.py`, which widens the impacted-area test set relative to a typical feature PR.\r\n\r\nFor completeness, the change to those two shared files is a two-line guard that skips the `mpls` FEATURE, mirroring the existing `frr_bmp` skip immediately above it \u2014 `mpls` is enabled as a FEATURE in `CONFIG_DB` for vpp topologies but has no corresponding docker container, so `modify_syslog_rate_limit()`'s `docker exec -i mpls` fails with `No such container: mpls`. On `t0-sonic` the `mpls` FEATURE is not enabled, so the guard is inert.\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-02T06:53:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-02T06:53:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "augusdn",
+          "createdAt": "2026-08-02T06:55:35Z",
+          "body": "Pushed `15489cc9c`. Two substantive changes since the previous revision, plus a note on three things whose real root cause sits outside this repo.\r\n\r\n## What changed\r\n\r\n**1. The `mpls` FEATURE is now registered as `disabled`, not `enabled`.**\r\n\r\nThis is the important one. Registering it as `enabled` was verified on a live DUT to break the platform:\r\n\r\n```\r\n$ sudo monit summary | grep container_checker\r\n container_checker    Status failed    Program\r\n$ sudo /usr/bin/container_checker\r\nExpected containers not running: mpls\r\n```\r\n\r\n`mpls` is a config flag, not a containerized service \u2014 there is no `mpls` docker. With `state: enabled` the image's own monit `container_checker` fails permanently, which fails the **pre-test sanity check for every test on this platform**, not just the MPLS ones. The exemption for the same class of containerless feature (`frr_bmp`) is hardcoded in sonic-buildimage's `/usr/bin/container_checker`, so it can't be worked around from sonic-mgmt.\r\n\r\nThe conditional_mark gate is `\"'mpls' not in feature_status\"` \u2014 a *key-membership* test \u2014 so `disabled` is sufficient to un-skip the tests. Verified: feature still listed by `show feature status`, `container_checker` exits 0, monit reports `container_checker OK`.\r\n\r\n**2. `tests/test_pretest.py` and `tests/test_posttest.py` are no longer touched at all.**\r\n\r\nThose guards only existed because the feature was enabled. Both loops already skip features whose state isn't `enabled`, so with `disabled` they became dead code. Reverting them removes this PR's footprint on shared, global test files entirely \u2014 which also narrows the impacted-area test set.\r\n\r\n**3. Skip cleanly when the topology has no T2-facing or no T0-facing interface.**\r\n\r\nGating on topology *type* correctly admits `t1-lag`, but it also admits `t1` variants with no T2 peer. Enumerating all 41 `t1`-type topologies, four have none: `t1-backend` (all `BT0`), `t1-isolated-d128`, `t1-isolated-d32`, `t1-isolated-v6-d128`. Those would have failed with an `IndexError` from `random.choice([])`.\r\n\r\n**4. LogAnalyzer ignore for the kernel-MPLS error** \u2014 see (a) below.\r\n\r\n## Three things whose root cause is upstream of this PR\r\n\r\nFlagging these explicitly rather than leaving them to be discovered.\r\n\r\n**(a) `intfmgrd` kernel-MPLS error \u2014 mitigated here, not fixed.**\r\nConfiguring MPLS on an interface makes `intfmgrd` run `sysctl -w net.mpls.conf.<intf>.input=1`, which needs the `mpls_router` kernel module. **No SONiC image loads that module** (nothing in `/etc/modules-load.d/` references it), so the command fails and is logged as an `ERR`:\r\n\r\n```\r\nERR swss#intfmgrd: :- setIntfMpls: Command 'sysctl -w net.mpls.conf.Ethernet76.input=1' failed with rc 1\r\n```\r\n\r\nOn sonic-vpp this is genuinely benign \u2014 MPLS forwarding is done by VPP in userspace via the SAI INSEG entries, so the kernel data path is unused. That's why the ignore is gated on `asic_type == 'vpp'` rather than applied globally: on a platform that *does* rely on the kernel path, this error would be meaningful and shouldn't be masked. The real fix belongs in sonic-buildimage (load the module) or sonic-swss (don't log an ERR where the kernel path isn't used).\r\n\r\n**(b) `test_push_label` is skipped, not fixed.**\r\nIt injects the push route straight into `ROUTE_TABLE`, and orchagent doesn't install that route into ASIC_DB, so it never reaches the SAI backend. That's a route-management gap in sonic-swss (or an unsupported test method), not something specific to VPP. Pre-existing \u2014 it isn't a regression from this change.\r\n\r\n**(c) `config interface mpls remove` doesn't restore CONFIG_DB.**\r\nIt writes `mpls: disable` rather than deleting the field, so an interface that had no `mpls` key before the test has one after:\r\n\r\n```\r\n\"Ethernet84\":     {\"mpls\": \"disable\"}\r\n\"PortChannel111\": {\"mpls\": \"disable\"}\r\n```\r\n\r\n`core_dump_and_config_check` notices and auto-runs `restore_config_db_and_config_reload`, so it's non-fatal \u2014 the full run below is green. The behaviour is sonic-utilities CLI semantics in pre-existing test code, so I've left it rather than paper over it in the teardown, but I'm happy to add a restore here if reviewers would prefer the test be strictly idempotent on its own.\r\n\r\n## Verification\r\n\r\nFull suite on `vms-kvm-vpp-t1-lag` with the pre-requisite backend (sonic-net/sonic-sairedis#2008) installed:\r\n\r\n```\r\ntest_pretest.py + mpls/test_mpls.py + test_posttest.py\r\n17 passed, 5 skipped, 0 failed, 0 errors\r\n```\r\n\r\nA/B against a clean `master` worktree on the same DUT, identical scope, to confirm no regression:\r\n\r\n```\r\nclean master : 14 passed, 4 skipped, 0 failed\r\nthis PR      : 14 passed, 4 skipped, 0 failed\r\n```\r\n\r\nThis stays a draft until #2008 merges and the submodule bump reaches the sonic-vpp image \u2014 until then `kvmtest-t1-lag-vpp` can't pass, because the newly enabled tests have no backend to talk to.\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-03T08:29:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-03T08:29:44Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "augusdn",
+          "createdAt": "2026-08-03T08:31:31Z",
+          "body": "Pushed `8971943db`. One change since the last revision, plus the local validation results.\r\n\r\n## Replaced the LogAnalyzer ignore with a root-cause fix\r\n\r\nThe previous revision suppressed this error with a LogAnalyzer ignore:\r\n\r\n```\r\nERR swss#intfmgrd: :- setIntfMpls: Command 'sysctl -w net.mpls.conf.Ethernet76.input=1' failed with rc 1\r\n```\r\n\r\nThat was treating the symptom. The actual cause is that `sysctl -w net.mpls.conf.<intf>.input=1` needs the `mpls_router` kernel module, which **ships in the image but is never loaded** \u2014 nothing in `/etc/modules-load.d/` references it, so `/proc/sys/net/mpls` doesn't exist at all:\r\n\r\n```\r\n# before\r\n$ ls /proc/sys/net/mpls\r\nls: cannot access '/proc/sys/net/mpls': No such file or directory\r\n\r\n# after modprobe mpls_router\r\nconf  default_ttl  ip_ttl_propagate  platform_labels\r\n$ sysctl -w net.mpls.conf.Ethernet0.input=1\r\nnet.mpls.conf.Ethernet0.input = 1        <- the exact command intfmgrd runs, now succeeds\r\n```\r\n\r\nSo the fixture now loads the module instead of hiding the error. SONiC's own `config interface mpls add` then completes as designed rather than half-failing. This follows sonic-swss's own MPLS test, which does `modprobe mpls_router` in `setup_mpls`, and sonic-mgmt already modprobes in `tests/console/conftest.py` and `tests/test_pktgen.py`.\r\n\r\nVerified from a clean baseline (module `rmmod`'ed first, `/proc/sys/net/mpls` confirmed absent), **with no LogAnalyzer ignore in place**:\r\n\r\n```\r\nmpls/test_mpls.py  3 passed, 1 skipped\r\nsetIntfMpls errors: 0\r\nLogAnalyzer match failures: 0\r\n```\r\n\r\nThe module is deliberately left loaded on teardown \u2014 `modprobe` is idempotent, the module ships in the image, unloading could disrupt anything else using MPLS, and it touches no CONFIG_DB state.\r\n\r\nThe durable fix still belongs upstream (sonic-buildimage loading the module, or sonic-swss not logging an `ERR` where the kernel MPLS path is unused), but this no longer depends on that.\r\n\r\n## Local validation\r\n\r\nThe dev VM's build environment was repaired so the full sairedis build and test suite could be run locally against the pre-requisite backend before pushing:\r\n\r\n| check | result |\r\n|---|---|\r\n| `dpkg-buildpackage` | rc=0, all 9 debs produced |\r\n| `make check` \u2014 `tests` | **All 11 tests passed** (`aspellcheck.pl`, `conflictnames.pl`, `checksaiapi.sh`, `checkwhitespace.sh`, `swsslogentercheck.sh`, platform `.pl` tests, `testdash_gtest`) |\r\n| `make check` \u2014 `meta` / `lib` / `vslib` / `unittest/vslib` | PASS |\r\n| ASAN build + `vslib` tests under ASAN | clean, **0 findings** (leaks, UAF, stack-use-after-return all enabled) |\r\n| sonic-mgmt Markers Check | PASS (737 scripts, 0 without topology markers) |\r\n| flake8 / YAML / whitespace | clean |\r\n| `test_pretest` + `mpls` + `test_posttest` on `vms-kvm-vpp-t1-lag` | **17 passed, 5 skipped, 0 failed** |\r\n| A/B against a clean `master` worktree, same DUT, same scope | identical (14 passed / 4 skipped both) |\r\n\r\nStill a draft until sonic-net/sonic-sairedis#2008 merges and the submodule bump reaches the sonic-vpp image \u2014 until then `kvmtest-t1-lag-vpp` cannot pass, because the newly enabled tests have no backend to talk to.\r\n"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T05:28:03Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "augusdn",
+          "createdAt": "2026-08-05T05:28:37Z",
+          "body": "Marking this ready for review. Summary of the current CI state so the one red check isn't a surprise:\r\n\r\n**22 checks pass, 1 fails.** The single failure is `Test impacted-area-kvmtest-t1-lag-vpp by Elastictest`, and it is the expected merge-order dependency rather than a defect:\r\n\r\n```\r\nmpls/test_mpls.py|||2 failed for RUN_TEST_CASE_FAILED\r\n```\r\n\r\nThat job runs the whole `t1-lag-vpp` list (acl, arp, bfd, bgp, ...) against a **stock sonic-vpp image**, and `mpls/test_mpls.py` is the only failure in it. The tests this PR un-skips have no backend to talk to until sonic-net/sonic-sairedis#2008 lands and is picked up into the sonic-vpp image. It cannot go green before then.\r\n\r\nThe same tests pass once that backend is present - ElasticTest plan `6a69da68f481df03c4e59c5e` on image `SONiC.master-28652.1177040-4e2ccc26c` (a throwaway build carrying #2008) returned **17 passed / 5 skipped / 0 failed / 0 errors** for `test_pretest.py` + `mpls/test_mpls.py` + `test_posttest.py`. Details are in the PR description.\r\n\r\nEverything else is green, including all eight other topology jobs (`t0`, `t0-2vlans`, `t0-sonic`, `t1-lag`, `multi-asic-t1`, `t2`, `dualtor`, `dpu`) and every `Pre_test` gate (Markers Check, Static Analysis, Validate Test Cases, Meta check, Dependency Check, skip_expiry, MMU probe).\r\n\r\nWorth noting for review scope: this PR touches **no shared global test files**. An earlier revision needed guards in the pre-test/post-test/`dut_utils` paths; registering the `mpls` FEATURE as `disabled` instead of `enabled` made those unnecessary and they were reverted. The remaining change set is 5 files, +68/-13.\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T07:11:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T07:11:56Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T23:09:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-13T23:10:15Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-17T06:17:42Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

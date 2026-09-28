@@ -1,0 +1,113 @@
+{
+  "number": 20048,
+  "title": "Replace sonic-cfggen with sonic-db-cli in banner-config & hostname-config",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/20048",
+  "createdAt": "2024-08-28T05:33:17Z",
+  "closedAt": "2024-10-04T00:25:40Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Triaged",
+    "NVIDIA"
+  ],
+  "assignees": [
+    "vivekkarri"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nsonic-cfggen is an expensive call to make especially on devices with weaker CPU's\r\n\r\nEg:\r\n```\r\nroot@sn2700:/home/admin# time sonic-cfggen\r\n\r\nreal\t0m0.484s\r\nuser\t0m0.414s\r\nsys\t0m0.069s\r\n\r\nroot@sn2700/home/admin# time sonic-cfggen -d -v 'BANNER_MESSAGE[\"global\"][\"state\"]'\r\ndisabled\r\n\r\nreal\t0m0.726s\r\nuser\t0m0.507s\r\nsys\t0m0.090s\r\n\r\nroot@rsn2700:/home/admin# time sonic-db-cli CONFIG_DB HGET \"BANNER_MESSAGE|global\" state\r\ndisabled\r\n\r\nreal\t0m0.016s\r\nuser\t0m0.014s\r\nsys\t0m0.001s\r\n```\r\n\r\n\r\n\r\nServices like banner-config, hostname-config just read from CONFIG_DB and proceed with their own stuff. Profiling with would show this. \r\n\r\nThese services complete with swss start and add some lantency to the overall control plan downtime during WR/FW.\r\n\r\n<img width=\"771\" alt=\"image\" src=\"https://github.com/user-attachments/assets/1dbf02d6-6fbb-4f64-b1db-55d9d7febd5a\">\r\n\r\n<img width=\"1244\" alt=\"image\" src=\"https://github.com/user-attachments/assets/0d1a8e98-b679-4840-a95e-43399da4dd3c\">\r\n\r\n\r\n\r\nThere are straightforward calls to DB which doesn't require sonic-cfggen\r\n\r\n",
+  "comments": [
+    {
+      "author": "vivekkarri",
+      "createdAt": "2024-08-28T15:56:43Z",
+      "body": "@SviatoslavBoichuk FYI for banner config"
+    },
+    {
+      "author": "gechiang",
+      "createdAt": "2024-08-28T16:02:46Z",
+      "body": "@vaibhavhd FYI... this may be of interest to you.\r\nThanks!"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 20232,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/20232",
+      "title": "Replace straightforward sonic-cfggen calls with sonic-db-cli",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-10-04T00:25:39Z",
+      "createdAt": "2024-09-11T21:27:16Z",
+      "author": "vivekkarri",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/20048\r\n\r\nIt is explained in ticket above, how sonic-cfggen calls in the hostname.sh, pcie-check.sh and banner-config and hogging the CPU and slightly delaying the start of swss\r\n\r\n**pcie-check.sh**\r\nredis-cli call is also replaced with sonic-db-cli since redis-cli is a wrapper around the actual redis-cli under database container\r\n<img width=\"1113\" alt=\"image\" src=\"https://github.com/user-attachments/assets/bed9d055-3b9f-4f75-aabd-1e0335716396\">\r\n\r\n**swss start**\r\nIf the SKU has create_only_config_db_buffers.json set to true, the only config that's updated today is. \r\n```\r\n{\r\n    \"DEVICE_METADATA\": {\r\n        \"localhost\": {\r\n            \"create_only_config_db_buffers\": \"true\"\r\n        }\r\n    }\r\n}\r\n```\r\nWe use sonic-cfggen which cause 1.5 sec delay in the start of swss container. Thus replace with sonic-db-cli. If a complex use case arises in future, this can be updated.\r\n<img width=\"1483\" alt=\"Screenshot 2024-09-16 at 12 45 05\u202fPM\" src=\"https://github.com/user-attachments/assets/ee3248b5-7623-42c4-9b50-81b114c71ae7\">\r\n\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\n#### How to verify it\r\n\r\n**Note: Everything was tested on MSN2700 device, Intel Celeron CPU with 2 cores**\r\n\r\n- 1.5 sec saved in the swss container start\r\n<img width=\"1298\" alt=\"image\" src=\"https://github.com/user-attachments/assets/817739f1-26a2-41ad-89e4-1e76e31532ac\">\r\n\r\n- 1.6 sec saved in the start of swss service. Previously, it took almost 1.8 sec after config-setup is finished for the swss to start. After replacing the calls, it start almost 0.2 sec after config-setup is finished\r\n\r\nIn total, anywhere between 2.5 - 3.5 sec is saved\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/docker_image_ctl.j2",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "files/image_config/bannerconfig/banner-config.sh",
+          "additions": 4,
+          "deletions": 4
+        },
+        {
+          "path": "files/image_config/hostname/hostname-config.sh",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "files/image_config/pcie-check/pcie-check.sh",
+          "additions": 3,
+          "deletions": 3
+        },
+        {
+          "path": "files/image_config/rsyslog/rsyslog-config.sh",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "vivekkarri",
+          "createdAt": "2024-09-16T14:31:20Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-09-16T14:31:22Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-09-16T14:31:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2024-09-16T14:53:42Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-09-16T14:53:45Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-09-16T14:53:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2024-10-04T00:19:37Z",
+          "body": "@qiluo-msft Can we merge this?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-10-21T23:41:33Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-buildimage/pull/20562"
+        }
+      ]
+    }
+  ]
+}

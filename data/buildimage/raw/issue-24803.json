@@ -1,0 +1,206 @@
+{
+  "number": 24803,
+  "title": "Bug: [Chassis]: ERR syncd0#syncd: :- threadFunction: time span WD exceeded 30673 ms for create:SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000\\n\"",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24803",
+  "createdAt": "2025-12-10T21:09:47Z",
+  "closedAt": "2026-03-24T17:53:33Z",
+  "author": "deepak-singhal0408",
+  "labels": [
+    "Bug :bug:",
+    "Help Wanted :sos:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn All chassis platforms, during swss/syncd init, a bunch of Watchdog exceeded error syslogs are generated.\nAlthough this seems harmless, as the init goes through succesfully. This Error messages are unwaranted and causes confusion.\n\nERR syncd0#syncd: :- threadFunction: time span WD exceeded 30937 ms for create:SAI_OBJECT_TYPE_SWITCH:oid:0x21000000000000\n\nThere was timeout adjustments done in SWSS for Chassis platforms:\nhttps://github.com/sonic-net/sonic-swss/blob/b88a5c20efb9296af946d49436d8487affe2dec1/orchagent/main.cpp#L693-L717\n\nNeed similar adjustments in syncd/sairedis as well?\n\n### Steps to Reproduce\n\nrestart SWSS\n\n\n### Actual Behavior and Expected Behavior\n\nActual Behvaior:\ntime span WD error syslogs are generated upon swss restarts\n\nExpected Behavior:\nLonger init time is expected, and hence this syslog should not be seen(or should be info not error).\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC202405\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2025-12-10T21:15:09Z",
+      "body": "@rlhui @arlakshm for viz"
+    },
+    {
+      "author": "zjswhhh",
+      "createdAt": "2026-01-14T16:14:29Z",
+      "body": "Hi @deepak-singhal0408 - can you confirm this issue exists in the latest release branch? `202405` is a bit old. "
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-01-23T06:40:21Z",
+      "body": "Hi @deepak-singhal0408 \u2014 I noticed the Help Wanted tag and did a bit of digging here.\n\nFor @zjswhhh's question: I traced through the watchdog timeout setting and not much logic has changed since `202405`. Default timeout is still 30 seconds, with no exceptions for chassis-style platforms (unlike `sonic-swss`), so issue likely still persists.\n\n`syncd` supports a configurable watchdog timeout via the `-w` CLI option (introduced in sonic-net/sonic-sairedis#1243). It may make sense to follow this pattern, as `nvidia-bluefield` platform is already using this approach here to change their timeout: [syncd/scripts/syncd_init_common.sh#L552](https://github.com/sonic-net/sonic-sairedis/blob/50c5626c89566bf5ca54d0ab767b272c8742dee5/syncd/scripts/syncd_init_common.sh#L552).\n\nI\u2019ve prepared a PR following this pattern and will submit it momentarily. Happy to iterate on it if there is feedback."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1751,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/1751",
+      "title": "syncd: Add -W flag for platform specific watchdog timeout during initialization",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-24T17:53:31Z",
+      "createdAt": "2026-01-23T06:40:41Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/24803\r\n\r\nOn chassis platforms (VOQ, fabric, chassis-packet, DPU), syncd generates false-alarm \"WD exceeded\" errors during initialization. The default 30-second watchdog timeout is too short for these platforms.\r\n\r\nInitially, I proposed statically extending the timeout, but as pointed out in the reviews, a permanent extension effectively neutralizes the watchdog's ability to detect hung operations during steady-state operation. We need a way to tolerate slow initialization without compromising ongoing system monitoring.\r\n\r\n#### How I did it\r\nAdded a two-timeout setup: a longer timeout for the initialization phase, which automatically drops back to the standard timeout once init is done.\r\n\r\n1. Added optional `-W` for the init timeout (similar to the existing `-w` flag introduced in #1243).\r\n2. `syncd` starts using the `-W` timeout. Once `APPLY_VIEW` succeeds, `syncd` automatically switches the watchdog back to the `-w` timeout.\r\n3. For normal switches, if `-W` isn't provided, it defaults to value of `-w` for backward compatibility. However, default `-W` value is extended for chassis platforms:\r\n   - voq/chassis-packet/dpu: 150s (5x default)\r\n   - fabric: 300s (10x default)\r\n\r\n#### Why not the swss way (C++ DB read)\r\n\r\nContext: There was timeout adjustments done in SWSS for Chassis platforms, they just read from CONFIG_DB:\r\n[orchagent/main.cpp#L693-L717](https://github.com/sonic-net/sonic-swss/blob/b88a5c20efb9296af946d49436d8487affe2dec1/orchagent/main.cpp#L693-L717)\r\n\r\nHowever, syncd is configured via its `-w` command-line option in this repo. Reading CONFIG_DB in C++ at syncd startup would add a new DB dependency and ordering risk, while the value is already available in this script via sonic-cfggen. This keeps the watchdog setting with the component that consumes it and aligns with existing syncd init patterns.\r\n\r\nAlso, the `nvidia-bluefield` platform is already using this approach here to change their timeout: [syncd/scripts/syncd_init_common.sh#L552](https://github.com/sonic-net/sonic-sairedis/blob/50c5626c89566bf5ca54d0ab767b272c8742dee5/syncd/scripts/syncd_init_common.sh#L552).\r\n\r\n#### How to verify it\r\n\r\nDeploy on a chassis platform (VOQ/fabric) and verify no false \"WD exceeded\" errors during syncd initialization.\r\n\r\n#### Description for the changelog\r\n\r\nImplement dual-timeout watchdog in syncd to prevent false-alarms during chassis initialization",
+      "files": [
+        {
+          "path": "syncd/CommandLineOptions.cpp",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/CommandLineOptions.h",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/CommandLineOptionsParser.cpp",
+          "additions": 21,
+          "deletions": 3
+        },
+        {
+          "path": "syncd/Syncd.cpp",
+          "additions": 44,
+          "deletions": 1
+        },
+        {
+          "path": "syncd/Syncd.h",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/TimerWatchdog.cpp",
+          "additions": 32,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/TimerWatchdog.h",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/scripts/syncd_init_common.sh",
+          "additions": 27,
+          "deletions": 0
+        },
+        {
+          "path": "unittest/syncd/Makefile.am",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "unittest/syncd/TestCommandLineOptions.cpp",
+          "additions": 41,
+          "deletions": 2
+        },
+        {
+          "path": "unittest/syncd/TestTimerWatchdog.cpp",
+          "additions": 34,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-23T06:40:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-23T06:41:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-24T06:03:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-24T06:03:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-24T06:11:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-24T06:11:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-16T08:34:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-16T08:34:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-16T14:28:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-16T14:28:20Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-16T14:30:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-16T14:30:29Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-17T13:44:48Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-17T13:45:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-02-17T14:17:43Z",
+          "body": "Updated the PR description with the full mechanics of the new `-W` flag and pushed the dual-timeout solution. \r\n\r\nOne minor issue I want to call out: We have a duplicated 30s default. It now lives once in `CommandLineOptions.cpp` and again in `syncd_init_common.sh`. This has been the case before this PR as well (although we were using hard coded strings in the bash file instead of explicit variables).\r\n\r\nIt annoyed me for a moment, and I considered just stripping the default value entirely from the C++ side. We can strictly enforce that `-w` *must* be passed, so there is a single source of truth for default values. \r\n\r\nThe catch is I'm not 100% sure if `syncd` gets invoked in other test harnesses, unit tests, or obscure paths without the bash wrapper. If it does, removing the C++ default might cause crashes. Given the issue is related to warning messages and does not cause regression / crashes, I'm not sure if the risk is worth it.\r\n\r\nFor now I am leaving the duplicate defaults as they are. If `syncd` is never invoked elsewhere and we can ensure passing in the `-w` flag (or if there is a more elegant way to extract the default timeout), please let me know."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-17T14:30:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-17T14:31:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-02-18T07:07:30Z",
+          "body": "Seems like there is an issue with the redis python client blocking the vs tests.\r\n\r\nFiled issues in `sonic-buildimage` and `redis-py`."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-23T11:29:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-23T11:30:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

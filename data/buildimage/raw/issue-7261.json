@@ -1,0 +1,163 @@
+{
+  "number": 7261,
+  "title": " Static route is incorrect when max PortChannels are configured and removed",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/7261",
+  "createdAt": "2021-04-08T10:35:16Z",
+  "closedAt": "2021-05-13T01:57:28Z",
+  "author": "JibinBao",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n\r\n-->\r\nFirstly create max number of PortChannels depending on system type and remove them. Secondly create one PortChannel, and  add static route with this PortChannel. After that we can find the static route info is not correct, namely the PortChannel is not the specified PortChannel.\r\n\r\n#### Steps to reproduce the issue:\r\n1.  Create max number of PortChannels:\r\n      sudo config portchannel add PortChannel1\r\n      sudo config portchannel add PortChannel2\r\n      sudo config portchannel add PortChannel3\r\n      sudo config portchannel add PortChannel4\r\n      ......\r\n\r\n      show interfaces portchannel\r\n      sudo config save -y\r\n      reboot\r\n      show interfaces portchannel\r\n\r\n2.  Del all PortChannels created by step 1\r\n     sudo config portchannel del PortChannel1\r\n     sudo config portchannel del PortChannel2\r\n     sudo config portchannel del PortChannel3\r\n     .....\r\n\r\n3.  Configure route like following example:\r\n     sudo config route add prefix 20.0.0.1/32 nexthop PortChannel0001\r\n\r\n3.  Check route info:\r\n      show ip route 20.0.0.1\r\n\r\n#### Describe the results you received:\r\n   Known via \"static\", distance 1, metric 0, best\r\n   Last update 00:00:12 ago\r\n  * directly connected, **PortChannel1**, weight 1\r\n\r\n#### Describe the results you expected:\r\n   Known via \"static\", distance 1, metric 0, best\r\n   Last update 00:00:12 ago\r\n  * directly connected, **PortChannel0001**, weight 1\r\n\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nSONiC Software Version: .master branch, commit hash: 01b03307\r\n\r\n\r\n```\r\nAttached below is sysdump log:\r\n[sysdump_test_basic_static_route.tar.gz](https://github.com/Azure/sonic-buildimage/files/6277919/sysdump_test_basic_static_route.tar.gz)\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n(First case: create portchannel. Second case: create static route)\r\nThe first test has created a port-channel with the name PortChannel1.\r\n\r\nAt the end of the test, the cleanup has removed the port-channels the tests have created but did not reload the configuration or the switch.\r\n\r\nApparently, there is a cache inside vtyshs that remembered this port-channel name, and when we added a route to PortChannel0001 it added it under the name of the previously created port-channel (PortChannel1).\r\n\r\nReloading the BGP service recreates the routes with the correct values and the tests pass.\r\n\r\nTo prevent the tests from failing we can run at the end of the test config reload or change the tests to use the same pattern of the port-channel name. But doing so won't fix the issue that the route was added to a non-existing port-channel, this could be done by forcing to reload the service after removing a port-channel, but we probably don't want to do this like this.\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": null,
+      "createdAt": "2021-04-13T15:46:08Z",
+      "body": "Working on the issue"
+    },
+    {
+      "author": null,
+      "createdAt": "2021-04-14T13:09:22Z",
+      "body": "The issue will be fixed in scope of PR https://github.com/Azure/sonic-utilities/pull/1534 by checking whether the interface for nexthop parameter is present in the system or not before creation of the static route."
+    },
+    {
+      "author": "anshuv-mfst",
+      "createdAt": "2021-04-14T15:21:38Z",
+      "body": "FYI - @d-dashkov, please include this issue in your fix/add this Issue to PR#1534. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1534,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/1534",
+      "title": "[config]Static routes to config_db",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-05-13T01:57:27Z",
+      "createdAt": "2021-03-30T15:33:40Z",
+      "author": "d-dashkov",
+      "body": "**What I did**\r\nfixes https://github.com/Azure/sonic-buildimage/issues/6997\r\nAdded process for writing static routes to config_db.\r\n\r\nfixes https://github.com/Azure/sonic-buildimage/issues/7261\r\nAdded interface validation before creating route. \r\n\r\n**How I did it**\r\nRefactored add/del route functions. Wrote generic function that returns a vtysh command and an entry for config_db with name.\r\n```\r\nsudo config route add prefix 1.2.3.4/32 nexthop 30.0.0.5\r\nsudo config route add prefix 1.3.3.4/32 nexthop 30.0.0.5\r\nsudo config route add prefix 1.4.3.4/32 nexthop 30.0.0.5\r\nsudo config route add prefix vrf Vrf-RED 1.5.3.4/32 nexthop 30.0.0.5\r\nsudo config save -y\r\nsudo reboot\r\n```\r\nInstead of running the vtysh command, it creates config_db entries that will be loaded by the ffr daemon:\r\n```\r\n    \"STATIC_ROUTE\": {\r\n        \"1.2.3.4/32\": {\r\n            \"nexthop\": \"30.0.0.5\"\r\n        },\r\n        \"1.3.3.4/32\": {\r\n            \"nexthop\": \"30.0.0.5\"\r\n        },\r\n        \"1.4.3.4/32\": {\r\n            \"nexthop\": \"30.0.0.5\"\r\n        },\r\n        \"Vrf-RED|1.5.3.4/32\": {\r\n            \"nexthop\": \"30.0.0.5\"\r\n        }\r\n    }\r\n```",
+      "files": [
+        {
+          "path": "config/main.py",
+          "additions": 198,
+          "deletions": 88
+        },
+        {
+          "path": "doc/Command-Reference.md",
+          "additions": 78,
+          "deletions": 0
+        },
+        {
+          "path": "tests/static_routes_test.py",
+          "additions": 365,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "prsunny",
+          "createdAt": "2021-03-30T16:32:56Z",
+          "body": "Here, the user is expected to run `route update` after every reboot?"
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-03-30T16:41:28Z",
+          "body": "@prsunny \r\nI don't think so, user shouldn't run this command manually after reboot. But I really don't know where this update function can be called, because it should be executed after the RIFs are generated, and running it in the startup script shouldn't work."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2021-03-30T17:00:47Z",
+          "body": "> @prsunny\r\n> I don't think so, user shouldn't run this command manually after reboot. But I really don't know where this update function can be called, because it should be executed after the RIFs are generated, and running it in the startup script shouldn't work.\r\n\r\nok, so how is it expected to be restored from config_db after reboot?"
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-03-30T19:13:35Z",
+          "body": "> > @prsunny\r\n> > I don't think so, user shouldn't run this command manually after reboot. But I really don't know where this update function can be called, because it should be executed after the RIFs are generated, and running it in the startup script shouldn't work.\r\n> \r\n> ok, so how is it expected to be restored from config_db after reboot?\r\n\r\nI'm not sure, but maybe the update can be triggered using crontab or along with running the bgp container."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2021-03-30T23:08:44Z",
+          "body": "Can you add unit-tests as well?"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2021-03-30T23:11:10Z",
+          "body": "Why is the schema showing nexthop in key?\r\n```\r\n       \"1.2.3.4/32|30.0.0.5\": {\r\n            \"nexthop\": \"30.0.0.5\",\r\n            \"prefix\": \"1.2.3.4/32\"\r\n        },\r\n```"
+        },
+        {
+          "author": "caizhenghui-juniper",
+          "createdAt": "2021-03-31T01:24:11Z",
+          "body": "And also why do we need prefix in the value field? It's already part of the key... \r\nFor static route table the scheme is prefix as key and nexthop as field as the simplest case.."
+        },
+        {
+          "author": "caizhenghui-juniper",
+          "createdAt": "2021-03-31T01:28:13Z",
+          "body": "we already have frrcfgd monitoring config db, so the part of programming frr cfg is not necessary as long as config_db is updated, isn't it?"
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-03-31T17:52:23Z",
+          "body": "@prsunny @caizhenghui-juniper\r\nI updated the record name with a prefix as the key and nexthop as the value, and also added base UT. But I cannot find frrcfgd in the repositories, can you tell me where it is?"
+        },
+        {
+          "author": "caizhenghui-juniper",
+          "createdAt": "2021-03-31T18:02:17Z",
+          "body": "Hi, Dmytro,\r\n\r\nHere it is: https://github.com/Azure/sonic-buildimage/tree/master/src/sonic-frr-mgmt-framework/frrcfgd\r\nOne more issue: in swss, we do require VRF name conforms with prefix Vrf, so please correct that in VRF test case accordingly. Small problem \ud83d\ude0a\r\nAnd the schema defined in frrcfgd for vrf is using vrf_name instead of vrf.\r\nPlus, are you still setting prefix as field? At line 3248?\r\n\r\nThanks\r\n\r\nZhenghui\r\n\r\nFrom: Dmytro ***@***.***>\r\nReply-To: Azure/sonic-utilities ***@***.***>\r\nDate: Wednesday, March 31, 2021 at 1:52 PM\r\nTo: Azure/sonic-utilities ***@***.***>\r\nCc: Zhenghui Cai ***@***.***>, Mention ***@***.***>\r\nSubject: Re: [Azure/sonic-utilities] [config]Static routes to config_db (#1534)\r\n\r\n[External Email. Be cautious of content]\r\n\r\n\r\n@prsunny<https://github.com/prsunny> @caizhenghui-juniper<https://github.com/caizhenghui-juniper>\r\nI updated the record name with a prefix as the key and nexthop as the value, and also added base UT. But I cannot find frrcfgd in the repositories, can you tell me where it is?\r\n\r\n\u2014\r\nYou are receiving this because you were mentioned.\r\nReply to this email directly, view it on GitHub<https://github.com/Azure/sonic-utilities/pull/1534#issuecomment-811288563>, or unsubscribe<https://github.com/notifications/unsubscribe-auth/AKDUQJVEG3JZD3HB5MP773DTGNOOTANCNFSM42CKDI4Q>.\r\n\r\n\r\nJuniper Business Use Only\r\n"
+        },
+        {
+          "author": "caizhenghui-juniper",
+          "createdAt": "2021-03-31T18:34:21Z",
+          "body": "and can you put support for ECMP too? With more than 1 next hops for the static routes?"
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-04-06T19:17:31Z",
+          "body": "I'm not sure if this is a bug or not, but after reboot, the frr daemon does not start with the system, and also after manual start, the daemon sees a static route, but does not add it to frr cfg\r\n\r\n**Before reboot**\r\n```\r\nsudo config route add prefix 1.2.3.4/32 nexthop 30.0.0.5\r\n```\r\n```\r\n\"STATIC_ROUTE\": {\r\n\t\"1.2.3.4/32\": {\r\n\t\t\"nexthop\": \"30.0.0.5\"\r\n\t}\r\n}\r\n\r\n\r\nadmin@sonic:~$ redis-cli -n 4 keys \"*\" | grep STATIC_ROUTE\r\nSTATIC_ROUTE|1.2.3.4/32\r\nadmin@sonic:~$ redis-cli -n 4 hgetall \"STATIC_ROUTE|1.2.3.4/32\"\r\n1) \"nexthop\"\r\n2) \"30.0.0.5\"\r\n```\r\n```\r\nadmin@sonic:~$ show ip route\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\r\n\r\nS>* 0.0.0.0/0 [200/0] via 192.168.111.3, eth0, weight 1, 00:05:24\r\nS>  1.2.3.4/32 [1/0] via 30.0.0.7 (recursive), weight 1, 00:00:06\r\nC>* 10.1.0.1/32 is directly connected, Loopback0, 00:05:07\r\nC>* 192.168.111.0/24 is directly connected, eth0, 00:05:25\r\n```\r\n\r\n**After reboot**\r\n\r\nSyslog\r\n```\r\nMay  7 21:22:18.776046 sonic DEBUG bgp#/frrcfgd: entering BGP configuration daemon\r\nMay  7 21:22:18.780913 sonic DEBUG bgp#/frrcfgd: send initial enable command to bgpd\r\nMay  7 21:22:18.784148 sonic DEBUG bgp#/frrcfgd: send initial enable command to zebra\r\nMay  7 21:22:18.784148 sonic DEBUG bgp#/frrcfgd: send initial enable command to staticd\r\nMay  7 21:22:18.784148 sonic DEBUG bgp#/frrcfgd: send initial enable command to bfdd\r\nMay  7 21:22:18.784148 sonic DEBUG bgp#/frrcfgd: send initial enable command to ospfd\r\nMay  7 21:22:18.784148 sonic DEBUG bgp#/frrcfgd: send initial enable command to pimd\r\nMay  7 21:22:18.810021 sonic DEBUG bgp#/frrcfgd: entering VTYSH proxy thread\r\nMay  7 21:22:18.810021 sonic DEBUG bgp#/frrcfgd: waiting for client connection ...\r\nMay  7 21:22:18.899398 sonic DEBUG bgp#/frrcfgd: Init Cached DB data\r\nMay  7 21:22:19.926529 sonic DEBUG bgp#/frrcfgd:   STATIC_ROUTE&&1.2.3.4/32 : {'nexthop': '30.0.0.5'}\r\n```\r\n```\r\nadmin@sonic:~$ show ip route\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\r\n\r\nS>* 0.0.0.0/0 [200/0] via 192.168.111.3, eth0, weight 1, 00:05:24\r\nC>* 10.1.0.1/32 is directly connected, Loopback0, 00:05:07\r\nC>* 192.168.111.0/24 is directly connected, eth0, 00:05:25\r\n```\r\nAnd if I try to change the nexthop on this entry, staticd crashes because it has no previous entry\r\n```\r\nsudo config route add prefix 1.2.3.4/32 nexthop 30.0.0.5\r\n```\r\n```\r\nMay  7 21:09:27.483443 sonic DEBUG bgp#/frrcfgd: ----------------------------------\r\nMay  7 21:09:27.483607 sonic DEBUG bgp#/frrcfgd:  BGP table handling\r\nMay  7 21:09:27.483690 sonic DEBUG bgp#/frrcfgd: ----------------------------------\r\nMay  7 21:09:27.483764 sonic DEBUG bgp#/frrcfgd: table : STATIC_ROUTE\r\nMay  7 21:09:27.483881 sonic DEBUG bgp#/frrcfgd: key   : 1.2.3.4/32\r\nMay  7 21:09:27.483958 sonic DEBUG bgp#/frrcfgd: op    : SET\r\nMay  7 21:09:27.484074 sonic DEBUG bgp#/frrcfgd: data  :\r\nMay  7 21:09:27.484152 sonic DEBUG bgp#/frrcfgd:         nexthop    - 30.0.0.7\r\nMay  7 21:09:27.484225 sonic DEBUG bgp#/frrcfgd:\r\nMay  7 21:09:27.484326 sonic INFO bgp#/frrcfgd: value for table STATIC_ROUTE prefix default key 1.2.3.4/32 changed to {'nexthop': (30.0.0.7, UPDATE)}\r\nMay  7 21:09:27.484439 sonic INFO bgp#/frrcfgd: Set static IP route for vrf default prefix 1.2.3.4/32\r\nMay  7 21:09:27.484525 sonic DEBUG bgp#/frrcfgd: execute command vtysh -c 'configure terminal' -c 'vrf default' -c 'no ip route 1.2.3.4/32  30.0.0.5     ' for table STATIC_ROUTE.\r\nMay  7 21:09:27.484646 sonic DEBUG bgp#/frrcfgd: VTYSH CMD: configure terminal daemons: ['staticd']\r\nMay  7 21:09:27.484725 sonic DEBUG bgp#/frrcfgd: VTYSH CMD: vrf default daemons: ['staticd']\r\nMay  7 21:09:27.485096 sonic DEBUG bgp#/frrcfgd: VTYSH CMD: no ip route 1.2.3.4/32  30.0.0.5 daemons: ['staticd']\r\nMay  7 21:09:27.485581 sonic DEBUG bgp#/frrcfgd: [staticd] command return code: 1\r\nMay  7 21:09:27.485777 sonic DEBUG bgp#/frrcfgd:\r\nMay  7 21:09:27.485883 sonic DEBUG bgp#/frrcfgd: VTYSH CMD: end daemons: ['staticd']\r\nMay  7 21:09:27.485995 sonic ERR bgp#/frrcfgd: command execution failure. Command: \"vtysh -c 'configure terminal' -c 'vrf default' -c 'no ip route 1.2.3.4/32  30.0.0.5     '\"\r\nMay  7 21:09:27.486073 sonic ERR bgp#/frrcfgd: failed running FRR command: no ip route 1.2.3.4/32  30.0.0.5\r\nMay  7 21:09:27.486161 sonic ERR bgp#/frrcfgd: failed running static route config command\r\nMay  7 21:09:27.486235 sonic DEBUG bgp#/frrcfgd: ignore cache update for nexthop because of STAT_FAIL\r\nMay  7 21:09:27.486308 sonic INFO bgp#/frrcfgd: delete table row STATIC_ROUTE&&default|1.2.3.4/32 from cache\r\n```"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2021-04-06T21:21:23Z",
+          "body": "Please update CLI command reference [document ](https://github.com/Azure/sonic-utilities/blob/master/doc/Command-Reference.md)"
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-04-06T22:27:05Z",
+          "body": "> I see that this PR is missing ecmp handling. In the existing code, by calling vtysh, it does handle ECMP. My suggestion is, when user configure the same route prefix with a different nexthop, it should modify the STATIC_ROUTE DB entry instead of overwriting thus supporting ECMP (similar to vtysh). @shi-su, this should be handled by bgpcfgd.\r\n\r\nYes, the STATIC_ROUTE DB entry needs to be updated when nexthop changes. The bgpcfgd should be able to know the changes and only apply the differences for the same route prefix."
+        },
+        {
+          "author": "d-dashkov",
+          "createdAt": "2021-04-16T12:59:38Z",
+          "body": "I found that the daemon cannot create direct routes to interfaces.\r\n\r\nWhen I tried to set it up this way:\r\n```\r\n\"10.10.10.0/24\": {\r\n\t\"nexthop\": \"Ethernet0\"\r\n}\r\n```\r\nDaemon returns error: ip in nexthop is invalid\r\n\r\nOtherwise:\r\n```\r\n\"10.10.10.0/24\": {\r\n\t\"ifname\": \"Ethernet0\"\r\n}\r\n```\r\nDaemon returns error: nexthop ip not found"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2021-04-17T01:21:48Z",
+          "body": "> I found that the daemon cannot create direct routes to interfaces.\r\n> \r\n> When I tried to set it up this way:\r\n> \r\n> ```\r\n> \"10.10.10.0/24\": {\r\n> \t\"nexthop\": \"Ethernet0\"\r\n> }\r\n> ```\r\n> \r\n> Daemon returns error: ip in nexthop is invalid\r\n> \r\n> Otherwise:\r\n> \r\n> ```\r\n> \"10.10.10.0/24\": {\r\n> \t\"ifname\": \"Ethernet0\"\r\n> }\r\n> ```\r\n> \r\n> Daemon returns error: nexthop ip not found\r\n\r\nThe second case is valid and should be handled by bgpcfgd. @shi-su "
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-04-17T03:51:47Z",
+          "body": "> > I found that the daemon cannot create direct routes to interfaces.\r\n> > When I tried to set it up this way:\r\n> > ```\r\n> > \"10.10.10.0/24\": {\r\n> > \t\"nexthop\": \"Ethernet0\"\r\n> > }\r\n> > ```\r\n> > \r\n> > \r\n> > Daemon returns error: ip in nexthop is invalid\r\n> > Otherwise:\r\n> > ```\r\n> > \"10.10.10.0/24\": {\r\n> > \t\"ifname\": \"Ethernet0\"\r\n> > }\r\n> > ```\r\n> > \r\n> > \r\n> > Daemon returns error: nexthop ip not found\r\n> \r\n> The second case is valid and should be handled by bgpcfgd. @shi-su\r\n\r\nbgpcfgd is actually handling the second case:\r\n```\r\nadmin@vlab-01:~$ sudo sonic-cfggen -a '{\"STATIC_ROUTE\":{\"10.27.0.0/24\": {\"ifname\": \"Ethernet0\"}}}' --write-to-db\r\nadmin@vlab-01:~$ show ip route 10.27.0.1\r\nRouting entry for 10.27.0.0/24\r\n  Known via \"static\", distance 1, metric 0\r\n  Last update 00:00:07 ago\r\n    directly connected, Ethernet0 inactive, weight 1\r\n```"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2021-04-22T21:45:03Z",
+          "body": "@shi-su , could you please review/sign-off?"
+        },
+        {
+          "author": "dprital",
+          "createdAt": "2021-05-30T15:33:57Z",
+          "body": "@prsunny - Can you please add the tag \"Required to 202012\" ?"
+        },
+        {
+          "author": "haslersn",
+          "createdAt": "2021-07-03T20:25:36Z",
+          "body": "Is this already available in the prebuilt sonic-aboot-broadcom.swi ? If not, then how to configure (and persist across reboots) static routes?"
+        }
+      ]
+    }
+  ]
+}

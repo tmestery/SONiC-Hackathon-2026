@@ -1,0 +1,89 @@
+{
+  "number": 21962,
+  "title": "[swss] Orchagent terminated by SIGHUP because logrotate sent SIGHUP on boot after 202405->202411 warm upgrade",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21962",
+  "createdAt": "2025-03-07T12:39:38Z",
+  "closedAt": "2025-04-02T10:28:40Z",
+  "author": "volodymyrsamotiy",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "Issue for 202411"
+  ],
+  "assignees": [
+    "theasianpianist"
+  ],
+  "milestone": null,
+  "body": "**Description**\nAfter upgrading from 202405 to 202411 image, during boot to new image, orchagent was terminated by SIGHUP.\nNot sure if it is related to warm-reboot or upgrade flow, probably it is generic issue, but we reproduced it during warm upgrade.\nPlease note that this issue happened just once so far.\n\nIn syslog there is indication that there was some BASH error in logrotate script:\n```\n2025 Mar  2 03:40:02.291520 sonic INFO logrotate[8512]: logrotate_script: 10: [: -gt: unexpected operator\n```\n\nAfter that logrotate sent SIGHUP to orchagent:\n```\n2025 Mar  2 03:40:02.294484 sonic INFO logrotate: Sending SIGHUP to OA log_file_name: /var/log/swss/swss.rec\n```\n\nAs a result orchagent exited:\n```\n2025 Mar  2 03:40:02.393109 sonic INFO swss#supervisord 2025-03-02 03:40:02,381 WARN exited: orchagent (terminated by SIGHUP; not expected)\n```\n\nLooks the error happened in the script that is defined for ```postrotate``` action in  ```/etc/logrotate.d/rsyslog``` configuration file:\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/files/image_config/logrotate/rsyslog.j2#L118\n```\n    postrotate\n        if [ $(echo $1 | grep -c \"/var/log/swss/\") -gt 0 ]; then\n            # for multi asic platforms, there are multiple orchagents\n            # send the SIGHUP only to the orchagent the which needs log file rotation\n            PLATFORM=`sonic-cfggen -H -v DEVICE_METADATA.localhost.platform`\n            ASIC_CONF=/usr/share/sonic/device/$PLATFORM/asic.conf\n            if [ -f \"$ASIC_CONF\" ]; then\n                . $ASIC_CONF\n            fi\n            if [ $NUM_ASIC -gt 1 ]; then\n                log_file=$1\n                log_file_name=${log_file#/var/log/swss/}\n                logger -p syslog.info -t \"logrotate\" \"Sending SIGHUP to OA log_file_name: $log_file_name\"\n                pgrep -xa orchagent | grep $log_file_name | awk '{ print $1; }' | xargs /bin/kill -HUP 2>/dev/null || true\n            else\n                logger -p syslog.info -t \"logrotate\" \"Sending SIGHUP to OA log_file_name: $1\"\n                pgrep -x orchagent | xargs /bin/kill -HUP 2>/dev/null || true\n            fi\n        else\n            if [ -f /var/run/rsyslogd.pid ]; then\n                /bin/kill -HUP $(cat /var/run/rsyslogd.pid)\n            fi\n        fi\n    endscript\n```\n\n**Steps to reproduce the issue:**\nNo specific steps to reproduce, issue happened just once so far.\nIt looks like generic statistical issue related to logrotate.\nBut we reproduced it during warm upgrade from 202404 to 202411.\n\n**Describe the results you received:**\nOrchagent terminated by SIGHUP because logrotate sent SIGHUP:\n```\n2025 Mar  2 03:40:02.291520 sonic INFO logrotate[8512]: logrotate_script: 10: [: -gt: unexpected operator\n2025 Mar  2 03:40:02.294484 sonic INFO logrotate: Sending SIGHUP to OA log_file_name: /var/log/swss/swss.rec\n2025 Mar  2 03:40:02.389481 sonic INFO systemd[1]: logrotate.service: Deactivated successfully.\n2025 Mar  2 03:40:02.389594 sonic INFO systemd[1]: Finished logrotate.service - Rotate log files.\n2025 Mar  2 03:40:02.393109 sonic INFO swss#supervisord 2025-03-02 03:40:02,381 WARN exited: orchagent (terminated by SIGHUP; not expected)\n2025 Mar  2 03:40:02.398651 sonic INFO swss#supervisor-proc-exit-listener: Process 'orchagent' exited unexpectedly. Terminating supervisor 'swss'\n```\n\n**Describe the results you expected:**\nLogrotate should not send SIGHUP to orchagent\n",
+  "comments": [
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2025-03-10T16:24:49Z",
+      "body": "@vaibhavhd For visibility"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2025-03-10T21:52:04Z",
+      "body": "Logrotate *should* send SIGHUP to orchagent; the question here is why orchagent exited when it got the SIGHUP.\n\nThe expectation here is that it should reopen the log files (`sairedis.rec` and `swss.rec`) when it gets the SIGHUP.\n\nSee also https://github.com/sonic-net/sonic-swss/blob/202411/orchagent/main.cpp#L334-L338"
+    },
+    {
+      "author": "vaibhavhd",
+      "createdAt": "2025-03-10T23:48:34Z",
+      "body": "@prsunny, can you help take a look?"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2025-03-12T15:49:14Z",
+      "body": "@theasianpianist and @prabhataravind, can you please help triage"
+    },
+    {
+      "author": "theasianpianist",
+      "createdAt": "2025-03-17T17:40:10Z",
+      "body": "> Logrotate _should_ send SIGHUP to orchagent; the question here is why orchagent exited when it got the SIGHUP.\n> \n> The expectation here is that it should reopen the log files (`sairedis.rec` and `swss.rec`) when it gets the SIGHUP.\n> \n> See also https://github.com/sonic-net/sonic-swss/blob/202411/orchagent/main.cpp#L334-L338\n\nIs it possible that logrotate is getting called before orchagent can register a handler for SIGHUP? @volodymyrsamotiy do you have syslogs from the repro? Wondering if we can use any preceding orchagent logs to determine where the process was when SIGHUP was received."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22207,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/22207",
+      "title": "[orchagent.sh] mask SIGHUP before starting orchagent",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-04-30T19:49:57Z",
+      "createdAt": "2025-04-02T09:17:05Z",
+      "author": "stepanblyschak",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nFIXES https://github.com/sonic-net/sonic-buildimage/issues/21962\r\n\r\nlogrotate uses SIGHUP to let orchagent reopen SAI Redis recording. If SIGHUP is sent by logrotate before orchagent register its handler the default action takes place - termination. If we mask the signal in the start script orchagent inherits masked signals and will ignore SIGHUP until signal handler is registered.\r\n\r\nThis is a rare race condition observed during 1000 warm-reboot testing.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\nMask SIGHUP\r\n\r\n#### How to verify it\r\n\r\nPlace sleep inside orchagent before signal handler for SIGHUP is registered. Send SIGHUP as if it would be sent from logrotate script, ensure no orchagent termination.\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [ ] 202405\r\n- [ ] 202411\r\n\r\nRequest to backport to all active branches.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-orchagent/orchagent.sh",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-02T09:17:13Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-04-02T09:17:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2025-04-28T16:45:20Z",
+          "body": "@prsunny, @stepanblyschak Will the signal `SIGHUP` be trapped by `orchagent.sh` forever? If so, does that cause trouble?"
+        },
+        {
+          "author": "stepanblyschak",
+          "createdAt": "2025-04-28T16:50:47Z",
+          "body": "@bingwang-ms  If SIGHUP is sent to orchagent before handlers are registered the orchagent will terminate "
+        }
+      ]
+    }
+  ]
+}

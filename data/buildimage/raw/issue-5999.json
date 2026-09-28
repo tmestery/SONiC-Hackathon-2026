@@ -1,0 +1,57 @@
+{
+  "number": 5999,
+  "title": "Possibility of Teamd can start before swss restart",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/5999",
+  "createdAt": "2020-11-23T03:14:53Z",
+  "closedAt": "2020-11-25T16:41:12Z",
+  "author": "abdosi",
+  "labels": [
+    "Request for 201911 Branch :shipit:",
+    "Issue for 201911"
+  ],
+  "assignees": [
+    "abdosi"
+  ],
+  "milestone": null,
+  "body": "Issue was found on multi-asic platform.\r\nTeamd got started before swss restart which resulted in bad state since swss  on its init\r\ncleaned up the State DB populated by teamd and system went into bad state \r\nand could not recover on it\u2019s own\r\n\r\nRoot cause for above condition is Feature Table handling being done in hostcfgd. \r\nFeature Table does not know about state of swss when starting teamd(/syncd)\r\nand can start teamd (/syncd) while swss is about to get stopped (because of some crash/error handling) but not completely stopped and is active.\r\n\r\nIssue Flow during init:\r\n\r\n\u2022\tLinux start swss/teamd/syncd/hostcfgd services\r\n\u2022\tSyncd crash\r\n\u2022\tSyncd/swss/teamd are getting stopped (service is still active)\r\n\u2022\tHostcfgd processing Feature Table in parallel and start teamd which populate State DB\r\n\u2022\tLinux finally stop and restart swss and it cleans up State DB populated by above Step.\r\n\r\n\r\nSwss2 gets notified of orchangent being killed\r\n\r\nNov 19 01:41:30.843894 STG02-0101-0102-01T1 INFO swss2#supervisor-proc-exit-listener: Process orchagent exited unxepectedly. Terminating supervisor...\r\n\r\nTeamd2 getting started from hostcfgd (swss2 is still active )\r\n\r\nNov 19 01:41:51.649500 STG02-0101-0102-01T1 INFO systemd[1]: Reloading.\r\nNov 19 01:41:51.733279 STG02-0101-0102-01T1 INFO hostcfgd: Running cmd: 'sudo systemctl start teamd@2.service'\r\nNov 19 01:41:51.744685 STG02-0101-0102-01T1 INFO systemd[1]: Starting TEAMD container...\r\n\r\n\r\nSwss2 service finally getting stop and restart\r\n\r\nNov 19 01:42:14.064349 STG02-0101-0102-01T1 INFO systemd[1]: swss@2.service: Service hold-off time over, scheduling restart.\r\nNov 19 01:42:14.064899 STG02-0101-0102-01T1 INFO systemd[1]: Stopped switch state service.\r\nNov 19 01:42:14.065865 STG02-0101-0102-01T1 INFO systemd[1]: Starting switch state service...\r\nNov 19 01:42:14.071078 STG02-0101-0102-01T1 NOTICE root: Starting swss2 service...\r\nNov 19 01:42:14.075242 STG02-0101-0102-01T1 NOTICE root: Locking /tmp/swss-syncd-lock2 from swss2 service\r\nNov 19 01:42:14.080174 STG02-0101-0102-01T1 NOTICE root: Locked /tmp/swss-syncd-lock2 (10) from swss2 service\r\nNov 19 01:42:14.443526 STG02-0101-0102-01T1 NOTICE root: Warm boot flag: swss2 false.\r\nNov 19 01:42:14.447624 STG02-0101-0102-01T1 NOTICE root: Flushing APP, ASIC, COUNTER, CONFIG, and partial STATE databases ...\r\n\r\nThis issue is definitely more prominent in case of multi-asic as we have more services to take action on \r\nbut can come in single asic also. \r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 6000,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/6000",
+      "title": "Enhanced Feature table to support 'always_enabled' value for state and auto-restart fields.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-11-25T16:41:11Z",
+      "createdAt": "2020-11-23T07:29:10Z",
+      "author": "abdosi",
+      "body": "Why I did:\r\nFixes Issue#https://github.com/Azure/sonic-buildimage/issues/5999\r\n\r\nHow I did:\r\n\r\n- Added new flag value 'always_enabled' for the state and auto-restart field of feature table\r\n\r\n- init_cfg.json is updated to initialize state field of database/swss/syncd/teamd feature and auto-restart field of database feature \r\n  as always_enabled \r\n\r\n- Once the state/auto-restart value is initialized as \"always_enabled\" it is immutable and cannot be change via feature config commands. (config feature..) PR#https://github.com/Azure/sonic-utilities/pull/1271\r\n\r\n- hostcfgd will not take any action if state field value is 'always_enabled'\r\n\r\n- Since we have always_enabled field for auto-restart updated supervisor-proc-exit-listener\r\n   not to have special check for database and always rely  on value from Feature table.\r\n\r\nHow I Verify:\r\n\r\n- Cli command\r\n\r\n```\r\nadmin@str-xxx-2:/var/log$ show feature status\r\nFeature     State           AutoRestart\r\n----------  --------------  --------------\r\nacms        enabled         enabled\r\nbgp         enabled         enabled\r\ndatabase    always_enabled  always_enabled\r\ndhcp_relay  enabled         enabled\r\nlldp        enabled         enabled\r\npmon        enabled         enabled\r\nradv        enabled         enabled\r\nsnmp        enabled         enabled\r\nswss        always_enabled  enabled\r\nsyncd       always_enabled  enabled\r\nteamd       always_enabled  enabled\r\ntelemetry   enabled         enabled\r\n\r\n```\r\n\r\n- Hostcfgd skip the processing via syslog\r\n\r\n`Nov 25 01:02:44.925773 str-xxx-2 INFO hostcfgd: Feature 'teamd' service is always enabled`\r\n\r\n- Made sure auto-restart works fine for swss/syncd/teamd \r\n",
+      "files": [
+        {
+          "path": "files/build_templates/init_cfg.json.j2",
+          "additions": 4,
+          "deletions": 4
+        },
+        {
+          "path": "files/scripts/supervisor-proc-exit-listener",
+          "additions": 19,
+          "deletions": 20
+        },
+        {
+          "path": "src/sonic-host-services/scripts/hostcfgd",
+          "additions": 4,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "abdosi",
+          "createdAt": "2020-11-23T16:53:01Z",
+          "body": "vsimage test \"test_po_cleanup.py\" failure is expected since we need to update the test case based on this change.\r\nIn the test case we are using config feature teamd disabled which will not work after this change.\r\n\r\nUpdated the test case here: https://github.com/Azure/sonic-mgmt/pull/2577"
+        }
+      ]
+    }
+  ]
+}

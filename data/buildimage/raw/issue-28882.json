@@ -1,0 +1,71 @@
+{
+  "number": 28882,
+  "title": "Bug: [vpp] VLAN SVI neighbor host route not installed in VPP data plane (downstream traffic to SVI hosts dropped at glean)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28882",
+  "createdAt": "2026-08-06T12:01:01Z",
+  "closedAt": "2026-08-07T01:13:10Z",
+  "author": "lolyu",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "lolyu"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\ngeneric (VPP platform / `docker-syncd-vpp`, `libsaivs` vslib)\n\n### Importance or Severity\nHigh\n\n### Description of the bug\nOn the VPP platform, an IP neighbor whose router interface is a **VLAN SVI** (`Vlan<id>`, `SAI_ROUTER_INTERFACE_TYPE_VLAN`, realized in VPP as a BVI `bvi<vlan_id>`) is **never programmed into the VPP data plane**. No neighbor adjacency and no `/32` (or `/128`) host route are installed on the BVI.\n\nAs a result, routed traffic destined to a host that sits on a VLAN subnet (e.g. uplink \u2192 downlink to a server on `Vlan1000`) has no host route to match. It falls through to the connected `/21` **glean** entry on the BVI, where VPP emits an ARP and **drops** the triggering packet. Downstream delivery to SVI hosts is silently dropped until (and unless) VPP happens to resolve the host by its own ARP.\n\nRoot cause is in `SwitchVpp::addRemoveIpNbr()` (`vslib/vpp/SwitchVppNbr.cpp`). It resolves `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` **before** it branches on the RIF type:\n\n```cpp\nattr.id = SAI_ROUTER_INTERFACE_ATTR_PORT_ID;\nCHECK_STATUS(get(SAI_OBJECT_TYPE_ROUTER_INTERFACE, nbr_entry.rif_id, 1, &attr));\nauto port_obj_type = objectTypeQuery(attr.value.oid);\nif (port_obj_type != SAI_OBJECT_TYPE_PORT && port_obj_type != SAI_OBJECT_TYPE_LAG)\n{\n    return SAI_STATUS_SUCCESS;   // <-- VLAN SVI RIF has no PORT_ID => returns here, neighbor never programmed\n}\n```\n\nA VLAN SVI RIF has **no** `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` (it references a VLAN, not a single port), so the neighbor is dropped before the RIF type is ever considered. Only `PORT` and `SUB_PORT` RIFs are handled.\n\nThis is the neighbor/host-route counterpart of the RIF-attribute-update bug tracked separately (VLAN RIF updates); both stem from resolving `PORT_ID` before dispatching on RIF type.\n\n### Steps to Reproduce\n1. Deploy a VPP KVM testbed with a VLAN SVI, e.g. `Vlan1000` with an IP (dual-ToR t0 exercises this heavily; the server-facing `/32`s live on the SVI).\n2. Create an IP neighbor on the SVI (learned normally, or via mux/host-route programming). The SAI `NEIGHBOR_ENTRY` appears in `ASIC_DB` with a valid `DST_MAC`.\n3. Inspect the VPP data plane:\n   - `docker exec syncd vppctl show ip neighbor | grep <host>` \u2192 **absent**\n   - `docker exec syncd vppctl show ip fib <host>` \u2192 only the connected `/21` **glean**, no `/32`.\n4. Route a packet to that host from an uplink \u2192 it is dropped at `ip4-glean` (no host route/adjacency).\n\n### Actual Behavior and Expected Behavior\n**Actual:** A SAI `NEIGHBOR_ENTRY` on a VLAN SVI RIF is accepted by SONiC (present in `ASIC_DB`, MAC learned in the VPP L2 FDB) but **not** realized in VPP L3 \u2014 no adjacency, no host route. Downstream packets to the host glean-and-drop.\n\n**Expected:** Creating the neighbor should install the L3 adjacency and the host route on the BVI (`bvi<vlan_id>`), so routed traffic to the host forwards immediately \u2014 matching ASIC behavior, where a `NEIGHBOR_ENTRY` installs the host route regardless of whether the switch has itself ARPed the host. `addRemoveIpNbr()` should dispatch on RIF type first and resolve the BVI for `SAI_ROUTER_INTERFACE_TYPE_VLAN` (mirroring `vpp_create_bvi_interface()`), instead of requiring `PORT_ID`.\n\n### Relevant log output\n```\n# ASIC_DB has the neighbor with a valid MAC:\nredis-cli -n 1 keys '*NEIGHBOR_ENTRY*192.168.0.2*'\n  ASIC_STATE:SAI_OBJECT_TYPE_NEIGHBOR_ENTRY:{\"ip\":\"192.168.0.2\",\"rif\":\"oid:0x6...\",\"switch_id\":\"oid:0x21...\"}\n  SAI_NEIGHBOR_ENTRY_ATTR_DST_MAC_ADDRESS = 0E:4D:33:65:C0:01\n\n# ... but VPP has no L3 neighbor for it:\ndocker exec syncd vppctl show ip neighbor | grep 192.168.0.2\n  (absent)\n\n# ... and the VPP FIB has only the connected /21 glean (no /32 host route):\ndocker exec syncd vppctl show ip fib 192.168.0.2\n  192.168.0.0/21 fib:0 index:150 locks:2\n    ... cfg-flags:glean, bvi1000\n  forwarding: unicast-ip4-chain\n    [0] [@4]: ipv4-glean: [src:192.168.0.0/21] bvi1000: ... ffffffffffff22ada23408760806\n```\n\n### Output of `show version`, `show techsupport`\n```\nSONiC Software Version: SONiC.master.1182394-fc9ea17bb\nDistribution: Debian 13.5\nKernel: 6.12.41+deb13-sonic-amd64\nPlatform: x86_64-kvm_x86_64-r0\nHwSKU: Force10-S6000\nASIC: vpp\nASIC Count: 1\n```\n\n### Fix\nDispatch on RIF type before resolving `PORT_ID`; for `SAI_ROUTER_INTERFACE_TYPE_VLAN`, resolve the BVI (`bvi<vlan_id>`) and program the neighbor adjacency + host route there (static, since SONiC owns the SVI neighbor lifecycle).\n\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2023,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2023",
+      "title": "[vpp] Program VLAN router-interface neighbors on the BVI",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-07T01:13:09Z",
+      "createdAt": "2026-08-06T12:18:18Z",
+      "author": "lolyu",
+      "body": "\r\n\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/28882\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [ ] Test improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nIP neighbors on a VLAN SVI (`SAI_ROUTER_INTERFACE_TYPE_VLAN`, realized in VPP as bvi<vlan_id>) were never programmed into VPP. `addRemoveIpNbr()` read `SAI_ROUTER_INTERFACE_ATTR_PORT_ID` before dispatching on RIF type and only accepted `PORT`/`SUB_PORT`; a VLAN RIF has no `PORT_ID`, so the neighbor was dropped. With no `/32` on the `BVI`, routed uplink\u2192downlink traffic to VLAN hosts fell to the connected `/21` glean and was dropped.\r\n\r\nSigned-off-by: Longxiang Lyu <lolv@microsoft.com>\r\n\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How did you do it?\r\n\r\nvslib/vpp/SwitchVppNbr.cpp (addRemoveIpNbr):\r\n\r\n- Query RIF type first; accept VLAN alongside PORT/SUB_PORT.\r\n- Gate the PORT_ID/OUTER_VLAN_ID lookup to the PORT/SUB_PORT branch only.\r\n- For VLAN, resolve the VLAN id (RIF VLAN_ID \u2192 VLAN object SAI_VLAN_ATTR_VLAN_ID, same as vpp_create_bvi_interface()) and program the neighbor on bvi<vlan_id>; BVI\u2192member delivery uses the existing L2 FIB.\r\n- Program the VLAN neighbor static (is_static=true) since SONiC owns the SVI neighbor lifecycle and it must not be aged/re-ARP'd. IPv4 and IPv6 both handled.\r\n\r\n#### How did you verify/test it?\r\n\r\nOn a dual-ToR VPP KVM testbed, for an active-side SVI host (192.168.0.2 on Vlan1000):\r\n\r\n* Before: NEIGHBOR_ENTRY present in ASIC_DB, but show ip neighbor absent and show ip fib 192.168.0.2 = /21 glean only -> downstream packets glean-drop.\r\n* After: /32 + adjacency installed on bvi1000; routed downstream traffic forwards to the member port.\r\n\r\n#### Any platform specific information?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "vslib/vpp/SwitchVppNbr.cpp",
+          "additions": 60,
+          "deletions": 25
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T12:18:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T12:18:28Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T12:18:39Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T12:30:57Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T12:31:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T12:32:06Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

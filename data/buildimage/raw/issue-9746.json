@@ -1,0 +1,123 @@
+{
+  "number": 9746,
+  "title": "[yang] validating TACPLUS with empty \u201cglobal\u201d fails, while non-empty \u201cglobal\u201d does not fail",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/9746",
+  "createdAt": "2022-01-12T10:00:38Z",
+  "closedAt": "2022-04-07T00:46:41Z",
+  "author": "wen587",
+  "labels": [
+    "P0",
+    "Triaged",
+    "YANG"
+  ],
+  "assignees": [
+    "praveen-li"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nyang validation fail when `global` is empty, but it succeeds when nonempty.\r\n\r\n_Background of tacacs table._ \r\nIn t0 topo, tacacs has default value while configDB doesn't contain those table.\r\nAfter sudo config tacacs value, its table will appear in configDB.\r\nThen the table will contains empty value after set back to default.\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. config tacacs and let TACPLUS table appear in configDB\r\n```\r\nadmin@vlab-01:~$ show run all | grep -w TACPLUS\r\nadmin@vlab-01:~$ sudo config tacacs timeout 3\r\nadmin@vlab-01:~$ show run all | grep -w TACPLUS -A3\r\n    \"TACPLUS\": {\r\n        \"global\": {\r\n            \"timeout\": \"3\"\r\n        }\r\n\r\n```\r\n2. Verify by python script. Pass. (Some yang is outdated so we ignore them)\r\n```\r\nadmin@vlab-01:~$ cd /usr/local/yang-models/\r\nadmin@vlab-01:/usr/local/yang-models$ sudo mkdir ignore\r\nadmin@vlab-01:/usr/local/yang-models$ sudo mv sonic-queue.yang sonic-scheduler.yang sonic-feature.yang ignore/\r\nadmin@vlab-01:/usr/local/yang-models$ cd -\r\n/home/admin\r\n\r\nadmin@vlab-01:~$ cat verify_configDB_yang.py\r\nimport subprocess\r\nimport sonic_yang\r\nimport json\r\ndef get_config_db_json():\r\n    cmd = \"show runningconfiguration all\"\r\n    result = subprocess.Popen(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\r\n    text, err = result.communicate()\r\n    return json.loads(text)\r\nconfigDbJson = get_config_db_json()\r\nsy = sonic_yang.SonicYang(\"/usr/local/yang-models\")\r\nsy.loadYangModel()\r\nsy.loadData(configDbJson )\r\nsy.validate_data_tree()\r\nadmin@vlab-01:~$\r\n\r\nadmin@vlab-01:~$ python verify_configDB_yang.py\r\nNote: Below table(s) have no YANG models:\r\nBGP_PEER_RANGE, CONSOLE_SWITCH, DEVICE_NEIGHBOR_METADATA, DHCP_SERVER, FEATURE, KDUMP, QUEUE, RESTAPI, SCHEDULER, SNMP, SNMP_COMMUNITY, TELEMETRY,\r\nadmin@vlab-01:~$\r\n```\r\n3. set tacacs back to default and run python script again. It fails.\r\n```\r\nadmin@vlab-01:~$ sudo config tacacs default timeout\r\nadmin@vlab-01:~$ show run all | grep -w TACPLUS -A3\r\n    \"TACPLUS\": {\r\n        \"global\": {}\r\n    },\r\n    \"TACPLUS_SERVER\": {\r\nadmin@vlab-01:~$ python verify_configDB_yang.py\r\nNote: Below table(s) have no YANG models:\r\nBGP_PEER_RANGE, CONSOLE_SWITCH, DEVICE_NEIGHBOR_METADATA, DHCP_SERVER, FEATURE, KDUMP, QUEUE, RESTAPI, SCHEDULER, SNMP, SNMP_COMMUNITY, TELEMETRY,\r\nsonic_yang(3):All Keys are not parsed in TACPLUS\r\ndict_keys(['global'])\r\nsonic_yang(3):exceptionList:[]\r\nsonic_yang(3):Data Loading Failed:All Keys are not parsed in TACPLUS\r\ndict_keys(['global'])\r\nTraceback (most recent call last):\r\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 1062, in loadData\r\n    self._xlateConfigDB(xlateFile=xlateFile)\r\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 695, in _xlateConfigDB\r\n    self._xlateConfigDBtoYang(jIn, yangJ)\r\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 682, in _xlateConfigDBtoYang\r\n    self._xlateContainer(cmap['container'], yangJ[key][subkey], \\\r\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 662, in _xlateContainer\r\n    raise(Exception(\"All Keys are not parsed in {}\\n{}\".format(table, \\\r\nException: All Keys are not parsed in TACPLUS\r\ndict_keys(['global'])\r\n\r\nDuring handling of the above exception, another exception occurred:\r\n\r\nTraceback (most recent call last):\r\n  File \"/home/admin/verify_configDB_yang.py\", line 12, in <module>\r\n    sy.loadData(configDbJson )\r\n  File \"/usr/local/lib/python3.9/dist-packages/sonic_yang_ext.py\", line 1072, in loadData\r\n    raise SonicYangException(\"Data Loading Failed\\n{}\".format(str(e)))\r\nsonic_yang_ext.SonicYangException: Data Loading Failed\r\nAll Keys are not parsed in TACPLUS\r\ndict_keys(['global'])\r\n\r\n```\r\n#### Describe the results you received:\r\nSee above.\r\n\r\n#### Describe the results you expected:\r\nAction should succeed because it should be valid configDB.\r\n\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nadmin@vlab-01:~/tacacs$ show ver\r\n\r\nSONiC Software Version: SONiC.master.58770-6402a0226\r\nDistribution: Debian 11.1\r\nKernel: 5.10.0-8-2-amd64\r\nBuild commit: 6402a0226\r\nBuild date: Mon Dec 13 09:02:14 UTC 2021\r\nBuilt by: AzDevOps@sonic-build-workers-000Z9S\r\n\r\nPlatform: x86_64-kvm_x86_64-r0\r\nHwSKU: Force10-S6000\r\nASIC: vs\r\nASIC Count: 1\r\nSerial Number: N/A\r\nModel Number: N/A\r\nHardware Revision: N/A\r\nUptime: 09:54:13 up  4:11,  2 users,  load average: 0.14, 0.14, 0.15\r\n\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2022-01-13T18:30:17Z",
+      "body": "@ArthiSivanantham can you please help to take a look at this issue? Venkat will follow-up with you. Thanks."
+    },
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2022-01-20T18:26:35Z",
+      "body": "Dell team is working on this."
+    },
+    {
+      "author": "venkatmahalingam",
+      "createdAt": "2022-02-03T17:40:26Z",
+      "body": "We'll update our findings today."
+    },
+    {
+      "author": "ArthiSivanantham",
+      "createdAt": "2022-02-07T19:26:26Z",
+      "body": "For config validation, in sonic_yang_ext.py \"_xlateContainer()\" method, translates a dictionary in config DB to a Yang JSON container using yang model. A copy of config keys are deleted after every match. When all the keys are being processed, an empty dictionary was expected,\r\n\r\nhttps://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-mgmt/sonic_yang_ext.py#L654\r\n\r\n**Working case:**\r\n\r\nadmin@testsonic5:~$ sudo config tacacs timeout 3\r\n\r\nconfigC:  {'global': {'timeout': '3'}}\r\nmodel:  OrderedDict([('@name', 'global'), ('leaf', OrderedDict([('@name', 'timeout'), ('type', OrderedDict([('@name', 'uint16'), ('range', OrderedDict([('@value', '1..60'), ('error-message', OrderedDict([('value', 'TACACS timeout must be 1..60')]))]))])), ('default', OrderedDict([('@value', '5')]))]))])\r\n\r\n\r\nconfigC.keys was empty after processing the dict at the above mentioned point. (#654)\r\n\r\n**Non-working case:**\r\n\r\nThere is an early return when processing a container inside a container case ( \"_xlateContainerInContainer()\" method in sonic_yang_ext.py).  If the config has an empty dict as a value, it's key is not being cleaned up and returned from that function,\r\n\r\nhttps://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-mgmt/sonic_yang_ext.py#L597\r\n\r\n\r\nadmin@testsonic5:~$ sudo config tacacs default timeout\r\n\r\nconfigC:  {'global': {}}\r\nmodel:  OrderedDict([('@name', 'global'), ('leaf', OrderedDict([('@name', 'timeout'), ('type', OrderedDict([('@name', 'uint16'), ('range', OrderedDict([('@value', '1..60'), ('error-message', OrderedDict([('value', 'TACACS timeout must be 1..60')]))]))])), ('default', OrderedDict([('@value', '5')]))]))])\r\n\r\n\r\nconfigC : {'global': {}} was not empty and the validation failed as,\r\n\r\nException: All Keys are not parsed in TACPLUS\r\ndict_keys(['global'])\r\n\r\nhttps://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-mgmt/sonic_yang_ext.py#L659\r\n\r\nRequesting the script owner @praveen-li  to re-visit the logic of clearing dictionary keys (for empty value).\r\n\r\n"
+    },
+    {
+      "author": "wen587",
+      "createdAt": "2022-03-16T00:49:57Z",
+      "body": "any update for this one?"
+    },
+    {
+      "author": "wen587",
+      "createdAt": "2022-03-22T06:14:37Z",
+      "body": "Is there an ETA for this one?"
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2022-03-23T00:23:48Z",
+      "body": "@praveen-li Could you help check \"re-visit the logic of clearing dictionary keys (for empty value)\"?"
+    },
+    {
+      "author": "praveen-li",
+      "createdAt": "2022-03-23T01:20:23Z",
+      "body": "Let me check it once tomorrow.\n\nThanks,\n\nRegards\nPraveen\n________________________________\nFrom: Qi Luo ***@***.***>\nSent: Tuesday, March 22, 2022 5:23 PM\nTo: Azure/sonic-buildimage ***@***.***>\nCc: Praveen Chaudhary ***@***.***>; Mention ***@***.***>\nSubject: Re: [Azure/sonic-buildimage] [yang] validating TACPLUS with empty \u201cglobal\u201d fails, while non-empty \u201cglobal\u201d does not fail (Issue #9746)\n\n\n@praveen-li<https://nam06.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2Fpraveen-li&data=04%7C01%7Cpchaudhary%40linkedin.com%7C1dc7fc6192844ff7410308da0c636fe6%7C72f988bf86f141af91ab2d7cd011db47%7C1%7C0%7C637835918467238601%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C3000&sdata=jIq2X4Jr5L0fyt3a8e4uBHpBruRhDDrRv%2FF98U5wMU8%3D&reserved=0> Could you help check \"re-visit the logic of clearing dictionary keys (for empty value)\"?\n\n\u2014\nReply to this email directly, view it on GitHub<https://nam06.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2FAzure%2Fsonic-buildimage%2Fissues%2F9746%23issuecomment-1075779113&data=04%7C01%7Cpchaudhary%40linkedin.com%7C1dc7fc6192844ff7410308da0c636fe6%7C72f988bf86f141af91ab2d7cd011db47%7C1%7C0%7C637835918467238601%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C3000&sdata=m5FLyXAAwbMkHvs311osejabsXFYfc7CC8X1yPO9tlA%3D&reserved=0>, or unsubscribe<https://nam06.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2Fnotifications%2Funsubscribe-auth%2FAJHZHPMZQDKPKT4ECTGK5B3VBJQB7ANCNFSM5LYRB7KQ&data=04%7C01%7Cpchaudhary%40linkedin.com%7C1dc7fc6192844ff7410308da0c636fe6%7C72f988bf86f141af91ab2d7cd011db47%7C1%7C0%7C637835918467238601%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C3000&sdata=KOliu2jJ7MtgEzUaoXB4mK%2B6hP9908WjElQ6wTBhnWk%3D&reserved=0>.\nYou are receiving this because you were mentioned.Message ID: ***@***.***>\n"
+    },
+    {
+      "author": "praveen-li",
+      "createdAt": "2022-03-23T01:26:16Z",
+      "body": "Which yang model is in picture here, Kindly send me the link.\nHere global is container and Timeout is leaf right ?\n\n\n\nThanks,\n\nRegards\nPraveen\n________________________________\nFrom: Praveen Chaudhary ***@***.***>\nSent: Tuesday, March 22, 2022 6:20 PM\nTo: Azure/sonic-buildimage ***@***.***>; Azure/sonic-buildimage ***@***.***>\nCc: Mention ***@***.***>; Gaurav Dawra ***@***.***>\nSubject: Re: [Azure/sonic-buildimage] [yang] validating TACPLUS with empty \u201cglobal\u201d fails, while non-empty \u201cglobal\u201d does not fail (Issue #9746)\n\nLet me check it once tomorrow.\n\nThanks,\n\nRegards\nPraveen\n________________________________\nFrom: Qi Luo ***@***.***>\nSent: Tuesday, March 22, 2022 5:23 PM\nTo: Azure/sonic-buildimage ***@***.***>\nCc: Praveen Chaudhary ***@***.***>; Mention ***@***.***>\nSubject: Re: [Azure/sonic-buildimage] [yang] validating TACPLUS with empty \u201cglobal\u201d fails, while non-empty \u201cglobal\u201d does not fail (Issue #9746)\n\n\n@praveen-li<https://nam06.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2Fpraveen-li&data=04%7C01%7Cpchaudhary%40linkedin.com%7C1dc7fc6192844ff7410308da0c636fe6%7C72f988bf86f141af91ab2d7cd011db47%7C1%7C0%7C637835918467238601%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C3000&sdata=jIq2X4Jr5L0fyt3a8e4uBHpBruRhDDrRv%2FF98U5wMU8%3D&reserved=0> Could you help check \"re-visit the logic of clearing dictionary keys (for empty value)\"?\n\n\u2014\nReply to this email directly, view it on GitHub<https://nam06.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2FAzure%2Fsonic-buildimage%2Fissues%2F9746%23issuecomment-1075779113&data=04%7C01%7Cpchaudhary%40linkedin.com%7C1dc7fc6192844ff7410308da0c636fe6%7C72f988bf86f141af91ab2d7cd011db47%7C1%7C0%7C637835918467238601%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C3000&sdata=m5FLyXAAwbMkHvs311osejabsXFYfc7CC8X1yPO9tlA%3D&reserved=0>, or unsubscribe<https://nam06.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2Fnotifications%2Funsubscribe-auth%2FAJHZHPMZQDKPKT4ECTGK5B3VBJQB7ANCNFSM5LYRB7KQ&data=04%7C01%7Cpchaudhary%40linkedin.com%7C1dc7fc6192844ff7410308da0c636fe6%7C72f988bf86f141af91ab2d7cd011db47%7C1%7C0%7C637835918467238601%7CUnknown%7CTWFpbGZsb3d8eyJWIjoiMC4wLjAwMDAiLCJQIjoiV2luMzIiLCJBTiI6Ik1haWwiLCJXVCI6Mn0%3D%7C3000&sdata=KOliu2jJ7MtgEzUaoXB4mK%2B6hP9908WjElQ6wTBhnWk%3D&reserved=0>.\nYou are receiving this because you were mentioned.Message ID: ***@***.***>\n"
+    },
+    {
+      "author": "wen587",
+      "createdAt": "2022-03-23T05:32:51Z",
+      "body": "sonic-system-tacacs.yang\r\nRight, global is container and timeout is leaf."
+    },
+    {
+      "author": "praveen-li",
+      "createdAt": "2022-04-01T00:48:44Z",
+      "body": "Kindly add below, it should fix this issue. Let me know if not. Thx.\r\n    \r\nif not configC.get(ccontainer['@name']):\r\n       # Empty container, clean config and return\r\n      del configC[ccontainer['@name']]\r\n       return"
+    },
+    {
+      "author": "wen587",
+      "createdAt": "2022-04-01T03:31:19Z",
+      "body": "Hi @praveen-li , Could you elaberate where to add those lines?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 10431,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/10431",
+      "title": "Fix yang validation failure when table contains empty value",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-04-07T00:46:41Z",
+      "createdAt": "2022-04-01T07:00:27Z",
+      "author": "wen587",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFix https://github.com/Azure/sonic-buildimage/issues/9746\r\n#### How I did it\r\nSplit the check condition based on non-exist and zero length.\r\n#### How to verify it\r\nRun verification script when table contains empty value\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/SONiC/wiki/Configuration.\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "src/sonic-yang-mgmt/sonic_yang_ext.py",
+          "additions": 14,
+          "deletions": 9
+        },
+        {
+          "path": "src/sonic-yang-mgmt/tests/libyang-python-tests/test_sonic_yang.py",
+          "additions": 15,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-models/tests/files/sample_config_db.json",
+          "additions": 7,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-yang-models/tests/yang_model_tests/tests/tacacs.json",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-yang-models/yang-models/sonic-device_metadata.yang",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

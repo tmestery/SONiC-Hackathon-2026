@@ -1,0 +1,156 @@
+{
+  "number": 23635,
+  "title": "Bug:Removing a vlan member followed by adding the port to portchannel may sometime lead to crash if configs are processed in reverse order when orchagent is busy",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/23635",
+  "createdAt": "2025-08-07T22:46:32Z",
+  "closedAt": "2026-03-31T20:37:04Z",
+  "author": "dgsudharsan",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen a port, which is part of a Vlan is removed from it and gets added to portchannel, sometimes when orchagent is busy the configs may get queued in redis and during processing, it gets handled in alphabetical order and not chrological order.\n\nThis would result in error logs like below and orchagent crash for versions before 202505.\n\n```\n2025 Aug  7 18:28:46.592292 sonic ERR syncd#SDK: [SAI_LAG.ERR] ./src/mlnx_sai_lag.c[726]- validate_port: Can't add port which is under bridge\n2025 Aug  7 18:28:46.592461 sonic ERR syncd#SDK: :- sendApiResponse: api SAI_COMMON_API_CREATE failed in syncd mode: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 18:28:46.592926 sonic ERR swss#orchagent: :- create: create status: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 18:28:46.593116 sonic ERR swss#orchagent: :- addLagMember: Failed to add member Ethernet0 to LAG PortChannel1 lid:20000000005a8 pid:100000000000d\n2025 Aug  7 18:28:46.593529 sonic ERR swss#orchagent: :- handleSaiFailure: Encountered failure in create operation, SAI API: SAI_API_LAG, status: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 18:28:46.593570 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_LAG_ID: oid:0x20000000005a8\n2025 Aug  7 18:28:46.593570 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_PORT_ID: oid:0x100000000000d\n2025 Aug  7 18:28:46.593598 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_EGRESS_DISABLE: true\n2025 Aug  7 18:28:46.593598 sonic ERR syncd#SDK: :- processQuadEvent: attr: SAI_LAG_MEMBER_ATTR_INGRESS_DISABLE: true\n2025 Aug  7 18:28:53.415477 sonic ERR swss#orchagent: :- set: switch id oid:0x0 doesn't exist\n2025 Aug  7 18:28:53.416028 sonic ERR swss#orchagent: :- setDistributionOnLagMember: Failed to disable distribution on LAG member Ethernet0\n2025 Aug  7 18:28:53.416092 sonic ERR swss#orchagent: :- handleSaiFailure: Encountered failure in set operation, SAI API: SAI_API_LAG, status: SAI_STATUS_INVALID_PARAMETER\n2025 Aug  7 18:28:57.929435 sonic ERR swss#orchagent: :- set: switch id oid:0x0 doesn't exist\n2025 Aug  7 18:28:57.929478 sonic ERR swss#orchagent: :- setCollectionOnLagMember: Failed to disable collection on LAG member Ethernet0\n2025 Aug  7 18:28:57.929519 sonic ERR swss#orchagent: :- handleSaiFailure: Encountered failure in set operation, SAI API: SAI_API_LAG, status: SAI_STATUS_INVALID_PARAMETER\n```\n\nThere is a check in CLI but the check just checks config_db https://github.com/sonic-net/sonic-utilities/blob/1418f218825484551b1f8893ff836d420f0a6135/config/main.py#L2728\n\n\n### Steps to Reproduce\n\nconfig vlan add 10\nconfig vlan member add 10 Ethernet0\n\nIn a parallel session attach gdb to orchagent.\n\nconfig vlan member del 10 Ethernet0\nconfig portchannel add PortChannel1\nconfig portchannel member add PortChannel1 Ethernet0\n\n### Actual Behavior and Expected Behavior\n\nActual behavior: Errors in logs and crash prior to 202505\n\nExpected behavior. No errors in log or crash.\n\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "prgeor",
+      "createdAt": "2025-08-27T16:00:06Z",
+      "body": "@dgsudharsan is this a configuration or sdk issue?"
+    },
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2025-08-27T16:37:03Z",
+      "body": "@prgeor This is a SWSS issue due to reordering of configuration. Please check my repro steps. It is easy to reproduce"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4387,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4387",
+      "title": "[portsorch]: Fix Errors when removing VLAN member and adding port to P\u2026",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-31T20:37:03Z",
+      "createdAt": "2026-03-24T21:06:19Z",
+      "author": "yizhenzha",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n\r\nThis PR fixed the bug Fixes sonic-net/sonic-buildimage#23635\r\n\r\n**Summary**\r\n\r\nWhen a port is removed from a VLAN and added to a PortChannel in quick succession (e.g., when orchagent is busy), the operations queue up in Redis. Because orchagent processes `LAG_MEMBER_TABLE` before `VLAN_MEMBER_TABLE` (alphabetical order at the same priority), it attempts to add the port to the LAG while the port is still a bridge member. This causes SAI error `\"Can't add port which is under bridge\"` and a crash on versions prior to 202505.\r\n\r\nThe fix defers the LAG member addition when `m_portVlanMember` for the port is non-empty, allowing the VLAN member removal to complete first. On the next `doTask()` cycle, the LAG member addition proceeds successfully.\r\n\r\n**How I verified it**\r\n\r\n1. **End-to-end testing on canonical SONiC testbed:**\r\n```\r\n$ sudo config vlan add 12\r\n23:44:54.434747 NOTICE addVlan: Create an empty VLAN Vlan12 vid:12 vlan_oid:260000000005ae\r\n```\r\n\r\n```\r\n$ sudo config vlan member add 12 Ethernet0\r\n23:45:40.034743 NOTICE addVlanMember: Add member Ethernet0 to VLAN Vlan12 vid:12 pid1000000000017\r\n```\r\ngdb pause orchagent in another session, then in previous session, run:\r\n```\r\nsudo config vlan member del 12 Ethernet0\r\nsudo config portchannel add PortChannel1\r\nsudo config portchannel member add PortChannel1 Ethernet0\r\n```\r\n\r\nthen continue gdb in the other session, then we will see:\r\n\r\n```\r\n2026 Mar 12 23:46:52.123568 sonic INFO swss#orchagent: :- doLagMemberTask: Port Ethernet0 is still a member of 1 VLAN(s), skipping adding port to port channel.\r\n2026 Mar 12 23:46:52.123568 sonic INFO swss#orchagent: :- doLagMemberTask: Port Ethernet0 is still a member of 1 VLAN(s), skipping adding port to port channel.\r\n2026 Mar 12 23:46:52.125843 sonic INFO swss#orchagent: :- doLagMemberTask: Port Ethernet0 is still a member of 1 VLAN(s), skipping adding port to port channel.\r\n ... \r\n2026 Mar 12 23:46:52.136631 sonic NOTICE swss#orchagent: :- removeVlanMember: Remove member Ethernet0 from VLAN Vlan12 lid:c vmid:270000000005b0\r\n\r\n... \r\n2026 Mar 12 23:46:52.209554 sonic NOTICE swss#orchagent: :- addLagMember: Add member Ethernet0 to LAG PortChannel1 lid:20000000005b1 pid:1000000000017\r\n```\r\n\r\nand validate the SAI message disappear:\r\n   ```\r\n   show logging | grep \"Can't add port which is under bridge\"\r\n   # Returns nothing (no SAI error)\r\n   ```\r\n2. **C++ mock test** (`tests/mock_tests/portsorch_ut.cpp`): `VlanLagRaceTest.LagMemberAddDeferredWhileVlanMemberPending` \u2014 verifies the LAG member add is deferred while `m_portVlanMember` is non-empty, then succeeds after the VLAN member removal completes across two `doTask()` cycles. Runs automatically during swss `.deb` build.\r\n",
+      "files": [
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 9,
+          "deletions": 1
+        },
+        {
+          "path": "tests/mock_tests/portsorch_ut.cpp",
+          "additions": 130,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-03-24T21:06:24Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: LuminaScript / name: Yizhen Zhang  (81a8ead0307378ad3601989758a0f8edb6fc33db)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T21:06:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T21:06:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T21:12:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T21:12:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T21:28:18Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T21:28:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T21:29:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T21:29:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T21:33:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T21:34:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yizhenzha",
+          "createdAt": "2026-03-25T17:26:22Z",
+          "body": "the [Azure.sonic-swss](https://github.com/sonic-net/sonic-swss/pull/4387/checks?check_run_id=68458827622) is failing due to know issue in community https://github.com/sonic-net/sonic-swss/issues/4345, https://github.com/sonic-net/sonic-swss/issues/4110 can we get help here? I saw the fix is still not merge in. Thank you! @prsunny "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T23:54:47Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-25T23:54:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-26T00:42:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-26T00:42:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-30T17:12:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-30T17:12:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yizhenzha",
+          "createdAt": "2026-03-30T17:16:54Z",
+          "body": "@prsunny can you approve this PR? Thanks"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-30T17:40:13Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

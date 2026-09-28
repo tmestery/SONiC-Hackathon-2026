@@ -1,0 +1,119 @@
+{
+  "number": 11576,
+  "title": "[Generic Config Updater] apply-patch ignore-path path is not working",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/11576",
+  "createdAt": "2022-07-28T17:53:12Z",
+  "closedAt": "2022-08-09T01:38:09Z",
+  "author": "DavidZagury",
+  "labels": [
+    "Triaged",
+    "MSFT",
+    "Generic Config Update (GCU)"
+  ],
+  "assignees": [
+    "wen587"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\nWhen using apply-patch to update the DB there is an hidden option 'ignore-path' that should be used to ignore validation for config specified by given path.\r\n\r\nThe validation on apply-path does not ignore the tables given with this flag.\r\n\r\n#### Steps to reproduce the issue:\r\n1. Verify using dynamic buffer.\r\n2. Create a patch to shutdown a port:\r\n```\r\nadmin@r-tigon-21:~$ cat test_down\r\n[\r\n        {\r\n            \"op\": \"replace\",\r\n            \"path\": \"/PORT/Ethernet0/admin_status\",\r\n            \"value\": \"down\"\r\n        }\r\n]\r\n```\r\n3. Verify the interface status is up:\r\n```\r\nadmin@r-tigon-21:~$ show interface status Ethernet0\r\n  Interface    Lanes    Speed    MTU    FEC    Alias            Vlan    Oper    Admin             Type    Asym PFC\r\n-----------  -------  -------  -----  -----  -------  --------------  ------  -------  ---------------  ----------\r\n  Ethernet0      0,1      50G   9100    N/A    etp1a  PortChannel102      up       up  QSFP28 or later         off\r\n```\r\n4. Apply the patch\r\n\r\n#### Describe the results you received:\r\n```\r\nadmin@r-tigon-21:~$ sudo config apply-patch -i /BUFFER_PG test_down\r\nPatch Applier: Patch application starting.\r\nPatch Applier: Patch: [{\"op\": \"replace\", \"path\": \"/PORT/Ethernet0/admin_status\", \"value\": \"down\"}]\r\nPatch Applier: Getting current config db.\r\nPatch Applier: Simulating the target full config after applying the patch.\r\nPatch Applier: Validating target config does not have empty tables, since they do not show up in ConfigDb.\r\nPatch Applier: Sorting patch updates.\r\nPatch Applier: The patch was sorted into 1 change:\r\nPatch Applier:   * [{\"op\": \"replace\", \"path\": \"/PORT/Ethernet0/admin_status\", \"value\": \"down\"}]\r\nPatch Applier: Applying 1 change in order:\r\nPatch Applier:   * [{\"op\": \"replace\", \"path\": \"/PORT/Ethernet0/admin_status\", \"value\": \"down\"}]\r\nPatch Applier: Verifying patch updates are reflected on ConfigDB.\r\nFailed to apply patch\r\nUsage: config apply-patch [OPTIONS] PATCH_FILE_PATH\r\nTry \"config apply-patch -h\" for help.\r\n```\r\nLogs show:\r\n\r\n> Jun  7 07:58:49.028286 r-tigon-21 ERR config: Change Applier: run_data vs expected_data: {'BUFFER_PG': {'Ethernet0|3': {'profile'\r\n> Jun  7 07:58:49.028426 r-tigon-21 ERR config: Change Applier: Failed to apply Json change\r\n> \r\n\r\n\r\n#### Describe the results you expected:\r\nShould pass.\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\nThe BUFFER_PG table does change when shutting down a port:\r\n> root@r-tigon-21:/home/admin# config interface startup Ethernet0\r\n> root@r-tigon-21:/home/admin# redis-cli -n 4 keys \"BUFFER_PG|Ethernet0*\"\r\n> 1) \"BUFFER_PG|Ethernet0|0\"\r\n> 2) \"BUFFER_PG|Ethernet0|3-4\"\r\n> root@r-tigon-21:/home/admin# config interface shutdown Ethernet0\r\n> root@r-tigon-21:/home/admin# redis-cli -n 4 keys \"BUFFER_PG|Ethernet0*\"\r\n> 1) \"BUFFER_PG|Ethernet0|0\"\r\n\r\nBut it seems that the -i flag doesn't work and doesn't ignore tables giving to it.\r\nAfter update is done on src/sonic-utilities/generic_config_updater/change_applier.py in function  apply(self, change)\r\n\r\nThere is a validation:\r\nhttps://github.com/Azure/sonic-utilities/blob/ac2f55306e9f5f0f9fad60f814bcc777f685d2b4/generic_config_updater/change_applier.py#L145\r\n```\r\n            if upd_data != run_data:\r\n                self._report_mismatch(run_data, upd_data)\r\n                ret = -1\r\n```\r\n\r\nWhich take the new db and compare it to the expected db, there is no mention of what we gave it on the ignore flag, which results in a the error.\r\n\r\n\r\n\r\n",
+  "comments": [
+    {
+      "author": "ghooo",
+      "createdAt": "2022-07-29T20:00:46Z",
+      "body": "This seems like a problem in the box, shutting down a port has a side effect of changing BUFFER_PG table. @qiluo-msft do you have suggestions about who can help with this?\r\n\r\n`ignore_path` i.e `-i` option is used for ignoring tables or fields from YANG validation. This is used to unblock E2E testing of the GCU feature especially the YANG models are not complete and the test DUTS they have different YANG validation issues which are not related to E2E testing. Also `ignore_path` should not be used for production, it is a great risk to skip validation while working on real devices. This is the reason why the feature is hidden. Please check the PR adding `ignore_path` for more info. https://github.com/Azure/sonic-utilities/pull/1929"
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2022-07-29T22:03:59Z",
+      "body": "@DavidZagury The ERR syslog is generated by this code line https://github.com/Azure/sonic-utilities/blob/6de18a1ded43a5bec02af5732fc4c64e551d8a42/generic_config_updater/change_applier.py#L129 and it is truncated. Could you just add some debug output and capture `run_data, upd_data` there?\r\n\r\n@renukamanavalan Could you please help check also?\r\n"
+    },
+    {
+      "author": "renukamanavalan",
+      "createdAt": "2022-07-29T23:12:46Z",
+      "body": "@ghooo is correct w.r.t YANG validation. \r\nIt appears that the patch did not get applied to the running config. \r\nSomeone has to repro and debug."
+    },
+    {
+      "author": "wen587",
+      "createdAt": "2022-08-01T02:03:01Z",
+      "body": "I think when use GCU to shut down the port, GCU will compare the running config and target config to make sure it makes the change and only make the change to the `Ethernet0's admin_status`.\r\nThe operation will fail if changes other than `admin_status` are changed.\r\n\r\nIn this example(check **Additional information** in this issue), shutting down the port will result in \"BUFFER_PG|Ethernet0|3-4\" disappearing. The BUFFER_PG seems to have dependent changes to `port admin_status`. I guess this is why the GCU fail."
+    },
+    {
+      "author": "DavidZagury",
+      "createdAt": "2022-08-01T07:54:06Z",
+      "body": "> @DavidZagury The ERR syslog is generated by this code line https://github.com/Azure/sonic-utilities/blob/6de18a1ded43a5bec02af5732fc4c64e551d8a42/generic_config_updater/change_applier.py#L129 and it is truncated. Could you just add some debug output and capture `run_data, upd_data` there?\r\n> \r\n> @renukamanavalan Could you please help check also?\r\n\r\nI have add a breakpoint and printed the run_data and the upd_data, since it is the full db it is quite long to add as a comment here, I added it to here:\r\nrun_data:\r\nhttps://justpaste.it/3ag9p\r\nupd_data:\r\nhttps://justpaste.it/5hso8\r\n\r\nAs I said, the difference is only on the BUFFER_PG where a profile was removed.\r\nThe patch did get updated and the port did updated as it should have, the error was only due to this change in the buffer table."
+    },
+    {
+      "author": "stephenxs",
+      "createdAt": "2022-08-02T03:07:16Z",
+      "body": "Hi\r\nWe understand applying patches via using `sudo config apply-patch -i /BUFFER_PG test_down` can fail if there is a difference in `CONFIG_DB` between and after the patch is applied.\r\nBut by design, the traditional buffer manager will update the `BUFFER_PG` and `BUFFER_PROFILE` table on ports' `speed` or `admin_status` updated.\r\nAs a result, it will fail to apply a patch containing `speed` and `admin_status` updates in the `PORT` table.\r\nWe just want to clarify what's the scope of GCU.\r\nFor example, is it designed for updating the configurations which have corresponding CLI."
+    },
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2022-08-03T15:13:36Z",
+      "body": "@qiluo-msft  can you please find someone in your team to take a look at this issue? "
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2022-08-03T22:59:16Z",
+      "body": "@wen587 will work on a fix."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2295,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/2295",
+      "title": "Fix GCU bug when backend service modifying config",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-08-09T01:38:08Z",
+      "createdAt": "2022-08-04T09:16:59Z",
+      "author": "wen587",
+      "body": "<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\nModifying PORT `admin_status` will result in backend service changing the running config. e.g. buffermgrd will modify `BUFFER_PG|EthernetXX|3-4` when one of the EthernetXX in `PORT` table admin down.\r\nThis PR is to skip comparison of config that is possiblly being modified by backend service\r\n\r\n#### What I did\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/11576\r\n#### How I did it\r\nAdd a workaround to only compare config without backend service impact.\r\n#### How to verify it\r\nManual test on specific platform and check operation success.\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n",
+      "files": [
+        {
+          "path": "generic_config_updater/change_applier.py",
+          "additions": 12,
+          "deletions": 0
+        },
+        {
+          "path": "generic_config_updater/generic_updater.py",
+          "additions": 2,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2022-08-04T09:17:02Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: wen587 / name: jingwenxie  (4dce058b004b51f90e4201fc0919538d6de6e265, a2c3abf632cd5e05caa80beef25a82958ed02afb, 96ba055ecfed7a82ed3308daf929528e56d1b5f2)</li></ul>"
+        },
+        {
+          "author": "wen587",
+          "createdAt": "2022-08-05T03:26:35Z",
+          "body": "Hi @liuh-80 , could you help review if only these two tables `[BUFFER_PG, BUFFER_PROFILE]` will be impacted by buffermgrd?"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2022-08-05T05:36:32Z",
+          "body": "@DavidZagury Could you help review this PR?"
+        },
+        {
+          "author": "DavidZagury",
+          "createdAt": "2022-08-07T07:32:23Z",
+          "body": "@qiluo-msft I tested this PR on my setup and it fixed the issue. I did add one comment that I think could have a slight improvement in the performance of this solution .\r\n\r\n@stephenxs do you know of any other tables that should be ignored during the GCU validation check?"
+        },
+        {
+          "author": "stephenxs",
+          "createdAt": "2022-08-08T06:58:58Z",
+          "body": "> @qiluo-msft I tested this PR on my setup and it fixed the issue. I did add one comment that I think could have a slight improvement in the performance of this solution .\r\n> \r\n> @stephenxs do you know of any other tables that should be ignored during the GCU validation check?\r\n\r\nHi\r\nI'm not aware of other tables that can be updated by manager daemons. Now that we have an infra to ignore such tables, we can add them to the list in case we find some new."
+        },
+        {
+          "author": "wen587",
+          "createdAt": "2022-08-09T01:37:29Z",
+          "body": "/easycla"
+        }
+      ]
+    }
+  ]
+}

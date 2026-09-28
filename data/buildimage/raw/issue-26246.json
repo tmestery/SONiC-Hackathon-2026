@@ -1,0 +1,157 @@
+{
+  "number": 26246,
+  "title": "Bug: countersyncd: Netlink receive buffer overflows with very large HFT counter set",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26246",
+  "createdAt": "2026-03-18T17:11:12Z",
+  "closedAt": "2026-04-23T18:54:36Z",
+  "author": "DavidZagury",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "Pterosaur"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nUnder high HFT load with a very large number of counters (e.g. full queue counters, as in test_hft_full_queue_counters), countersyncd can hit ENOBUFS (\u201cNo buffer space available\u201d) on the netlink socket. \n\nThe kernel reports that the netlink socket\u2019s receive buffer is full (\u201cNo buffer space available\u201d), so the overflow is at the kernel \u2192 userspace boundary: data is arriving faster than the process is reading it.\n\nSo the kernel is telling us its netlink receive buffer is full and it had to drop data. The problem is before our processing: we are not draining the socket often enough.\n\nThe code waits a fixed interval (e.g. 10 ms) before each socket readiness check, then does one read. So we only try to drain the kernel buffer at most once per interval. If HFT samples are sent every 10 ms. With a very large number of counters, each 10 ms burst is large. If we only read once per 10 ms, the kernel can get the next burst before we\u2019ve read the previous one, so its buffer fills and we see the \u201cbuffer full\u201d error. Because comm stats show downstream is keeping up, the only remaining explanation is that we\u2019re not draining the kernel buffer often enough for this data rate and burst size.\n\nI have created a debug version with reduced interval of 5ms - which has caused this issue to disappear under the same load \n\n### Steps to Reproduce\n\n1. Configure SONiC with HFT enabled and a profile that creates a very large number of counters (e.g. full queue counters, as covered by test_hft_full_queue_counters on a switch with 512 ports, and 8 QUEUES defined per port), with 10 ms sample interval.\n2. Start countersyncd with:\n    countersyncd -e --stats-interval 10 \n3. Run under steady traffic so HFT samples are sent every 10 ms with the full counter set.\n4. Observe logs for ENOBUFS.\n\n### Actual Behavior and Expected Behavior\n\n**Expected behavior**\nNo ENOBUFS when running with a very large number of HFT counters (e.g. full queue counters as in test_hft_full_queue_counters), as long as the poll interval is appropriate for the data rate.\n\n**Actual behavior**\nWith a very large number of counters, logs repeatedly show:\n\n`[WARN] Netlink receive buffer full (ENOBUFS). Consider increasing buffer size or processing messages faster. Error: Os { code: 105, kind: Uncategorized, message: \"No buffer space available\" }\n`\nSome HFT samples are dropped; stats can be incomplete or lag during bursts.\nWith a smaller number of counters, the same setup typically does not show ENOBUFS.\n\n### Relevant log output\n\n```shell\nWith 10 ms poll interval (reproduces the bug):\n\n[crates/countersyncd/src/actor/data_netlink.rs:892] [WARN] Netlink receive buffer full (ENOBUFS). Consider increasing buffer size or processing messages faster. Error: Os { code: 105, kind: Uncategorized, message: \"No buffer space available\" }[2026-03-18 12:10:46.408] [crates/countersyncd/src/actor/data_netlink.rs:892] [WARN] Netlink receive buffer full (ENOBUFS). ...[2026-03-18 12:10:46.508] [crates/countersyncd/src/actor/data_netlink.rs:892] [WARN] Netlink receive buffer full (ENOBUFS). ...\n\nComm stats (data path itself is not backlogged; bottleneck is kernel\u2192userspace):\n\n[crates/countersyncd/src/utilities/mod.rs:140] [INFO] Comm stats [data_netlink.ipfix_records]: count=47754, avg_len=0.00, peak_len=0, min_len=0, last_len=0, rms_len=0.00, nonzero_count=0, capacity=1024, avg_util=0.00, peak_util=0.00\n[crates/countersyncd/src/utilities/mod.rs:140] [INFO] Comm stats [ipfix.stats_reporter]: count=95507, avg_len=0.50, peak_len=3, min_len=0, last_len=1, rms_len=0.71, nonzero_count=47741, capacity=1024, avg_util=0.00, peak_util=0.00\n[crates/countersyncd/src/utilities/mod.rs:140] [INFO] Comm stats [control_netlink.data_netlink_cmd]: count=10, avg_len=0.00, peak_len=0, min_len=0, last_len=0, rms_len=0.00, nonzero_count=0, capacity=10, avg_util=0.00, peak_util=0.00\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4380,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4380",
+      "title": "[countersyncd]: Make it possible to configure the poll intervals",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-23T18:54:35Z",
+      "createdAt": "2026-03-23T08:20:47Z",
+      "author": "DavidZagury",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\n- Made the socket readiness poll interval configurable via --socket-readiness-timeout-ms (default 5 ms; was fixed at 10 ms). The data_netlink actor uses this value when waiting before checking the netlink socket.\r\n- Made the netlink socket receive buffer configurable via --netlink-rcvbuf (default 4 MB; 0 = OS default). Set SO_RCVBUF on the data netlink socket at connect/reconnect and log requested vs actual size.\r\n- Made the comm stats log interval configurable via --comm-stats-interval (default 600 s) so queue-depth stats can be emitted more often when debugging.\r\n\r\n**Why I did it**\r\nTo make sure we can empty the buffer before the next samples of counters is received.\r\nAnd to fix https://github.com/sonic-net/sonic-buildimage/issues/26246\r\n\r\n**How I verified it**\r\nConfigure HFT with a large amount of counters and ports and verified the amount of messages received per second.\r\nUse the test test_hft_full_queue_counters to validate such secnario.\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "crates/countersyncd/src/actor/data_netlink.rs",
+          "additions": 68,
+          "deletions": 20
+        },
+        {
+          "path": "crates/countersyncd/src/actor/netlink_utils.rs",
+          "additions": 36,
+          "deletions": 1
+        },
+        {
+          "path": "crates/countersyncd/src/main.rs",
+          "additions": 94,
+          "deletions": 2
+        },
+        {
+          "path": "crates/countersyncd/src/utilities/mod.rs",
+          "additions": 13,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T08:20:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T08:21:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T15:51:28Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T15:51:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T16:05:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T16:05:47Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T16:21:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T16:21:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T16:38:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T16:38:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T16:42:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T16:42:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T18:02:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T18:02:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "DavidZagury",
+          "createdAt": "2026-03-24T07:29:21Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T07:29:24Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T07:29:26Z",
+          "body": "Retrying failed(or canceled) stages in build 1068934:\n\u2705Stage **BuildAsan**:\n- Job amd64: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-30T16:49:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-03-30T16:50:00Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: DavidZagury / name: david.zagury  (1771cc24ced54972947b05b1a72e74d6b1ce03ba, 4ff22322d5f5db4c78abdc9031d13ac483cdac96, 667cf0a2953eac021ed470b1ee49beda342dc6b8, 68531571f6bfc8bc924da27a6788184213d300e8, 83efed891457b729adfb47999a14347e3121776d, 8641caadbc6028b551c94ac852921c8ccae6939b, 8c95829dd1ee31fc37fd9cb742af1da22662d9a0, ab0049b2b6a175b8232510847b66861ec25be157, cc586c8d262e2d9b0d7e029fb3b243e81645bea8, e37a910ebaccba2d69cf104052abb02a3831fc75, e58b5ec8b460c3127a00ff47fa6788089112e234, eb895a2509a51a2a58afbcad754ff246ff89cf90)</li><li>:white_check_mark: login: DavidZagury / name: DavidZagury  (83b656ba9bf03da0ebecf7ec266d05a9fc4d215d)</li><li>:white_check_mark: login: dgsudharsan / name: Sudharsan Dhamal Gopalarathnam  (bf4b27ce049a5ebfcf055359b2e8570dcc17b2c0)</li><li>:white_check_mark: login: Pterosaur / name: Ze Gan  (a03eb749e6804678558fbd791cc7a1a997a05a40, d4b89d7278262874217e5e5fae313a06a26d90bd)</li></ul>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-30T16:50:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

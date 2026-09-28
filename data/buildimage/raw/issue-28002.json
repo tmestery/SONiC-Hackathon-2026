@@ -1,0 +1,120 @@
+{
+  "number": 28002,
+  "title": "Build fails when building from a git worktree: submodule git metadata is outside the container bind-mount (breaks scapy version derivation)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28002",
+  "createdAt": "2026-06-20T05:58:04Z",
+  "closedAt": "2026-06-21T18:17:26Z",
+  "author": "securely1g",
+  "labels": [],
+  "assignees": [
+    "lguohan"
+  ],
+  "milestone": null,
+  "body": "## Description\n\nBuilding from a **`git worktree`** of `sonic-buildimage` (instead of a full standalone clone) fails because the build containers only bind-mount the worktree directory, not the parent repository's `.git` directory where worktree/submodule git metadata actually lives. As a result, any in-container `git` command run against a submodule fails with `fatal: not a git repository`, which silently breaks version-string derivation for at least the `scapy` python wheel and aborts the build.\n\nThere are valid use cases for worktrees (e.g. building multiple branches/commits from a single bare-ish clone without re-downloading ~GBs of submodules per branch), so it would be nice for the build system to support, or at least clearly document/detect, worktree mode.\n\n## Steps to reproduce\n\n```bash\n# Existing full clone with submodules\ncd /data/sonic-buildimage          # origin = sonic-net/sonic-buildimage\n\n# Create a worktree for master and build the VS image from it\ngit worktree add /data/sonic-buildimage-master -b master-latest\ncd /data/sonic-buildimage-master\ngit fetch origin master && git reset --hard origin/master\ngit submodule update --init --recursive\n\nmake configure PLATFORM=vs\nmake SONIC_BUILD_JOBS=4 target/sonic-vs.img.gz\n```\n\n## Observed result\n\nBuild fails at the `scapy` wheel step:\n\n```\nCreated wheel for scapy: filename=scapy-2026.6.20-py3-none-any.whl ...\nBuilding Wheels package target/python-wheels/bookworm/scapy-2.6.1.dev0-py3-none-any.whl\nmv: cannot stat 'src/scapy/dist/scapy-2.6.1.dev0-py3-none-any.whl': No such file or directory\n[  FAIL LOG END  ] [ target/python-wheels/bookworm/scapy-2.6.1.dev0-py3-none-any.whl ]\nmake: *** [slave.mk:1081: target/python-wheels/bookworm/scapy-2.6.1.dev0-py3-none-any.whl] Error 1\n```\n\nThe whole build is also spammed with thousands of:\n\n```\nfatal: not a git repository: /data/sonic-buildimage/.git/worktrees/sonic-buildimage-master/...\n```\n\n## Root cause\n\nIn a worktree, a submodule's `.git` is a **pointer file**, not a directory. For example `src/scapy/.git` contains:\n\n```\ngitdir: ../../../sonic-buildimage/.git/worktrees/sonic-buildimage-master/modules/src/scapy\n```\n\nThe build container only bind-mounts the worktree dir into `/sonic`:\n\n```\ndocker run ... -v /data/sonic-buildimage-master:/sonic -w /sonic ... sonic-slave-bookworm ...\n```\n\nSo inside the container that gitdir resolves to\n`/sonic/src/scapy/../../../sonic-buildimage/.git/worktrees/...`, i.e. it points **outside** the mount, to a path that does not exist in the container. Every in-container `git` call against a submodule therefore returns `rc=128 / fatal: not a git repository`.\n\n`scapy`'s version logic (`scapy/__init__.py::_version()`) tries, in order: `SCAPY_VERSION` env \u2192 `scapy/VERSION` file \u2192 git-archive subst \u2192 **`git describe`** \u2192 **date fallback** (`strftime('%Y.%m.%d')`). The only method that yields the pinned `2.6.1.dev0` is `git describe`, and it is wrapped in `except Exception: pass`. With git unreachable in-container it falls through to the date, producing `scapy-2026.6.20-...whl`, while `rules/scapy.mk` expects `scapy-2.6.1.dev0-...whl` \u2192 `mv` fails.\n\nThis was confirmed with instrumentation inside the in-container build:\n\n```\nSONIC-SCAPY-DIAG: enter _version_from_git_describe pkgdir='/sonic/src/scapy/scapy' parent='/sonic/src/scapy' dotgit_exists=True\nSONIC-SCAPY-DIAG: git FAILED rc=128 cmd='git describe --tags --always --long' cwd='/sonic/src/scapy/scapy'\n   stderr='fatal: not a git repository: /sonic/src/scapy/../../../sonic-buildimage/.git/worktrees/sonic-buildimage-master/modules/src/scapy'\nSONIC-SCAPY-DIAG: Method3(git describe) FAIL CalledProcessError: ... exit status 128.\nSONIC-SCAPY-DIAG: falling through to DATE fallback (THIS IS THE BUG)\n```\n\nNote `dotgit_exists=True` \u2014 so the existing patch `src/scapy.patch/0001-Fix-version-string-generation-when-scapy-is-a-submod.patch` (which only removes an `os.path.isdir('.git')` precheck) does **not** help here; the failure is one level deeper, in `git describe` itself.\n\n`scapy` is just the first casualty; any build step that shells out to `git` in a submodule under a worktree is exposed to the same class of failure.\n\n## Expected result\n\nBuilding from a `git worktree` should either work, or fail fast with a clear message, rather than silently producing wrong version strings deep into the build.\n\n## Possible fixes / mitigations\n\n- **Mount the parent `.git`/common dir** into the build containers when the source tree is a worktree (e.g. also `-v <common-git-dir>:<same-path>`), or rewrite gitdir pointers to in-container paths.\n- **Make version derivation robust to unreachable git** \u2014 e.g. honor `SCAPY_VERSION` from the build env for the scapy wheel (verified workaround: `SCAPY_VERSION=2.6.1.dev0` makes `_version()` return the pinned version regardless of git), and similarly for any other component that derives versions from git at build time.\n- **Detect worktree mode** in `make configure` / `Makefile.work` and emit a clear warning/guard if it is unsupported.\n\n## Workaround\n\n- Build from a regular full `git clone` (self-contained `.git/`) instead of a worktree, **or**\n- Export `SCAPY_VERSION=2.6.1.dev0` (matching `rules/scapy.mk`) into the build environment.\n\n## Environment\n\n- Repo: `sonic-net/sonic-buildimage` master @ `be9722abb`\n- Source tree: a `git worktree` (`/data/sonic-buildimage-master`, branch `master-latest` tracking `origin/master`) of a full clone at `/data/sonic-buildimage`\n- Target: `target/sonic-vs.img.gz` / `target/docker-sonic-vs.gz`, `PLATFORM=vs`, bookworm slave\n",
+  "comments": [
+    {
+      "author": "securely1g",
+      "createdAt": "2026-06-20T06:02:23Z",
+      "body": "@saiarcot895 could you take a look and share feedback on the best way to resolve this?\n\nThe core problem: when `sonic-buildimage` is built from a **git worktree**, each submodule's `.git` is a pointer file into the parent repo's `.git/worktrees/.../modules/...`, which lives **outside** the `-v <src>:/sonic` bind-mount. So every in-container `git` call against a submodule returns `fatal: not a git repository` (rc=128), which silently breaks `scapy`'s `git describe`-based version derivation (falls through to a date version `scapy-2026.MM.DD`) and aborts the wheel step.\n\nA few directions I can think of, but want your guidance on the preferred one:\n1. Mount the parent common `.git` dir into the build container (or rewrite gitdir pointers to in-container paths) when the tree is a worktree.\n2. Make version derivation robust to unreachable git (e.g. honor `SCAPY_VERSION` from the build env \u2014 verified workaround `SCAPY_VERSION=2.6.1.dev0`), and similarly for other git-version-deriving components.\n3. Detect worktree mode in `make configure` / `Makefile.work` and fail fast with a clear message if unsupported.\n\nHappy to put up a PR for whichever approach you think is cleanest. Thanks!\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28007,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28007",
+      "title": "[build] Support building from a git worktree",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-21T18:17:25Z",
+      "createdAt": "2026-06-20T17:29:27Z",
+      "author": "securely1g",
+      "body": "#### Why I did it\n\nBuilding sonic-buildimage from a `git worktree` (instead of a normal clone) fails, because in-container `git` breaks. This fixes #28002.\n\nIn a worktree, `$(PWD)/.git` is a *file* pointing into the parent repo's git dir, and the build only bind-mounts the worktree directory (`$(PWD):/sonic`). Two things then break inside the slave container:\n\n1. **Submodule git / work-tree detection.** Each submodule's `.git` pointer and its gitdir's `core.worktree` back-reference resolve to paths **outside** the `$(PWD):/sonic` mount, so in-container submodule git (e.g. `src/scapy`, `src/sonic-frr`) fails with `fatal: not a git repository` (Error 128), and tools like `stg` fail with `Not inside a git worktree`. This breaks at least:\n   - the **scapy** wheel (scapy derives its version from in-container git via `src/scapy.patch/0001-Fix-version-string-generation-when-scapy-is-a-submod.patch`; when git fails it falls back to a date version and the expected `scapy-2.6.1.dev0-...whl` is never produced), and\n   - the **FRR** deb (`src/sonic-frr` runs `git`, `stg`, and `gbp dch` in-container).\n\n2. **Image version string.** `git worktree add` records the **top-level** worktree `.git` pointer as an **absolute** gitdir path into the parent repo (e.g. `gitdir: /abs/parent/.git/worktrees/<wt>`), unlike submodule `.git` pointers which are written relative. That absolute host path does not exist at the same location inside the container, so the in-container `git` used by `slave.mk` to compute `SONIC_IMAGE_VERSION` returns empty. The empty version then produces an invalid Docker tag and the build fails late, e.g.:\n   ```\n   docker tag docker-macsec:.0- ...\n   invalid reference format: \"docker-macsec:.0-\" is not a valid repository/tag\n   ```\n   so the full image (`target/sonic-vs.img.gz`) is never produced.\n\n#### How I did it\n\nAll changes are in `Makefile.work` and apply **only** when building from a worktree. For a normal clone the detection is a no-op (the extra mounts are empty, the workdir stays `/sonic`, and the pointer fixup is empty), so nothing changes.\n\n1. **Bind-mount the parent git dir + align the workdir.** Additionally bind-mount:\n   - the parent repo's common git dir at the absolute path the worktree's `.git` pointers reference inside the container, and\n   - the worktree tree at its parent-relative basename path, so each submodule gitdir's `core.worktree` back-reference resolves onto the real tree,\n\n   and run the build from that basename path (`DOCKER_BUILDER_WORKDIR`) so git's inferred work tree matches the build working directory. `/sonic` stays mounted for paths that reference it directly. Both mounts are read-write because package builds such as FRR write to the git dir.\n\n2. **Normalize the top-level `.git` pointer to a relative gitdir.** As the first step of the in-container build command, rewrite the worktree's top-level `.git` pointer from the absolute parent path to the equivalent **relative** gitdir (the same form `git` already uses for submodule pointers \u2014 see the `init` target's `git submodule foreach ... realpath --relative-to=.`). A relative gitdir resolves correctly **both** on the host and inside the container, because the worktree directory keeps the same relative relationship to the parent `.git` in either location. This lets `slave.mk` compute a non-empty `SONIC_IMAGE_VERSION` and produces a valid Docker tag.\n\nThe helper variables are deliberately named `SONIC_WT_*` (not `GIT_DIR` / `GIT_COMMON_DIR` / `GIT_WORK_TREE`), because those are environment variable names git itself honors and would otherwise leak into child git invocations.\n\nThis assumes the worktree is created with the standard `git worktree add ../<name>` layout (a sibling of the parent repo). \n\n#### How to verify it\n\nFrom a worktree of sonic-buildimage:\n```\ngit worktree add ../sonic-buildimage-wt -b some-branch\ncd ../sonic-buildimage-wt\nmake init\nmake configure PLATFORM=vs\nmake SONIC_BUILD_JOBS=4 target/sonic-vs.img.gz\n```\nBefore this change the build aborts at the scapy wheel (`mv: cannot stat '.../scapy-2.6.1.dev0-...whl'`), then at the trixie FRR deb (`fatal: not a git repository` / `stg ... Not inside a git worktree`), and \u2014 once those are mounted \u2014 late at the Docker tag step with an empty version (`docker tag docker-macsec:.0-` / `not a valid repository/tag`).\n\nWith this change, building from a worktree:\n- produces `scapy-2.6.1.dev0-py3-none-any.whl`,\n- produces `frr_10.5.4-sonic-0_amd64.deb` (plus `frr-dbgsym`, `frr-snmp`, `frr-snmp-dbgsym`),\n- resolves a non-empty `SONIC_IMAGE_VERSION` so the Docker images tag correctly, and\n- builds `target/sonic-vs.img.gz` end-to-end.\n\nNormal (non-worktree) builds are unaffected.\n\nFixes #28002\n",
+      "files": [
+        {
+          "path": "Makefile.work",
+          "additions": 64,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T17:29:35Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T17:29:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T18:02:44Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T18:02:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T22:29:00Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T22:29:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T23:37:27Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T23:37:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T03:42:28Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T03:42:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T03:53:27Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T03:53:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T06:59:29Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T06:59:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2026-06-21T18:12:02Z",
+          "body": "@saiarcot895 , let me know if there is any comment. i will merge this for now."
+        }
+      ]
+    }
+  ]
+}

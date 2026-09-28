@@ -1,0 +1,157 @@
+{
+  "number": 14880,
+  "title": "[techsupport] show cli invocation is dependent on availability of redis connectivity",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/14880",
+  "createdAt": "2023-04-28T23:02:03Z",
+  "closedAt": "2023-06-14T01:45:41Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Chassis :robot:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\nshow cli invocation is dependent on availability of redis connection\r\n\r\n#### Steps to reproduce the issue:\r\n\r\nVery rare to repro, but is seen during system init and auto-techsupport being triggered around the same time.\r\n\r\n```\r\nApr 27 04:08:53.222405 sonic  INFO systemd[1]: Reloading.\r\nApr 27 04:08:53.510773 sonic  ERR coredump_gen_handler.py[71993]: show techsupport failed with exit code 1, stderr: Traceback (most recent call last):#012  File \"/usr/local/bin/show\", line 5, in <module>#012    from show.main import cli#012  File \"/usr/local/lib/python3.9/dist-packages/show/main.py\", line 297, in <module>#012    if is_gearbox_configured():#012  File \"/usr/local/lib/python3.9/dist-packages/show/main.py\", line 240, in is_gearbox_configured#012    app_db.connect(app_db.APPL_DB)#012  File \"/usr/lib/python3/dist-packages/swsscommon/swsscommon.py\", line 1781, in connect#012    return _swsscommon.SonicV2Connector_Native_connect(self, db_name, retry_on)#012RuntimeError: Unable to connect to redis: Cannot assign requested address\r\n```\r\n\r\nEven If the connection fails for some other reason i.e. database down etc, techsupport invocation should not be failed regardless.\r\n\r\n#### Describe the results you received:\r\n\r\nClearly, generate_dump invocation failed because of the failure in show cli i.e \"Unable to connect to redis: Cannot assign requested address\"\r\n\r\n#### Describe the results you expected:\r\n\r\nIMO, user should be able to collect techsupport dump regardless of the system state. \r\n\r\n\r\n[sysdump_test_reboot.tar.gz](https://github.com/sonic-net/sonic-buildimage/files/11357755/sysdump_test_reboot.tar.gz)\r\n",
+  "comments": [
+    {
+      "author": "gechiang",
+      "createdAt": "2023-05-10T15:43:18Z",
+      "body": "This seems to be due to \"chassis\" changes that made a change in loopback address?\r\nthis needs to be discussed with the \"chassis\" community to change from unix socket?\r\nChange wrapper so that it does not break pizzabox platforms?\r\n@yxieca can you help find the PR that made the change that is causing this issue?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 15080,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/15080",
+      "title": "Re-add 127.0.0.1/8 when bringing down the interfaces",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-06-14T01:45:39Z",
+      "createdAt": "2023-05-15T23:59:22Z",
+      "author": "saiarcot895",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nWith #5353, 127.0.0.1/16 was added to the lo interface, and then 127.0.0.1/8 was removed. However, when bringing down the lo interface, like during a config reload, 127.0.0.1/16 gets removed, but 127.0.0.1/8 isn't added back to the interface. This means that there's a period of time where 127.0.0.1 is not available at all, and services that need to connect to 127.0.0.1 (such as for redis DB) will fail.\r\n\r\nFixes #15117.\r\nFixes #14880.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: 18637195\r\n\r\n#### How I did it\r\n\r\nTo fix this, when going down, add 127.0.0.1/8. Add this address before the existing configuration gets removed, so that 127.0.0.1 is available at all times.\r\n\r\nNote that running `ifdown lo` doesn't actually bring down the loopback interface; the interface always stays \"physically\" up.\r\n\r\n#### How to verify it\r\n\r\nOn a virtual switch, `config reload` was run for 8 times, and the `docker-wait-any` process for the `swss` container correctly monitored both `syncd` and `teamd`. On my setup, prior to this change, there was at least a 50% chance where during `swss` startup, `sonic-db-cli` would fail, and `teamd` would not get monitored by `docker-wait-any`:\r\n\r\n```\r\nadmin@vlab-02:~$ ps -ef | grep docker-wait\r\nroot      484870  483774  0 22:59 ?        00:00:00 python3 /usr/bin/docker-wait-any -s swss -d syncd teamd\r\nadmin     486833   11367  0 23:02 pts/0    00:00:00 grep docker-wait\r\n```\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [x] 202205\r\n- [x] 202211\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/image_config/interfaces/interfaces.j2",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_nomgmt",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_nomgmt_ztp",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_nomgmt_ztp_inband",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_nomgmt_ztp_inband_ip",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/interfaces_nomgmt_ztp_ip",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/mvrf_interfaces",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/mvrf_interfaces_nomgmt",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/two_mgmt_interfaces",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_nomgmt",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_nomgmt_ztp",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_nomgmt_ztp_inband",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_nomgmt_ztp_inband_ip",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/interfaces_nomgmt_ztp_ip",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/mvrf_interfaces",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/mvrf_interfaces_nomgmt",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/two_mgmt_interfaces",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2023-06-13T03:47:37Z",
+          "body": "@saiarcot895 Why is this in draft? Can you please share ETA to merge this fix?"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2023-06-13T17:59:31Z",
+          "body": "@dgsudharsan there were discussions ongoing to see if removing the 127.0.0.1/8 address was necessary in the first place. Those discussions and experiments have now concluded, and we do need to add and remove 127.0.0.1/8 at the appropriate times."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-06-14T01:46:15Z",
+          "body": "@saiarcot895 PR conflicts with 202205 branch"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-06-14T01:46:18Z",
+          "body": "Cherry-pick PR to 202211: https://github.com/sonic-net/sonic-buildimage/pull/15454"
+        }
+      ]
+    }
+  ]
+}

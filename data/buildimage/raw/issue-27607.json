@@ -1,0 +1,98 @@
+{
+  "number": 27607,
+  "title": "Regression: bgp.service ExecStopPost fails on non-dualToR DUTs after #23804",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27607",
+  "createdAt": "2026-05-29T21:37:40Z",
+  "closedAt": "2026-06-09T02:26:07Z",
+  "author": "kalash-nexthop",
+  "labels": [
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "kalash-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Description\n\nOn any non-dualToR SONiC DUT, every `systemctl stop bgp.service` leaves the unit in `failed (Result: exit-code)` \u2014 even though the `bgp` container itself stops cleanly. With `auto_restart` enabled, repeated failed stops accumulate against systemd's `StartLimitBurst` and eventually trip `Start request repeated too quickly`, leaving `bgp.service` in a permanently failed state until `systemctl reset-failed bgp.service` is run manually.\n\n### Is it platform specific\n\ngeneric \u2014 affects every non-dualToR SONiC DUT regardless of ASIC vendor.\n\n### Importance / Severity\n\nHigh. Any environment that produces a few bgp container exits (or stops) inside `StartLimitIntervalSec` leaves BGP unrecoverable without manual operator intervention.\n\n### Previous working version\n\nAny image with `files/scripts/write_standby.py` predating commit [`bd28d51fba`](https://github.com/sonic-net/sonic-buildimage/commit/bd28d51fba) (PR #23804, Sep 2025). The original `return` semantics for the non-dualToR early-out had been in place since 2021 (commit `17cbfc44e61`).\n\n### Steps to reproduce\n\nOn any non-dualToR DUT (`DEVICE_METADATA.localhost.subtype` not set to `DualToR`):\n\n```\n$ sudo systemctl stop bgp.service\n$ systemctl status bgp.service\n```\n\nExpected: `Active: inactive (dead)`\nActual: `Active: failed (Result: exit-code)`\n\n### Relevant log output\n\n```\n\u00d7 bgp.service - BGP container\n     Active: failed (Result: exit-code) since ...\n    Process: ... ExecStop=/usr/local/bin/bgp.sh stop                         (code=exited, status=0/SUCCESS)\n    Process: ... ExecStopPost=/usr/local/bin/write_standby.py --shutdown bgp (code=exited, status=1/FAILURE)\n```\n\nJournal trailer:\n\n```\nwrite_standby[...]: It is not a Dual-ToR system, do not start mux container\nbgp.service: Control process exited, code=exited, status=1/FAILURE\nbgp.service: Failed with result 'exit-code'.\n```\n\n`bgp.sh stop` (`ExecStop`) exits 0 \u2014 the container stops cleanly. The unit is marked failed by `ExecStopPost`.\n\n### Impact\n\n- Every `bgp.service` stop on every non-dualToR DUT is incorrectly recorded as a unit failure.\n- With `Restart=always` from `auto_restart.conf`, each failure burns a slot against `StartLimitBurst`.\n- Once `StartLimitBurst` is hit inside `StartLimitIntervalSec=1200s`, systemd refuses further auto-restarts with `Start request repeated too quickly`. `bgp.service` is stuck in `failed`. BGP is down on the box and only `systemctl reset-failed bgp.service && systemctl start bgp.service` recovers it.\n\n### Root cause\n\n`bgp.service` is templated for both dualToR and non-dualToR deployments and unconditionally wires (per [`files/build_templates/per_namespace/bgp.service.j2`](https://github.com/sonic-net/sonic-buildimage/blob/master/files/build_templates/per_namespace/bgp.service.j2)):\n\n```\nExecStopPost=/usr/local/bin/write_standby.py --shutdown bgp\n```\n\nCommit [`bd28d51fba`](https://github.com/sonic-net/sonic-buildimage/commit/bd28d51fba) (PR #23804, *\"[Dual-ToR] do not allow to start mux container if Dual-ToR was not configured\"*) changed the non-dualToR early-out in `files/scripts/write_standby.py::apply_mux_config()`:\n\n```diff\n         if not self.is_dualtor:\n-            return\n+            logger.log_warning(\"It is not a Dual-ToR system, do not start mux container\")\n+            sys.exit(1)\n```\n\nThat `sys.exit(1)` is correct for the **mux startup** call site (`mux.service ExecStartPre=/usr/local/bin/write_standby.py`) \u2014 refuse to bring up the mux container when there is no dualToR. But the **same script** is also invoked from `bgp.service ExecStopPost=` with `--shutdown bgp`. On a non-dualToR system there is no `MUX_CABLE_TABLE` to update \u2014 the previous `return` quietly no-op'd. The new `sys.exit(1)` poisons systemd's bookkeeping of every bgp stop.\n\n### Suggested fix\n\nRestore the silent no-op for `--shutdown bgp` on non-dualToR; preserve `sys.exit(1)` for the mux-startup path so #23804's intent is intact:\n\n```diff\n         if not self.is_dualtor:\n+            if self.shutdown_module == 'bgp':\n+                # On non-dualToR, --shutdown bgp is a no-op: no MUX_CABLE_TABLE to update.\n+                return\n             logger.log_warning(\"It is not a Dual-ToR system, do not start mux container\")\n             sys.exit(1)\n```\n\nThe `--shutdown mux` path (`mux.service ExecStopPost`) also continues to `sys.exit(1)` under this fix \u2014 refusing all mux operations on non-dualToR remains the intent from #23804.\n\n",
+  "comments": [
+    {
+      "author": "vmittal-msft",
+      "createdAt": "2026-06-03T15:57:55Z",
+      "body": "@deepak-singhal0408 can you please review this pr"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27609,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27609",
+      "title": "[mux] write_standby.py: silent no-op on non-dualToR --shutdown bgp",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-09T02:26:06Z",
+      "createdAt": "2026-05-29T21:45:54Z",
+      "author": "kalash-nexthop",
+      "body": "#### Why I did it\r\n\r\n**Fixes #27607.**\r\n\r\nRegression introduced in #23804 (commit `bd28d51fba`): the non-dualToR early-out in `files/scripts/write_standby.py::apply_mux_config()` was changed from `return` to `sys.exit(1)`. That hardening is correct for the **mux startup** call site (`mux.service ExecStartPre=/usr/local/bin/write_standby.py`) \u2014 refuse to bring up the mux container when there is no dualToR. But the same script is also wired as `bgp.service ExecStopPost` with `--shutdown bgp`:\r\n\r\n```\r\nExecStopPost=/usr/local/bin/write_standby.py --shutdown bgp\r\n```\r\n\r\nOn a non-dualToR system there is no `MUX_CABLE_TABLE` to update \u2014 the previous `return` (in place since 2021, commit `17cbfc44e61`) quietly no-op'd. The new `sys.exit(1)` causes systemd to mark `bgp.service` `failed (Result: exit-code)` on every clean stop. With `Restart=always` from the `auto_restart` drop-in, repeated failed stops accumulate against `StartLimitBurst` and eventually trip `Start request repeated too quickly`, leaving `bgp.service` permanently in a failed state until manual `systemctl reset-failed bgp.service`.\r\n\r\n#### How I did it\r\n\r\nEarly-return from `apply_mux_config()` on non-dualToR specifically when invoked as `--shutdown bgp`. The mux startup path (no `--shutdown` arg) and the `--shutdown mux` path are unchanged \u2014 both continue to log the warning and `sys.exit(1)`, preserving #23804's intent of refusing all mux operations on non-dualToR.\r\n\r\n```diff\r\n         if not self.is_dualtor:\r\n+            if self.shutdown_module == 'bgp':\r\n+                # On non-dualToR, --shutdown bgp is a no-op (no MUX_CABLE_TABLE to update).\r\n+                # Returning here lets bgp.service ExecStopPost succeed; exiting non-zero\r\n+                # would mark bgp.service failed and burn the unit's StartLimitBurst.\r\n+                # The mux startup path (no --shutdown arg) and the --shutdown mux path\r\n+                # intentionally still exit 1 \u2014 refusing mux operations on non-dualToR\r\n+                # is the intent of #23804.\r\n+                return\r\n             logger.log_warning(\"It is not a Dual-ToR system, do not start mux container\")\r\n             sys.exit(1)\r\n```\r\n\r\n#### How to verify it\r\n\r\nOn any non-dualToR DUT (`DEVICE_METADATA.localhost.subtype` not set to `DualToR`):\r\n\r\n**Before the fix:**\r\n\r\n```\r\n$ sudo systemctl stop bgp.service\r\n$ systemctl status bgp.service\r\n\u00d7 bgp.service - BGP container\r\n     Active: failed (Result: exit-code) since ...\r\n    Process: ... ExecStop=/usr/local/bin/bgp.sh stop                         (code=exited, status=0/SUCCESS)\r\n    Process: ... ExecStopPost=/usr/local/bin/write_standby.py --shutdown bgp (code=exited, status=1/FAILURE)\r\n\r\n$ sudo journalctl -u bgp.service --no-pager -n 5\r\n... write_standby[...]: It is not a Dual-ToR system, do not start mux container\r\n... bgp.service: Control process exited, code=exited, status=1/FAILURE\r\n... bgp.service: Failed with result 'exit-code'.\r\n```\r\n\r\n**After the fix:**\r\n\r\n```\r\n$ sudo systemctl stop bgp.service\r\n$ systemctl status bgp.service\r\n\u25cb bgp.service - BGP container\r\n     Active: inactive (dead) since ...\r\n    Process: ... ExecStop=/usr/local/bin/bgp.sh stop                         (code=exited, status=0/SUCCESS)\r\n    Process: ... ExecStopPost=/usr/local/bin/write_standby.py --shutdown bgp (code=exited, status=0/SUCCESS)\r\n\r\n$ sudo journalctl -u bgp.service --no-pager -n 5\r\n... bgp.service: Deactivated successfully.\r\n... bgp.service: Stopped bgp.service - BGP container.\r\n```\r\n\r\nMux-startup path is unaffected \u2014 still hard-fails on non-dualToR as #23804 requires:\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\nThe regression in #23804 is present on `master`, `202511`, and `202505` (cherry-picked into 202505 as #24024). All three branches need this fix to recover `bgp.service` on non-dualToR DUTs.\r\n\r\n- [x] 202505\r\n- [x] 202511\r\n\r\n#### Description for the changelog\r\n\r\nFix `bgp.service` entering permanently failed state after repeated stops on non-dualToR DUTs (regression from #23804).\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\nVerified on master with a non-dualToR DUT.\r\n",
+      "files": [
+        {
+          "path": "files/scripts/write_standby.py",
+          "additions": 8,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-29T21:46:02Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-29T21:46:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "kalash-nexthop",
+          "createdAt": "2026-05-29T21:51:32Z",
+          "body": "Hi @ayurkiv-nvda @yxieca,\r\n\r\nCan you please take a look? You both have touched this in past so copying you directly here.\r\nIn fact the issue is coming after @ayurkiv-nvda 's change: https://github.com/nexthop-ai/private-sonic-buildimage/commit/bd28d51fbafe645f8969d25223e8900e376ea990\r\n\r\n@yxieca I see you made the change to call this code during bgp shutdown in https://github.com/nexthop-ai/private-sonic-buildimage/commit/a6843927d9b25ec32adf24841ff138da0d5efcbd, so you already would have the context here.\r\n\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-30T11:12:31Z",
+          "body": "This PR has backport request for branch(es): 202505,202511.<br>Added label(s) for branch(es) 202505,202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "kalash-nexthop",
+          "createdAt": "2026-06-04T22:01:40Z",
+          "body": "Hi @deepak-singhal0408 , did you get a chance to look at the changes in this PR?"
+        },
+        {
+          "author": "kalash-nexthop",
+          "createdAt": "2026-06-08T21:19:55Z",
+          "body": "Hi @yxieca , would you be able to merge this PR up please? Or is there someone else I should ping?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-09T23:53:06Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/27798"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T01:05:05Z",
+          "body": "The label `Approved for 202605 Branch` can only be added by a member of the @sonic-net/release-manager-202605 team. Removing the label. Please contact one of the release managers: @yxieca @vaibhavhd @mssonicbld to approve the cherry pick."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T06:14:33Z",
+          "body": "This PR has backport request label(s) for branch(es): 202505,202511,202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202505: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "yyynini",
+          "createdAt": "2026-08-10T06:56:28Z",
+          "body": "@kalash-nexthop  @Aravind-Subbaroyan please help provide test evidence here for 202605."
+        }
+      ]
+    }
+  ]
+}

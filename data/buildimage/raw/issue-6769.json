@@ -1,0 +1,41 @@
+{
+  "number": 6769,
+  "title": "Orchagent errors in case of deleting a vlan that has IP addresses.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/6769",
+  "createdAt": "2021-02-11T14:01:22Z",
+  "closedAt": "2021-02-16T22:05:11Z",
+  "author": "d-dashkov",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "#### Description\r\nThere is no validation of the attached IP addresses when deleting vlan\r\n\r\n#### Steps to reproduce the issue:\r\n1. config vlan add 20\r\n2. config int ip add Vlan20 100.0.0.20/24\r\n3. config vlan del 20\r\n\r\n#### Describe the results you received:\r\n```\r\nsudo tail -n 100 /var/log/syslog | grep ERR\r\nsonic ERR swss#orchagent: :- removeVlan: Failed to remove ref count 1 VLAN Vlan20\r\n```\r\n\r\n#### Describe the results you expected:\r\nThere should be no errors in the system log when deleting Vlan with IP address.\r\n\r\n#### Output of show version:\r\n```\r\nSONiC Software Version: SONiC.master.530-10436783\r\nDistribution: Debian 10.7\r\nKernel: 4.19.0-9-2-amd64\r\nBuild commit: 10436783\r\nBuild date: Sat Jan 23 11:39:24 UTC 2021\r\nBuilt by: johnar@jenkins-worker-7\r\n\r\nPlatform: x86_64-mlnx_msn2700-r0\r\nHwSKU: Mellanox-SN2700\r\nASIC: mellanox\r\nASIC Count: 1\r\nSerial Number: MT2028X35388\r\nUptime: 15:34:18 up 1 day,  5:06,  2 users,  load average: 8.59, 7.96, 7.57\r\n\r\nDocker images:\r\nREPOSITORY                    TAG                   IMAGE ID            SIZE\r\ndocker-syncd-mlnx             latest                0fe8ddc2858d        539MB\r\ndocker-syncd-mlnx             master.530-10436783   0fe8ddc2858d        539MB\r\ndocker-sflow                  latest                6f3d4f4caf95        406MB\r\ndocker-sflow                  master.530-10436783   6f3d4f4caf95        406MB\r\ndocker-snmp                   latest                49e6fc21f43e        436MB\r\ndocker-snmp                   master.530-10436783   49e6fc21f43e        436MB\r\ndocker-teamd                  latest                16e9b8791f0f        405MB\r\ndocker-teamd                  master.530-10436783   16e9b8791f0f        405MB\r\ndocker-sonic-mgmt-framework   latest                3e3717a8e63f        611MB\r\ndocker-sonic-mgmt-framework   master.530-10436783   3e3717a8e63f        611MB\r\ndocker-router-advertiser      latest                5f881b11268c        394MB\r\ndocker-router-advertiser      master.530-10436783   5f881b11268c        394MB\r\ndocker-platform-monitor       latest                d5bdc4294dfd        684MB\r\ndocker-platform-monitor       master.530-10436783   d5bdc4294dfd        684MB\r\ndocker-lldp                   latest                998fc496f4e5        434MB\r\ndocker-lldp                   master.530-10436783   998fc496f4e5        434MB\r\ndocker-database               latest                a6a7a391a9d0        394MB\r\ndocker-database               master.530-10436783   a6a7a391a9d0        394MB\r\ndocker-orchagent              latest                b13394f408a6        422MB\r\ndocker-orchagent              master.530-10436783   b13394f408a6        422MB\r\ndocker-macsec                 latest                173ef0dd28d9        407MB\r\ndocker-macsec                 master.530-10436783   173ef0dd28d9        407MB\r\ndocker-nat                    latest                3b17df40bd32        407MB\r\ndocker-nat                    master.530-10436783   3b17df40bd32        407MB\r\ndocker-sonic-telemetry        latest                b37418db6d2f        468MB\r\ndocker-sonic-telemetry        master.530-10436783   b37418db6d2f        468MB\r\ndocker-dhcp-relay             latest                ae7c4db1afda        401MB\r\ndocker-dhcp-relay             master.530-10436783   ae7c4db1afda        401MB\r\ndocker-fpm-frr                latest                064c7275f8c2        422MB\r\ndocker-fpm-frr                master.530-10436783   064c7275f8c2        422MB\r\n\r\n```",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 1429,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/1429",
+      "title": "[config] Prevent deleting VLAN with IP addresses.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-02-16T22:05:11Z",
+      "createdAt": "2021-02-11T15:19:18Z",
+      "author": "d-dashkov",
+      "body": "#### What I did\r\nPrevent deleting VLAN if it has IP addresses.\r\nfixes: https://github.com/Azure/sonic-buildimage/issues/6769\r\nCurrently, if an IP was added to the vlan, it creates entries in the VLAN_INTERFACE table and increments the reference counter for the vlan:\r\n```\r\nVLAN_INTERFACE|Vlan22|100.0.0.20/24\r\nVLAN_INTERFACE|Vlan22\r\n```\r\nBut after deleting the vlan, they get stuck in the table and throw an error:\r\n```\r\nsonic ERR swss#orchagent: :- removeVlan: Failed to remove ref count 1 VLAN Vlan22\r\n```\r\nTherefore, to prevent this error, make sure that the entries do not exist before deleting the VLAN.\r\n\r\n#### How I did it\r\nAdded check of the VLAN INTERFACE table and if there are records, the delete operation is not available and an error is displayed.\r\n\r\n#### How to verify it\r\n1. config vlan add 22\r\n2. config int ip add Vlan22 10.0.0.51/24\r\n3. config vlan del 22\r\n```\r\nError: Vlan22 can not be removed. First remove IP addresses assigned to this VLAN\r\n```\r\n\r\nSigned-off-by: d-dashkov <Dmytro_Dashkov@Jabil.com>\r\n",
+      "files": [
+        {
+          "path": "config/vlan.py",
+          "additions": 6,
+          "deletions": 0
+        },
+        {
+          "path": "tests/vlan_test.py",
+          "additions": 17,
+          "deletions": 0
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

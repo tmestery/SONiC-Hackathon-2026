@@ -1,0 +1,141 @@
+{
+  "number": 10605,
+  "title": "[FDB] [OA] [Warm-reboot] Cannot remove vlan since FDB Flush per port per vlan doesn't clear FDB entries",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/10605",
+  "createdAt": "2022-04-19T01:54:29Z",
+  "closedAt": "2022-05-18T22:27:11Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Triaged",
+    "NVIDIA"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n```\r\n1. config vlan add 40\r\n2. config vlan member add 40 Ethernet0\r\nOn the other side. \r\n3. sudo ip link add link enp4s0f0 name enp4s0f0.40 type vlan id 40\r\n4. sudo ip link set enp4s0f0.40 up\r\n5. Make sure a fdb entry is learnt. \r\nroot@sonic:/home/admin# fdbshow\r\n  No.    Vlan  MacAddress         Port       Type\r\n-----  ------  -----------------  ---------  -------\r\n    1      40  7C:FE:90:12:22:EC  Ethernet0  Dynamic\r\n6. config vlan member del 40 Ethernet0\r\n7. config vlan del 40\r\n```\r\n\r\n#### Describe the results you received:\r\n**1) Vlan delete couldn't be handled by OA** \r\n```\r\nApr 18 21:50:31.128148 sonic NOTICE swss#orchagent: :- removeVlan: VLAN Vlan40 still has assiciated FDB entries\r\n```\r\n\r\n**2) Subsequently, this impacts Warm-reboot restartcheck.**\r\n```\r\nApr 18 10:57:41.244710 sonic NOTICE swss#orchagent: :- removeVlan: VLAN Vlan40 still has assiciated FDB entries\r\nApr 18 10:57:41.244797 sonic NOTICE swss#orchagent: :- warmRestartCheck:     VLAN_TABLE:Vlan40|DEL\r\nApr 18 10:57:41.244825 sonic NOTICE swss#orchagent: :- warmRestartCheck: Restart check result: NOT_READY\r\nApr 18 10:57:41.244865 sonic NOTICE swss#orchagent_restart_check: :- main: RESTARTCHECK failed, orchagent is not ready for warm restart with status NOT_READY\r\n```\r\n\r\n**3) FDB Entry from State DB is not removed. This is also documented here:** https://github.com/Azure/sonic-buildimage/issues/7538\r\n```\r\nroot@r-lionfish-16:/home/admin# dump state fdb all --db ASIC_DB --db STATE_DB\r\n{\r\n    \"Vlan40:7c:fe:90:12:22:ec\": {\r\n        \"ASIC_DB\": {\r\n            \"keys\": [],\r\n            \"tables_not_found\": [\r\n                \"ASIC_STATE:SAI_OBJECT_TYPE_FDB_ENTRY\"\r\n            ]\r\n        },\r\n        \"STATE_DB\": {\r\n            \"keys\": [\r\n                {\r\n                    \"FDB_TABLE|Vlan40:7c:fe:90:12:22:ec\": {\r\n                        \"port\": \"Ethernet0\",\r\n                        \"type\": \"dynamic\"\r\n                    }\r\n                }\r\n            ],\r\n            \"tables_not_found\": []\r\n        }\r\n    }\r\n}\r\n```\r\n\r\n**4) OA doesn't have the logic to consolidate remove**\r\nInternal cache of OA which saves FDB entries use FdbEntry struct which uses the exact mac address as the part of key. To my knowledge, there is no section of the code which handles the consolidate remove and clear the FDB entries accordingly.\r\nhttps://github.com/Azure/sonic-swss/blob/master/orchagent/fdborch.h#L17 \r\n\r\n**5) FdbOrch doesn't have logic to clear internal cache and decrement corresponding fdb counters when the flush recieved from Syncd is for per port and per vlan.** \r\nhttps://github.com/Azure/sonic-swss/blob/master/orchagent/fdborch.cpp#L571\r\n\r\n**6) Individual fdb_counters i.e. m_fdb_count for port and vlan are only decremented when there is a AGED notification and not a FLUSHED notification.** \r\nMellanox SDK doesn't generate a AGED notification when the VLAN is removed, it only generates a FLUSHED notification. \r\nAs i understand, Broadcom's SDK does generate a AGED notif in this case and the SONiC code is written in accordance to this behavior. Can someone point me to the spec where this is documented that AGED is appropriate rather that FLUSHED in this scenario?\r\nhttps://github.com/Azure/sonic-swss/blob/master/orchagent/fdborch.cpp#L434 \r\n\r\n**7) SAI/SDK notifications/functionality seems to be the expected lines:**\r\nThe notification received from the SAI is of consolidated type:\r\nhttps://github.com/opencomputeproject/SAI/blob/master/inc/saifdb.h#L304\r\n```\r\n2022-04-18.21:49:22.707054|r|SAI_OBJECT_TYPE_VLAN_MEMBER:oid:0x27000000000c81\r\n2022-04-18.21:49:22.709914|f|SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000|SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID=oid:0x3a000000000c80|SAI_FDB_FLUSH_ATTR_BV_ID=oid:0x26000000000c7d\r\n2022-04-18.21:49:22.712346|F|SAI_STATUS_SUCCESS\r\n2022-04-18.21:49:22.713039|s|SAI_OBJECT_TYPE_BRIDGE_PORT:oid:0x3a000000000c80|SAI_BRIDGE_PORT_ATTR_ADMIN_STATE=false\r\n2022-04-18.21:49:22.715425|n|fdb_event|[{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x26000000000c7d\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x21000000000000\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x3a000000000c80\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]|\r\n2022-04-18.21:49:22.717977|s|SAI_OBJECT_TYPE_HOSTIF:oid:0xd000000000a22|SAI_HOSTIF_ATTR_VLAN_TAG=SAI_HOSTIF_VLAN_TAG_STRIP\r\n2022-04-18.21:49:22.718885|f|SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000|SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID=oid:0x3a000000000c80\r\n2022-04-18.21:49:22.721875|F|SAI_STATUS_SUCCESS\r\n2022-04-18.21:49:22.722751|r|SAI_OBJECT_TYPE_BRIDGE_PORT:oid:0x3a000000000c80\r\n2022-04-18.21:49:22.723082|n|fdb_event|[{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x39000000000010\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x21000000000000\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x3a000000000c80\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]|\r\n```\r\n\r\nSome extra info collected when Eth0 was a part of Vlan40 \r\n```\r\n{\r\n    \"Vlan40|Ethernet0\": {\r\n        \"ASIC_DB\": {\r\n            \"keys\": [\r\n                {\r\n                    \"ASIC_STATE:SAI_OBJECT_TYPE_VLAN_MEMBER:oid:0x27000000000c81\": {\r\n                        \"SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID\": \"oid:0x3a000000000c80\",\r\n                        \"SAI_VLAN_MEMBER_ATTR_VLAN_ID\": \"oid:0x26000000000c7d\",\r\n                        \"SAI_VLAN_MEMBER_ATTR_VLAN_TAGGING_MODE\": \"SAI_VLAN_TAGGING_MODE_TAGGED\"\r\n                    }\r\n                },\r\n                {\r\n                    \"ASIC_STATE:SAI_OBJECT_TYPE_BRIDGE_PORT:oid:0x3a000000000c80\": {\r\n                        \"SAI_BRIDGE_PORT_ATTR_ADMIN_STATE\": \"true\",\r\n                        \"SAI_BRIDGE_PORT_ATTR_FDB_LEARNING_MODE\": \"SAI_BRIDGE_PORT_FDB_LEARNING_MODE_HW\",\r\n                        \"SAI_BRIDGE_PORT_ATTR_PORT_ID\": \"oid:0x10000000008d4\",\r\n                        \"SAI_BRIDGE_PORT_ATTR_TYPE\": \"SAI_BRIDGE_PORT_TYPE_PORT\"\r\n                    }\r\n                }\r\n            ],\r\n            \"tables_not_found\": [],\r\n            \"vidtorid\": {\r\n                \"oid:0x27000000000c81\": \"oid:0x100280027\",\r\n                \"oid:0x3a000000000c80\": \"oid:0x10000003a\"\r\n            }\r\n        }\r\n}\r\n```\r\n\r\n\r\n**8) syslog:**\r\n```\r\nApr 18 21:49:22.710029 sonic INFO swss#orchagent: :- flushFDBEntries: Flushing FDB bridge_port_oid: 0x3a000000000c80, and bvid_oid:0x26000000000c7d.\r\nApr 18 21:49:22.710029 sonic NOTICE swss#orchagent: :- flushFdbEntries: flush key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000, fields: 2\r\nApr 18 21:49:22.710029 sonic NOTICE swss#orchagent: :- recordFlushFdbEntries: flush key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000, fields: 2\r\nApr 18 21:49:22.710628 sonic INFO syncd#SDK: :- processSingleEvent: key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000 op: flush\r\nApr 18 21:49:22.710628 sonic NOTICE syncd#SDK: [SAI_FDB.NOTICE] mlnx_sai_fdb.c[1212]- mlnx_flush_fdb_entries: Flush fdb, #0 BRIDGE_PORT_ID=BRIDGE_PORT,(0:0),1,0000,0 #1 BV_ID=VLAN,(0:0),28,0000,0\r\nApr 18 21:49:22.712389 sonic NOTICE syncd#SDK: :- processFdbFlush: fdb flush succeeded, updating redis database\r\nApr 18 21:49:22.713760 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: processing consolidated fdb flush event of type: SAI_FDB_ENTRY_TYPE_DYNAMIC\r\nApr 18 21:49:22.713760 sonic INFO syncd#SDK: :- enqueueNotification: fdb_event [{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x2800000026\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x100000021\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x10000003a\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]\r\nApr 18 21:49:22.713760 sonic NOTICE syncd#SDK: :- processFlushEvent: received a flush port fdb event, portVid = oid:0x3a000000000c80, bvId = oid:0x26000000000c7d\r\nApr 18 21:49:22.713760 sonic NOTICE syncd#SDK: :- processFlushEvent: pattern ASIC_STATE:SAI_OBJECT_TYPE_FDB_ENTRY:*oid:0x26000000000c7d*, portStr oid:0x3a000000000c80\r\nApr 18 21:49:22.713760 sonic INFO swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: removing SAI_OBJECT_TYPE_FDB_ENTRY:{\"bvid\":\"oid:0x26000000000c7d\",\"mac\":\"7C:FE:90:12:22:EC\",\"switch_id\":\"oid:0x21000000000000\"}\r\nApr 18 21:49:22.713760 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: fdb flush took 0.000579 sec\r\nApr 18 21:49:22.713760 sonic INFO swss#orchagent: :- notifyObserversFDBFlush: Adding MAC learnt on [ port:Ethernet0 , bvid:0x26000000000c7d]                           to ARP flush\r\nApr 18 21:49:22.713760 sonic INFO swss#orchagent: :- processFDBFlushUpdate: processFDBFlushUpdate port: Ethernet0\r\nApr 18 21:49:22.713760 sonic INFO swss#orchagent: :- processFDBFlushUpdate: Flushing ARP for port: Vlan40, VLAN: Ethernet0\r\nApr 18 21:49:22.713924 sonic NOTICE syncd#SDK: :- handle_fdb_event: got fdb flush event: [{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x2800000026\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x100000021\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x10000003a\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]\r\nApr 18 21:49:22.713962 sonic INFO syncd#SDK: :- process_on_fdb_event: fdb event count: 1\r\nApr 18 21:49:22.713962 sonic NOTICE syncd#SDK: :- processFlushEvent: received a flush port fdb event, portVid = oid:0x3a000000000c80, bvId = oid:0x26000000000c7d\r\nApr 18 21:49:22.713962 sonic NOTICE syncd#SDK: :- processFlushEvent: pattern ASIC_STATE:SAI_OBJECT_TYPE_FDB_ENTRY:*oid:0x26000000000c7d*, portStr oid:0x3a000000000c80\r\nApr 18 21:49:22.716496 sonic INFO syncd#SDK: :- sendNotification: fdb_event [{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x26000000000c7d\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x21000000000000\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x3a000000000c80\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]\r\nApr 18 21:49:22.717567 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: processing consolidated fdb flush event of type: SAI_FDB_ENTRY_TYPE_DYNAMIC\r\nApr 18 21:49:22.717950 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: fdb flush took 0.000430 sec\r\n\r\nApr 18 21:49:22.718949 sonic INFO swss#orchagent: :- flushFDBEntries: Flushing FDB bridge_port_oid: 0x3a000000000c80, and bvid_oid:0x0.\r\nApr 18 21:49:22.718949 sonic NOTICE swss#orchagent: :- flushFdbEntries: flush key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000, fields: 1\r\nApr 18 21:49:22.718949 sonic NOTICE swss#orchagent: :- recordFlushFdbEntries: flush key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000, fields: 1\r\nApr 18 21:49:22.719409 sonic INFO syncd#SDK: :- processSingleEvent: key: SAI_OBJECT_TYPE_FDB_FLUSH:oid:0x21000000000000 op: flush\r\nApr 18 21:49:22.719409 sonic NOTICE syncd#SDK: [SAI_FDB.NOTICE] mlnx_sai_fdb.c[1212]- mlnx_flush_fdb_entries: Flush fdb, #0 BRIDGE_PORT_ID=BRIDGE_PORT,(0:0),1,0000,0\r\nApr 18 21:49:22.720897 sonic INFO syncd#SDK: :- enqueueNotification: fdb_event [{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x10010039\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x100000021\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x10000003a\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]\r\nApr 18 21:49:22.721002 sonic NOTICE syncd#SDK: :- processFdbFlush: fdb flush succeeded, updating redis database\r\nApr 18 21:49:22.721002 sonic NOTICE syncd#SDK: :- processFlushEvent: received a flush port fdb event, portVid = oid:0x3a000000000c80, bvId = oid:0x0\r\nApr 18 21:49:22.721002 sonic NOTICE syncd#SDK: :- processFlushEvent: pattern ASIC_STATE:SAI_OBJECT_TYPE_FDB_ENTRY:*, portStr oid:0x3a000000000c80\r\nApr 18 21:49:22.722930 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: processing consolidated fdb flush event of type: SAI_FDB_ENTRY_TYPE_DYNAMIC\r\nApr 18 21:49:22.722930 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: fdb flush took 0.000635 sec\r\nApr 18 21:49:22.722930 sonic INFO swss#orchagent: :- removeBridgePort: Flush FDB entries for port Ethernet0\r\nApr 18 21:49:22.722930 sonic NOTICE syncd#SDK: :- handle_fdb_event: got fdb flush event: [{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x10010039\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x100000021\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x10000003a\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]\r\nApr 18 21:49:22.722930 sonic INFO syncd#SDK: :- process_on_fdb_event: fdb event count: 1\r\nApr 18 21:49:22.722930 sonic NOTICE syncd#SDK: :- processFlushEvent: received a flush port fdb event, portVid = oid:0x3a000000000c80, bvId = oid:0x39000000000010\r\nApr 18 21:49:22.722930 sonic NOTICE syncd#SDK: :- processFlushEvent: pattern ASIC_STATE:SAI_OBJECT_TYPE_FDB_ENTRY:*oid:0x39000000000010*, portStr oid:0x3a000000000c80\r\nApr 18 21:49:22.722930 sonic INFO syncd#SDK: :- sendNotification: fdb_event [{\"fdb_entry\":\"{\\\"bvid\\\":\\\"oid:0x39000000000010\\\",\\\"mac\\\":\\\"00:00:00:00:00:00\\\",\\\"switch_id\\\":\\\"oid:0x21000000000000\\\"}\",\"fdb_event\":\"SAI_FDB_EVENT_FLUSHED\",\"list\":[{\"id\":\"SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID\",\"value\":\"oid:0x3a000000000c80\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_TYPE\",\"value\":\"SAI_FDB_ENTRY_TYPE_DYNAMIC\"},{\"id\":\"SAI_FDB_ENTRY_ATTR_PACKET_ACTION\",\"value\":\"SAI_PACKET_ACTION_FORWARD\"}]}]\r\nApr 18 21:49:22.728991 sonic WARNING swss#orchagent: :- meta_fdb_event_snoop_oid: fdb_entry oid (snoop): SAI_OBJECT_TYPE_BRIDGE_PORT: oid:0x3a000000000c80\r\nApr 18 21:49:22.728991 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: processing consolidated fdb flush event of type: SAI_FDB_ENTRY_TYPE_DYNAMIC\r\nApr 18 21:45:29.760159 sonic INFO swss#orchagent: :- update: FDB event:3, MAC: 00:00:00:00:00:00 , BVID: 0x26000000000c7d ,                    bridge port ID: 0x3a000000000c7e.\r\nApr 18 21:45:29.760159 sonic INFO swss#orchagent: :- update: Flush event: Failed to get port by bridge port ID 0x3a000000000c7e.\r\nApr 18 21:45:29.760159 sonic INFO swss#orchagent: :- update: FDB event:3, MAC: 00:00:00:00:00:00 , BVID: 0x39000000000010 ,                    bridge port ID: 0x3a000000000c7e.\r\nApr 18 21:45:29.760159 sonic INFO swss#orchagent: :- update: Flush event: Failed to get port by bridge port ID 0x3a000000000c7e.\r\nApr 18 21:49:22.729021 sonic NOTICE swss#orchagent: :- meta_sai_on_fdb_flush_event_consolidated: fdb flush took 0.000480 sec\r\n```\r\n\r\n\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\n1) FDB clear flow should not impact removing Vlan and thus the warm-boot\r\n\r\n",
+  "comments": [
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2022-04-19T03:38:44Z",
+      "body": "@prsunny  @dr412113 We may need to revert the check introduced in this PR https://github.com/Azure/sonic-swss/pull/1716 to return failure to remove VLAN with FDB entries until the problems mentioned here are sorted out"
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2022-04-20T04:51:54Z",
+      "body": "@dgsudharsan , as discussed, please consider this to be handled in FLUSH event. "
+    },
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2022-04-27T15:33:57Z",
+      "body": "Nvidia team is working on the fix."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2254,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2254",
+      "title": "[FDB] Fix fbdorch to properly handle syncd FDB FLUSH Notif",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-05-18T22:27:11Z",
+      "createdAt": "2022-05-04T08:39:09Z",
+      "author": "vivekkarri",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\n\r\nFixes https://github.com/Azure/sonic-buildimage/issues/10605\r\n\r\n**Why I did it**\r\n\r\n1) Vlan delete couldn't be handled by OA when there is fdb learnt on the member and when the member is deleted\r\n2) This inability of handling APPL_DB notif is affecting warm-restart\r\n3) FDB Entry from State DB is not removed.\r\n4) OA doesn't have the logic to handle consolidate flush notif coming from syncd\r\n5) FdbOrch doesn't have logic to clear internal cache and decrement corresponding fdb counters during a flush notification\r\n\r\n**How I verified it**\r\n\r\nChecked this config and verified the remove vlan passed though\r\n```\r\n1. config vlan add 40\r\n2. config vlan member add 40 Ethernet0\r\nOn the other side. \r\n3. sudo ip link add link enp4s0f0 name enp4s0f0.40 type vlan id 40\r\n4. sudo ip link set enp4s0f0.40 up\r\n5. Make sure a fdb entry is learnt. \r\n\r\nroot@sonic:/home/admin# fdbshow\r\n  No.    Vlan  MacAddress         Port       Type\r\n-----  ------  -----------------  ---------  -------\r\n    1      40  7C:FE:90:12:22:EC  Ethernet0  Dynamic\r\n\r\ndump state fdb all --db STATE_DB\r\n{\r\n    \"Vlan40:7c:fe:90:12:22:ec\": {\r\n        \"STATE_DB\": {\r\n            \"keys\": [\r\n                {\r\n                    \"FDB_TABLE|Vlan40:7c:fe:90:12:22:ec\": {\r\n                        \"port\": \"Ethernet0\",\r\n                        \"type\": \"dynamic\"\r\n                    }\r\n                }\r\n            ],\r\n            \"tables_not_found\": []\r\n        }\r\n    }\r\n}\r\n\r\n7. config vlan member del 40 Ethernet0\r\n8. config vlan del 40\r\n9. dump state fdb all --db STATE_DB\r\n{}\r\n```\r\n**Unit Tests:**\r\n```\r\nvkarri@4897dcba242c:/sonic/src/sonic-swss/tests/mock_tests$ ./tests --gtest_filter=FdbOrchTest*\r\nRunning main() from /usr/src/gtest/src/gtest_main.cc\r\nNote: Google Test filter = FdbOrchTest*\r\n[==========] Running 6 tests from 1 test case.\r\n[----------] Global test environment set-up.\r\n[----------] 6 tests from FdbOrchTest\r\n[ RUN      ] FdbOrchTest.ConsolidatedFlushVlanandPort\r\n[       OK ] FdbOrchTest.ConsolidatedFlushVlanandPort (14 ms)\r\n[ RUN      ] FdbOrchTest.ConsolidatedFlushAll\r\n[       OK ] FdbOrchTest.ConsolidatedFlushAll (15 ms)\r\n[ RUN      ] FdbOrchTest.ConsolidatedFlushVlan\r\n[       OK ] FdbOrchTest.ConsolidatedFlushVlan (14 ms)\r\n[ RUN      ] FdbOrchTest.ConsolidatedFlushPort\r\n[       OK ] FdbOrchTest.ConsolidatedFlushPort (15 ms)\r\n[ RUN      ] FdbOrchTest.ConsolidatedFlushVlanandPortBridgeportDeleted\r\n[       OK ] FdbOrchTest.ConsolidatedFlushVlanandPortBridgeportDeleted (14 ms)\r\n[ RUN      ] FdbOrchTest.NonConsolidatedFlushVlanandPort\r\n[       OK ] FdbOrchTest.NonConsolidatedFlushVlanandPort (15 ms)\r\n[----------] 6 tests from FdbOrchTest (87 ms total)\r\n\r\n[----------] Global test environment tear-down\r\n[==========] 6 tests from 1 test case ran. (87 ms total)\r\n[  PASSED  ] 6 tests.\r\n\r\n```\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/fdborch.cpp",
+          "additions": 123,
+          "deletions": 100
+        },
+        {
+          "path": "orchagent/fdborch.h",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 16,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/portsorch.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/Makefile.am",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/fdborch/flush_syncd_notif_ut.cpp",
+          "additions": 424,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/mock_table.cpp",
+          "additions": 9,
+          "deletions": 9
+        }
+      ],
+      "comments": [
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2022-05-04T14:04:14Z",
+          "body": "@vivekreddynv  on which branch this fix should go? master only?"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2022-05-07T02:52:42Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-05-07T02:52:43Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-05-07T02:52:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2022-05-10T00:20:19Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-05-10T00:20:21Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-05-10T00:20:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2022-05-17T18:13:47Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-05-17T18:13:49Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-05-17T18:13:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2022-05-25T23:24:11Z",
+          "body": "@vivekreddynv  Please raise a separate PR for 202111 as there are conflicts "
+        }
+      ]
+    }
+  ]
+}

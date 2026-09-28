@@ -1,0 +1,164 @@
+{
+  "number": 27372,
+  "title": "Bug: [hft][countersyncd] Silent data corruption + reconnect loop when IPFIX netlink datagram exceeds 128 KB",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27372",
+  "createdAt": "2026-05-14T10:08:20Z",
+  "closedAt": "2026-06-30T22:59:06Z",
+  "author": "DavidZagury",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "Pterosaur"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\ncountersyncd fails to deliver IPFIX counter data whenever the streaming IPFIX data datagram exceeds BUFFER_SIZE = 0x1FFFF (131 071 bytes), defined at crates/countersyncd/src/actor/data_netlink.rs:38.\n\nIt will be hit by any session whose data datagram exceeds 128 KB. \n\nTwo issues combine to produce the failure:\n\n1. Receive buffer too small. data_netlink.rs:673 calls libc::recv(fd, buf, 0x1FFFF, 0). sonic_stel / ipfix is a NETLINK_GENERIC (datagram) socket; when the datagram is larger than the recv buffer, the kernel returns the truncated bytes, sets MSG_TRUNC in msg_flags, and discards the remainder. The code calls recv with flags = 0 and never inspects MSG_TRUNC, so truncation is silent. BUFFER_SIZE is hard-coded - not exposed as a CLI flag, env var, ConfigDB key, or constants.yml setting.\n2. NetlinkMessageParser splices truncated datagrams. parse_buffer (data_netlink.rs:87) was written as if netlink were a byte stream that could split a single message across recv calls. When recv #1 yields a truncated datagram (e.g. 131 071 of a 134 296-byte message), the parser stores it in incomplete_buffer and waits. On recv #2 it concatenates the next (also truncated) datagram and finds an \"apparently complete\" message of the declared length - but the tail bytes are actually the head of the next datagram, and the rest of that next datagram is then read as a new netlink header. This produces:\n  - One corrupted IPFIX payload sent downstream (silently).\n  - A WARN: Failed to receive message: Invalid netlink message length: 0 (too small) (data_netlink.rs:944 / parser at data_netlink.rs:118), because the post-extract offset lands inside a payload that happens to start with zero bytes.\n  - Followed by socket disconnect/reconnect, and the cycle repeats.\n\nNet effect: no valid counter data reaches CounterDB or the OpenTelemetry exporter.\n\n### Steps to Reproduce\n\n1. On a high-port-count switch, configure a HIGH_FREQUENCY_TELEMETRY_PROFILE with STREAM_STATE = enabled and attach a large number of objects/counters such that the resulting IPFIX data datagram exceeds 128 KB.\n  - In our case: queue_profile|QUEUE session covering ~560 Ethernet*|<queue> objects with ~6 counters each (including PACKETS), producing a ~134 KB data datagram.\n2. Start countersyncd:\ncountersyncd -e -l debug\n3. Watch the log.\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behavior**\n\nTemplates are sent successfully once at startup, then every subsequent data push fails:\n\n[DEBUG] Received netlink data, size: 131071 bytes\n[DEBUG] Combined incomplete buffer (131071 bytes) with new data (131071 bytes)\n[DEBUG] Found complete message: offset=0, length=134296, aligned_length=134296\n[DEBUG] Successfully extracted payload with 134276 bytes        # <-- corrupted: tail is from the next datagram\n[WARN]  Failed to receive message: Custom { kind: InvalidData,\n        error: \"Invalid netlink message length: 0 (too small)\" }\n[INFO]  Establishing new connection for family 'sonic_stel', group 'ipfix'\n[INFO]  Successfully connected to family 'sonic_stel', group 'ipfix' with group_id: 21\n...\n\n- No usable counters are printed.\n- The downstream IPFIX decoder receives spliced/corrupted records that it cannot interpret.\n- The actor keeps reconnecting on every cycle.\n\n**Expected Behavior**\n- countersyncd should be able to receive IPFIX data datagrams of any size the producer emits (the kernel-side SO_RCVBUF is already 8 MB on this system per the same log).\n- Truncation must never be silent: if a datagram is larger than the userspace recv buffer, countersyncd should either grow the buffer and re-recv (e.g. via recvmsg with MSG_PEEK | MSG_TRUNC to size, then recv), or drop with a clear error and a metric - but never splice a truncated datagram with the next one.\n- IPFIX data records should be delivered intact to CounterDB / OTel for any supported counter configuration.\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "r12f",
+      "createdAt": "2026-05-27T17:29:37Z",
+      "body": "Sent to Ze to look at."
+    },
+    {
+      "author": "Pterosaur",
+      "createdAt": "2026-06-18T02:18:19Z",
+      "body": "Ack, I\u2019ll check it in two weeks."
+    },
+    {
+      "author": "Pterosaur",
+      "createdAt": "2026-06-20T02:50:43Z",
+      "body": "Hi Deddy, could you please help to review this PR: https://github.com/sonic-net/sonic-swss/pull/4684\n"
+    },
+    {
+      "author": "DavidZagury",
+      "createdAt": "2026-06-24T15:33:09Z",
+      "body": "> Hi Deddy, could you please help to review this PR: [sonic-net/sonic-swss#4684](https://github.com/sonic-net/sonic-swss/pull/4684)\n\nHi @Pterosaur , \nI have taken your fix to my internal build - the issue still reproduces.\n\nHave you manged to reproduce it in your system?\n\nI have attached Claudes analyze of the failure with your fix:\n\n```\nThe test IS still failing with the same root symptom \u2014 the fix may be incomplete\n\nWhat the test shows (report #20)\n\nThe specific error is:\nFailed to receive message: Custom { kind: InvalidData, error: 'Invalid netlink message length: 0 (too small)' }\nResult: \"Total Messages Received: 0\" \u2014 no telemetry data flows through at all.\n\nIs this the same issue?\n\nThe symptom is identical to the original bug (Invalid netlink message length: 0), but there's a meaningful difference: the Custom { kind: InvalidData, ... } format and the (too small) qualifier are consistent with Rust error types introduced by the PR itself (the PR explicitly adds InvalidData errors for zero-length datagrams). This strongly suggests the tested build does include the PR fix.\n\nWhy is it still failing?\n\nThe PR correctly fixes the application-layer buffer truncation problem:\n- Replaces fixed 128KB recv() with MSG_PEEK | MSG_TRUNC to probe actual datagram size first\n- Allocates exact-sized buffers per datagram\n- Eliminates cross-datagram state carryover in the parser\n\nHowever, there's a second, separate issue the PR doesn't address: the kernel's netlink socket receive buffer (SO_RCVBUF). When a 134KB datagram exceeds the kernel socket buffer, the kernel drops the datagram entirely (not truncates \u2014 drops). After a drop, the netlink socket may enqueue a zero-length NLMSG_OVERRUN notification message. The new recv_datagram_fd() peeks this zero-length message, gets size 0, and now correctly (per the PR logic) raises InvalidData \u2014 but this causes a complete stall: Total Messages Received: 0.\n\nIn the old code, this zero-length message was silently dropped (and then a reconnect loop eventually recovered). In the new code, the InvalidData return halts reception.\n\nIs the PR correct?\n\nPartially correct, but incomplete. The core approach (MSG_PEEK | MSG_TRUNC + fixing user-space truncation. But two gaps remain:\n\n1. SO_RCVBUF is not increased. The kernel-level socket buffer still needs toeast one full datagram (~134KB+). The fix should call setsockopt(SO_RCVBUF,\n...) on the netlink socket with a size that accommodates the maximum expecte\n2. NLMSG_OVERRUN / zero-length datagrams are not handled. When the kernel dr this via a zero-length message. The new code returns InvalidData for these,\nwhich stalls everything. The correct behavior is to log a warning and continn notification, don't treat it as fatal).\n\nRecommended additional fix\n\nIn the recv_datagram_fd() function (or wherever the netlink socket is create\n\n// Increase kernel socket receive buffer to handle large IPFIX datagrams (e.\nsocket.set_recv_buffer_size(2 * 1024 * 1024)?;\n\nAnd in the zero-length datagram path, log and skip instead of returning Inva\nif peeked_size == 0 {\n    warn!(\"Received zero-length netlink datagram (possible NLMSG_OVERRUN), s\n    // drain the empty datagram from the socket\n    continue; // or return Ok(vec![])\n}\n\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4684,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4684",
+      "title": "[countersyncd]: Fix countersyncd netlink datagram truncation",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-30T22:59:04Z",
+      "createdAt": "2026-06-19T05:09:45Z",
+      "author": "Pterosaur",
+      "body": "**What I did**\n\nFix `countersyncd` IPFIX data netlink receive handling for oversized datagrams:\n\n- Receive generic netlink multicast data as atomic datagrams with `recvmsg`.\n- Use `MSG_PEEK | MSG_TRUNC` to determine the real datagram length before consuming it.\n- Allocate the receive buffer from the probed datagram length instead of relying on the fixed 128 KB buffer.\n- Configure data socket `SO_RCVBUF` before joining the multicast group, avoiding a startup race where early multicast datagrams used the kernel default receive buffer.\n- Stop carrying incomplete parser state across receives, so a truncated datagram cannot be spliced with the next datagram.\n- Drop invalid, empty, or oversized datagrams without reconnecting the socket.\n- Preserve already-parsed messages from the same datagram if only a malformed trailing portion is found.\n- Add parser regression tests, fd-level `UnixDatagram` tests, and a startup-burst regression test covering the receive-buffer/membership ordering.\n\n**Why I did it**\n\nFixes sonic-net/sonic-buildimage#27372.\n\nThat issue reports silent IPFIX counter data corruption and reconnect loops when an IPFIX netlink datagram exceeds the old userspace receive buffer size (`BUFFER_SIZE = 0x1FFFF`).\n\nThe old code used `recv(..., flags = 0)` and then let `NetlinkMessageParser` keep incomplete bytes for the next recv. On a datagram socket, an undersized receive discards the rest of that datagram. The next recv is a new datagram, not a continuation. This allowed `countersyncd` to splice the truncated head of one datagram with bytes from the next datagram and send corrupted IPFIX payloads downstream.\n\nThis change makes truncation observable and keeps parsing scoped to a single datagram. It also ensures the enlarged kernel receive buffer is applied before multicast delivery can begin on the data socket.\n\n**How I verified it**\n\nVerified in `swss-bookworm-master` container on commits `824881f` and `6d9bbc7`.\n\nCommands:\n\n```bash\nRUSTFLAGS=-Dwarnings cargo test -p countersyncd test_data_socket_rcvbuf_before_membership_prevents_startup_burst_corruption -- --nocapture\nRUSTFLAGS=-Dwarnings cargo check -p countersyncd --all-targets\nRUSTFLAGS=-Dwarnings cargo test -p countersyncd\n```\n\nTDD check:\n\n```text\nTemporarily changed configure_data_socket_steps() to old order:\nbind -> add_membership -> set_non_blocking -> set_rcvbuf\n\ntest_data_socket_rcvbuf_before_membership_prevents_startup_burst_corruption failed with:\nInvalid netlink message length: 0 (too small)\n\nRestored fixed order:\nbind -> set_rcvbuf -> add_membership -> set_non_blocking\n\nThe same test passed.\n```\n\nFinal committed result:\n\n```text\ncargo check -p countersyncd --all-targets: passed\nsrc/lib.rs: 100 passed\nsrc/main.rs: 106 passed\ntests/integration_test.rs: 2 passed\ntests/ipfix_helpers_integration.rs: 1 passed\ndoc-tests: 0 passed\n```\n\nRedis was started on `/var/run/redis/redis.sock` for the `swss` actor tests.\n\n**Details if related**\n\nRelated issue: sonic-net/sonic-buildimage#27372\n\nThe receive path intentionally uses a peek-first flow instead of a fixed large reusable buffer. This adds one extra syscall per datagram, but it guarantees correct sizing and prevents future silent truncation if producer datagrams grow beyond any fixed buffer value.",
+      "files": [
+        {
+          "path": "crates/countersyncd/src/actor/data_netlink.rs",
+          "additions": 426,
+          "deletions": 175
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T05:09:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T05:10:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "50n1c-rnsft",
+          "createdAt": "2026-06-19T06:20:12Z",
+          "body": "One small follow-up beyond the receive-path test: the `messages.is_empty()` log still says \u201cpartial message\u201d, but after this change parsing is datagram-scoped. It may be clearer to reword it as \u201cno complete payload extracted\u201d to avoid implying stream-style continuation."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T06:43:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T06:44:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "50n1c-rnsft",
+          "createdAt": "2026-06-19T07:19:04Z",
+          "body": "Re-reviewed v2. All previous comments are addressed:\n\n- **Parser data loss** fixed via `return_parsed_or_error()` \u2014 valid messages before a tail error are now delivered.\n- **Production receive path test coverage** \u2014 three `#[cfg(target_os = \"linux\")]` tests using `UnixDatagram::pair()` now exercise `recv_datagram_fd` and `recvmsg_into` directly.\n- **Peek-first rationale** \u2014 inline comment at the peek call explains the tradeoff.\n- **Log wording** \u2014 updated to datagram-scoped semantics.\n- **`recv_datagram_fd` extracted** with parameterized `max_size`, testable without netlink.\n\nNo new bugs found. LGTM."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T11:35:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T11:35:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Pterosaur",
+          "createdAt": "2026-06-19T12:48:26Z",
+          "body": "Addressed the log wording follow-up in d8786bd: the empty-message debug log now says `Received netlink datagram but no complete payload was extracted`, so it no longer implies stream-style partial continuation."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T12:57:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T12:58:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T13:26:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T13:26:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T13:34:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T13:34:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T02:57:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T02:58:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T03:04:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T03:04:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T03:05:12Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

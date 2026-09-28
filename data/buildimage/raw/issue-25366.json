@@ -1,0 +1,128 @@
+{
+  "number": 25366,
+  "title": "Bug:Setting ring_thread_enabled to true in DEVICE_METADATA causes orchagent to fail during startup.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25366",
+  "createdAt": "2026-02-05T18:26:43Z",
+  "closedAt": "2026-02-23T23:40:30Z",
+  "author": "aeedara-nokia",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "Chiranjeevi-U-ML"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nSetting ring_thread_enabled to true in DEVICE_METADATA causes orchagent to fail during startup. The failure is due to an invalid command-line invocation, where the -R option is passed without a required argument.           \n\nSet the following in config_db.json:\n\"ring_thread_enabled\": \"true\"\n\nRestart swss or reboot the device:\nsudo systemctl restart swss\nObserve that orchagent does not start.\n\n/usr/bin/orchagent -d /var/log/swss -b 1024 -s \\\n  -m a8:24:b8:8b:45:0d -q tcp://127.0.0.1 -R &\nObserved Behavior\norchagent exits immediately with the following error:\n\n/usr/bin/orchagent: option requires an argument -- 'R'\nThis indicates that the -R option is being passed without a required value.                                            \n\n\n\n\n### Steps to Reproduce\n\nSet the following in config_db.json:\n\"ring_thread_enabled\": \"true\"\n\nRestart swss or reboot the device:\nsudo systemctl restart swss\nObserve that orchagent does not start.\n\n### Actual Behavior and Expected Behavior\n\nWhen ring_thread_enabled=true, orchagent should:\n\nStart successfully, or\n\nValidate required parameters and fall back safely if missing.\n\n-R must not be passed without its mandatory argument.\n\n### Relevant log output\n\n```shell\n/usr/bin/orchagent -d /var/log/swss -b 1024 -s -m a8:24:b8:8b:45:0d -q tcp://127.0.0.1 -R &\n[1] 276\nroot@ixr-x1b-2:/# /usr/bin/orchagent: option requires an argument -- 'R'\n \n[1]+  Exit 1                  /usr/bin/orchagent -d /var/log/swss -b 1024 -s -m a8:24:b8:8b:45:0d -q tcp://127.0.0.1 -R\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC Software Version: SONiC.nokia-master.0-dirty-20260202.102116\nSONiC OS Version: 13\nDistribution: Debian 13.3\nKernel: 6.12.41+deb13-sonic-arm64\nBuild commit: cfc90a838\nBuild date: Mon Feb  2 15:22:47 UTC 2026\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "Chiranjeevi-U-ML",
+      "createdAt": "2026-02-06T07:08:24Z",
+      "body": "Hi Aeedara,\n\nIn line 403 of `src/sonic-swss/orchagent/main.cpp`, the **-R** option is defined as a flag (means there's no argument required).\n\nbut the \"-R\" option was being added without a trailing space in the `dockers/docker-orchagent/orchagent.sh` at line 127. So, when the script builds the command line arguments, it might be concatenating them.\n\nTry adding a trailing space as such in the same line: \n`ORCHAGENT_ARGS+=\"-R \"`\n\n\nFor ref, the VS image doesn't face this issue because it has the trailing space in platform/vs/docker-sonic-vs/orchagent.sh at line 62\n\n> ORCHDAEMON_RING_ENABLED=`sonic-db-cli CONFIG_DB hget \"DEVICE_METADATA|localhost\" \"ring_thread_enabled\"`\n> if [[ x\"${ORCHDAEMON_RING_ENABLED}\" == x\"true\" ]]; then\n>    ORCHAGENT_ARGS+=\"-R \"\n> fi\n\nplease let me know if this fixed the issue"
+    },
+    {
+      "author": "vpandian-nokia",
+      "createdAt": "2026-02-09T16:00:13Z",
+      "body": "Hi Chiranjeevi,\n\nWe tried your suggestion and it doesn't work.\n\n\"/usr/bin/orchagent -d /var/log/swss -b 1024 -s -m a8:24:b8:8b:45:0d -q tcp://127.0.0.1 -R  \"\n/usr/bin/orchagent: option requires an argument -- 'R'\n\nIt is expecting some character after the <space>\n\nThis is also what is in /usr/bin/orchagent.sh\n\n# Enable ring buffer\nORCHDAEMON_RING_ENABLED=`sonic-db-cli CONFIG_DB hget \"DEVICE_METADATA|localhost\" \"ring_thread_enabled\"`\nif [[ x\"${ORCHDAEMON_RING_ENABLED}\" == x\"true\" ]]; then\n    ORCHAGENT_ARGS+=\" -R \"\nfi\n \n\n"
+    },
+    {
+      "author": "Chiranjeevi-U-ML",
+      "createdAt": "2026-02-10T05:48:32Z",
+      "body": "Hi Pandian,\n\nI'm sorry for the confusion caused by my earlier comment suggesting that adding a trailing space to `-R` in `orchagent.sh` would fix this issue. \n\nI went through the code files and the original commits and was able to find the root cause. The bug was not in the shell script, and it's in the `getopt` string in `main.cpp` file.\n\nRemove the colon beside the `R` in the main.cpp file at line 403. It should be `:RD:` instead of `:R:D:`.\n\nI will raise a PR with this issue highlighting the cause of the issue and the justification.\n\nPlease let me know if the fix is working fine or not, in the meantime.\n\nThanks :)"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4207,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4207",
+      "title": "[orchagent] Fix getopt string for -R option (ring_thread_enabled regression)",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-23T23:40:29Z",
+      "createdAt": "2026-02-10T07:43:12Z",
+      "author": "Chiranjeevi-U-ML",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nFixed a typo in the getopt option string in `orchagent/main.cpp` where the `-R` option was incorrectly defined as requiring a mandatory argument (`R:`) instead of being a simple flag (`R`).\r\n\r\nThe fix changes line 403 from:\r\n```cpp\r\nwhile ((opt = getopt(argc, argv, \"b:m:r:f:j:d:i:hsz:k:q:c:t:v:I:R:D:M\")) != -1)\r\n```\r\nto:\r\n```cpp\r\nwhile ((opt = getopt(argc, argv, \"b:m:r:f:j:d:i:hsz:k:q:c:t:v:I:RD:M\")) != -1)\r\n```\r\n\r\n\r\n**Why I did it**\r\n\r\nWhen ring_thread_enabled is set to true in DEVICE_METADATA, orchagent fails to start with the error:\r\n`/usr/bin/orchagent: option requires an argument -- 'R'`\r\n\r\nThis bug was introduced in PR #3814 (specifically, commit 5de59222) when the -D option was added. \r\n\r\nThe getopt string was changed from `I:R` to `I:R:D:` instead of the correct `I:RD:`. \r\n\r\nThis accidentally added a colon after R, making it require a mandatory argument.\r\n\r\n\r\n**How I verified it**\r\n\r\nI did a code review and verified that the -R case handler does not use `optarg` and simply sets `gRingMode = true`. Also, I have checked the git history and traced the bug introduction to PR #3814 and confirmed the original implementation in PR #3242 was correct.\r\n\r\nCheck the code lines here:\r\n\r\nOriginal PR link:\r\nhttps://github.com/sonic-net/sonic-swss/pull/3242/changes#diff-3cba33a216c0ea2b942dc03b2638fa27a40a8b6eb81abf9f83f13e1ee7831ac4R360\r\n\r\nBug Link:\r\nhttps://github.com/sonic-net/sonic-swss/pull/3814/changes#diff-3cba33a216c0ea2b942dc03b2638fa27a40a8b6eb81abf9f83f13e1ee7831ac4R373\r\n\r\n\r\n**Details if related**\r\n\r\nFixes: sonic-net/sonic-buildimage#25366",
+      "files": [
+        {
+          "path": "orchagent/main.cpp",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/test_zmq.py",
+          "additions": 17,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-10T07:43:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-10T07:43:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T03:01:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T03:01:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2026-02-11T03:02:34Z",
+          "body": "@Chiranjeevi-U-ML Don't we have a UT in buildimage or vstest to catch these failures? If possible can we add UT?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T03:14:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T03:14:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T05:38:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T05:38:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Chiranjeevi-U-ML",
+          "createdAt": "2026-02-11T05:40:24Z",
+          "body": "@dgsudharsan Added an integration test `test_ring_thread` in `tests/test_zmq.py` to cover the -R flag.  It verifies that orchagent starts successfully with the -R flag (no argument required)."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-02-11T18:31:08Z",
+          "body": "@dgsudharsan , can you sign off?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T19:31:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T19:31:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

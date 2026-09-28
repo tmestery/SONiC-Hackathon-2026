@@ -1,0 +1,126 @@
+{
+  "number": 27359,
+  "title": "Bug: [rsyslog] RELP forwarding in container rsyslog causes blocking syslog writes, degrading initialization performance under high log load",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27359",
+  "createdAt": "2026-05-14T03:00:22Z",
+  "closedAt": "2026-06-16T19:59:29Z",
+  "author": "ganglyu",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n## Summary\n\nPR #18113 switched Docker container rsyslog forwarding from UDP (`omfwd`) to RELP (`omrelp`). RELP is a TCP-based protocol that requires per-message ACKs. Under high syslog load, this creates a blocking chain that causes any container process writing to syslog to hang inside `sendto()`, significantly degrading initialization and configuration performance.\n\n## Root Cause\n\nRELP requires the sender to wait for a TCP ACK before sending the next message. When the host rsyslog is under load (e.g., during `config reload` or cold reboot), ACKs are delayed, which propagates back-pressure through the entire syslog stack inside the container:\n\n```\nhost rsyslog slow to ACK\n  \u2192 container rsyslog omrelp send queue exhausted (queue.size=20000)\n    \u2192 container rsyslog stops reading from /dev/log Unix socket\n      \u2192 /dev/log socket buffer fills (kernel default: 512 slots)\n        \u2192 any process calling syslog() \u2192 sendto() BLOCKS\n```\n\nWith the previous UDP (`omfwd`) configuration, `sendto()` returns immediately regardless of host rsyslog state \u2014 messages may be dropped under extreme load, but the caller never blocks.\n\n## Affected Scope\n\n`dockers/docker-base-bookworm/etc/rsyslog.conf` is the base image for **all** SONiC containers. Any initialization-heavy service is at risk during high log-load periods:\n\n- `config reload` / cold reboot (many containers starting simultaneously)\n- Large-scale interface provisioning (PortChannels, VLANs, etc.)\n- FRR/LLDP convergence events\n- syncd/orchagent bulk ASIC operations\n\n### Steps to Reproduce\n\nNA\n\n### Actual Behavior and Expected Behavior\n\nNA\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27408,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27408",
+      "title": "[rsyslog] Prevent RELP backpressure from blocking containers",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-16T19:59:28Z",
+      "createdAt": "2026-05-15T19:46:09Z",
+      "author": "rustiqly",
+      "body": "## Why\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/27359.\n\nContainer rsyslog forwards to the host with RELP. If host-side backpressure fills the RELP action queue, the default enqueue timeout can block rsyslog's imuxsock processing path and make service initialization callers stall in `syslog()`/`sendto()`.\n\n## What\n\nSet `queue.timeoutEnqueue=\"0\"` on container RELP action queues so queue saturation drops immediately instead of blocking container syslog producers. This preserves RELP behavior while the queue has capacity, but restores the important pre-RELP property that syslog forwarding must not stall critical service startup paths under log storms.\n\nCovered configs:\n\n- `dockers/docker-base-bookworm/etc/rsyslog.conf`\n- `dockers/docker-base-trixie/etc/rsyslog.conf`\n- `dockers/docker-base-bullseye/etc/rsyslog.conf`\n- `dockers/docker-platform-monitor/etc/rsyslog.conf`\n\n## Test\n\n- `git diff --check`\n- `rsyslogd -N1` not run locally: `rsyslogd` is not installed on the worker host.\n",
+      "files": [
+        {
+          "path": "dockers/docker-base-bookworm/etc/rsyslog.conf",
+          "additions": 4,
+          "deletions": 1
+        },
+        {
+          "path": "dockers/docker-base-bullseye/etc/rsyslog.conf",
+          "additions": 4,
+          "deletions": 1
+        },
+        {
+          "path": "dockers/docker-base-trixie/etc/rsyslog.conf",
+          "additions": 4,
+          "deletions": 1
+        },
+        {
+          "path": "dockers/docker-platform-monitor/etc/rsyslog.conf",
+          "additions": 4,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-15T19:46:18Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-15T19:46:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-16T10:01:37Z",
+          "body": "CI classification for the latest required Azure failure:\n\n- Failed check: Azure.sonic-buildimage (Test impacted-area-kvmtest-t1-lag by Elastictest) in Azure build 1114755\n- Result: Elastictest plan timeout, not a product test assertion failure\n- Evidence: the run ended with TEST_PLAN_TIMEOUT / Test plan stuck & timeout; summary showed 1962 passes, 0 failures, and 2 errors from autorestart/test_container_autorestart.py module timeouts after the plan remained at 0.00% progress.\n- The failed module is unrelated to this PR's rsyslog RELP action queue change. The optional docker-ptf Trivy failure is also non-blocking by the PR CI rules.\n\nRequesting a rerun."
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-16T10:01:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-16T10:01:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-18T14:13:52Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-18T14:14:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-05-23T01:18:35Z",
+          "body": "Summary:\n- Adds queue.timeoutEnqueue=\"0\" to RELP action queues so full queues drop immediately instead of blocking imuxsock, preventing service startup hangs under backpressure.\n\nReviewed by: AI agent on behalf of Ying.\n\nNon-blocking nits:\n- Consider running rsyslogd -N1 (or CI syntax check) since configs were modified.\n- Drops on queue saturation are silent; consider enabling queue failure reporting/impstats or documenting drop behavior.\n- Existing queue.size=\"20000\" may still be small during storms; reassess if needed.\n- Pre-existing inconsistency: bullseye uses resumeRetryCount=\"-1\" vs 60 elsewhere.\n"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-07-21T07:50:26Z",
+          "body": "This PR has the \"Request for 202605 Branch\" label but is missing 202605-specific test results. Please:\n1. Tick the **202605** checkbox in the \"Tested branch\" section of the PR description\n2. Provide 202605 branch test evidence in the \"Test result\" section\n3. Add the label **\"Tested for 202605 branch\"** once done\n\nMaster branch test results alone are not sufficient for 202605 cherry-pick approval.\n\n*Comment on behalf of @vaibhavhd*\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T12:14:38Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-13T23:18:00Z",
+          "body": "**Approved for 202605 cherry-pick.**\n\nMust-have bug fix: RELP backpressure blocking containers can cause service unavailability. PR has been tested on the 202605 branch and has code review approval on master.\n\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T23:22:10Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-buildimage/pull/29010"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-17T03:12:56Z",
+          "body": "@rustiqly cherry pick PR didn't pass PR checker after retry. Please help check! Thanks.<br>https://github.com/sonic-net/sonic-buildimage/pull/29010\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-18T07:13:44Z",
+          "body": "Approved for 202605 cherry-pick.\n\nHas the test gap been identified for the RELP backpressure issue? Is there a test or monitoring check that could have detected containers being blocked by rsyslog backpressure before this reached production?\n\n*Review by @vaibhavhd via automated tooling*"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "number": 14948,
+  "title": "[EVPN]Orchagent crashes when there are multiple routes to a nexthop group and they withdraw",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/14948",
+  "createdAt": "2023-05-04T16:42:09Z",
+  "closedAt": "2023-05-04T16:42:51Z",
+  "author": "dgsudharsan",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nWhen multiple routes point to a nexthop group which means the ref count of ngh is more than one, there is an error condition in the removal flow. The original logic is to remove nhg only when ref count becomes zero. However due to the structuring of if else statements, if the nhg count is not zero, the logic fallbacks to removeOverlayNextHops which will also get added to the list of tasks.\r\nLater when bulker logic kicks in, the nexthop group removal will remove the nexthops associated. However the removeOverlayNextHops  will also subsequently try to remove the same nexthops resulting in errors below.\r\n\r\n\r\n```\r\nApr 19 11:51:05.323909 anc-ali-t9 NOTICE swss#orchagent: :- removeRoutePost: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.323976 anc-ali-t9 NOTICE swss#orchagent: :- removeRoutePost: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.328042 anc-ali-t9 NOTICE swss#orchagent: :- removeOverlayNextHops: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.328081 anc-ali-t9 NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.329642 anc-ali-t9 NOTICE syncd#SDK: [SAI_NEXT_HOP_GROUP.NOTICE] mlnx_sai_nexthopgroup.c[951]- mlnx_remove_next_hop_group: Remove next hop group next hop group id 0x000000C8\r\nApr 19 11:51:05.330400 anc-ali-t9 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.106.106.2, mac b6:a1:0b:0b:d3:cc, vni 30\r\nApr 19 11:51:05.330658 anc-ali-t9 NOTICE syncd#SDK: [SAI_NEXT_HOP.NOTICE] mlnx_sai_nexthop.c[1431]- mlnx_remove_next_hop: Remove next hop next hop id 326, ext 1\r\nApr 19 11:51:05.331108 anc-ali-t9 NOTICE swss#orchagent: :- removeTunnelNextHop: Removed Tunnel next hop vtep1, 173.106.106.2@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.331877 anc-ali-t9 NOTICE swss#orchagent: :- removeOverlayNextHops: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.331877 anc-ali-t9 NOTICE swss#orchagent: :- removeOverlayNextHops: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.331877 anc-ali-t9 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.106.106.2, mac b6:a1:0b:0b:d3:cc, vni 30\r\nApr 19 11:51:05.331877 anc-ali-t9 ERR swss#orchagent: :- removeTunnelNextHop: Failed to remove Tunnel next hop vtep1, 173.106.106.2@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.331877 anc-ali-t9 ERR swss#orchagent: :- removeOverlayNextHops: Tunnel Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2 delete failed\r\n```\r\n\r\nets assume NH1 is part of NHG and R1 is pointing to NH1 and R2 is pointing to NH2. \r\nWhen both R1 and R2 are deleted,  NH1 delete comes first which reduces ref count of NH1 and adds it to m_bulkNhgReducedRefCnt. Later NHG comes and its added to m_bulkNhgReducedRefCnt.\r\n\r\nHowever when m_bulkNhgReducedRefCnt is later processed, NHG delete is processed first which checks for NH1 ref count after removing NHG and finds it zero (since it was removed even before adding to m_bulkNhgReducedRefCnt). This removes the NH1 as part of NHG removal. Later when NH1 removal is processed while iterating through  m_bulkNhgReducedRefCnt  it leads to error.\r\n```\r\nApr 24 15:33:35.313676 anc-ali-t11 NOTICE swss#orchagent: :- removeRoutePost: Remove overlay Nexthop 173.116.116.2@vniVlan27@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.315774 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group 173.108.108.2@vniVlan27@27@7a:1e:b3:02:cd:55,173.116.116.2@vniVlan27@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.317500 anc-ali-t11 NOTICE syncd#SDK: [SAI_NEXT_HOP_GROUP.NOTICE] mlnx_sai_nexthopgroup.c[951]- mlnx_remove_next_hop_group: Remove next hop group next hop group id 0x00000048\r\nApr 24 15:33:35.318345 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.108.108.2, mac 7a:1e:b3:02:cd:55, vni 27\r\nApr 24 15:33:35.318646 anc-ali-t11 NOTICE syncd#SDK: [SAI_NEXT_HOP.NOTICE] mlnx_sai_nexthop.c[1431]- mlnx_remove_next_hop: Remove next hop next hop id 3782, ext 1\r\nApr 24 15:33:35.319188 anc-ali-t11 NOTICE swss#orchagent: :- removeTunnelNextHop: Removed Tunnel next hop vtep1, 173.108.108.2@27@7a:1e:b3:02:cd:55\r\nApr 24 15:33:35.319188 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.116.116.2, mac da:d0:2e:40:6d:ba, vni 27\r\nApr 24 15:33:35.319491 anc-ali-t11 NOTICE syncd#SDK: [SAI_NEXT_HOP.NOTICE] mlnx_sai_nexthop.c[1431]- mlnx_remove_next_hop: Remove next hop next hop id 6918, ext 1\r\nApr 24 15:33:35.320017 anc-ali-t11 NOTICE swss#orchagent: :- removeTunnelNextHop: Removed Tunnel next hop vtep1, 173.116.116.2@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.320847 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.116.116.2, mac da:d0:2e:40:6d:ba, vni 27\r\nApr 24 15:33:35.320847 anc-ali-t11 ERR swss#orchagent: :- removeTunnelNextHop: Failed to remove Tunnel next hop vtep1, 173.116.116.2@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.320847 anc-ali-t11 ERR swss#orchagent: :- removeOverlayNextHops: Tunnel Nexthop 173.116.116.2@vniVlan27@27@da:d0:2e:40:6d:ba delete failed\r\n\r\n```\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Create ECMP and have multiple routes point. Make few routes point to individual nexthops in ECMP\r\n2. Withdraw the routes\r\n3.\r\n\r\n#### Describe the results you received:\r\nOrchagent throws errors and crashes\r\n\r\n#### Describe the results you expected:\r\nNo issues\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2744,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2744",
+      "title": "[EVPN]Fixing nexthop group delete when multiple routes point to the nexthop group",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-05-01T19:58:53Z",
+      "createdAt": "2023-04-20T04:09:34Z",
+      "author": "dgsudharsan",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/14948\r\n**What I did**\r\nWhen multiple routes point to a nexthop group which means the ref count of ngh is more than one, there is an error condition in the removal flow. The original logic is to remove nhg only when ref count becomes zero. However due to the structuring of if else statements, if the nhg count is not zero, the logic fallbacks to removeOverlayNextHops which will also get added to the list of tasks.\r\nLater when bulker logic kicks in, the nexthop group removal will remove the nexthops associated. However the removeOverlayNextHops  will also subsequently try to remove the same nexthops resulting in errors below.\r\n\r\n\r\n```\r\nApr 19 11:51:05.323909 anc-ali-t9 NOTICE swss#orchagent: :- removeRoutePost: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.323976 anc-ali-t9 NOTICE swss#orchagent: :- removeRoutePost: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.328042 anc-ali-t9 NOTICE swss#orchagent: :- removeOverlayNextHops: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.328081 anc-ali-t9 NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.329642 anc-ali-t9 NOTICE syncd#SDK: [SAI_NEXT_HOP_GROUP.NOTICE] mlnx_sai_nexthopgroup.c[951]- mlnx_remove_next_hop_group: Remove next hop group next hop group id 0x000000C8\r\nApr 19 11:51:05.330400 anc-ali-t9 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.106.106.2, mac b6:a1:0b:0b:d3:cc, vni 30\r\nApr 19 11:51:05.330658 anc-ali-t9 NOTICE syncd#SDK: [SAI_NEXT_HOP.NOTICE] mlnx_sai_nexthop.c[1431]- mlnx_remove_next_hop: Remove next hop next hop id 326, ext 1\r\nApr 19 11:51:05.331108 anc-ali-t9 NOTICE swss#orchagent: :- removeTunnelNextHop: Removed Tunnel next hop vtep1, 173.106.106.2@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.331877 anc-ali-t9 NOTICE swss#orchagent: :- removeOverlayNextHops: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.331877 anc-ali-t9 NOTICE swss#orchagent: :- removeOverlayNextHops: Remove overlay Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2\r\nApr 19 11:51:05.331877 anc-ali-t9 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.106.106.2, mac b6:a1:0b:0b:d3:cc, vni 30\r\nApr 19 11:51:05.331877 anc-ali-t9 ERR swss#orchagent: :- removeTunnelNextHop: Failed to remove Tunnel next hop vtep1, 173.106.106.2@30@b6:a1:0b:0b:d3:cc\r\nApr 19 11:51:05.331877 anc-ali-t9 ERR swss#orchagent: :- removeOverlayNextHops: Tunnel Nexthop 173.106.106.2@vniVlan30@30@b6:a1:0b:0b:d3:cc,173.108.108.2@vniVlan30@30@c2:72:8d:aa:61:d2 delete failed\r\n```\r\n\r\nFixed a second scenario where a nexthop is part of NHG as well as functioning as individual nexthop to a route. Lets assume NH1 is part of NHG and R1 is pointing to NH1 and R2 is pointing to NH2. \r\nWhen both R1 and R2 are deleted,  NH1 delete comes first which reduces ref count of NH1 and adds it to m_bulkNhgReducedRefCnt. Later NHG comes and its added to m_bulkNhgReducedRefCnt.\r\n\r\nHowever when m_bulkNhgReducedRefCnt is later processed, NHG delete is processed first which checks for NH1 ref count after removing NHG and finds it zero (since it was removed even before adding to m_bulkNhgReducedRefCnt). This removes the NH1 as part of NHG removal. Later when NH1 removal is processed while iterating through  m_bulkNhgReducedRefCnt  it leads to error.\r\n```\r\nApr 24 15:33:35.313676 anc-ali-t11 NOTICE swss#orchagent: :- removeRoutePost: Remove overlay Nexthop 173.116.116.2@vniVlan27@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.315774 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopGroup: Delete next hop group 173.108.108.2@vniVlan27@27@7a:1e:b3:02:cd:55,173.116.116.2@vniVlan27@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.317500 anc-ali-t11 NOTICE syncd#SDK: [SAI_NEXT_HOP_GROUP.NOTICE] mlnx_sai_nexthopgroup.c[951]- mlnx_remove_next_hop_group: Remove next hop group next hop group id 0x00000048\r\nApr 24 15:33:35.318345 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.108.108.2, mac 7a:1e:b3:02:cd:55, vni 27\r\nApr 24 15:33:35.318646 anc-ali-t11 NOTICE syncd#SDK: [SAI_NEXT_HOP.NOTICE] mlnx_sai_nexthop.c[1431]- mlnx_remove_next_hop: Remove next hop next hop id 3782, ext 1\r\nApr 24 15:33:35.319188 anc-ali-t11 NOTICE swss#orchagent: :- removeTunnelNextHop: Removed Tunnel next hop vtep1, 173.108.108.2@27@7a:1e:b3:02:cd:55\r\nApr 24 15:33:35.319188 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.116.116.2, mac da:d0:2e:40:6d:ba, vni 27\r\nApr 24 15:33:35.319491 anc-ali-t11 NOTICE syncd#SDK: [SAI_NEXT_HOP.NOTICE] mlnx_sai_nexthop.c[1431]- mlnx_remove_next_hop: Remove next hop next hop id 6918, ext 1\r\nApr 24 15:33:35.320017 anc-ali-t11 NOTICE swss#orchagent: :- removeTunnelNextHop: Removed Tunnel next hop vtep1, 173.116.116.2@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.320847 anc-ali-t11 NOTICE swss#orchagent: :- removeNextHopTunnel: NH tunnel remove for vtep1, ip 173.116.116.2, mac da:d0:2e:40:6d:ba, vni 27\r\nApr 24 15:33:35.320847 anc-ali-t11 ERR swss#orchagent: :- removeTunnelNextHop: Failed to remove Tunnel next hop vtep1, 173.116.116.2@27@da:d0:2e:40:6d:ba\r\nApr 24 15:33:35.320847 anc-ali-t11 ERR swss#orchagent: :- removeOverlayNextHops: Tunnel Nexthop 173.116.116.2@vniVlan27@27@da:d0:2e:40:6d:ba delete failed\r\n\r\n```\r\n\r\nThe fix is to add NH to m_bulkNhgReducedRefCnt only when ref count becomes zero.\r\n\r\n**Why I did it**\r\nTo fix proper handling of ECMP pointed by multiple routes.\r\n\r\n**How I verified it**\r\nAdded VS tests to verify.\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/routeorch.cpp",
+          "additions": 32,
+          "deletions": 18
+        },
+        {
+          "path": "tests/evpn_tunnel.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/test_evpn_l3_vxlan.py",
+          "additions": 38,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2023-04-21T15:35:08Z",
+          "body": "@srj102  @tapashdas  @prsunny  Please review. "
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2023-04-21T17:01:31Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-04-21T17:01:33Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-04-21T17:01:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2023-04-25T02:03:32Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-04-25T02:03:33Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-04-25T02:03:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2023-04-26T01:44:40Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-04-26T01:44:42Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-04-26T01:44:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2023-04-26T02:51:00Z",
+          "body": "@Ndancejic for viz"
+        }
+      ]
+    }
+  ]
+}

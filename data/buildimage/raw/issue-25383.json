@@ -1,0 +1,91 @@
+{
+  "number": 25383,
+  "title": "Bug: Docker socket activation incorrectly configured in sonic",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25383",
+  "createdAt": "2026-02-07T00:36:51Z",
+  "closedAt": "2026-02-14T07:01:44Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThe following change made 7 years ago to sonic \n\nhttps://github.com/sonic-net/sonic-buildimage/pull/2417/changes#diff-9260b9ec21d3b4e6c963aec3df057525b89c388b7daa30b931414a4fe721f824\n\n```\n-- /usr/bin/dockerd -H fd://\n++ /usr/bin/dockerd -H unix://\n```\n\nSocket activation has systemd listen on /run/docker.sock early in boot. When a client connects (like Ansible running docker ps), systemd starts Docker and is supposed to hand that same socket connection over to dockerd.  \n\nThe handoff fails because the Docker service override (https://github.com/sonic-net/sonic-buildimage/blob/master/files/docker/docker.service.conf) starts the daemon with dockerd -H unix://, which makes Docker create a new Unix socket instead of inheriting the one systemd was listening on. The client remains connected to the original socket, so the request hangs. This happens when the docker client connects before the docker service is started as part of the normal boot order. [Here's](https://github.com/moby/moby/pull/3105) the recommend way to start using -H fd://) as per docker community.\n\n### Steps to Reproduce\n\n1. Reboot sonic\n2. During the startup before the docker service starts communicate with docker socket using say 'docker ps'\n3. The command hangs. \n4. After the docker service starts we can communicate with it as usual using docker commands. But the original communication is still hung as the socket which was listening by systemd on behalf of docker wasn't handed over to the docker daemon once it started\n\n### Actual Behavior and Expected Behavior\n\nExpected behaviour: docker commands before docker service starts should still be responded once through socket activation by docker daemon\n\nActual behaviour: docker commands before docker service starts are not responded as they never reach docker daemon when it starts\n\n```\n07:30:21             docker.socket started listening\nFeb  1 07:30:21 sonic systemd[1]: Listening on docker.socket - Docker Socket for the API.\n \n07:30:25             Ansible SSH session initiated docker ps command\nFeb  1 07:30:25 sonic python3[2674]: ansible-command Invoked with _raw_params=docker ps --filter status=running --format \\{\\{.Names\\}\\} ...\n \n07:30:27             docker.service started syslog\nFeb  1 07:30:27 sonic systemd[1]: Starting docker.service - Docker Application Container Engine...\n \n07:30:28             Docker daemon completed initialization (\"API listen on /var/run/docker.sock\")\nFeb  1 07:30:28 sonic dockerd[2994]: time=\"2026-02-01T07:30:28.945144092+02:00\" level=info msg=\"API listen on /var/run/docker.sock\"\nFeb  1 07:30:28 sonic systemd[1]: Started docker.service - Docker Application Container Engine.\n \n07:30:36             healthd successfully executed docker ps\nFeb  1 07:30:36 sonic healthd[3269]: system_health#dict_keys(['Services', 'Hardware', 'Process', 'System'])\n \n08:23:xx              Ansible SSH session finally closed (~53 min later)\nFeb  1 07:30:25 sonic sshd[2670]: pam_unix(sshd:session): session opened for user admin\nFeb  1 08:23:xx sonic sshd[2670]: pam_unix(sshd:session): session closed for user admin\n```",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25398,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25398",
+      "title": "[docker] Fix Docker commands hanging before docker.service starts",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-14T07:01:42Z",
+      "createdAt": "2026-02-09T14:47:16Z",
+      "author": "Chiranjeevi-U-ML",
+      "body": "#### Why I did it\r\nFix Docker socket activation broken since PR #2417 (January 2019). Docker commands executed before docker.service starts hang indefinitely because -H unix:// breaks systemd socket activation.\r\n\r\n**Fixes #25383**\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nChanged `-H unix://` to `-H fd://` in  `files/docker/docker.service.conf`. Added documentation comments explaining why this flag is required to prevent future regression.\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\nVerified on VS image:\r\n- docker.socket is active and triggers docker.service\r\n- dockerd runs with -H fd:// flag\r\n- Socket activation works correctly\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [x] 202305\r\n- [x] 202311\r\n- [x] 202405\r\n- [x] 202411\r\n- [x] 202505\r\n- [x] 202511\r\n\r\n**Reason:** This is a bug fix that has existed since January 2019. All active release branches are affected and should receive this fix.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [x] master : `fix_docker-socket-activation-25383.0-b01504e6c` (sonic-vs.img.gz)\r\n\r\n#### Description for the changelog\r\n\r\nFix Docker socket activation hang by using -H fd:// instead of -H unix:// in docker.service.conf\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\nN/A\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n![michael-sum-LEpfefQf4rU-unsplash](https://github.com/user-attachments/assets/a4f71f80-b11c-49f4-a562-26d63b89fdbe)\r\n",
+      "files": [
+        {
+          "path": "files/docker/docker.service.conf",
+          "additions": 11,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-09T14:47:25Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-02-09T14:47:26Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: lguohan / name: Guohan Lu  (32be70cccb18ba529083df79334186280dfcea07)</li></ul>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-09T14:47:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-10T11:58:27Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-10T11:58:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-02-11T16:48:35Z",
+          "body": "@make1980 please help check this,"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T16:48:54Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T16:49:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2026-02-13T16:29:33Z",
+          "body": "@qiluo-msft @saiarcot895 Can we merge this?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-14T07:02:27Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25503"
+        }
+      ]
+    }
+  ]
+}

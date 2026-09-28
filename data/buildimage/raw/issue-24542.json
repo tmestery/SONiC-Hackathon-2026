@@ -1,0 +1,87 @@
+{
+  "number": 24542,
+  "title": "gnmi container should remove privileged mode",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24542",
+  "createdAt": "2025-11-17T21:04:43Z",
+  "closedAt": "2026-02-17T19:13:00Z",
+  "author": "qiluo-msft",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "hdwhdw"
+  ],
+  "milestone": null,
+  "body": ">privileged [](http://example.com/codeflow?start=28&length=10)\r\n\r\nCould you check [https://github.com/sonic-net/SONiC/pull/1364](https://github.com/sonic-net/SONiC/pull/1364) ? Is it possible to use fine granularity linux capacities?\r\n\r\n_Originally posted by @qiluo-msft in https://github.com/sonic-net/sonic-buildimage/pull/24056#discussion_r2535501897_\r\n            ",
+  "comments": [
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2025-11-18T00:44:17Z",
+      "body": "Please also update PRIVILEGED_CONTAINERS in the testcase test_container_privileged, after this issue resolved."
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2025-11-18T17:51:05Z",
+      "body": "Ack"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25089,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25089",
+      "title": "[docker-gnmi] Replace --privileged with specific capabilities",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-17T19:12:58Z",
+      "createdAt": "2026-01-15T16:50:17Z",
+      "author": "hdwhdw",
+      "body": "#### Why I did it\n\nImplement container hardening for the GNMI container as per the [SONiC Container Hardening HLD](https://github.com/sonic-net/SONiC/blob/master/doc/Container%20Hardening/SONiC_container_hardening_HLD.md). This improves security by following the principle of least privilege, replacing the `--privileged` flag with specific Linux capabilities.\n\nFixes #24542\n\n#### How I did it\n\nModified `rules/docker-gnmi.mk` to replace `--privileged` with specific Linux capabilities and security options:\n\n**Capabilities added:**\n- `CAP_SYS_ADMIN`: Required for `setns()` syscall used by nsenter to enter namespaces\n- `CAP_SYS_BOOT`: For reboot operations via gNOI\n- `CAP_SYS_PTRACE`: Required to access `/proc/1/ns/*` files - the kernel enforces PTRACE_MODE_READ checks when reading namespace symlinks of other processes (see `man 2 ptrace` \"Ptrace access mode checking\" section)\n- `CAP_NET_ADMIN`: For network administration operations\n- `CAP_DAC_OVERRIDE`: To bypass file permission checks\n\n**Security options added:**\n- `--security-opt apparmor=unconfined`\n- `--security-opt seccomp=unconfined`\n\nThese security options are required for nsenter to access host namespaces from within the container.\n\n**Why CAP_SYS_PTRACE is required:**\n\nWhen nsenter runs inside the container, it needs to read `/proc/1/ns/*` to enter the host's namespaces. The kernel requires PTRACE_MODE_READ access for `readlink()` on `/proc/[pid]/ns/*` files. Without `CAP_SYS_PTRACE`:\n```\n$ nsenter -t 1 -m -n -p -u -i hostname\nnsenter: cannot open /proc/1/ns/ipc: Permission denied\n```\n\nWith `CAP_SYS_PTRACE`, the container can read the namespace files and nsenter works correctly.\n\n#### How to verify it\n\n**Testing performed on vlab-01:**\n\n1. **Verified container is running without --privileged:**\n   ```bash\n   docker ps | grep gnmi\n   ```\n\n2. **Key Test - nsenter from INSIDE the container (this is how gNOI operates):**\n   ```bash\n   docker exec gnmi nsenter -t 1 -m -n -p -u -i sonic-installer list\n   ```\n\n3. **Tested reboot functionality:**\n   ```bash\n   docker exec gnmi nsenter -t 1 -m -n -p -u -i reboot\n   # System rebooted successfully\n   ```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202405\n- [ ] 202411\n\n#### Description for the changelog\n\nReplace --privileged flag with specific Linux capabilities (SYS_ADMIN, SYS_BOOT, SYS_PTRACE, NET_ADMIN, DAC_OVERRIDE) and security options for GNMI container to improve security while maintaining gNOI functionality including nsenter operations from within the container.",
+      "files": [
+        {
+          "path": "rules/docker-gnmi.mk",
+          "additions": 9,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-22T20:03:31Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-22T20:03:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-27T21:20:06Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-27T21:20:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-06T15:52:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-06T15:52:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-02-11T17:53:44Z",
+          "body": "@qiluo-msft @StormLiangMS @yxieca Can you help merge? Thanks!"
+        }
+      ]
+    }
+  ]
+}

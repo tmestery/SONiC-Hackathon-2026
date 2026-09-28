@@ -1,0 +1,124 @@
+{
+  "number": 16209,
+  "title": "Ipv6 e-BGP default route not getting programmed if ipv6 management config is not done on eth0",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/16209",
+  "createdAt": "2023-08-18T23:41:45Z",
+  "closedAt": "2023-08-24T14:53:51Z",
+  "author": "abdosi",
+  "labels": [
+    "P0",
+    "Issue for 202205"
+  ],
+  "assignees": [
+    "abdosi"
+  ],
+  "milestone": null,
+  "body": "What is the Issue:\r\n\r\nIf there no ipv6 management config on eth0 we have accept_ra flag enable on eth0 which cause default route to be learned over link-local via RA message. Since this route is added by Kernel with metric 1024 which has higher priority of e-BGP learn default route the e-BGP default route is not porgammed and cause dataplane impact.\r\n\r\n",
+  "comments": [
+    {
+      "author": "abdosi",
+      "createdAt": "2023-08-18T23:43:29Z",
+      "body": "Issue is generic issue and should be present on previous release branch also.\r\nFor 202205 I am planning to fix this by porting below Kernel patch to 5.10 \r\n\r\nhttps://github.com/torvalds/linux/commit/6b2e04bc240fe9be9e690059f710e9f95346d34d#diff-96f508f2a9a317bbed526ca6eb163ff3c0d95e6eafdd0fd0b46dd9651efb7200\r\n\r\nand then setting metric to higher value using `ra_defrtr_metric `"
+    },
+    {
+      "author": "abdosi",
+      "createdAt": "2023-08-18T23:44:03Z",
+      "body": "cc @arlakshm for viz."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 326,
+      "repository": "sonic-net/sonic-linux-kernel",
+      "url": "https://github.com/sonic-net/sonic-linux-kernel/pull/326",
+      "title": "[PATCH] net: allow user to set metric on default route learned via  Router Advertisement",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-08-24T14:53:49Z",
+      "createdAt": "2023-08-23T01:05:18Z",
+      "author": "abdosi",
+      "body": "What I did:\r\nPatch taken from Linux 5.12 to allow user to set metric on default route learned via Router Adv message for IPv6\r\n\r\nThis PR is to backport the following commits to kernel v5.10:\r\n\r\nhttps://github.com/torvalds/linux/commit/6b2e04bc240fe9be9e690059f710e9f95346d34d\r\n\r\nADO: 24888962\r\n\r\nWhy I did:\r\n\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/16209",
+      "files": [
+        {
+          "path": "patch/0001-net-allow-user-to-set-metric-on-default-route-learne.patch",
+          "additions": 262,
+          "deletions": 0
+        },
+        {
+          "path": "patch/series",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "abdosi",
+          "createdAt": "2023-08-23T01:05:43Z",
+          "body": "@saiarcot895 created PR for master"
+        },
+        {
+          "author": "paulmenzel",
+          "createdAt": "2023-08-24T14:55:35Z",
+          "body": "What does the line below mean?\r\n\r\n> ADO: 24888962\r\n\r\nIt is MSFT internal work item tracking number"
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2023-08-28T16:02:31Z",
+          "body": "@yxieca can you please help with cherry-pick into 202205 branch\r\n"
+        },
+        {
+          "author": "zhenggen-xu",
+          "createdAt": "2024-10-13T16:10:59Z",
+          "body": "@yxieca @StormLiangMS Can you confirm if this kernel patch is in 202305 branch?  I only see the config changes in sonic-buildimage 202305 branch but not the Linux kernel patch, that won't be sufficient.  thanks!"
+        }
+      ]
+    },
+    {
+      "number": 16367,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/16367",
+      "title": "Assign the higher metric value for Ipv6 default route learnt via RA message",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-09-01T18:38:14Z",
+      "createdAt": "2023-08-31T21:00:39Z",
+      "author": "abdosi",
+      "body": "What I did:\r\nAssign the metric value for Ipv6 default route learnt via RA message to\r\nhigher value so that BGP learnt default route is higher priority.\r\n\r\nThis change depend on this Kernel Patch: https://github.com/sonic-net/sonic-linux-kernel/pull/326\r\n\r\nADO: 24888962\r\n\r\nWhy I did:\r\nFixes : https://github.com/sonic-net/sonic-buildimage/issues/16209\r\n\r\nHow I verify:\r\nManual Verification to make sure after setting metric e-BGP learnt default is always higher priority over RA default route.\r\n\r\n```\r\nstr2-xxxxx-acs-03# show ipv6 route ::/0\r\nRouting entry for ::/0\r\n  Known via \"kernel\", distance 119, metric 1000\r\n  Last update 00:00:33 ago\r\n    fe80::9a49:25ff:fe03:6e52, via eth0\r\n\r\nRouting entry for ::/0\r\n  Known via \"bgp\", distance 20, metric 0, best\r\n  Last update 00:00:59 ago\r\n  * fc00::2, via PortChannel102, weight 1\r\n  * fc00::a, via PortChannel105, weight 1\r\n  * fc00::12, via PortChannel108, weight 1\r\n  * fc00::1a, via PortChannel1011, weight 1\r\n  * fc00::22, via PortChannel1014, weight 1\r\n  * fc00::2a, via PortChannel1017, weight 1\r\n  * fc00::32, via PortChannel1020, weight 1\r\n  * fc00::3a, via PortChannel1023, weight 1\r\n```\r\n\r\n```\r\nadmin@str2-xxxxx-acs-03:~$ sudo ip -6 route show ::/0 table main\r\ndefault nhid 297 proto bgp src fc00:1::32 metric 20 pref medium\r\n        nexthop via fc00::2 dev PortChannel102 weight 1\r\n        nexthop via fc00::12 dev PortChannel108 weight 1\r\n        nexthop via fc00::1a dev PortChannel1011 weight 1\r\n        nexthop via fc00::22 dev PortChannel1014 weight 1\r\n        nexthop via fc00::2a dev PortChannel1017 weight 1\r\n        nexthop via fc00::32 dev PortChannel1020 weight 1\r\n        nexthop via fc00::3a dev PortChannel1023 weight 1\r\n        nexthop via fc00::a dev PortChannel105 weight 1\r\ndefault via fe80::2a01:111:e210:3000:3 dev eth0 proto ra metric 1996489704 expires 1797sec hoplimit 64 pref medium\r\ndefault via fe80::2a01:111:e210:3000:1 dev eth0 proto ra metric 1996489704 expires 1799sec hoplimit 64 pref medium\r\ndefault via fe80::2a01:111:e210:3000:2 dev eth0 proto ra metric 1996489704 expires 1797sec hoplimit 64 pref medium\r\ndefault via fe80::9a49:25ff:fe03:6e52 dev eth0 proto ra metric 1996489704 expires 1797sec hoplimit 64 pref medium\r\n```",
+      "files": [
+        {
+          "path": "files/dhcp/90-dhcp6-systcl.conf.j2",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "abdosi",
+          "createdAt": "2023-08-31T21:03:21Z",
+          "body": "@yxieca / @StormLiangMS this PR depends on https://github.com/sonic-net/sonic-linux-kernel/pull/326 to be cherry-picked and submodule update in corresponding release branch."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2023-09-01T18:37:47Z",
+          "body": "@dgsudharsan for viz\r\n"
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2023-09-01T21:11:15Z",
+          "body": "> @yxieca / @StormLiangMS this PR depends on [sonic-net/sonic-linux-kernel#326](https://github.com/sonic-net/sonic-linux-kernel/pull/326) to be cherry-picked and submodule update in corresponding release branch.\r\n\r\n@yxieca this can be cherry-picked now. Submodule is updated for 202205"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-09-03T03:36:35Z",
+          "body": "Cherry-pick PR to 202305: https://github.com/sonic-net/sonic-buildimage/pull/16429"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-09-05T03:28:53Z",
+          "body": "Cherry-pick PR to 202205: https://github.com/sonic-net/sonic-buildimage/pull/16440"
+        }
+      ]
+    }
+  ]
+}

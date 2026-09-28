@@ -1,0 +1,149 @@
+{
+  "number": 20725,
+  "title": "Orchagent exiting due to unsupported SAI_*_ATTR_SELECTIVE_COUNTER_LIST attr",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/20725",
+  "createdAt": "2024-11-07T06:04:17Z",
+  "closedAt": "2024-12-06T18:00:54Z",
+  "author": "bofish-arista",
+  "labels": [
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "kcudnik",
+    "tjchadaga"
+  ],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nSonic-buildimage PR#20540 has incorporated SAI changes which includes latest sairedis, this in turn features changes to SAI, including SAI_PORT_ATTR_SELECTIVE_COUNTER_LIST, which does not appear to be supported yet by Broadcom.\r\n\r\nAs a result of this change, orchagent is exiting early in startup process.\r\n\r\nRelevant links:\r\nhttps://github.com/sonic-net/sonic-buildimage/pull/20540\r\nhttps://github.com/sonic-net/sonic-sairedis/pull/1431\r\nhttps://github.com/opencomputeproject/SAI/pull/1941\r\n\r\n#### Steps to reproduce the issue:\r\n\r\nIssue is seen during inialization of a standalone device.\r\n\r\n\r\n#### Describe the results you received:\r\n\r\nOrchagent exited with runtime error logged as shown below:\r\n\r\n2024 Nov  4 17:44:07.612509 up500 ERR syncd#syncd: :- run: Runtime error: :- discover: when query SAI_PORT_ATTR_SELECTIVE_COUNTER_LIST (on SAI_OBJECT_TYPE_PORT RID oid:0x100000001) got value oid:0x7ffc4a7b45f0 objectTypeQuery returned NULL object type\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\n\r\n#### Output of `show version`:\r\n\r\nroot@up322:~# show version\r\n\r\nSONiC Software Version: SONiC.branch.master-ars.7cd2518e-buildimage.origin.master-nightly-slim-2024.10.31.20.12\r\nSONiC OS Version: 12\r\nDistribution: Debian 12.7\r\nKernel: 6.1.0-22-2-amd64\r\nBuild commit: 7f44814d7\r\nBuild date: Fri Nov  1 00:59:18 UTC 2024\r\nBuilt by: jenkins@jenkins-arsonic-k8s-1-vfqtx\r\n\r\nPlatform: x86_64-arista_7060_cx32s\r\nHwSKU: Arista-7060CX-32S-C32\r\nASIC: broadcom\r\nASIC Count: 1\r\nSerial Number: SGD20254417\r\nModel Number: DCS-7060CX-32S\r\nHardware Revision: 03.00\r\nUptime: 06:20:23 up 9 min,  2 users,  load average: 0.26, 0.98, 0.75\r\nDate: Sat 02 Nov 2024 06:20:23\r\n\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-11-08T08:02:26Z",
+      "body": "Hi:\r\n\r\n```\r\nf23185d5 (Rajkumar-Marvell         2024-10-07 11:55:21 +0530 2627)     SAI_PORT_ATTR_SELECTIVE_COUNTER_LIST,\r\n```\r\n \r\nthat attribute was recently added in 2024/10/7\r\n \r\n```\r\nSAI_PORT_ATTR_SELECTIVE_COUNTER_LIST (on SAI_OBJECT_TYPE_PORT RID oid:0x20100000000) got value oid:0x559ac8beda80 objectTypeQuery returned NULL object type\r\n```\r\n\r\nthis attribute is LIST of counters, and it returned some OID value 0x559ac8beda80 on which OT returned NULL, and it should be SAI_OBJECT_TYPE_COUNTER as specified in SAI headers saiport.h, if it's returning NULL, that's a vendor bug \r\n \r\nand currently syncd on such error crashes, since we got OID but we don't know what type it is, this is invalid\r\n\r\nso what should happened, when we have newer headers in SAI sairedis/syncd and we are using older vendor SAI, all unsupported attributes should return not implemented or not supported, instead of success, but it seams that vendor is returning some invalid value and success on this attribute\r\n\r\nerror comes from here: https://github.com/sonic-net/sonic-sairedis/blob/master/syncd/SaiDiscovery.cpp#L237\r\n\r\nerror could be also caused by DASH extensions (if vendor support DASH) since extensions range changed, and that change is not backward compatible: https://github.com/opencomputeproject/SAI/pull/2028\r\n\r\nso what i expect is happening, vendor have some custom/private attribute after SAI_PORT_ATTR_END, on older version of SAI headers which have the same enum value as SAI_PORT_ATTR_SELECTIVE_COUNTER_LIST, which causes syncd think that SAI_PORT_ATTR_SELECTIVE_COUNTER_LIST  is implemented when actually this is private internal attribute\r\n\r\n@bofish-arista can you confirm ?\r\n "
+    },
+    {
+      "author": "tjchadaga",
+      "createdAt": "2024-11-08T18:34:02Z",
+      "body": "@JaiOCP - could you please confirm the analysis above?"
+    },
+    {
+      "author": "tjchadaga",
+      "createdAt": "2024-11-08T18:42:24Z",
+      "body": "@rajkumar38 - fyi"
+    },
+    {
+      "author": "bofish-arista",
+      "createdAt": "2024-11-08T20:06:16Z",
+      "body": "Hi @kcudnik - your assessment is correct.  There are some extensions added by the vendor which are causing the conflict.  The vendor implementation currently does not allow SAI to grow without introducting conflicts.   We have a ticket opened with them to get this addressed.  "
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-11-08T21:29:35Z",
+      "body": "Nice, I have proposal to update syncd and SAI metadata to add version on each attribute so discovery process will not exceed SAI_PORT_ATTR_END and any attr end if vendor is lover version than supported syncd headers, this will solve this issue for the future, I will work on this to address this issue\r\n\r\n@lguohan for visibility"
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-11-08T21:30:43Z",
+      "body": "> Hi @kcudnik - your assessment is correct. There are some extensions added by the vendor which are causing the conflict. The vendor implementation currently does not allow SAI to grow without introducting conflicts. We have a ticket opened with them to get this addressed.\r\n\r\nWe introduced custom attribute range for each attribute for vendors to prevent this behavior https://github.com/opencomputeproject/SAI/blob/master/inc/saiport.h#L2635 SAI_PORT_ATTR_CUSTOM_RANGE_START"
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-11-19T07:55:05Z",
+      "body": "I created partial  one step to partial solution https://github.com/opencomputeproject/SAI/pull/2100, with this we will have attributes and SAI version per attribute,  you can read explanation here: https://github.com/opencomputeproject/SAI/issues/2099\r\n\r\ni will work on this to support that on syncd with a cmd enable/flag"
+    },
+    {
+      "author": "prgeor",
+      "createdAt": "2024-11-20T16:14:26Z",
+      "body": "@ying can you check with @kcudnik how to unblock master with SAI 11.x as 12.x may introduce regression?"
+    },
+    {
+      "author": "bradh352",
+      "createdAt": "2024-11-28T18:54:04Z",
+      "body": "Anyone tracking this issue, a simple workaround until a proper fix is created is here: https://github.com/bradh352/sonic-sairedis/commit/9f2a0b9"
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-11-28T19:30:38Z",
+      "body": "on sairedis master this is already fixed partially: https://github.com/sonic-net/sonic-sairedis/pull/1470, this is checked in, but needs to be enabled by \"-a\" parameter in syncd init script "
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-11-28T19:32:14Z",
+      "body": "also entire problem is not that simple, since custom attributes on brcm will be moved from v1.13 and v1.14 to different range"
+    },
+    {
+      "author": "bradh352",
+      "createdAt": "2024-11-28T19:53:55Z",
+      "body": "> on sairedis master this is already fixed partially: [sonic-net/sonic-sairedis#1470](https://github.com/sonic-net/sonic-sairedis/pull/1470), this is checked in, but needs to be enabled by \"-a\" parameter in syncd init script\r\n\r\nI saw that but I didn't see the commit to SAI that actually tagged each attribute with a version.  That said, now that I'm looking harder at it, I see https://github.com/opencomputeproject/SAI/pull/2100 which is actually auto-generating a version header based on git tags.\r\n\r\nOut of curiosity why make it opt-in?   Are there expected incompatibilities?"
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-11-28T21:45:40Z",
+      "body": "for backward compatibility"
+    },
+    {
+      "author": "bradh352",
+      "createdAt": "2024-12-01T15:12:22Z",
+      "body": "I can confirm that adding the \"-a\" does indeed work on my TD3 switches."
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-12-01T20:55:01Z",
+      "body": "> I can confirm that adding the \"-a\" does indeed work on my TD3 switches.\r\n\r\nnice !"
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-12-01T20:55:19Z",
+      "body": "can we enable tahat ?"
+    },
+    {
+      "author": "bradh352",
+      "createdAt": "2024-12-01T21:46:12Z",
+      "body": "I think it would make sense for it to be enabled by default, that said I don't fully understand the backwards compatibility implications, perhaps there may be specific issues with various closed vendor blobs.  In my own branch (which I only use on Broadcom Trident 3) I always enable `-a`: https://github.com/bradh352/sonic-sairedis/commit/4fe35ae9\r\n\r\nHowever, I don't see why it couldn't be moved into each ASIC-specific section that is validated to be ok:\r\nhttps://github.com/bradh352/sonic-sairedis/blob/4fe35ae9ecb96f73568e3df318fabfd7bb2c124f/syncd/scripts/syncd_init_common.sh#L476\r\n"
+    },
+    {
+      "author": "kcudnik",
+      "createdAt": "2024-12-02T14:29:11Z",
+      "body": "can you make PR for sonic-sairedis to enable this feature by default ? i  think there are no implications for not enabling that in production, from other hand, if there are new  attributes that are not in official release then this needs to be disabled, but currently this feature is only implemented in discovery, user can still make invalid create/set/get of attrbitue that is vendor extention after ATTR_END, but in normal operation this will not happen, since release versions are tested before production\r\n\r\nbut maybe it would make sense to also implement check on those operations too, in case some old libsai would be used in some weird case"
+    },
+    {
+      "author": "bofish-arista",
+      "createdAt": "2024-12-02T16:07:35Z",
+      "body": "I've tried enabling -a flag in syncd init script and it is working for me.  "
+    },
+    {
+      "author": "bradh352",
+      "createdAt": "2024-12-02T16:17:20Z",
+      "body": "> can you make PR for sonic-sairedis to enable this feature by default ? i think there are no implications for not enabling that in production, from other hand, if there are new attributes that are not in official release then this needs to be disabled, but currently this feature is only implemented in discovery, user can still make invalid create/set/get of attrbitue that is vendor extention after ATTR_END, but in normal operation this will not happen, since release versions are tested before production\r\n> \r\n> but maybe it would make sense to also implement check on those operations too, in case some old libsai would be used in some weird case\r\n\r\ndone: https://github.com/sonic-net/sonic-sairedis/pull/1477"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 21068,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/21068",
+      "title": "[Broadcom][master] Upgrade xgs SAI version to 11.2.16.2",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-12-06T18:00:53Z",
+      "createdAt": "2024-12-06T06:10:43Z",
+      "author": "Gfrom2016",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nUpgrade SAI xgs version to 11.2.16.2 to fix #20725 \r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: 30445459\r\n\r\n#### How I did it\r\nUpdate xgs SAI version to 11.2.16.2 in the sai.mk file.\r\n\r\n#### How to verify it\r\nload the built image to the DUT, swss starts fine.\r\n```\r\nadmin@bjw-can-7260-12:~$ show ver\r\nSONiC Software Version: SONiC.master-21068.714337-2b8782edb\r\nadmin@bjw-can-7260-12:~$ docker ps -a\r\nCONTAINER ID   IMAGE                                COMMAND                  CREATED         STATUS                     PORTS     NAMES\r\n06db1eecf14a   docker-snmp:latest                   \"/usr/local/bin/supe\u2026\"   2 minutes ago   Up 2 minutes                         snmp\r\ne3653b608fb3   docker-platform-monitor:latest       \"/usr/bin/docker_ini\u2026\"   2 minutes ago   Up 2 minutes                         pmon\r\n518313e8c576   docker-sonic-mgmt-framework:latest   \"/usr/local/bin/supe\u2026\"   2 minutes ago   Up 2 minutes                         mgmt-framework\r\nfd6d46734dfb   docker-lldp:latest                   \"/usr/bin/docker-lld\u2026\"   2 minutes ago   Up 2 minutes                         lldp\r\n008182a39f22   docker-sonic-gnmi:latest             \"/usr/local/bin/supe\u2026\"   2 minutes ago   Up 2 minutes                         gnmi\r\nff4487642c0b   docker-router-advertiser:latest      \"/usr/bin/docker-ini\u2026\"   4 minutes ago   Up 4 minutes                         radv\r\ne30cb7df07ca   docker-syncd-brcm:latest             \"/usr/local/bin/supe\u2026\"   4 minutes ago   Up 4 minutes                         syncd\r\n8bd4b5928efe   docker-teamd:latest                  \"/usr/local/bin/supe\u2026\"   4 minutes ago   Up 4 minutes                         teamd\r\n648a75dd59a8   docker-fpm-frr:latest                \"/usr/bin/docker_ini\u2026\"   4 minutes ago   Up 4 minutes                         bgp\r\n058d4c018f91   docker-orchagent:latest              \"/usr/bin/docker-ini\u2026\"   4 minutes ago   Up 4 minutes                         swss\r\n73a0b5d1b433   docker-eventd:latest                 \"/usr/local/bin/supe\u2026\"   4 minutes ago   Up 4 minutes                         eventd\r\n63aca9f54c55   docker-sonic-restapi:latest          \"/usr/local/bin/supe\u2026\"   4 minutes ago   Up 4 minutes                         restapi\r\n8a3788a03225   docker-database:latest               \"/usr/local/bin/dock\u2026\"   4 minutes ago   Up 4 minutes                         database\r\n```\r\n\r\nSigned-off-by: zitingguo-ms <zitingguo@microsoft.com>\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "platform/broadcom/sai.mk",
+          "additions": 2,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "yxieca",
+          "createdAt": "2024-12-06T17:31:06Z",
+          "body": "/azpw ms_conflict"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "number": 28982,
+  "title": "[BMC] pmon container syslog not routed to host \u2014 missing rsyslog template directives",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28982",
+  "createdAt": "2026-08-12T17:43:55Z",
+  "closedAt": "2026-08-14T00:56:57Z",
+  "author": "yxieca",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "# [BMC] pmon container: bmcctld logs partially duplicated to local overlay instead of host-only\n\n## Description\n\nThe pmon container's rsyslog routes most daemon logs to the host correctly via omrelp (`127.0.0.1:2514`). However, **bmcctld-specific messages** are partially lost \u2014 most are written only to the container's local `/var/log/syslog` (Docker overlay) and do not reach the host.\n\n## Observed Behavior\n\nAfter ~27 hours on `SONiC.20260810.05`:\n\n| Location | pmon total | bmcctld only |\n|----------|-----------|-------------|\n| Host `/var/log/syslog` | 113 lines | **8 lines** |\n| Container `/var/log/syslog` | 79 lines | **79 lines** (all bmcctld) |\n\n- Other pmon daemons (`supervisord`, `platform_api_server`) route to host correctly \u2705\n- bmcctld messages mostly stay local \u2014 only ~10% reach the host \u274c\n\nThe container local syslog contains **only** bmcctld messages, suggesting bmcctld's logging path differs from other pmon daemons.\n\n## Impact\n\nUnder normal load this is minor (7.5KB locally). But when bmcctld enters the `sel.select()` spam loop (sonic-net/sonic-platform-daemons#872), the local-only writes accumulate to **6.4GB in 3 weeks**, filling the 9.6G eMMC and blocking image upgrades.\n\n## Possible Root Cause\n\nbmcctld uses a syslog wrapper (`bmcctld.syslog[pid]`) rather than logging through supervisord's stdout capture like other pmon daemons. This may hit a different rsyslog rule path.\n\nAdditionally, pmon's `rsyslog.conf` is missing `$ActionFileDefaultTemplate` and `$template SONiCFileFormat` directives that other containers (gnmi, lldp) include, which may affect how messages are filtered for local vs relay writes.\n\n## Suggested Investigation\n\n1. Compare bmcctld's logging mechanism vs other pmon daemons (syslog socket vs stdout)\n2. Check if the missing rsyslog template directives affect local write suppression\n3. Align pmon's Docker build rsyslog template (`dockers/docker-platform-monitor/`) with gnmi/lldp\n\n## Environment\n\n- Platform: `arm64-nexthop_b27-r0` (Komodo, NH-B27)\n- Image: `SONiC.20260810.05`\n- Related: sonic-net/sonic-platform-daemons#872 (bmcctld syslog spam)",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 875,
+      "repository": "sonic-net/sonic-platform-daemons",
+      "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/875",
+      "title": "bmcctld: stop teeing routine logs to /var/log/syslog",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-14T00:56:56Z",
+      "createdAt": "2026-08-13T12:19:38Z",
+      "author": "chinmoy-nexthop",
+      "body": "### Why i did it?\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/28982\r\nFixes: https://github.com/sonic-net/sonic-platform-daemons/issues/872\r\n\r\n> - bmcctld FileHandler currently has no log rotation mechanism, making it the only unrotated writer to syslog within PMON. The write volume is low, but the log is effectively bounded only by the event rate.\r\n> - EventLogger tees every log call to DEFAULT_LOG_FILE = \"/var/log/syslog\" using a plain logging.FileHandler, without any maxBytes or backupCount. This path lives in PMON\u2019s writable overlay, so the host\u2019s logrotate cannot manage it, and PMON does not have a cron-based rotation mechanism. As a result, it is the only file in the container without any form of rotation. Since the file is append-only and persists across reboots, it can grow monotonically over the lifetime of the device.\r\n\r\n### How i did it ?\r\n\r\n> remove the tee to /var/log/syslog rather than adding a RotatingFileHandler. EventLogger already invokes the base class before touching the file on every logging method, so the messages are already handled through the normal logging path, which would avoid maintaining a separate unrotated file\r\n\r\n### How to verify?\r\n```\r\ndocker exec pmon ls -la /var/log/syslog\r\n```\r\n\r\n<!-- Provide a general summary of your changes in the Title above -->\r\n\r\n#### Description\r\n<!--\r\n     Describe your changes in detail\r\n-->\r\n\r\n#### Motivation and Context\r\n<!--\r\n     Why is this change required? What problem does it solve?\r\n     If this pull request closes/resolves an open Issue, make sure you\r\n     include the text \"fixes #xxxx\", \"closes #xxxx\" or \"resolves #xxxx\" here\r\n-->\r\n\r\n#### How Has This Been Tested?\r\n<!--\r\n     Please describe in detail how you tested your changes.\r\n     Include details of your testing environment, and the tests you ran to\r\n     see how your change affects other areas of the code, etc.\r\n-->\r\n\r\n#### Additional Information (Optional)\r\n",
+      "files": [
+        {
+          "path": "sonic-bmcctld/scripts/bmcctld",
+          "additions": 27,
+          "deletions": 15
+        },
+        {
+          "path": "sonic-bmcctld/tests/test_bmcctld.py",
+          "additions": 37,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T12:19:46Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-13T12:19:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-13T12:19:56Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T12:25:26Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-14T00:23:29Z",
+          "body": "This PR has backport request label(s) for branch(es): msft-202608, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202608: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-14T17:42:50Z",
+          "body": "Cherry-pick PR to msft-202608: https://github.com/Azure/sonic-platform-daemons.msft/pull/83"
+        }
+      ]
+    }
+  ]
+}

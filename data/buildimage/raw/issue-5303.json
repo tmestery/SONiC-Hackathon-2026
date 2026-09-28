@@ -1,0 +1,77 @@
+{
+  "number": 5303,
+  "title": "Switch level drop counters not working",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/5303",
+  "createdAt": "2020-09-03T00:41:41Z",
+  "closedAt": "2020-09-10T16:15:21Z",
+  "author": "prsunny",
+  "labels": [
+    "Issue for 201911"
+  ],
+  "assignees": [
+    "daall"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\n\r\nEnabling drop counter for `switch_ingress_drops` not working as expected\r\n\r\n**Steps to reproduce the issue:**\r\n1. show dropcounters capabilities \r\n```\r\nCounter Type            Total\r\n--------------------  -------\r\nSWITCH_EGRESS_DROPS        31\r\nSWITCH_INGRESS_DROPS       31\r\n\r\nSWITCH_INGRESS_DROPS\r\n\tACL_ANY\r\n\tDECAP_ERROR\r\n```\r\n\r\n2. config dropcounters install test_decap  SWITCH_INGRESS_DROPS DECAP_ERROR\r\n```\r\nSep  3 NOTICE swss#orchagent: :- addDropReason: Succesfully created drop counter TEST_DECAP\r\nSep  3 NOTICE swss#orchagent: :- installDebugCounter: Succesfully created drop counter test_decap\r\n```\r\n\r\n3. redis-cli\r\n\r\n```\r\n127.0.0.1:6379[5]> SELECT 4\r\n127.0.0.1:6379[4]> KEYS *DEBUG*\r\n1) \"DEBUG_COUNTER|test_decap\"\r\n2) \"DEBUG_COUNTER_DROP_REASON|TEST_DECAP|DECAP_ERROR\"\r\n```\r\n\r\n\r\n**Describe the results you received:**\r\nshow dropcounters counts -t SWITCH_INGRESS_DROPS\r\n\r\n<No output>\r\n\r\n**Describe the results you expected:**\r\nValid drop counter values\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\n\r\n    **Output of `show version`:**\r\n\r\n    ```\r\n    show version \r\n\r\n    SONiC Software Version: SONiC.20191130.47\r\n    Distribution: Debian 9.13\r\n    Kernel: 4.9.0-11-2-amd64\r\n    Build commit: 272885b17\r\n    Build date: Fri Aug 28 01:36:16 UTC 2020\r\n    Built by: sonicbld@jenkins-slave-phx-2\r\n\r\n    Platform: x86_64-mlnx_msn3800-r0\r\n    HwSKU: ACS-MSN3800\r\n    ASIC: mellanox\r\n\r\n    ```\r\n\r\n    **Attach debug file `sudo generate_dump`:**\r\n\r\n    ```\r\n    (paste your output here)\r\n    ```\r\n",
+  "comments": [
+    {
+      "author": "daall",
+      "createdAt": "2020-09-03T01:33:37Z",
+      "body": "After experimenting for a bit I figured out that the issue here is not w/ the switch counter handling, but actually because the name of the counter is lowercase. I will update utilities/swss to not be case-sensitive for the naming. :P"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1103,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/1103",
+      "title": "[drop counters] Fix configuration for counters with lowercase names",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-09-10T16:15:21Z",
+      "createdAt": "2020-09-09T00:01:54Z",
+      "author": "daall",
+      "body": "Signed-off-by: Danny Allen <daall@microsoft.com>\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n\"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\nissue when the PR is merged.\r\n\r\nIf you are adding/modifying/removing any command or utility script, please also\r\nmake sure to add/modify/remove any unit tests from the tests\r\ndirectory as appropriate.\r\n\r\nIf you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\nsubcommand, or you are adding a new subcommand, please make sure you also\r\nupdate the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\nyour changes.\r\n\r\nPlease provide the following information:\r\n-->\r\n\r\n**- What I did**\r\nI fixed in a bug in the drop counters CLI where counters that weren't provided in uppercase were not being installed properly into Config DB.\r\n\r\nFixes https://github.com/Azure/sonic-buildimage/issues/5303\r\n\r\n**- How I did it**\r\nI figured out that `swssdk` normalizes all table names to uppercase. Since I was providing the drop counter name as part of the table name instead of part of the key, the drop counter name was being set to all uppercase. This is problematic because the counter was being installed into config DB in whatever case the user provided since for that table it is treated as a key.\r\n\r\nSo, I updated the parts of the code that touch the `DROP_REASONS` table to include the counter name as part of the key rather than as part of the table name.\r\n\r\n**- How to verify it**\r\nI've updated the unit tests to include a `lowercase_counter` to check for this behavior. I also validated that all four `config` functions work properly on a physical DUT.\r\n\r\n**- Previous command output (if the output of a command-line utility has changed)**\r\n\r\n**- New command output (if the output of a command-line utility has changed)**\r\n\r\n",
+      "files": [
+        {
+          "path": "scripts/dropconfig",
+          "additions": 16,
+          "deletions": 16
+        },
+        {
+          "path": "tests/drops_group_test.py",
+          "additions": 12,
+          "deletions": 11
+        },
+        {
+          "path": "tests/mock_tables/config_db.json",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tables/counters_db.json",
+          "additions": 4,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "prsunny",
+          "createdAt": "2020-09-09T00:58:25Z",
+          "body": "retest this please"
+        },
+        {
+          "author": "daall",
+          "createdAt": "2020-09-09T20:43:32Z",
+          "body": "retest this please"
+        },
+        {
+          "author": "daall",
+          "createdAt": "2020-09-09T23:53:01Z",
+          "body": "retest this please"
+        }
+      ]
+    }
+  ]
+}

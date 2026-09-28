@@ -1,0 +1,63 @@
+{
+  "number": 5045,
+  "title": "Master branch starting on build 353 BRCM DUT suffers SYNCD get switch_type failure resulting to Orchagent crash",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/5045",
+  "createdAt": "2020-07-27T07:07:28Z",
+  "closedAt": "2020-07-29T18:19:16Z",
+  "author": "gechiang",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "Starting with Master branch build 353 Orchagent crashes for BRCM DUTs.\r\nIf you look into the SYS log you will find the following:\r\n...\r\nJul 26 22:32:45.980049 str-s6000-acs-8 NOTICE syncd#syncd: :- helperSaveDiscoveredObjectsToRedis: save discovered objects to redis took 2.731556 sec\r\nJul 26 22:32:45.984351 str-s6000-acs-8 WARNING syncd#syncd: :- helperGetSwitchAttrOid: failed to get SAI_SWITCH_ATTR_ECMP_HASH: SAI_STATUS_NOT_SUPPORTED\r\nJul 26 22:32:45.984351 str-s6000-acs-8 WARNING syncd#syncd: :- helperGetSwitchAttrOid: failed to get SAI_SWITCH_ATTR_LAG_HASH: SAI_STATUS_NOT_SUPPORTED\r\nJul 26 22:32:45.984351 str-s6000-acs-8 ERR syncd#syncd: :- getSwitchType: failed to get switch type\r\nJul 26 22:32:45.984351 str-s6000-acs-8 NOTICE syncd#syncd: :- SaiSwitch: constructor took 3.042757 sec\r\nJul 26 22:32:45.987625 str-s6000-acs-8 ERR syncd#syncd: :- run: Runtime error: :- getSwitchType: failed to get switch type\r\nJul 26 22:32:45.987625 str-s6000-acs-8 NOTICE syncd#syncd: :- sendShutdownRequest: sending switch_shutdown_request notification to OA for switch: oid:0x0\r\nJul 26 22:32:45.988511 str-s6000-acs-8 NOTICE syncd#syncd: :- sendShutdownRequestAfterException: notification send successfull\r\n...\r\nWhich leads to Orchagent crash.\r\n\r\nGuoHan suspected that this crash was introduced by:\r\nsonic-sairedis: Add support to sonic-sairedis for gearbox phys (#632)\r\n(https://github.com/Azure/sonic-sairedis/pull/632)\r\n\r\nI have tried commenting out the code that was causing this issue in \r\nsai_switch_type_t SaiSwitch::getSwitchType()  where the get switch_type failure on BRCM DUT (with return status -3 NO MEMORY) was causing the SWSS_LOG_THROW(\"failed to get switch type\")  that leads to Orchagent crash  by not causing the crash but to default to return \"SAI_SWITCH_TYPE_NPU\" instead.  This helped resolved the Orchagent crash issue but it exposed the  next layer of issues where it now continuously showing something as following:\r\n\r\nJul 25 20:48:33.344512 str-s6000-acs-8 ERR syncd#syncd: :- guard: RedisReply catches system_error: command: *8#015#012$7#015#012EVALSHA#015#012$40#015#01231fc701ca9b1b9f968f501c92b639f50f6346a9c#015#012$1#015#0121#015#012$19#015#012oid:0x1000000000008#015#012$1#015#0122#015#012$8#015#012COUNTERS#015#012$7#015#0121000000#015#012$2#015#012''#015#012, reason: ERR Error running script (call to f_31fc701ca9b1b9f968f501c92b639f50f6346a9c): @user_script:21: user_script:21: attempt to perform arithmetic on local 'alpha' (a boolean value) : Input/output error\r\nJul 25 20:48:33.345213 str-s6000-acs-8 ERR syncd#syncd: :- runRedisScript: Caught exception while running Redis lua script: ERR Error running script (call to f_31fc701ca9b1b9f968f501c92b639f50f6346a9c): @user_script:21: user_script:21: attempt to perform arithmetic on local 'alpha' (a boolean value) : Input/output error\r\n\r\n---------------------------------------------------\r\nBUG REPORT INFORMATION\r\n---------------------------------------------------\r\n\r\n**Steps to reproduce the issue:**\r\n1. Load any master branch build starting with image 353 on any BRCM DUT\r\n2. Once it boots up you will see Orchagent crashed and if you investigate the syslog you will see the first error I reported above.\r\n\r\nMaster.350 was the last good build that did not suffer this issue.  Unfortunately master.351 and master.352 both had build issues so we don't have their test results.\r\n    **Output of `show version`:**\r\n\r\nadmin@str-s6000-acs-8:~$ show version\r\n\r\nSONiC Software Version: SONiC.master.353-b3ae7858\r\nDistribution: Debian 10.4\r\nKernel: 4.19.0-9-2-amd64\r\nBuild commit: b3ae7858\r\nBuild date: Sun Jul 19 13:27:43 UTC 2020\r\nBuilt by: johnar@jenkins-worker-7\r\n\r\nPlatform: x86_64-dell_s6000_s1220-r0\r\nHwSKU: Force10-S6000\r\nASIC: broadcom\r\nSerial Number: 1QBRX42\r\nUptime: 07:05:06 up 38 min,  1 user,  load average: 0.15, 0.10, 0.35\r\n\r\nDocker images:\r\nREPOSITORY                    TAG                   IMAGE ID            SIZE\r\ndocker-teamd                  latest                be843e740dd2        380MB\r\ndocker-teamd                  master.353-b3ae7858   be843e740dd2        380MB\r\ndocker-nat                    latest                d7faaa0c4d23        382MB\r\ndocker-nat                    master.353-b3ae7858   d7faaa0c4d23        382MB\r\ndocker-router-advertiser      latest                f5d8a5da5e15        350MB\r\ndocker-router-advertiser      master.353-b3ae7858   f5d8a5da5e15        350MB\r\ndocker-platform-monitor       latest                844697e3e64a        422MB\r\ndocker-platform-monitor       master.353-b3ae7858   844697e3e64a        422MB\r\ndocker-database               latest                f63204dd0f61        351MB\r\ndocker-database               master.353-b3ae7858   f63204dd0f61        351MB\r\ndocker-lldp                   latest                ebfc33f71809        377MB\r\ndocker-lldp                   master.353-b3ae7858   ebfc33f71809        377MB\r\ndocker-orchagent              latest                d8c14690e66c        393MB\r\ndocker-orchagent              master.353-b3ae7858   d8c14690e66c        393MB\r\ndocker-sonic-telemetry        latest                8764f9533b8d        414MB\r\ndocker-sonic-telemetry        master.353-b3ae7858   8764f9533b8d        414MB\r\ndocker-snmp                   latest                8605e02d8f8b        390MB\r\ndocker-snmp                   master.353-b3ae7858   8605e02d8f8b        390MB\r\ndocker-dhcp-relay             latest                870bed6def46        357MB\r\ndocker-dhcp-relay             master.353-b3ae7858   870bed6def46        357MB\r\ndocker-sonic-mgmt-framework   latest                a1cf99e915fe        473MB\r\ndocker-sonic-mgmt-framework   master.353-b3ae7858   a1cf99e915fe        473MB\r\ndocker-sflow                  latest                577f5c5eed53        383MB\r\ndocker-sflow                  master.353-b3ae7858   577f5c5eed53        383MB\r\ndocker-syncd-brcm             latest                21dd40c5d954        447MB\r\ndocker-syncd-brcm             master.353-b3ae7858   21dd40c5d954        447MB\r\ndocker-fpm-frr                latest                4e1bfd2f9ab7        340MB\r\ndocker-fpm-frr                master.353-b3ae7858   4e1bfd2f9ab7        340MB\r\n\r\n[get_switch_type_failure_casue_orchagent_crash_syslog.txt](https://github.com/Azure/sonic-buildimage/files/4980475/get_switch_type_failure_casue_orchagent_crash_syslog.txt)\r\n",
+  "comments": [
+    {
+      "author": "gechiang",
+      "createdAt": "2020-07-27T07:12:38Z",
+      "body": "Attaching the syslog after worked around the get switch_type error but then seeing RedisReply system errors...\r\n[get_switch_typeBypassed_RedisReply_srror_syslog.txt](https://github.com/Azure/sonic-buildimage/files/4980491/get_switch_typeBypassed_RedisReply_srror_syslog.txt)\r\n"
+    },
+    {
+      "author": "gechiang",
+      "createdAt": "2020-07-27T15:40:52Z",
+      "body": "opened the issue in sonic-sairedis \r\nhttps://github.com/Azure/sonic-sairedis/issues/646"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 5052,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/5052",
+      "title": "[sonic-sairedis] Update Submodule",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-07-28T21:57:17Z",
+      "createdAt": "2020-07-28T00:34:05Z",
+      "author": "gechiang",
+      "body": "Advance submodule head for sonic-sairedis on Master branch\r\n\r\n**- Why I did it**\r\nThe following are the commits in the submodule:\r\n\r\n    Workaround getSwitchType failure due to NPU SAI not yet supporting it (#647)\r\n    commit 4a3a568ad12d8f953c4b4a33ae39744a5bd57025\r\n\r\n    Adding support for new SAI API sai_query_attribute_capability() (#645)\r\n    commit 8d3ae8c6546dcfdc06cf84e1a59bc2a615651a72\r\n\r\n    [syncd] ARM32 bit fixes, for 64bit printf format specifier. (#643)  \r\n    Signed-off-by: Rajkumar Pennadam Ramamoorthy <rpennadamram@marvell.com>\r\n    commit 8809d53871169775e8869328679987ba56e4c426\r\n\r\n    [syncd] Add support for synchronous bulk api (#640)\r\n    commit d54bfb45435685059578ea53453e797b87241617\r\n\r\n**- How I did it**\r\nUpdate sairedis submodule commit pointer\r\n\r\n**- Description for the changelog**\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n",
+      "files": [
+        {
+          "path": "src/sonic-sairedis",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2020-07-28T10:01:00Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "gechiang",
+          "createdAt": "2020-07-28T15:26:42Z",
+          "body": "Retested the BRCM image.  \r\nSummary:\r\nDUT boot up fine.  All services are up.  No core/crash observed with the associated changes.  Syslog shows the get switch type failed but default to NPU type and moved on.  performed \"show interface status\" and observed all ports/LAGs were up.\r\nI have copied those output in a file and attached\r\n[updateSairedisSubmoduleValidationResult.txt](https://github.com/Azure/sonic-buildimage/files/4989319/updateSairedisSubmoduleValidationResult.txt)\r\n"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2020-07-28T15:33:55Z",
+          "body": "retest vsimage please"
+        }
+      ]
+    }
+  ]
+}

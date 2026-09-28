@@ -1,0 +1,226 @@
+{
+  "number": 26133,
+  "title": "Enhancement: PDDF SPI support",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26133",
+  "createdAt": "2026-03-11T16:09:09Z",
+  "closedAt": "2026-05-06T05:25:18Z",
+  "author": "domingo-nexthop",
+  "labels": [
+    "Enhancement :heavy_plus_sign:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the enhancement\n\nSupport for SPI controller and SPI devices via PDDF\n\n### Current Behavior\n\nCurrently, PDDF does not support creation or deletion of SPI controllers / SPI devices. SPI controllers and SPI devices cannot be registered / removed in user space.\n\n### Proposed Behavior\n\nEnable definition of SPI controllers and associated SPI devices in PDDF. Example usage could be `pddfparse.py --create-subtree <spi_device_name>` and `pddfparse.py --delete-subtree <spi_device_name>`",
+  "comments": [
+    {
+      "author": "domingo-nexthop",
+      "createdAt": "2026-03-11T16:09:47Z",
+      "body": "https://github.com/sonic-net/sonic-linux-kernel/pull/541 adds the spi-xilinx driver to sonic-linux-kernel"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26550,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26550",
+      "title": "Add PDDF SPI support",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-05-06T05:25:17Z",
+      "createdAt": "2026-04-03T23:53:53Z",
+      "author": "domingo-nexthop",
+      "body": "#### Why I did it\r\n\r\n\r\nRecommend to review each commit individually:\r\n- [`Create pddf module for creating and deleting SPI controller and SPI devices`](https://github.com/sonic-net/sonic-buildimage/pull/26550/changes/2c3395a0184031538c295411e04b250d74f2d84f) - main change adding support for SPI controllers and SPI devices in PDDF\r\n- [`Refactor pcie_variable config to its directory`](https://github.com/sonic-net/sonic-buildimage/pull/26550/changes/788a5d2b5df30bac7fc57803b352d7bcd1b89dc5) - Refactor nexthop's pcie_variable config and make platform string detection more reliable (which will be used in pddf json for defining platform SPI controllers and devices)\r\n\r\n- Add PDDF SPI support for defining SPI controllers and associated SPI devices in PDDF, to enable multiple SPI controllers and multiple SPI devices per controller\r\n- A SPI device can also be marked persistent, which is asserted as long as the SPI controller is present. Otherwise, user or toolings would need to create and delete the SPI device on demand (`pddfparse.py --create-subtree SPI_DEVICE_NAME` `pddfparse.py --delete-subtree SPI_DEVICE_NAME`)\r\n- Do not `pci_request_regions()` (and `pci_release_regions()`) This allows child device drivers (like spi-xilinx) to claim \"sub-regions\" within the PCI BAR\r\n\r\nChanges to platform's pddf-device.json will be in a separate PR.\r\n\r\nResolves https://github.com/sonic-net/sonic-buildimage/issues/26133\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\n- pddf create SPI controllers automatically and associated SPI devices if they are marked persistent\r\n- Create/delete SPI controller and associated SPI devices in `pddfparse`\r\n- Add CLI and reusable libraries for centralized way of retrieving information about SPI devices\r\n\r\n#### How to verify it\r\n\r\nAdd a SPI controller and associated SPI device to pddf-device.json for testing.\r\n\r\n```\r\n$ sudo pddfparse.py --create-subtree SWITCHCARD_CONFIG_FLASH\r\nINFO: [__init__:32] initialization started\r\nINFO: [__init__:40] loading device JSON from /usr/share/sonic/platform/pddf/pddf-device.json\r\nINFO: [__init__:43] device JSON loaded successfully\r\nINFO: [__init__:52] initialization completed\r\nsuccess\r\nsuccess\r\n\r\n$ ls /sys/bus/spi/devices/\r\nspi1.0\r\n\r\n$ sudo mtd_debug info /dev/mtd0\r\nmtd.type = MTD_NORFLASH\r\nmtd.flags = MTD_CAP_NORFLASH\r\nmtd.size = 33554432 (32M)\r\nmtd.erasesize = 65536 (64K)\r\nmtd.writesize = 1\r\nmtd.oobsize = 0\r\nregions = 0\r\n\r\n$ sudo pddfparse.py --delete-subtree SWITCHCARD_CONFIG_FLASH\r\nINFO: [__init__:32] initialization started\r\nINFO: [__init__:40] loading device JSON from /usr/share/sonic/platform/pddf/pddf-device.json\r\nINFO: [__init__:43] device JSON loaded successfully\r\nINFO: [__init__:52] initialization completed\r\nsuccess\r\n\r\n$ ls /sys/bus/spi/devices/\r\n\r\n```\r\n\r\nSWITCHCARD_CONFIG_FLASH still present after deleting MULTIFPGAPCI1\r\n\r\n```\r\n$ sudo pddfparse.py --create-subtree SWITCHCARD_CONFIG_FLASH\r\nINFO: [__init__:32] initialization started\r\nINFO: [__init__:40] loading device JSON from /usr/share/sonic/platform/pddf/pddf-device.json\r\nINFO: [__init__:43] device JSON loaded successfully\r\nINFO: [__init__:52] initialization completed\r\nsuccess\r\nsuccess\r\n\r\n$ sudo pddfparse.py --delete-subtree MULTIFPGAPCIE1\r\nINFO: [__init__:32] initialization started\r\nINFO: [__init__:40] loading device JSON from /usr/share/sonic/platform/pddf/pddf-device.json\r\nINFO: [__init__:43] device JSON loaded successfully\r\nINFO: [__init__:52] initialization completed\r\n\r\n$ sudo mtd_debug info /dev/mtd0\r\nmtd.type = MTD_NORFLASH\r\nmtd.flags = MTD_CAP_NORFLASH\r\nmtd.size = 33554432 (32M)\r\nmtd.erasesize = 65536 (64K)\r\nmtd.writesize = 1\r\nmtd.oobsize = 0\r\nregions = 0\r\n```\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "device/nexthop/common/komodo/pcie-variables.yaml",
+          "additions": 42,
+          "deletions": 0
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4010-r0/pcie-variables.yaml",
+          "additions": 0,
+          "deletions": 42
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4010-r0/pcie-variables.yaml",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4010-r1/pcie-variables.yaml",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "device/nexthop/x86_64-nexthop_4220-r0/pcie-variables.yaml",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/nexthop/gen_cli.py",
+          "additions": 9,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_pddf_config_parser.py",
+          "additions": 15,
+          "deletions": 6
+        },
+        {
+          "path": "platform/pddf/i2c/modules/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "platform/pddf/i2c/modules/include/pddf_client_defs.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "platform/pddf/i2c/modules/include/pddf_multifpgapci_spi_defs.h",
+          "additions": 70,
+          "deletions": 0
+        },
+        {
+          "path": "platform/pddf/i2c/modules/multifpgapci/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "platform/pddf/i2c/modules/multifpgapci/driver/pddf_multifpgapci_driver.c",
+          "additions": 0,
+          "deletions": 11
+        },
+        {
+          "path": "platform/pddf/i2c/modules/multifpgapci/spi/Makefile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "platform/pddf/i2c/modules/multifpgapci/spi/pddf_multifpgapci_spi_module.c",
+          "additions": 418,
+          "deletions": 0
+        },
+        {
+          "path": "platform/pddf/i2c/modules/spi/Makefile",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "platform/pddf/i2c/modules/spi/pddf_spi_module.c",
+          "additions": 151,
+          "deletions": 0
+        },
+        {
+          "path": "platform/pddf/i2c/utils/pddfparse.py",
+          "additions": 167,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-03T23:54:43Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-03T23:54:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-09T22:22:50Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-09T22:22:56Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-09T22:28:07Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-09T22:28:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-09T22:46:42Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-09T22:46:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-15T21:11:14Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-15T21:11:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-16T17:57:58Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-16T17:58:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-16T18:03:01Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-16T18:03:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-16T21:09:38Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-16T21:09:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T05:50:19Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T05:50:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T05:51:54Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T05:52:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

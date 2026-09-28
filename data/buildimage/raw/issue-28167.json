@@ -1,0 +1,141 @@
+{
+  "number": 28167,
+  "title": "Bug: Uninitialized port role causes SerDes SI skip when role is missing from port config",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28167",
+  "createdAt": "2026-06-30T15:49:03Z",
+  "closedAt": "2026-09-14T21:30:36Z",
+  "author": "tshalvi",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nThe following PR introduced a change in orchagent where SerDes SI configuration is skipped for ports with certain roles: [PR #4543](https://github.com/sonic-net/sonic-swss/pull/4543).\n\nHowever, not all platforms define role for ports in port_config.ini / CONFIG_DB. When role is missing, orchagent still copies PortConfig::role.value into Port::m_role without checking whether role was set, and role.value has no default initializer. The effective role therefore depends on whatever value happens to be in memory at port init, and can end up as Port::Role::Rec or Port::Role::Inb \u2014 roles for which PR#4543 skips SerDes programming.\n\nOn affected systems, xcvrd may publish media SI settings to APPL_DB, but orchagent never applies them to SAI because programSerdes() returns early. Setting role=Ext in CONFIG_DB (or defaulting missing role to Ext in orchagent) fixes the issue.\n\n### Steps to Reproduce\n\nNote: This bug is non-deterministic. When role is missing from port config, m_role is uninitialized; you cannot predict or observe its value without extra debugging. The skip in PR#4543 only appears when that value happens to be Rec or Inb.\n\n1. Platform with no role in port_config.ini / CONFIG_DB (redis-cli -n 4 HGET \"PORT|Ethernet8\" role \u2192 (nil)).\n2. Image with PR#4543, no default of missing role to Ext.\n3. Boot with modules that use xcvrd media SI.\nBecause m_role is uninitialized when role is absent, SerDes may or may not be skipped on a given boot. On affected boots, look for: oper-down ports with SI in APPL_DB, Skipping serdes programming for recirc/inband port, and no serdes SAI logs.\n\nWorkaround confirms cause: HSET PORT|Ethernet8 role Ext + swss restart \u2192 SerDes programs reliably.\n\n### Actual Behavior and Expected Behavior\n\nActual\n* Ports without role in config may end up as Port::Role::Rec or Port::Role::Inb due to lack of initialization, so SerDes SI configuration for those ports is skipped (PR#4543).\nXcvrd may still publish SI to APPL_DB; orchagent does not apply it when the skip path is taken.\n\nExpected\n* Only ports whose role is explicitly Rec or Inb should have SerDes SI configuration skipped.\n\nSuggested fix\n* Default missing role to Ext in orchagent (e.g. validatePortConfig(), addPortBulk(), initExistingPort(), and/or PortConfig::role.value initializer).\n\n### Relevant log output\n\n```shell\ndoPortTask: KEY: Ethernet8, OP: SET\nFIELD: pre1, VALUE: 0xfffffffe,0xfffffffe,0xfffffffe,0xfffffffe\nprogramSerdes: Skipping serdes programming for recirc/inband port Ethernet8\n\nsudo grep -iE \"Created port serdes|Successfully set.*serdes|mlnx_create_port_serdes\" /var/log/syslog\n# (empty)\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nroot@r-leopard-41:/home/admin# show version \n\nSONiC Software Version: SONiC.202605_RC_port_role_init.1-1ce39f045c_Internal\nSONiC OS Version: 13\nDistribution: Debian 13.5\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 2ace7bfc02\nBuild date: Mon Jun 29 21:29:23 UTC 2026\nBuilt by: sw-r2d2-bot@r-build-sonic-ci03-242\n\nPlatform: x86_64-mlnx_msn4700-r0\nHwSKU: ACS-MSN4700\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT2047X05586\nModel Number: MSN4700-WS2FO\nHardware Revision: AA\nUptime: 18:15:59 up 16:25,  1 user,  load average: 0.89, 0.73, 0.61\nDate: Tue 30 Jun 2026 18:15:59\n\nDocker images:\nREPOSITORY                                         TAG                                              IMAGE ID       SIZE\ndocker-fpm-frr                                     202605_RC_port_role_init.1-1ce39f045c_Internal   88c18942e615   383MB\ndocker-fpm-frr                                     latest                                           88c18942e615   383MB\ndocker-orchagent                                   202605_RC_port_role_init.1-1ce39f045c_Internal   275a6197c93e   334MB\ndocker-orchagent                                   latest                                           275a6197c93e   334MB\ndocker-sflow                                       202605_RC_port_role_init.1-1ce39f045c_Internal   df7b1907b3fd   319MB\ndocker-sflow                                       latest                                           df7b1907b3fd   319MB\ndocker-nat                                         202605_RC_port_role_init.1-1ce39f045c_Internal   0aad6136a400   321MB\ndocker-nat                                         latest                                           0aad6136a400   321MB\ndocker-syncd-mlnx                                  202605_RC_port_role_init.1-1ce39f045c_Internal   f3b1cdad1bba   759MB\ndocker-syncd-mlnx                                  latest                                           f3b1cdad1bba   759MB\ndocker-sonic-bmp                                   202605_RC_port_role_init.1-1ce39f045c_Internal   60edcc6ce7a7   282MB\ndocker-sonic-bmp                                   latest                                           60edcc6ce7a7   282MB\ndocker-macsec                                      202605_RC_port_role_init.1-1ce39f045c_Internal   d4ecfec3315d   321MB\ndocker-macsec                                      latest                                           d4ecfec3315d   321MB\ndocker-eventd                                      202605_RC_port_role_init.1-1ce39f045c_Internal   b2409e136e95   280MB\ndocker-eventd                                      latest                                           b2409e136e95   280MB\ndocker-teamd                                       202605_RC_port_role_init.1-1ce39f045c_Internal   057ff954f5ad   318MB\ndocker-teamd                                       latest                                           057ff954f5ad   318MB\ndocker-dash-ha                                     202605_RC_port_role_init.1-1ce39f045c_Internal   fd79a1a735b1   338MB\ndocker-dash-ha                                     latest                                           fd79a1a735b1   338MB\ndocker-sonic-restapi                               202605_RC_port_role_init.1-1ce39f045c_Internal   2303e324cc21   304MB\ndocker-sonic-restapi                               latest                                           2303e324cc21   304MB\ndocker-restapi-sidecar                             202605_RC_port_role_init.1-1ce39f045c_Internal   a7e3f0a4a348   281MB\ndocker-restapi-sidecar                             latest                                           a7e3f0a4a348   281MB\ndocker-gnmi-watchdog                               202605_RC_port_role_init.1-1ce39f045c_Internal   4d4b6ea32130   287MB\ndocker-gnmi-watchdog                               latest                                           4d4b6ea32130   287MB\ndocker-mux                                         202605_RC_port_role_init.1-1ce39f045c_Internal   4725b4ff5a2e   293MB\ndocker-mux                                         latest                                           4725b4ff5a2e   293MB\ndocker-snmp                                        202605_RC_port_role_init.1-1ce39f045c_Internal   a5cb4085ae2a   307MB\ndocker-snmp                                        latest                                           a5cb4085ae2a   307MB\ndocker-platform-monitor                            202605_RC_port_role_init.1-1ce39f045c_Internal   0d8622ae45b5   588MB\ndocker-platform-monitor                            latest                                           0d8622ae45b5   588MB\ndocker-bmp-watchdog                                202605_RC_port_role_init.1-1ce39f045c_Internal   d5a8a267ff71   280MB\ndocker-bmp-watchdog                                latest                                           d5a8a267ff71   280MB\ndocker-database                                    202605_RC_port_role_init.1-1ce39f045c_Internal   6b6c77e56712   287MB\ndocker-database                                    latest                                           6b6c77e56712   287MB\ndocker-sonic-otel                                  202605_RC_port_role_init.1-1ce39f045c_Internal   d4f2877705df   622MB\ndocker-sonic-otel                                  latest                                           d4f2877705df   622MB\ndocker-lldp                                        202605_RC_port_role_init.1-1ce39f045c_Internal   87e3ea84648c   289MB\ndocker-lldp                                        latest                                           87e3ea84648c   289MB\ndocker-dhcp-relay                                  202605_RC_port_role_init.1-1ce39f045c_Internal   511d7fbe0f23   323MB\ndocker-dhcp-relay                                  latest                                           511d7fbe0f23   323MB\ndocker-restapi-watchdog                            202605_RC_port_role_init.1-1ce39f045c_Internal   1a181dec245b   288MB\ndocker-restapi-watchdog                            latest                                           1a181dec245b   288MB\ndocker-gnmi-sidecar                                202605_RC_port_role_init.1-1ce39f045c_Internal   d6d2272e0889   280MB\ndocker-gnmi-sidecar                                latest                                           d6d2272e0889   280MB\ndocker-sonic-gnmi                                  202605_RC_port_role_init.1-1ce39f045c_Internal   54def2f48141   427MB\ndocker-sonic-gnmi                                  latest                                           54def2f48141   427MB\ndocker-sonic-mgmt-framework                        202605_RC_port_role_init.1-1ce39f045c_Internal   199972cd11bd   344MB\ndocker-sonic-mgmt-framework                        latest                                           199972cd11bd   344MB\ndocker-sysmgr                                      202605_RC_port_role_init.1-1ce39f045c_Internal   ba583f45eaa5   286MB\ndocker-sysmgr                                      latest                                           ba583f45eaa5   286MB\ndocker-router-advertiser                           202605_RC_port_role_init.1-1ce39f045c_Internal   1716892034be   281MB\ndocker-router-advertiser                           latest                                           1716892034be   281MB\ndocker-dhcp-server                                 202605_RC_port_role_init.1-1ce39f045c_Internal   37371dc97780   286MB\ndocker-dhcp-server                                 latest                                           37371dc97780   286MB\nurm.nvidia.com/sw-nbu-sws-sonic-docker/sonic-wjh   2.5.0-202605-006                                 e8cf7a23eeec   333MB\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "zjswhhh",
+      "createdAt": "2026-07-15T15:08:58Z",
+      "body": "Hi @venu-nexthop - can you please take a look see if issue is related with PR https://github.com/sonic-net/sonic-swss/pull/4543. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4880,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4880",
+      "title": "Set default port role to external",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-14T21:30:35Z",
+      "createdAt": "2026-09-11T03:54:45Z",
+      "author": "markx-arista",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nDefault PortConfig::role and Port::m_role to Ext.\r\nUpdate unit tests to cover ports without an explicit role.\r\n\r\n**Why I did it**\r\nPort roles were left uninitialized when the role field was absent from port_config.ini. This could misidentify front-panel ports as inband or recirculation ports, skipping SerDes programming and causing subsequent warm-reboot reconciliation failures.\r\n\r\n**How I verified it**\r\nVerified that the Arista-7050CX3-32S-C32 retrieves preemphasis configurations from ASIC_DB when a role is omitted in port_config.ini and values are required from media_settings.json:\r\n202511 with internal review build:\r\n```shell\r\nadmin@ld495:/tmp$ show version | grep \"SONiC Software Version\"\r\nSONiC Software Version: SONiC.branch.202511-ars.bb776d89-buildimage.origin.202511-review.800778.3-2026.09.11.16.37\r\nadmin@ld495:/tmp$ sonic-db-cli ASIC_DB HGETALL ASIC_STATE:SAI_OBJECT_TYPE_PORT_SERDES:oid:0x57000000000651\r\n{'SAI_PORT_SERDES_ATTR_PORT_ID': 'oid:0x1000000000012', 'SAI_PORT_SERDES_ATTR_PREEMPHASIS': '4:404995,404995,404995,404995'}\r\n```\r\n202605 with internal review build:\r\n```shell\r\nadmin@ld481:/tmp$ show version | grep \"SONiC Software Version\"\r\nSONiC Software Version: SONiC.branch.202605-ars.41a922a7-buildimage.4519ff2e1d167f878f9f29b1542174c3e04f411f-review.798485.3-2026.09.10.06.13\r\nadmin@ld481:/tmp$ sonic-db-cli ASIC_DB HGETALL ASIC_STATE:SAI_OBJECT_TYPE_PORT_SERDES:oid:0x5700000000448b\r\n{'SAI_PORT_SERDES_ATTR_PREEMPHASIS': '4:404995,404995,404995,404995', 'SAI_PORT_SERDES_ATTR_PORT_ID': 'oid:0x1000000000012'}\r\n```\r\n\r\n**Details if related**\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/28167\r\n",
+      "files": [
+        {
+          "path": "orchagent/port.h",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/port/portcnt.h",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/mock_tests/portsorch_ut.cpp",
+          "additions": 1,
+          "deletions": 3
+        },
+        {
+          "path": "tests/mock_tests/ut_saihelper.cpp",
+          "additions": 1,
+          "deletions": 7
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-11T03:54:54Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-11T03:55:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-11T03:55:14Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-11T06:20:26Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-09-11T10:25:33Z",
+          "body": "hi @markx-arista could you help to provide the test result for 202511 and 202605?"
+        },
+        {
+          "author": "Pterosaur",
+          "createdAt": "2026-09-11T10:29:47Z",
+          "body": "Hi @prsunny , I think we can treat warnings as errors to prevent this issue from happening again."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-11T12:19:53Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511,202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "markx-arista",
+          "createdAt": "2026-09-11T19:01:39Z",
+          "body": "> hi @markx-arista could you help to provide the test result for 202511 and 202605?\r\n\r\nDescription updated."
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2026-09-11T20:47:24Z",
+          "body": "@markx-arista , @davidm-arista is warm reboot upgrade path testing done here?"
+        },
+        {
+          "author": "markx-arista",
+          "createdAt": "2026-09-11T22:43:50Z",
+          "body": "> @markx-arista , @davidm-arista is warm reboot upgrade path testing done here?\r\n\r\nDo you mean how we found the problem?\r\n\r\nWe actually found the problem in `route/test_static_route.py::test_static_route_warmboot`. \r\nOn Arista-7050CX3-32S-C32, uninitialized role is always 2 after config reload, which triggers the skip, but not after fast/cold reboot. If the DUT doesn't skip `programSerdes` before, then it has no issue in warm reboot. So we didn't see the problem during `test_advanced_reboot.py` or `upgrade_path/` tests.\r\n\r\nIf you ask about testing for the fix. I have tested warm reboot, and can confirm there is no reconciliation issue."
+        },
+        {
+          "author": "Pterosaur",
+          "createdAt": "2026-09-13T10:20:34Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-13T10:20:36Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-13T10:20:39Z",
+          "body": "Retrying failed(or canceled) stages in build 1217491:\n\n\n\u2705Stage **Test**:\n- Job vstest: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-14T22:55:51Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-swss/pull/4887"
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2026-09-14T23:12:58Z",
+          "body": "PR that caused this regression - https://github.com/sonic-net/sonic-swss/pull/4543"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-14T23:51:44Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-swss/pull/4888"
+        }
+      ]
+    }
+  ]
+}

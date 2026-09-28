@@ -1,0 +1,62 @@
+{
+  "number": 12279,
+  "title": "[Build] Incorrect version (md5 hash) of web files in some conditions",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/12279",
+  "createdAt": "2022-10-05T13:46:41Z",
+  "closedAt": "2022-12-16T07:05:43Z",
+  "author": "kv-y",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "xumia"
+  ],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nWe use curl and md5sum to calculate version of web file for reproducible build:\r\nhttps://github.com/sonic-net/sonic-buildimage/blob/1f0699f51e51cf9ca6e36d85bc632ee0e31792e4/src/sonic-build-hooks/scripts/buildinfo_base.sh#L54-L58\r\n\r\nThe main issues here:\r\n1. This action is not atomic. We use curl two times: for calculation md5sum and for downloading file after that.\r\nhttps://github.com/sonic-net/sonic-buildimage/blob/1f0699f51e51cf9ca6e36d85bc632ee0e31792e4/src/sonic-build-hooks/scripts/buildinfo_base.sh#L128-L136\r\nPossible solution here is using curl only once (at least when SONIC_VERSION_CONTROL_COMPONENTS=none) and calculate hash of already downloaded file.\r\n2. If curl failed we save incorrect hash anyway in target/versions.\r\n\r\nShort demonstration:\r\n\r\n> \u279c  ~ curl http://deb.debian.org/debian/pool/main/n/ntp/ntp_4.2.8p15+dfsg-1.debian.tar.xz | md5sum \r\n>   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\r\n>                                  Dload  Upload   Total   Spent    Left  Speed\r\n>   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (7) Couldn't connect to server\r\n> d41d8cd98f00b204e9800998ecf8427e  -\r\n\r\n#### Steps to reproduce the issue:\r\n1. Build with option SONIC_VERSION_CONTROL_COMPONENTS=none\r\n2. Get some network troubles during this build\r\n3. Check md5sum hashes of files in versions-web\r\n\r\n#### Describe the results you received:\r\nCurl failed for some reason at 1st step but incorrect hash (md5 of empty string - d41d8cd98f00b204e9800998ecf8427e) was saved to version-web file. At the same time build was not stopped, file was successfully downloaded at 2nd step and I noticed incorrect hash only after reviewing changes in file/build/versions.\r\n\r\n#### Describe the results you expected:\r\nIf curl failed we should get an error.\r\n",
+  "comments": [
+    {
+      "author": "liushilongbuaa",
+      "createdAt": "2022-10-13T07:55:10Z",
+      "body": "Using curl only once is better. We can use local file to caculate md5sum value.\r\nActually, we have a cache for downloaded files. If we have cached file with correct sha value, we will use cached file.\r\nIf not, we will use latest file in Internet. It is not a critical error."
+    },
+    {
+      "author": "kv-y",
+      "createdAt": "2022-10-13T09:34:29Z",
+      "body": "Yes, it's not critical error. But it's important when we do UpgradeVersion. In this case we disable DPKG cache. So if curl fails then we got incorrect md5hash in target/versions though whole build was successful. Later when we'll try to update info in files/build/versions and will build with enabled SONIC_VERSION_CONTROL_COMPONENTS we'll catch this error.\r\nAs a quick fix I'm testing now solution like this:\r\n`/usr/bin/curl -Lfks $package_url | md5sum | cut -d' ' -f1`\r\nand then I compare result with d41d8cd98f00b204e9800998ecf8427e (md5 of empty string).\r\n--fail flag allows to catch HTTP errors. Otherwise curl will generate some output and md5sum will use it to calculate incorrect md5sum.\r\n\r\nBut better solution here is refactoring and calculating hash of local files.\r\n\r\nI think this bug is a rare case. But I faced with this two times so I decided to report about it.\r\n\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 13013,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/13013",
+      "title": "[Build] fix md5sum calculation of web packages if transient error",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-12-16T07:05:42Z",
+      "createdAt": "2022-12-10T02:48:51Z",
+      "author": "kv-y",
+      "body": "Fix #12279\r\n\r\n#### Why I did it\r\n\r\nCurl can fail when we calculate md5sum of web package.\r\nE.g. if server responsed with 503 error.\r\nBut we don't validate this and pass any output from curl directly to md5sum.\r\nAfter that we save incorrect md5 hash to versions-web file.\r\n\r\n#### How I did it\r\n\r\n1. use option --retry 5 for transient errors (default value is 0)\r\n2. use option -f for curl and set -o pipefail for shell to detect errors\r\n3. stop build if curl failed\r\n\r\nSigned-off-by: Konstantin Vasin <k.vasin@yadro.com>\r\n",
+      "files": [
+        {
+          "path": "src/sonic-build-hooks/scripts/buildinfo_base.sh",
+          "additions": 4,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2022-12-14T07:34:42Z",
+          "body": "@xumia , can you review this one?"
+        },
+        {
+          "author": "kv-y",
+          "createdAt": "2022-12-15T11:38:02Z",
+          "body": "BTW, we use `real_version=$(get_url_version $url)` in 2 places:\r\n1. for normal build\r\n2. for repr build\r\n\r\nFor repr build this error will be detected anyway because there is a condition:\r\n`if [ \"$real_version\" != \"$version\" ]; then`\r\n\r\nBut probably need to fix it too."
+        }
+      ]
+    }
+  ]
+}

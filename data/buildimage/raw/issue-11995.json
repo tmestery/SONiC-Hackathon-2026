@@ -1,0 +1,59 @@
+{
+  "number": 11995,
+  "title": "'eth0' oper down causing BGP default route missing",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/11995",
+  "createdAt": "2022-09-07T18:07:37Z",
+  "closedAt": "2022-09-10T01:02:36Z",
+  "author": "prsunny",
+  "labels": [
+    "Issue for 202205"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "With a stable system with BGP learnt default route, and oper down of mgmt port (eth0) is causing default route deleted from APP_DB.  This issue is seen on 202205 as well. \r\n\r\nLogs:\r\n\r\n/var/log/syslog.444.gz:Aug 31 17:52:41.788610  INFO kernel: [2430739.815597] tg3 0000:04:00.0 eth0: Link is down\r\n\r\nswss rec\r\n2022-08-31.17:52:41.801386|ROUTE_TABLE:2603:10e2:11:154f::/64|DEL\r\n2022-08-31.17:52:41.801423|ROUTE_TABLE:25.192.243.64/26|DEL\r\n2022-08-31.17:52:41.801458|ROUTE_TABLE:0.0.0.0/0|DEL\r\n2022-08-31.17:52:41.801492|ROUTE_TABLE:::/0|DEL\r\n\r\n#### Steps to reproduce the issue:\r\n1. Reboot the system with 202205 image\r\n2. Learn BGP default route (0.0.0.0/0) from peers\r\n3. Ensure default route is also present in default table for eth0 ('ip route show table default')\r\n4. Bring down eth0 from management switch (simulate oper-down on DUT)\r\n5. Check for default route in APP_DB.\r\n\r\n#### Describe the results you received:\r\nAPP_DB default route is removed\r\n\r\n#### Describe the results you expected:\r\nAPP_DB default route must not be changed during eth0 link-up/down events\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2022-09-07T19:17:12Z",
+      "body": "Logs from debugging so far. On bootup we see the  kernel routes in `zebra` for the `default` table\r\n```\r\nadmin@sonic:~$ ip link show dev eth0\r\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000\r\n    link/ether ec:f4:bb:fe:80:84 brd ff:ff:ff:ff:ff:ff\r\nadmin@sonic:~$ vtysh -c \"show ip route table all\" | more\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\r\n\r\nVRF default table 253:\r\nK>* 0.0.0.0/0 [0/201] via 10.3.146.1, eth0, 00:02:39\r\nK>* 10.3.146.0/23 [0/0] is directly connected, eth0, 00:02:39\r\n\r\nVRF default table 254:\r\nB>* 0.0.0.0/0 [20/0] via 10.0.0.1, PortChannel102, weight 1, 00:01:00\r\n  *                  via 10.0.0.5, PortChannel105, weight 1, 00:01:00\r\n  *                  via 10.0.0.9, PortChannel108, weight 1, 00:01:00\r\n  *                  via 10.0.0.13, PortChannel1011, weight 1, 00:01:00\r\n  *                  via 10.0.0.17, PortChannel1014, weight 1, 00:01:00\r\n  *                  via 10.0.0.21, PortChannel1017, weight 1, 00:01:00\r\n  *                  via 10.0.0.25, PortChannel1020, weight 1, 00:01:00\r\n  *                  via 10.0.0.29, PortChannel1023, weight 1, 00:01:00\r\n```\r\nNow  when `eth0` becomes linkdown for the first time. These routes in `default `table are removed in `zebra`.  \r\n```\r\nadmin@sonic:~$ ip link show dev eth0\r\n2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast state DOWN mode DEFAULT group default qlen 1000\r\n    link/ether ec:f4:bb:fe:80:84 brd ff:ff:ff:ff:ff:ff\r\nadmin@sonic:~$ vtysh -c \"show ip route table all\" | more\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\r\n\r\nVRF default table 253:\r\nK>* 10.3.146.0/23 [0/0] is directly connected, eth0, 00:03:27\r\n\r\nVRF default table 254:\r\nB>* 0.0.0.0/0 [20/0] via 10.0.0.1, PortChannel102, weight 1, 00:01:48\r\n  *                  via 10.0.0.5, PortChannel105, weight 1, 00:01:48\r\n  *                  via 10.0.0.9, PortChannel108, weight 1, 00:01:48\r\n  *                  via 10.0.0.13, PortChannel1011, weight 1, 00:01:48\r\n  *                  via 10.0.0.17, PortChannel1014, weight 1, 00:01:48\r\n  *                  via 10.0.0.21, PortChannel1017, weight 1, 00:01:48\r\n  *                  via 10.0.0.25, PortChannel1020, weight 1, 00:01:48\r\n  *                  via 10.0.0.29, PortChannel1023, weight 1, 00:01:48\r\n```\r\n\r\nwhich might be causing the default route learnt from BGP to be removed from `APP_DB`\r\n```\r\nadmin@sonic:~$ redis-cli hgetall \"ROUTE_TABLE:0.0.0.0/0\"\r\n(empty array)\r\n```\r\nWhen `eth0` comes up, the default route in table `default` is not added back  in zebra.\r\n\r\n```\r\n  admin@sonic:~$ ip link show dev eth0\r\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000\r\n    link/ether ec:f4:bb:fe:80:84 brd ff:ff:ff:ff:ff:ff\r\nadmin@sonic:~$ vtysh -c \"show ip route table all\" | more\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\r\n\r\nVRF default table 253:\r\nK>* 10.3.146.0/23 [0/0] is directly connected, eth0, 00:04:29\r\n\r\nVRF default table 254:\r\nB>* 0.0.0.0/0 [20/0] via 10.0.0.1, PortChannel102, weight 1, 00:02:50\r\n  *                  via 10.0.0.5, PortChannel105, weight 1, 00:02:50\r\n  *                  via 10.0.0.9, PortChannel108, weight 1, 00:02:50\r\n  *                  via 10.0.0.13, PortChannel1011, weight 1, 00:02:50\r\n  *                  via 10.0.0.17, PortChannel1014, weight 1, 00:02:50\r\n  *                  via 10.0.0.21, PortChannel1017, weight 1, 00:02:50\r\n  *                  via 10.0.0.25, PortChannel1020, weight 1, 00:02:50\r\n  *                  via 10.0.0.29, PortChannel1023, weight 1, 00:02:50\r\n```"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2022-09-07T19:18:06Z",
+      "body": "@hasan-brcm, @prsunny. FYI add logs I collected"
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2022-09-10T01:02:36Z",
+      "body": "Closing the issue as FRR patch is merged"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 12023,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/12023",
+      "title": "[FRR] add patch in zebra to ignore route update on RT_TABLE_DEFAULT",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-09-08T18:03:20Z",
+      "createdAt": "2022-09-08T15:40:05Z",
+      "author": "arlakshm",
+      "body": "Signed-off-by: Arvindsrinivasan Lakshmi Narasimhan <arlakshm@microsoft.com>\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFixes #11995 and #9188 \r\n\r\n#### How I did it\r\nAdd a patch for zebra to ignore sending netlink messages for routes in the table `RT_DEFAULT_TABLE`\r\n#### How to verify it\r\nTest mentioned in the github issues  #11995 and #9188 \r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "src/sonic-frr/patch/0009-ignore-route-from-default-table.patch",
+          "additions": 32,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-frr/patch/series",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "number": 26568,
+  "title": "Bug: LLDP neighbor table flaps on high-scale systems",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26568",
+  "createdAt": "2026-04-05T06:28:59Z",
+  "closedAt": "2026-04-23T09:50:53Z",
+  "author": "benle7",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "ZhaohuiS"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nOn high-scale systems (sn5640-r0), the expanded startup and subsequent lldpmgrd/lldp-syncd reconfiguration create a prolonged convergence with repeated per-port LLDP updates.\nThis causes LLDP neighbor churn and unstable `show lldp table` results.\n\nRoot cause:\nhttps://github.com/sonic-net/sonic-buildimage/pull/26144\nThis PR added preloading of `portidsubtype` for every front-panel port into `lldpd.conf`.\nAs a result, LLDP startup work now scales with the number of ports.\n\nOn high-scale systems, `lldpd.conf` grows from 5 lines to 519 lines, significantly increasing startup/config processing and amplifying later lldpmgrd/lldp-syncd reconfiguration activity.\n\nFlapping persists in lldpctl source output.\nReverting the bulk per-port block restores stability, confirms regression tied to #26144 startup config expansion.\n\n### Steps to Reproduce\n\nwatch 'show lldp table | grep -i --color \"Total entries\"'\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\nInterfaces are repeatedly repopulated/re-added, causing LLDP neighbor churn and unstable `show lldp table` counts.\n- Unstable LLDP records:\nLLDP table entry count (`310 -> 288 -> 310`)\n`lldpctl -f json | jq '.lldp.interface | length'` (`288 -> 278 -> 310`)\n- logs repeatedly show interface repopulate/add events\n\nExpected behavior:\nLLDP neighbor table should converge once and remain stable.\n\n### Relevant log output\n\n```shell\n----- Logs -----\ndocker exec -i lldp wc -l /etc/lldpd.conf\n519 /etc/lldpd.conf\n\nshow lldp table | grep -i --color \"Total entries\"\nTotal entries displayed:  310\nshow lldp table | grep -i --color \"Total entries\"\nTotal entries displayed:  288\n\nwhile true; do   echo -n \"$(date '+%F %T') lldpctl_ifaces=\";   docker exec -i lldp lldpctl -f json | jq '.lldp.interface | length';   sleep 1; done\n2026-03-31 15:52:57 lldpctl_ifaces=288\n2026-03-31 15:53:05 lldpctl_ifaces=288\n...\n2026-03-31 15:53:31 lldpctl_ifaces=278\n2026-03-31 15:53:36 lldpctl_ifaces=278\n...\n2026-03-31 15:53:37 lldpctl_ifaces=310\n2026-03-31 15:53:38 lldpctl_ifaces=310\n...\n\nrepeated logs:\nINFO lldp#lldp-syncd [lldp_syncd] INFO: Force repopulate the changed interface Ethernet...\nINFO lldp#lldp-syncd [lldp_syncd] INFO: Add new interface Ethernet...\n\n\n----- Logs without the PR -----\ndocker exec -i lldp wc -l /etc/lldpd.conf\n5 /etc/lldpd.conf\n\nshow lldp table | grep -i --color \"Total entries\"\nTotal entries displayed:  476\n(Stable)\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "benle7",
+      "createdAt": "2026-04-05T06:31:41Z",
+      "body": "Hi @ZhaohuiS  \nCan you please review the issue and assist?\nThanks!"
+    },
+    {
+      "author": "ZhaohuiS",
+      "createdAt": "2026-04-07T03:19:19Z",
+      "body": "@benle7  checking"
+    },
+    {
+      "author": "ZhaohuiS",
+      "createdAt": "2026-04-07T14:28:27Z",
+      "body": "@benle7  which image version did you use for testing? I tried on a full topo 5640 testbed, 513 lldp neighbors.  Unable to reproduce the issue you described.\nDoes your image include this patch? https://github.com/sonic-net/sonic-buildimage/pull/25436\n\n\nadmin@str4-sn5640-5:~$ docker exec -i lldp wc -l /etc/lldpd.conf\n518 /etc/lldpd.conf\n\n\nadmin@str4-sn5640-5:~$ show lldp table | grep -i --color \"Total entries\"\nTotal entries displayed:  513\n\n\n\n\n2026-04-07 14:25:52 lldpctl_ifaces=2026-04-07T14:25:52 [WARN/control] unable to connect to socket /run/lldpd.socket: Connection refused\n2026-04-07 14:25:53 lldpctl_ifaces=0\n2026-04-07 14:26:07 lldpctl_ifaces=0\n2026-04-07 14:26:08 lldpctl_ifaces=0\n2026-04-07 14:26:10 lldpctl_ifaces=0\n2026-04-07 14:26:11 lldpctl_ifaces=0\n2026-04-07 14:26:12 lldpctl_ifaces=0\n2026-04-07 14:26:13 lldpctl_ifaces=0\n2026-04-07 14:26:14 lldpctl_ifaces=4\n2026-04-07 14:26:16 lldpctl_ifaces=52\n2026-04-07 14:26:17 lldpctl_ifaces=75\n2026-04-07 14:26:18 lldpctl_ifaces=90\n2026-04-07 14:26:19 lldpctl_ifaces=107\n2026-04-07 14:26:20 lldpctl_ifaces=127\n2026-04-07 14:26:21 lldpctl_ifaces=154\n2026-04-07 14:26:23 lldpctl_ifaces=178\n2026-04-07 14:26:24 lldpctl_ifaces=207\n2026-04-07 14:26:25 lldpctl_ifaces=228\n2026-04-07 14:26:26 lldpctl_ifaces=238\n2026-04-07 14:26:27 lldpctl_ifaces=266\n2026-04-07 14:26:29 lldpctl_ifaces=293\n2026-04-07 14:26:30 lldpctl_ifaces=322\n2026-04-07 14:26:31 lldpctl_ifaces=322\n2026-04-07 14:26:32 lldpctl_ifaces=357\n2026-04-07 14:26:33 lldpctl_ifaces=379\n2026-04-07 14:26:34 lldpctl_ifaces=389\n2026-04-07 14:26:35 lldpctl_ifaces=389\n2026-04-07 14:26:37 lldpctl_ifaces=414\n2026-04-07 14:26:38 lldpctl_ifaces=437\n2026-04-07 14:26:39 lldpctl_ifaces=447\n2026-04-07 14:26:40 lldpctl_ifaces=447\n2026-04-07 14:26:41 lldpctl_ifaces=461\n2026-04-07 14:26:42 lldpctl_ifaces=493\n2026-04-07 14:26:43 lldpctl_ifaces=513\n2026-04-07 14:26:45 lldpctl_ifaces=513\n2026-04-07 14:26:46 lldpctl_ifaces=513\n2026-04-07 14:26:47 lldpctl_ifaces=513\n2026-04-07 14:26:48 lldpctl_ifaces=513\n2026-04-07 14:26:49 lldpctl_ifaces=513\n"
+    },
+    {
+      "author": "benle7",
+      "createdAt": "2026-04-09T07:52:05Z",
+      "body": "Hi @ZhaohuiS \n\nThe image is based on master (platform sn5640-r0).\nIt includes https://github.com/sonic-net/sonic-buildimage/pull/25436.\nOnce we reverted https://github.com/sonic-net/sonic-buildimage/pull/26144 the issue disappeared.\n\n "
+    },
+    {
+      "author": "ZhaohuiS",
+      "createdAt": "2026-04-12T09:17:57Z",
+      "body": "@benle7 I did further testing on the latest master image with a full `systemctl restart lldp` and `config reload` on an SN5640 with 513 LLDP neighbors. **Issue was NOT reproduced** \u2014 LLDP converges monotonically with zero deletes in both scenarios.\n\n---\n\n### Test Environment\n\n**`show platform summary`:**\n```\nPlatform: x86_64-nvidia_sn5640-r0\nHwSKU: Mellanox-SN5640-C512S2\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT25116051TN\nModel Number: MSN5640\nHardware Revision: A5\n```\n\n- **DUT**: str4-sn5640-5 (Mellanox-SN5640-C512S2, ~514 front-panel ports)\n- **Image**: `SONiC.master.1083952-65d123534` (built Apr 9, 2026)\n- **Kernel**: `6.12.41+deb13-sonic-amd64`\n- **Topology**: PTP back-to-back with str4-sn5640-4 (512 connected ports)\n- **LLDP neighbors**: 513 (512 from peer + 1 mgmt switch)\n- **lldpd.conf**: 519 lines, 515 `portidsubtype` entries (PR #26144 present \u2705)\n\n---\n\n### Test Case 1: `systemctl restart lldp`\n\n| Metric | Value |\n|--------|-------|\n| add_new events | 513 |\n| **delete_table events** | **0** |\n| force_repopulate events | 561 |\n| Convergence pattern | 0\u21921\u2192106\u2192191\u2192283\u2192367\u2192514 (**monotonic \u2705**) |\n| Time to full convergence | ~45 seconds |\n| **Flapping** | **None** |\n\n**Key timeline:**\n- lldpd config processed in **9 seconds** (519-line lldpd.conf)\n- `waitfor_lldp_ready` ensures lldp-syncd starts **2 seconds AFTER** config fully applied\n- lldpmgrd starts after lldp-syncd\n\n### Test Case 2: `config reload`\n\n| Metric | Value |\n|--------|-------|\n| add_new events | 513 |\n| **delete_table events** | **0** |\n| force_repopulate events | 1842 |\n| Convergence pattern | 0\u2192(90s gap)\u21921\u21922\u219298\u2192200\u2192382\u2192463\u2192508\u2192514 (**monotonic \u2705**) |\n| Time to full convergence | ~3 minutes |\n| **Flapping** | **None** |\n\n**Key timeline:**\n- LLDP container down for 91 seconds (all-service restart)\n- Higher force_repopulate count (1842 vs 561) due to longer ramp-up period, but **no functional impact**\n\n---\n\n### Summary\n\nBoth test cases show **monotonic convergence with zero delete events**. The LLDP neighbor count never decreases \u2014 it only increases until reaching the stable value of 514.\n\nThe `force_repopulate` events are a pre-existing inefficiency in `lldp_syncd` (the `sync()` method enters the `if new or deleted:` branch each time it detects new neighbors during ramp-up), but they do NOT cause actual neighbor flapping.\n\n---\n\n### Questions for reproduction\n\n@benle7 Could you share more details about your reproduction scenario?\n\n1. **What was the exact image version / build commit** you tested with? (My test uses master build `1083952-65d123534` from Apr 9, 2026)\n2. **How did you trigger the flapping** \u2014 was it after a fresh boot, `systemctl restart lldp`, `config reload`, or did it happen spontaneously during steady state?\n3. **What topology** are your 310 LLDP neighbors in? (VMs from a test server, or physical back-to-back like my setup?)\n4. **How many front-panel ports** does your DUT have configured? (My DUT has 512+2 ports)\n5. **Were both sides restarted simultaneously**, or only one side?\n\nI suspect the difference may be related to the topology (VM neighbors vs physical back-to-back) or the exact timing of the peer's LLDP responses. In my PTP back-to-back setup, the peer retains neighbor state during our restart and immediately sends LLDP frames, which may prevent the race condition.\r\n"
+    },
+    {
+      "author": "benle7",
+      "createdAt": "2026-04-16T09:16:10Z",
+      "body": "Hi @ZhaohuiS \n\nPlatforms details:\nPlatform: x86_64-nvidia_sn5640-r0\nHwSKU: Mellanox-SN5640-C512S2\nASIC: mellanox\nASIC Count: 1\nSerial Number: MT2512602H1G\nModel Number: MSN5640\nHardware Revision: A4\n\n/etc/lldpd.conf = 519 lines (#26144 is present)\n512 + 2 front-panel ports configured\n\nIn our case, LLDP does not converge monotonically after a reboot.\n\nTopology is a large-scale loopback/self-neighbor on the same DUT.\nIs it different than your topology?\n"
+    },
+    {
+      "author": "ZhaohuiS",
+      "createdAt": "2026-04-18T00:02:55Z",
+      "body": "Hi @benle7, I've submitted a fix for this issue in PR #26873.\n\nThe fix replaces the per-port `portidsubtype` loop from #26144 with a single global directive:\n```\nconfigure lldp portidsubtype ifname\n```\nThis reduces `lldpd.conf` from 519 lines back to 6 lines, eliminating the startup processing delay entirely.\n\nI've verified this on a Mellanox SN5640 (512 ports, t0-isolated-d256u256s2 topology with 259 VM neighbors) \u2014 the neighbor table converges in ~30s and stays stable with zero deletes.\n\nCould you try applying this change on your machine and verify it resolves the flapping on your setup? The change is a one-liner in `dockers/docker-lldp/lldpd.conf.j2` \u2014 just replace the per-port loop block with the global directive. You can test it quickly by editing `/etc/lldpd.conf` inside the lldp container directly:\n\n```bash\n# Inside lldp container, remove all \"configure ports ... lldp portidsubtype\" lines\n# and add this single line before the \"pause\" line:\nconfigure lldp portidsubtype ifname\n```\n\nThen restart lldp and watch convergence:\n```bash\nsudo systemctl restart lldp\nwatch 'show lldp table | grep -i \"Total entries\"'\n```\n\nThanks!"
+    },
+    {
+      "author": "benle7",
+      "createdAt": "2026-04-19T07:02:25Z",
+      "body": "Hi @ZhaohuiS \nI applied your fix and verified it resolves the issue.\nThank you!"
+    },
+    {
+      "author": "ZhaohuiS",
+      "createdAt": "2026-04-23T05:37:51Z",
+      "body": "Fix it in https://github.com/sonic-net/sonic-buildimage/pull/26873"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26873,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26873",
+      "title": "[lldp] Replace per-port portidsubtype loop with global ifname directive",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-23T09:50:52Z",
+      "createdAt": "2026-04-17T10:45:59Z",
+      "author": "ZhaohuiS",
+      "body": "### Description of PR\n\nSummary:\nReplace the per-port portidsubtype configuration loop from PR #26144 with a single global `configure lldp portidsubtype ifname` directive.\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/26568\n\n#### Background: Why portidsubtype matters\n\nWithout any portidsubtype configuration, lldpd uses MAC address as the default Port ID. When lldpd auto-resumes after config processing, the first LLDP frame carries MAC-based Port IDs. Peers then see a transient MSAP change when `lldpmgrd` later reconfigures portidsubtype to `local` (alias), causing unnecessary neighbor flaps.\n\nPR #26144 solved this by adding a Jinja2 loop generating per-port `configure ports <name> lldp portidsubtype local <alias>` lines in `lldpd.conf`. This worked fine on low-port-count platforms.\n\n#### The problem on high-port-count platforms\n\nOn platforms with many ports (e.g., Mellanox SN5640 with 512 ports), PR #26144 generates 512+ config lines. Processing these lines blocks lldpd for **11+ seconds** at startup. During this blackout:\n- Neighbors with 30-second TTL begin timing out\n- When lldpd resumes, it sends frames with new MSAPs, causing neighbor table churn\n- The churn cascades through lldp_syncd, creating a feedback loop that never stabilizes\n- Result: LLDP neighbor count oscillates indefinitely (observed 161\u2192166\u2192163\u2192171 after 4+ minutes)\n\n#### The fix: global `portidsubtype ifname`\n\nThe single global directive `configure lldp portidsubtype ifname` tells lldpd to use the Linux interface name (e.g., `Ethernet0`) as Port ID for **all** ports, instead of MAC address. This achieves the same goal as the per-port loop (no MAC-as-Port-ID) with O(1) config processing time.\n\n`lldpmgrd` still runs later to set the final `portidsubtype` to `local` + alias (e.g., `etp1a`) per port \u2014 this is the existing designed behavior and works correctly.\n\n**Key trade-off:** The first LLDP frame after restart uses the interface name (`Ethernet0`) instead of the alias (`etp9a`). When lldpmgrd starts and reconfigures, there is a one-time MSAP transition per port. This is acceptable because:\n1. LLDP is an informational protocol \u2014 no data plane impact\n2. The transition is atomic and completes within seconds\n3. The alternative (batch per-port config) causes the same 512-line processing blackout\n\n### Type of change\n\n- [x] Bug fix\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\nOn high-port-count platforms (SN5640, 512 ports), the per-port portidsubtype loop from PR #26144 blocks lldpd startup for 11+ seconds, causing LLDP neighbor churn and cascading instability that never converges.\n\n#### How did you do it?\nReplaced the per-port Jinja2 loop (N lines) with a single global directive (1 line):\n```\nconfigure lldp portidsubtype ifname\n```\n\n#### How did you verify/test it?\nA/B tested on Mellanox SN5640 (str5-sn5640-6, topology t0-isolated-d256u256s2, 259 VM neighbors):\n\n| Configuration | Config Lines | Convergence | Stable at 259? | Deletes |\n|--------------|-------------|-------------|----------------|---------|\n| PR #26144 (per-port loop) | 519 | never stable | \u274c | 74+ ongoing |\n| No PR #26144 (baseline) | 5 | 14s | \u2705 | 0 |\n| **This PR (global ifname)** | **6** | **~30s** | **\u2705** | **0** |\n| Batch per-port in waitfor_lldp_ready.sh | 6 + 512 batch | never stable | \u274c | oscillating |\n\nThe global ifname approach was tested across multiple restart cycles with zero neighbor drops.\n\n#### Any platform specific information?\nPrimarily affects high-port-count platforms (SN5640 with 512 ports). Lower port count platforms were not affected by the original issue but benefit from the simpler config.\n\n#### Supported testbed topology if it's a new test case?\nN/A (not a new test case)\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "dockers/docker-lldp/lldpd.conf.j2",
+          "additions": 2,
+          "deletions": 19
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv4-iface-with-ports.conf",
+          "additions": 1,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv4-iface.conf",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv6-iface.conf",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T10:46:08Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T10:46:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T12:03:44Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T12:03:58Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T12:34:58Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T12:35:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T23:58:27Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T23:58:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-20T02:37:18Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-20T02:37:29Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-04-21T04:25:19Z",
+          "body": "close it for retrigger PR test."
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-04-21T04:25:25Z",
+          "body": "open it for retrigger PR test."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-21T04:25:33Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-21T04:25:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-04-21T06:23:17Z",
+          "body": "@StormLiangMS @r12f  could you pls help review?"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-04-22T05:41:24Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-04-22T05:41:37Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-22T05:41:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-22T05:41:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-27T16:14:53Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/27007"
+        }
+      ]
+    }
+  ]
+}

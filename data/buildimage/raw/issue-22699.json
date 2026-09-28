@@ -1,0 +1,68 @@
+{
+  "number": 22699,
+  "title": "Bug: PDDF - If multiple agents are getting/setting LED color, there is a race condition.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/22699",
+  "createdAt": "2025-05-24T15:33:28Z",
+  "closedAt": "2025-06-04T15:22:59Z",
+  "author": "lotus-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [
+    "lotus-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nPDDF - If multiple agents are getting/setting LED color, there is a race condition.\n\n### Steps to Reproduce\n\nOn a PDDF platform calling [get_led_color_from_cpld](https://github.com/sonic-net/sonic-buildimage/blob/b228122f388ecfdde86ae6921a30f60b9d4d8900/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py#L158) or [set_led_color_from_cpld](https://github.com/sonic-net/sonic-buildimage/blob/b228122f388ecfdde86ae6921a30f60b9d4d8900/platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py#L198) more multiple agents can cause a race condition.\n\nAs seen in the existing code below. \n\nEach set_led_color_from_cpld requires writing to the following sysfs paths in one atomic operation.\n```\n/sys/kernel/pddf/devices/led/device_name\n/sys/kernel/pddf/devices/led/index\n/sys/kernel/pddf/devices/led/color\n/sys/kernel/pddf/devices/led/dev_ops\n/sys/kernel/pddf/devices/led/cur_state/color\n```\n\nEach get_led_color_from_cpld requires writing to the following sysfs paths in one atomic operation.\n```\n/sys/kernel/pddf/devices/led/device_name\n/sys/kernel/pddf/devices/led/index\n/sys/kernel/pddf/devices/led/dev_ops\n/sys/kernel/pddf/devices/led/cur_state/color\n```\n \n```\n    def set_led_color_from_cpld(self, led_device_name, color):\n        index = self.data[led_device_name]['dev_attr']['index']\n        device_name = self.data[led_device_name]['dev_info']['device_name']\n        self.create_attr('device_name', device_name,  self.get_led_path())\n        self.create_attr('index', index, self.get_led_path())\n        self.create_attr('color', color, self.get_led_cur_state_path())\n        self.create_attr('dev_ops', 'set_status',  self.get_led_path())\n        return (True, \"Success\")\n```\n\n```\n    def get_led_color_from_cpld(self, led_device_name):\n        index = self.data[led_device_name]['dev_attr']['index']\n        device_name = self.data[led_device_name]['dev_info']['device_name']\n        self.create_attr('device_name', device_name,  self.get_led_path())\n        self.create_attr('index', index, self.get_led_path())\n        self.create_attr('dev_ops', 'get_status',  self.get_led_path())\n        return self.get_led_color()\n```\n\nThis will cause a race condition, if multiple agents are calling `set_led_color_from_cpld` and `get_led_color_from_cpld`, each call can get its sysfs files overwritten midway between able to finish the entire operation.\n\n### Actual Behavior and Expected Behavior\n\nNo race condition, can call the methods from multiple agent.\n\n### Relevant log output\n\n```shell\nErrors like:\n\n[  124.847956] PDDF_LED ERROR find_led_ops_data invalid index: 36 for type:FANTRAY_LED_1;3\n\n\nIn this case, one process was setting to index to 36 to operate on a port LED, while another process was attempting a fantray led operation.\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22684,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/22684",
+      "title": "[PDDF] Add file lock for led ctrl",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-06-04T15:22:58Z",
+      "createdAt": "2025-05-23T00:49:12Z",
+      "author": "lotus-nexthop",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\npddf uses a shared sysfs interface for getting/setting led status for all leds. Our system currently has 3 processes that gets/sets led status using the pddf api:\r\n - healthd\r\n - port-ledd.service\r\n - system-ledd.service\r\n\r\nThere's the potential for simultaneous sysfs operations to interfere with each other, resulting in errors like:\r\n```\r\n[  124.847956] PDDF_LED ERROR find_led_ops_data invalid index: 36 for type:FANTRAY_LED_1;3\r\n```\r\nThis problem is not unique to our system. Any vendor using pddf for leds is susceptible to this.\r\n\r\nFixes #22699\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\n#### How to verify it\r\nTested on NH-4010\r\nLet it run for > 30 minutes and confirmed no PDDF_LED \"invalid index\" errors. Previously it was easily reproducible in that timeframe.\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "platform/pddf/platform-api-pddf-base/sonic_platform_pddf_base/pddfapi.py",
+          "additions": 43,
+          "deletions": 17
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-23T00:49:20Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-23T00:49:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "jostar-yang",
+          "createdAt": "2025-05-23T03:46:30Z",
+          "body": "@FuzailBrcm \r\nNeed yo help check and review. It is common issue in PDDF framework when run healthd and other task control/access system-LED."
+        },
+        {
+          "author": "geans-pin",
+          "createdAt": "2025-05-23T06:49:11Z",
+          "body": "> Changes looks okay.\r\n> \r\n> @geans-pin Can we test these on some non-Accton PDDF platforms.\r\n\r\nYes, we can. Jostar, btw, did you verify this on some ACCTON PDDF platforms ? Did you have UT for reference ?"
+        },
+        {
+          "author": "jostar-yang",
+          "createdAt": "2025-05-23T10:07:02Z",
+          "body": "@geans-pin @FuzailBrcm \r\nThe issue is not easy happen in Accton platform. We study and think it happen in multi task to control SYS-LED. We write script and keep system-health service work. Then can see the issue. After merge the PR code to as9716 and test result is fine.\r\n\r\n"
+        }
+      ]
+    }
+  ]
+}

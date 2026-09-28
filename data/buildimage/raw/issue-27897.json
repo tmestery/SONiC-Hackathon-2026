@@ -1,0 +1,183 @@
+{
+  "number": 27897,
+  "title": "Bug: [HFT] HFT QUEUE flex counters fail after config reload - unimplemented START_STREAM \u2192 CREATE_CONFIG transition in HFTelProfile",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27897",
+  "createdAt": "2026-06-15T15:48:12Z",
+  "closedAt": "2026-07-07T16:39:15Z",
+  "author": "DavidZagury",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "Pterosaur"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhen HFT (High Frequency Telemetry) is configured for a QUEUE group with streaming enabled, HFT counters and queue flex counters coexist correctly on initial setup. After config reload -y, queue flex counter data becomes unavailable (N/A) and orchagent logs repeated exceptions.\n\nRoot cause: After reload, the HFT tel-type can already be in START_STREAM (because stream_state=enabled is restored from CONFIG_DB). When queue flex counter registration updates COUNTERS_QUEUE_NAME_MAP, HFTelOrch::locallyNotify() calls HFTelProfile::tryCommitConfig() \u2192 setStreamState(CREATE_CONFIG). In HFTelProfile::setStreamState(), the START_STREAM \u2192 CREATE_CONFIG transition is not implemented and throws:\n\n`Transfer from start to create config hasn't been implemented yet\n`\n\nThe exception is caught while draining FLEX_COUNTER_TABLE, so queue flex counter setup fails.\n\n### Steps to Reproduce\n\n1. Start from a fresh SONiC image on an HFT-capable platform with dynamic buffer model.\n2. Ensure QoS and queue flex counters are enabled.\n3. Configure an HFT profile and QUEUE group (example: queue Ethernet0|7, profile P1):\n```\nconfig hft add profile --poll_interval 10000 --stream_state enabled P1\nconfig hft add group --group_type QUEUE --object_counters BYTES --object_names Ethernet0\\|7 P1\n```\n4. Verify both counter paths work:\n```\nshow hft counter -i 1\nshow queue counters Ethernet0\n```\n5. Persist and reload:\n```\nconfig save -y\nconfig reload -y\n```\n6. Re-run the checks from step 4.\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior**\nBefore reload: \nshow hft counter and show queue counters Ethernet0 both return valid data for the configured queue.\n\nAfter config reload -y: queue flex counter output shows N/A:\n\n```\nPort    TxQ    Counter/pkts    Counter/bytes    Drop/pkts    Drop/bytes\n---------  -----  --------------  ---------------  -----------  ------------\nEthernet0    UC7             N/A              N/A          N/A           N/A\n```\nswss / syslog shows repeated errors (See under Relevant log output)\n\n**Expected behavior**\nAfter reload, HFT QUEUE streaming and queue flex counters should coexist, as they do before reload.\nshow hft counter and show queue counters should both show valid data.\nNo orchagent exceptions on the FLEX_COUNTER_TABLE / setStreamState path during COUNTERS_QUEUE_NAME_MAP updates.\n\n\n### Relevant log output\n\n```shell\nsonic NOTICE swss#orchagent: :- locallyNotify: The counter table COUNTERS_QUEUE_NAME_MAP is updated, operation 0, object Ethernet0|0\nsonic ERR swss#orchagent: :- setStreamState: Transfer from start to create config hasn't been implemented yet\nsonic ERR swss#orchagent: :- drain: Exception caught: type=exception, table=FLEX_COUNTER_TABLE, error=:- setStreamState: Transfer from start to create config hasn't been implemented yet\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "judyjoseph",
+      "createdAt": "2026-06-17T15:55:05Z",
+      "body": "Please add the platform and sonic version you are trying this on @DavidZagury "
+    },
+    {
+      "author": "judyjoseph",
+      "createdAt": "2026-06-17T15:55:33Z",
+      "body": "@Pterosaur  could you check this once we get data from @DavidZagury \n"
+    },
+    {
+      "author": "Pterosaur",
+      "createdAt": "2026-06-18T02:18:29Z",
+      "body": "Ack, I\u2019ll check it in two weeks."
+    },
+    {
+      "author": "Pterosaur",
+      "createdAt": "2026-06-21T01:34:21Z",
+      "body": "RCA:\n\nThe issue is not that HFT should support `START_STREAM -> CREATE_CONFIG` dynamic update at this stage. The real problem is that a later or unrelated `COUNTERS_QUEUE_NAME_MAP` update is incorrectly treated as a reason to regenerate the HFT configuration.\n\nDetailed flow:\n\n1. During config reload, `stream_state=enabled` is restored from CONFIG_DB.\n   `HFTelOrch::profileTableSet()` calls `HFTelProfile::setStreamState(START_STREAM)`, which records the desired state in `m_setting_state`.\n\n2. After the HFT group is processed, `HFTelProfile::tryCommitConfig()` moves the TAM tel type into `CREATE_CONFIG`.\n\n3. Once SAI reports the config-ready notification, `HFTelProfile::notifyConfigReady()` loads the IPFIX template and applies `m_setting_state`, so the actual TAM tel type state becomes `START_STREAM`.\n\n4. Later, queue flex counter setup rebuilds `COUNTERS_QUEUE_NAME_MAP`.\n   `CounterNameMapUpdater::setCounterNameMap()` notifies HFT through `HFTelOrch::locallyNotify()` before writing the queue map entry into COUNTERS_DB.\n\n5. `HFTelOrch::locallyNotify()` then calls `profile->tryCommitConfig()` unconditionally for every profile registered for `SAI_OBJECT_TYPE_QUEUE`.\n\n6. This is wrong for unrelated queue map updates. For example, the HFT config may only monitor `Ethernet0|7`, but a later update for `Ethernet0|0` still reaches the same QUEUE profile. `setObjectSAIID()` does nothing because the object is not part of the HFT group, but `tryCommitConfig()` is still called afterwards.\n\n7. Since the HFT tel type is already in `START_STREAM`, this unnecessary `tryCommitConfig()` attempts `START_STREAM -> CREATE_CONFIG`, which is intentionally unsupported today and throws:\n\n   `Transfer from start to create config hasn't been implemented yet`\n\n8. Because the exception happens inside `CounterNameMapUpdater::setCounterNameMap()` before the actual `COUNTERS_QUEUE_NAME_MAP` entry is written, queue flex counter setup is interrupted and `show queue counters` reports `N/A`.\n\nSo the fix should not be to implement dynamic `START_STREAM -> CREATE_CONFIG` update. Instead, HFT should avoid attempting to recommit configuration for queue map updates that do not actually affect the HFT profile. In particular, `locallyNotify()` should only call `tryCommitConfig()` when `setObjectSAIID()` / `delObjectSAIID()` actually changes the monitored objects for that profile. If the profile is already streaming and dynamic update is not supported, the update should be skipped safely instead of throwing and blocking normal queue flex counter map updates.\n\nI will create a PR to fix this issue."
+    },
+    {
+      "author": "Pterosaur",
+      "createdAt": "2026-06-21T02:44:00Z",
+      "body": "Hi @DavidZagury , could you please help to review this PR?\nhttps://github.com/sonic-net/sonic-swss/pull/4690"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4690,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4690",
+      "title": "[hftorch]: Fixbug skip commit for unrelated counter map updates",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-07T16:39:12Z",
+      "createdAt": "2026-06-21T01:58:27Z",
+      "author": "Pterosaur",
+      "body": "**What I did**\n\nAvoid re-committing HFT configuration when a counter name map update is for an object outside the HFT group.\n\nChanged `HFTelProfile::setObjectSAIID()` and `HFTelProfile::delObjectSAIID()` to return whether the profile was actually modified. `HFTelOrch::locallyNotify()` now calls `tryCommitConfig()` only when the counter name map update applies to an object in the profile.\n\nAdded a mock unit test that calls `HFTelOrch::locallyNotify()` with an unrelated `COUNTERS_PORT_NAME_MAP` update while the HFT profile is already streaming. The old behavior would continue into `tryCommitConfig()` and hit the unsupported `START_STREAM -> CREATE_CONFIG` path; the fixed behavior returns without committing.\n\n**Why I did it**\n\nFixes sonic-net/sonic-buildimage#27897.\n\nAfter reload, an HFT profile may already be in `START_STREAM`. `HFTelOrch::locallyNotify()` previously called `tryCommitConfig()` for every profile of the updated SAI object type, even if the updated counter name map entry was unrelated to that HFT group. That unrelated object update caused an unnecessary second commit and hit the existing unsupported `START_STREAM -> CREATE_CONFIG` transition.\n\n**How I verified it**\n\nUsed the `sonic-swss-verify` flow and checked the relevant CI files:\n\n- `.azure-pipelines/build-template.yml`\n- `.azure-pipelines/test-docker-sonic-vs-template.yml`\n\nDownloaded CI artifacts with `latestFromBranch` strategy:\n\n- swss-common build 1142984\n- sairedis build 1142386\n- common-lib build 1144430\n- VPP build 1139157 from `sonic-net.sonic-platform-vpp` main\n\nRan the updated unit test compilation in `sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:master-amd64`:\n\n- `make -C tests/mock_tests tests-hftelprofile_ut.o -j$(nproc)`\n\nResult: passed. The updated test object compiled successfully in the CI container.\n\nAlso ran:\n\n- `git diff --check`\n\n**Details if related**\n\nThe fix intentionally does not implement `START_STREAM -> CREATE_CONFIG`. It prevents unrelated object updates from entering that transition path in the first place.",
+      "files": [
+        {
+          "path": "orchagent/high_frequency_telemetry/hftelorch.cpp",
+          "additions": 8,
+          "deletions": 2
+        },
+        {
+          "path": "orchagent/high_frequency_telemetry/hftelprofile.cpp",
+          "additions": 17,
+          "deletions": 7
+        },
+        {
+          "path": "orchagent/high_frequency_telemetry/hftelprofile.h",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "tests/mock_tests/hftelprofile_ut.cpp",
+          "additions": 152,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T01:58:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T01:58:41Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T02:07:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T02:07:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T02:11:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T02:11:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T02:16:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T02:16:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T02:18:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T02:18:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-06-21T02:49:13Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: Pterosaur / name: Ze Gan (687f2349cab9ad218853073e0f583cb04427cde4, 6b9cd0eaa658ff6d737de7e93618ff43014a82ae)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T02:49:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T02:49:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T02:52:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T02:53:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T02:56:06Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T02:56:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-21T04:59:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-21T04:59:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Pterosaur",
+          "createdAt": "2026-07-01T23:20:25Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

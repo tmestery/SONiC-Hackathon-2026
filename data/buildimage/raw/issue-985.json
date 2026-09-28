@@ -1,0 +1,148 @@
+{
+  "number": 985,
+  "title": "Failed DHCP relay test",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/985",
+  "createdAt": "2017-09-25T12:58:11Z",
+  "closedAt": "2017-10-05T06:35:44Z",
+  "author": "tieguoevan",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "**Description**\r\n\r\n\r\n\r\n**Steps to reproduce the issue:**\r\nRun DHCP relay test and it fails\r\n\r\n**Describe the results you received:**\r\nTest failure\r\n\r\nand get errors in /var/log/syslog:\r\n```\r\nSep 25 12:34:42.248407 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay Traceback (most recent call last):\r\nSep 25 12:34:42.248619 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/bin/sonic-cfggen\", line 215, in <module>\r\nSep 25 12:34:42.248728 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     main()\r\nSep 25 12:34:42.248821 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/bin/sonic-cfggen\", line 200, in main\r\nSep 25 12:34:42.248912 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     print template.render(data)\r\nSep 25 12:34:42.249054 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/lib/python2.7/dist-packages/jinja2/environment.py\", line 1008, in render\r\nSep 25 12:34:42.249155 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     return self.environment.handle_exception(exc_info, True)\r\nSep 25 12:34:42.249248 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/lib/python2.7/dist-packages/jinja2/environment.py\", line 780, in handle_exception\r\nSep 25 12:34:42.249341 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     reraise(exc_type, exc_value, tb)\r\nSep 25 12:34:42.249468 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"<template>\", line 1, in top-level template code\r\nSep 25 12:34:42.249577 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay   File \"/usr/local/lib/python2.7/dist-packages/jinja2/environment.py\", line 411, in getitem\r\nSep 25 12:34:42.249673 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay     return obj[argument]\r\nSep 25 12:34:42.249769 str-s8900-54xc-01 INFO supervisord: isc-dhcp-relay jinja2.exceptions.UndefinedError: 'minigraph_ports' is undefined\r\n```\r\n\r\n**Describe the results you expected:**\r\nTest pass\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\nIt looks like the line 178 is outdated, since configDB has been introduced.\r\nhttps://github.com/Azure/sonic-buildimage/blob/f570616b0dca24d0c38550e5c946e7e9bf00b342/src/isc-dhcp/isc-dhcp-4.3.1_dhcrelay-custom-circuit_id-remote_id-and-bridge-iface-support.patch#L178\r\nMaybe it should be \r\n```\r\n+\t\t\t\t\t\tsprintf(cmdstr, \"sonic-cfggen -d -v \\\"PORT['%s'].alias\\\"\", ip->name);\r\n```\r\n",
+  "comments": [
+    {
+      "author": "jleveque",
+      "createdAt": "2017-09-25T17:31:06Z",
+      "body": "You are correct. This line was overlooked in the transition to ConfigDB. However, I am currently working on modifications to the DHCP relay agent, and in these changes, I have created a better solution here that doesn't involve a direct call to sonic-cfggen. I expect the changes to be committed sometime this week."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 999,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/999",
+      "title": "[DHCP Relay]: Support Multiple VLANs (Separate DHCP Relay Agents, One Per VLAN)",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2017-10-05T06:35:44Z",
+      "createdAt": "2017-09-28T23:54:32Z",
+      "author": "jleveque",
+      "body": "**- What I did**\r\n  - Spawn one DHCP relay agent for each VLAN that is configured as requiring one or more DHCP servers.\r\n  - Also resolves https://github.com/Azure/sonic-buildimage/issues/985\r\n\r\n**- How I did it**\r\n  - docker-dhcp-relay entrypoint is a new script, docker_init.sh, which is responsible for generating the supervisord configuration file dynamically from a Jinja2 template. docker_init.sh then starts supervisord via exec so that supervisord still runs as PID 1\r\n  - Dynamically-configured supervisord config now supports spawning a variable number of DHCP relay agent processes, based on VLAN configuration\r\n  - Due to above changes, we no longer rely on /etc/default/isc-dhcp-relay config file, so the related Jinja2 template and shell script have been removed\r\n - Update isc-dhcp-relay patch such that it no longer relies on calling sonic-cfggen to retrieve port aliases with each packet (slow). Now parses the aliases from port_config.ini file directly once at startup and loads them into memory\r\n - Prevent relaying of already-relayed packets using `-m discard` parameter\r\n- Change name of supervisord config file and template from generic `supervisord.conf` to more specific (albeit long) `docker-dhcp-relay.supervisord.conf` for better comprehension and also to avoid conflicts when copying to /usr/share/sonic/templates if we need to templatize other supervisord config files. We may also want to consider creating subdirectories under /usr/share/sonic/templates to further avoid other conflicts.\r\n - Update minigraph.py parser to parse out new `<DhcpRelays>` tag\r\n - Update sonic-cfggen test T0 minigraphs to contain new `<DhcpRelays>` tag\r\n - Remove executable permission and extra trailing newline from wait_for_intf.sh.j2 template file\r\n\r\n**- How to verify it**\r\n  1. Generate a T0 minigraph with two or more VLANs, each configured with one or more DHCP servers (using the `<DhcpRelays>` tag.\r\n  2. Boot up SONiC using the minigraph created in step 1.\r\n  3. Verify that there are multiple `dhcrelay` processes running, one per VLAN as configured in step 1.\r\n  4. Verify that DHCP requests from devices on VLANs under the SONiC T0 are forwarded to all the DHCP servers configured in the minigraph, and verify all responses from DHCP servers are forwarded back to the appropriate device under the SONiC T0.\r\n\r\n**- Description for the changelog**\r\n\r\n[DHCP Relay]: Support Multiple VLANs (Separate DHCP Relay Agents, One Per VLAN)\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n```\r\n       _                        \r\n       \\`*-.                    \r\n        )  _`-.                 \r\n       .  : `. .                \r\n       : _   '  \\               \r\n       ; *` _.   `*-._          \r\n       `-.-'          `-.       \r\n         ;       `       `.     \r\n         :.       .        \\    \r\n         . \\  .   :   .-'   .   \r\n         '  `+.;  ;  '      :   \r\n         :  '  |    ;       ;-. \r\n         ; '   : :`-:     _.`* ;\r\n[bug] .*' /  .*' ; .*`- +'  `*' \r\n      `*-*   `*-*  `*-*'\r\n```",
+      "files": [
+        {
+          "path": "dockers/docker-dhcp-relay/Dockerfile.j2",
+          "additions": 3,
+          "deletions": 5
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/docker-dhcp-relay.supervisord.conf.j2",
+          "additions": 67,
+          "deletions": 0
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/docker_init.sh",
+          "additions": 18,
+          "deletions": 0
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/isc-dhcp-relay.j2",
+          "additions": 0,
+          "deletions": 28
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/isc-dhcp-relay.sh",
+          "additions": 0,
+          "deletions": 18
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/start.sh",
+          "additions": 5,
+          "deletions": 8
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/supervisord.conf",
+          "additions": 0,
+          "deletions": 28
+        },
+        {
+          "path": "dockers/docker-dhcp-relay/wait_for_intf.sh.j2",
+          "additions": 0,
+          "deletions": 1
+        },
+        {
+          "path": "src/isc-dhcp/isc-dhcp-4.3.1_dhcrelay-custom-circuit_id-remote_id-and-bridge-iface-support.patch",
+          "additions": 200,
+          "deletions": 47
+        },
+        {
+          "path": "src/sonic-config-engine/minigraph.py",
+          "additions": 8,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/pc-test-graph.xml",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/isc-dhcp-relay",
+          "additions": 0,
+          "deletions": 7
+        },
+        {
+          "path": "src/sonic-config-engine/tests/simple-sample-graph.xml",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/t0-sample-bgp-speaker.xml",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/t0-sample-graph-everflow.xml",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/t0-sample-graph.xml",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_cfggen.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "taoyl-ms",
+          "createdAt": "2017-09-29T00:10:28Z",
+          "body": "Does this mean DHCP_Server field in minigraph - device metadata will no longer be used?"
+        },
+        {
+          "author": "jleveque",
+          "createdAt": "2017-09-29T00:29:28Z",
+          "body": "@taoyl-ms: Are you referring to the `DhcpResources` field?"
+        },
+        {
+          "author": "taoyl-ms",
+          "createdAt": "2017-09-29T00:32:02Z",
+          "body": "Ah Yes."
+        },
+        {
+          "author": "jleveque",
+          "createdAt": "2017-09-29T01:00:51Z",
+          "body": "@taoyl-ms: The `DhcpResources` field is global for the device. The new `<DhcpRelays>` tag is a child of each VLAN, so this tag should be used to specify DHCP servers for each VLAN."
+        },
+        {
+          "author": "jleveque",
+          "createdAt": "2017-10-05T00:54:26Z",
+          "body": "Retest this please."
+        }
+      ]
+    }
+  ]
+}

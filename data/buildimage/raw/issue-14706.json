@@ -1,0 +1,119 @@
+{
+  "number": 14706,
+  "title": "sailibthrift is reading data from port_map.ini instead of config_db.json",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/14706",
+  "createdAt": "2023-04-18T17:39:53Z",
+  "closedAt": "2023-07-03T20:57:38Z",
+  "author": "rraghav-cisco",
+  "labels": [
+    "P0",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "Gfrom2016"
+  ],
+  "milestone": null,
+  "body": "We encountered an issue where the sai-thrift library in syncd-rpc container in the SONiC image is reading the port information(lanes, speed) etc from the port_config.ini instead of the /etc/sonic/config_db.json. My understanding is that config_db.json is the place to read this information once it has been created and saved.\r\n\r\nWhen the issue happens, the sai thrift call returns an empty value for port OID. I have attached the packet trace during this call.\r\n\r\nSteps done:\r\nWe configured the port speeds and lanes for 8 ports  (Ethernet96 to Ethernet152) from 400G to 100G. This was done in config_db.json, and then config-reload or reboot. The port_config.ini was not changed. This caused the following issue:\r\n\r\n**The below is the syslog that appears that time:**\r\nApr 13 03:10:44.818545 chu-dut INFO syncd#/supervisord: message repeated 2 times: [ dshell_client [03:10:44] {/usr/bin/dshell_client.py:1676} INFO - sai_thrift_get_port_id_by_front_port]\r\nApr 13 03:10:44.818545 chu-dut INFO syncd#/supervisord: dshell_client [03:10:44] {/usr/bin/dshell_client.py:1676} INFO - Didn't find port\r\nApr 13 03:10:44.819073 chu-dut INFO syncd#/supervisord: dshell_client [03:10:44] {/usr/bin/dshell_client.py:1676} INFO - sai_thrift_get_port_id_by_front_port\r\n\r\nThis causes **qos/test_qos.py::TestQosSai::testQosSaiSharedReservationSize to fail**. The sai-port-id from the DUT is 0 for Ethernet96(one of the new 100G ports). You can see that **Ethernet0 is returning a valid port ID, but Ethernet96 is returning 0**. This is causing the script to fail.\r\nroot@chu-dut:/home/cisco# show int stat | grep \"96 \"\r\n     Ethernet96  1536,1537,1538,1539     100G   9100     rs    etp12   PortChannel102      up       up                                  QSFP28 or later         off\r\n    Ethernet196      260,261,262,263     100G   9100    N/A   etp24b           routed      up     down  QSFP-DD Double Density 8X Pluggable Transceiver         off\r\n\r\n\r\n(Pdb) client.sai_thrift_get_port_id_by_front_port(\"Ethernet96\")\r\n0\r\n(Pdb) client.sai_thrift_get_port_id_by_front_port(\"Ethernet0\")\r\n72057594037927956\r\n(Pdb)\r\nThis issue is happening in all the new 100G ports:\r\n(Pdb) for i in range(96,153,8): client.sai_thrift_get_port_id_by_front_port(\"Ethernet\"+str(i))\r\n0\r\n0\r\n0\r\n0\r\n0\r\n0\r\n0\r\n0\r\n(Pdb) client.sai_thrift_get_port_id_by_front_port(\"Ethernet160\") **<<< Normal port.**\r\n72057594037927980\r\n(Pdb) ",
+  "comments": [
+    {
+      "author": "rraghav-cisco",
+      "createdAt": "2023-04-18T17:45:23Z",
+      "body": "**Valid port ID for Ethernet0:**\r\n<img width=\"1792\" alt=\"Screenshot 2023-04-18 at 10 43 35 AM\" src=\"https://user-images.githubusercontent.com/58446052/232860246-50ef537c-265a-4cd1-8509-a9a67583efea.png\">\r\n<img width=\"1792\" alt=\"Screenshot 2023-04-18 at 10 43 58 AM\" src=\"https://user-images.githubusercontent.com/58446052/232860334-db19086a-d15e-47e8-8de9-33542ed0224b.png\">\r\n**Invalid port ID for Ethernet96**\r\n<img width=\"1792\" alt=\"Screenshot 2023-04-18 at 10 44 33 AM\" src=\"https://user-images.githubusercontent.com/58446052/232860450-7e24c3b6-6a6d-4124-8a76-1cf40b6e8c9d.png\">\r\n<img width=\"1792\" alt=\"Screenshot 2023-04-18 at 10 44 48 AM\" src=\"https://user-images.githubusercontent.com/58446052/232860505-b7d60730-392a-45f4-9317-1283c4d54ce8.png\">\r\n"
+    },
+    {
+      "author": "anamehra",
+      "createdAt": "2023-04-18T18:50:02Z",
+      "body": "Hi @abdosi , raised this issue for saithrift lib causing qos test case failure when using minigraph as port_config.ini is used to validate the link."
+    },
+    {
+      "author": "neethajohn",
+      "createdAt": "2023-04-26T15:34:17Z",
+      "body": "@rraghav-cisco , @abdosi , can you provide more context?"
+    },
+    {
+      "author": "neethajohn",
+      "createdAt": "2023-04-26T15:35:35Z",
+      "body": "@neethajohn to sync with @Gfrom2016 to understand this issue"
+    },
+    {
+      "author": "abdosi",
+      "createdAt": "2023-06-22T23:24:33Z",
+      "body": "@Gfrom2016 have fixed this. Please check.  \r\ncc @neethajohn / @vmittal-msft / @anamehra /@rraghav-cisco  for viz."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1814,
+      "repository": "opencomputeproject/SAI",
+      "url": "https://github.com/opencomputeproject/SAI/pull/1814",
+      "title": "fix the issue where port sai oid not correct when speed change is done from 400G to 100G",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-07-03T20:57:36Z",
+      "createdAt": "2023-06-22T23:21:37Z",
+      "author": "abdosi",
+      "body": "What I did:\r\nFixes:  https://github.com/sonic-net/sonic-buildimage/issues/14706\r\n\r\nWhy I did:\r\nWithout this change any HWSKU with native speed of 400G (8lanes) running as 100G port speed (4 lanes) the sai port oid are always return as NULL cauing all QOS test to fail.\r\n\r\nHow I did:\r\nChange is generic where instead of doing exact match of lane value set return by SAI_PORT_ATTR_HW_LANE_LIST with the port_config.ini define value we are checking if it's subset of port_config.ini set.\r\n\r\nHow I verify:\r\nManual Verification.",
+      "files": [
+        {
+          "path": "test/saithrift/src/switch_sai_rpc_server.cpp",
+          "additions": 32,
+          "deletions": 9
+        }
+      ],
+      "comments": [
+        {
+          "author": "abdosi",
+          "createdAt": "2023-06-22T23:22:56Z",
+          "body": "@rlhui we need to this for SAI 1.10 and need to backport for 202205 sonic-sairedis"
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2023-06-22T23:23:08Z",
+          "body": "cc @anamehra for viz"
+        },
+        {
+          "author": "kcudnik",
+          "createdAt": "2023-06-29T15:18:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-06-29T15:18:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2023-06-29T16:30:03Z",
+          "body": "@arlakshm can you please help review this."
+        },
+        {
+          "author": "rraghav-cisco",
+          "createdAt": "2024-02-02T17:38:38Z",
+          "body": "@abdosi : Is this ported to on 1.12 as well, pls?"
+        }
+      ]
+    },
+    {
+      "number": 15831,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/15831",
+      "title": "[submodule update] sonic-sairedis",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-07-20T01:12:54Z",
+      "createdAt": "2023-07-13T17:32:52Z",
+      "author": "abdosi",
+      "body": "What I did:\r\n\r\nAdvance SAI submodule with below commit:\r\n\r\n`56aee6c0dfc4705584764edd35b7b2977bb762eb (HEAD -> 202205, origin/202205) [202205] Advance SAI submodule to fix issue https://github.com/sonic-net/sonic-buildimage/issues/14706 (#1265)`\r\n\r\nMicrosoft ADO: 17890678\r\n\r\nHow I verify:\r\n\r\n- Verification of sonic-mgmt qos tests on native 400G platform running at speed 100G \r\n- Verified on pizza box T1 also\r\n\r\n```\r\nsudo ./run_tests.sh -n vms1-8  -i ../ansible/str,../ansible/veos -c qos/test_qos_sai.py::TestQosSai::testQosSaiDscpQueueMapping -u -e \"--skip_sanity --disable_loganalyzer\" -l info\r\n\r\n==================== 1 passed, 2 skipped in 458.82 seconds =====================\r\n```\r\n",
+      "files": [
+        {
+          "path": "src/sonic-sairedis",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

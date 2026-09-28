@@ -1,0 +1,75 @@
+{
+  "number": 29554,
+  "title": "Bug: [swss] P4orch VerifyIpNextHopStateTest fails when sonic-swss is built with SONIC_PROFILING_ON",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/29554",
+  "createdAt": "2026-09-15T10:04:09Z",
+  "closedAt": "2026-09-23T16:44:26Z",
+  "author": "nazariig",
+  "labels": [
+    "Bug :bug:",
+    "Build",
+    "Triaged",
+    "Unit Tests",
+    "NVIDIA"
+  ],
+  "assignees": [
+    "nazariig"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nBuilding `sonic-swss` with profiling (`SONIC_PROFILING_ON=y`) fails at\n`dh_auto_test`. `p4orch_tests` reports a single failure:\n\n`NextHopManagerTest.VerifyIpNextHopStateTest`\n\nThe same suite passes on a default (optimized) build. Profiling is a supported\nimage mode: `slave.mk` sets `DEB_BUILD_OPTIONS=nostrip noopt`, so the package\nis compiled without optimization (`-O0`). The test therefore only fails when\nthe compiler leaves uninitialized stack as-is.\n\nThis is a P4orch next-hop verify bug, not platform-specific SAI.\n\n### Investigation and suspected root cause\n\n`NextHopManager::VerifyState()` combines two checks:\n\n1. `verifyStateCache()` \u2014 compare APP_DB fields against the in-memory\n   `P4NextHopEntry`\n2. `verifyStateAsicDb()` \u2014 rebuild SAI attributes via `prepareSaiAttrs()` and\n   compare them to `ASIC_STATE`\n\n`VerifyState` returns the ASIC-DB result whenever the cache result is empty.\n\n#### Hole 1 \u2014 test does not pass `action`\n\n`VerifyIpNextHopStateTest` builds `attributes` with neighbor and router\ninterface only. Sibling cases (`VerifyIpNextHopStateTestRewrite`, tunnel\nverify) already include `action`.\n\n`deserializeP4NextHopAppDbEntry()` therefore leaves `action_str` empty.\n`verifyStateCache()` only compares router-interface and neighbor when\n`action_str == \"set_ip_nexthop\"`, so the \u201critf ID mismatches\u201d / \u201cneighbor ID\nmismatches\u201d assertions never exercise the cache path.\n\n#### Hole 2 \u2014 `prepareSaiAttrs()` uses an uninitialized OID on mapper miss\n\nWhen the test then mutates `p4_next_hop_entry->router_interface_id` to\n`kRouterInterfaceId2`, `verifyStateAsicDb()` still runs:\n\n```cpp\nsai_object_id_t rif_oid;   // uninitialized\nm_p4OidMapper->getOID(SAI_OBJECT_TYPE_ROUTER_INTERFACE, ..., &rif_oid);\nnext_hop_attr.value.oid = rif_oid;\n```\n\n`P4OidMapper::getOID()` returns `false` and **does not write** `*oid` when the\nkey is missing. The GRE-tunnel branch has the same pattern for `tunnel_oid`.\n\n#### Why only profiling / `-O0` fails\n\nOn an optimized build the leftover stack / register for `rif_oid` typically\ndoes not equal the original RIF (`oid:0x1`). ASIC-DB compare then reports a\nmismatch, `VerifyState()` is non-empty, and\n`EXPECT_FALSE(VerifyState(...).empty())` passes \u2014 hiding both holes.\n\nWith `noopt`, the stack slot often still holds the previous successful RIF OID\nfrom an earlier `prepareSaiAttrs()` in the same test. ASIC-DB compare then\n**matches** `oid:0x1`, `VerifyState()` returns empty, and the \u201critf ID\nmismatches\u201d assertion fails:\n\n```text\nnext_hop_manager_test.cpp:1444: Failure\nValue of: VerifyState(db_key, attributes).empty()\n  Actual: true\n  Expected: false\n[  FAILED  ] NextHopManagerTest.VerifyIpNextHopStateTest\n```\n\n#### Proposed fix\n\n1. Initialize `rif_oid` and `tunnel_oid` to `SAI_NULL_OBJECT_ID` in\n   `NextHopManager::prepareSaiAttrs()` so a mapper miss cannot reuse a stale\n   OID.\n2. Pass `action=set_ip_nexthop` in `VerifyIpNextHopStateTest` so the cache\n   path actually compares router-interface and neighbor.\n\n### Steps to Reproduce\n\n1. Build `sonic-swss` with profiling enabled, e.g. from sonic-buildimage:\n\n   `SONIC_PROFILING_ON=y make target/debs/<distro>/swss_*.deb`\n\n   or equivalently compile/test the swss tree with `DEB_BUILD_OPTIONS=nostrip noopt`\n2. Observe `make check` / `dh_auto_test` fail in\n   `orchagent/p4orch/tests` (`p4orch_tests.log`)\n3. Repeat without profiling (`SONIC_PROFILING_ON` unset): the same test\n   passes\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior:\n`NextHopManagerTest.VerifyIpNextHopStateTest` fails under `-O0` /\n`SONIC_PROFILING_ON=y`. `debian/rules binary` for `swss` exits non-zero\n(`p4orch_tests.log` Error 1). A default optimized build does not show the\nfailure.\n\n### Expected Behavior:\n`prepareSaiAttrs()` never programs a stale / uninitialized OID. The IP\nnext-hop verify unit test includes `action`, so cache mismatches are\ndetected in every optimization mode. `p4orch_tests` passes with\n`SONIC_PROFILING_ON=y`.\n\n### Relevant log output\n\n```shell\nmake[4]: Entering directory '/sonic/src/sonic-swss/orchagent/p4orch/tests'\nmake check-TESTS\nmake[6]: *** [Makefile:2434: p4orch_tests.log] Error 1\n\n# p4orch_tests.log\nnext_hop_manager_test.cpp:1444: Failure\nValue of: VerifyState(db_key, attributes).empty()\n  Actual: true\n  Expected: false\n[  FAILED  ] NextHopManagerTest.VerifyIpNextHopStateTest\n 1 FAILED TEST\n\n# sonic-buildimage\ndh_auto_test: error: make ... check ... returned exit code 2\nmake[1]: *** [debian/rules:26: binary] Error 25\ndpkg-buildpackage: error: debian/rules binary subprocess returned exit status 2\nmake: *** [slave.mk:988: target/debs/trixie/swss_1.0.0_amd64.deb] Error 1\n```\n\n### Output of `show version`, `show techsupport`\n\n* N/A\n\n### Attach files (if any)\n\n* N/A",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4890,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4890",
+      "title": "[p4orch]: Init next-hop OIDs on mapper miss and pass action in VerifyIpNextHopStateTest",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-23T16:44:25Z",
+      "createdAt": "2026-09-15T10:33:37Z",
+      "author": "nazariig",
+      "body": "Signed-off-by: Nazarii Hnydyn <nazariig@nvidia.com>\r\n\r\n<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\n\r\n* `NextHopManager::prepareSaiAttrs()`: initialize `rif_oid` and `tunnel_oid` to\r\n  `SAI_NULL_OBJECT_ID` before `P4OidMapper::getOID()`. On a missing key\r\n  `getOID()` returns false and does not write the out-parameter; the previous\r\n  uninitialized locals could reuse a stale OID from the stack.\r\n* `NextHopManagerTest.VerifyIpNextHopStateTest`: add\r\n  `action=set_ip_nexthop` to the APP_DB attributes so `verifyStateCache()`\r\n  actually compares router-interface and neighbor (it only does so when the\r\n  action is known).\r\n\r\n**Why I did it**\r\n\r\n`sonic-swss` built with `SONIC_PROFILING_ON=y` (`DEB_BUILD_OPTIONS=nostrip noopt`,\r\ni.e. `-O0`) fails `dh_auto_test` on\r\n`NextHopManagerTest.VerifyIpNextHopStateTest`. The test mutates the cached RIF\r\nand expects `VerifyState()` to be non-empty. Without `action`, the cache check\r\nis skipped; without initializing the OID, `verifyStateAsicDb()` can rebuild\r\nSAI attrs using leftover `oid:0x1` and report a match. Optimized builds hide\r\nthis.\r\n\r\n**How I verified it**\r\n\r\n* Static review of `prepareSaiAttrs()` / `getOID()` miss path and of\r\n  `VerifyIpNextHopStateTest` vs `VerifyIpNextHopStateTestRewrite` (the rewrite\r\n  case already passed `action`).\r\n* Rebuild `swss` with `SONIC_PROFILING_ON=y` and confirm\r\n  `orchagent/p4orch/tests` (`p4orch_tests`) passes, including\r\n  `NextHopManagerTest.VerifyIpNextHopStateTest`.\r\n* Confirm a default (optimized) `make check` in `p4orch/tests` still passes.\r\n\r\n**Details if related**\r\n\r\n* N/A\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n```\r\n      .---.        .-----------\r\n     /     \\  __  /    ------\r\n    / /     \\(  )/    -----\r\n   //////   ' \\/ `   ---\r\n  //// / // :    : ---\r\n // /   /  /`    '--\r\n//          //..\\\\\r\n       ====UU====UU====\r\n           '//||\\\\`\r\n             ''``\r\n```",
+      "files": [
+        {
+          "path": "orchagent/p4orch/next_hop_manager.cpp",
+          "additions": 6,
+          "deletions": 5
+        },
+        {
+          "path": "orchagent/p4orch/tests/next_hop_manager_test.cpp",
+          "additions": 2,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-15T10:33:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-15T10:33:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-15T10:34:07Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2026-09-23T15:55:17Z",
+          "body": "@prsunny @prabhataravind could you review ?"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-09-23T16:44:12Z",
+          "body": "@kishanps, @mint570  for viz"
+        }
+      ]
+    }
+  ]
+}

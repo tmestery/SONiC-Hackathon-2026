@@ -1,0 +1,219 @@
+{
+  "number": 25142,
+  "title": "Bug: PMON missing access to necessary devices for platform monitoring post privilege removal",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25142",
+  "createdAt": "2026-01-20T23:05:19Z",
+  "closedAt": "2026-08-27T18:01:06Z",
+  "author": "gregoryboudreau",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "pmon"
+  ],
+  "assignees": [
+    "gregoryboudreau"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nPMON container no longer has access to the full set of device nodes under /dev/, which is breaking PMON services that need to, for example, open I2C device files (e.g., /dev/i2c-*). This appears to be a side effect of removing --privileged (https://github.com/sonic-net/sonic-buildimage/commit/a13685f3081dfd6c11f1995917a9390de352c8fd) , since that previously granted broad device access; without it, the container only sees whatever devices are explicitly passed through. Some vendors have worked around this by adding targeted --device mappings, but that approach doesn\u2019t cover the full set of I2C devices (or other /dev nodes PMON may need) and becomes fragile as platforms vary and device nodes change.\n\nThis change has been addressed piece-meal by multiple vendors across multiple device types, but still lacks the necessary extensive coverage:\nhttps://github.com/sonic-net/sonic-buildimage/commit/bd0e6c34476377efecf61f18834a8a613da273c4\nhttps://github.com/sonic-net/sonic-buildimage/commit/736606a288fcf29da4a3f5a3a3404ce028e7172b\nhttps://github.com/sonic-net/sonic-buildimage/commit/259ed3b182de1826c596cf8f272d1ae9b75fb0c6\nhttps://github.com/sonic-net/sonic-buildimage/commit/b251c0d2bb5d02993d3d5e1983a6c7d50e58412d\n\n### Steps to Reproduce\n\nAny direct `i2c` access (excluding i2c-0 which was explicitly added and through sysfs) will fail. Example is on Cisco platforms, we attempt to retrieve a status word from PSUs via `i2cget` which will fail because the PMON container cannot access targeted pmbus for the PSU.\n\n### Actual Behavior and Expected Behavior\n\nHere is an example of what /dev/ used to look like beforehand (inclusive of all /dev/ contents on the host):\n```\nroot@sonic:/# ls /dev/\nautofs\t\t gpiochip3  i2c-17  i2c-3   i2c-42  i2c-55  i2c-68  i2c-80  i2c-93\t    loop5   mtd3ro   nvme0n1p1\tsda\t     tam     tty18  tty30  tty43  tty56    ttyS1   ttyS9     uio8\t  vcsa4        vhost-vsock\nbsg\t\t gpiochip4  i2c-18  i2c-30  i2c-43  i2c-56  i2c-69  i2c-81  input\t    loop6   mtd4     nvme0n1p2\tsda1\t     tpm0    tty19  tty31  tty44  tty57    ttyS10  ubi0      urandom\t  vcsa5        watchdog\nbtrfs-control\t gpiochip5  i2c-19  i2c-31  i2c-44  i2c-57  i2c-7   i2c-82  intel_th0\t    loop7   mtd4ro   nvme0n1p3\tsda2\t     tpmrm0  tty2   tty32  tty45  tty58    ttyS11  ubi0_0    userfaultfd  vcsa6        watchdog0\nbus\t\t hpet\t    i2c-2   i2c-32  i2c-45  i2c-58  i2c-70  i2c-83  intel_th1\t    mapper  mtd5     nvram\tsg0\t     tty     tty20  tty33  tty46  tty59    ttyS12  ubi_ctrl  vcs\t  vcsu\t       watchdog1\nconsole\t\t hwrng\t    i2c-20  i2c-33  i2c-46  i2c-59  i2c-71  i2c-84  isst_interface  mei0    mtd5ro   port\tshm\t     tty0    tty21  tty34  tty47  tty6\t   ttyS13  uhid      vcs1\t  vcsu1        watchdog2\ncore\t\t i2c-0\t    i2c-21  i2c-34  i2c-47  i2c-6   i2c-72  i2c-85  kmsg\t    mem     mtd6     ppp\tsnapshot     tty1    tty22  tty35  tty48  tty60    ttyS14  uinput    vcs2\t  vcsu2        zero\ncpu_dma_latency  i2c-1\t    i2c-22  i2c-35  i2c-48  i2c-60  i2c-73  i2c-86  kvm\t\t    mqueue  mtd6ro   pps0\tsnd\t     tty10   tty23  tty36  tty49  tty61    ttyS15  uio0      vcs3\t  vcsu3\ncuse\t\t i2c-10     i2c-23  i2c-36  i2c-49  i2c-61  i2c-74  i2c-87  log\t\t    mtd0    mtd7     psaux\tspidevc10.1  tty11   tty24  tty37  tty5   tty62    ttyS2   uio1      vcs4\t  vcsu4\nfd\t\t i2c-11     i2c-24  i2c-37  i2c-5   i2c-62  i2c-75  i2c-88  loop-control    mtd0ro  mtd7ro   ptmx\tspidevc11.1  tty12   tty25  tty38  tty50  tty63    ttyS3   uio2      vcs5\t  vcsu5\nfull\t\t i2c-12     i2c-25  i2c-38  i2c-50  i2c-63  i2c-76  i2c-89  loop0\t    mtd1    net      ptp0\tspidevc12.1  tty13   tty26  tty39  tty51  tty7\t   ttyS4   uio3      vcs6\t  vcsu6\nfuse\t\t i2c-13     i2c-26  i2c-39  i2c-51  i2c-64  i2c-77  i2c-9   loop1\t    mtd1ro  ng0n1    pts\tspidevc13.1  tty14   tty27  tty4   tty52  tty8\t   ttyS5   uio4      vcsa\t  vfio\ngpiochip0\t i2c-14     i2c-27  i2c-4   i2c-52  i2c-65  i2c-78  i2c-90  loop2\t    mtd2    null     random\tstderr\t     tty15   tty28  tty40  tty53  tty9\t   ttyS6   uio5      vcsa1\t  vga_arbiter\ngpiochip1\t i2c-15     i2c-28  i2c-40  i2c-53  i2c-66  i2c-79  i2c-91  loop3\t    mtd2ro  nvme0    rfkill\tstdin\t     tty16   tty29  tty41  tty54  ttyACM0  ttyS7   uio6      vcsa2\t  vhci\ngpiochip2\t i2c-16     i2c-29  i2c-41  i2c-54  i2c-67  i2c-8   i2c-92  loop4\t    mtd3    nvme0n1  rtc0\tstdout\t     tty17   tty3   tty42  tty55  ttyS0    ttyS8   uio7      vcsa3\t  vhost-net\n```\n\nThis is the /dev/ contents PMON can access after this change:\n```\nroot@sonic:/# ls /dev/\nconsole    fd/        i2c-0      mqueue/    ptmx       random     shm/       stdin      tty        watchdog   watchdog1  zero       \ncore       full       log        null       pts/       sda        stderr     stdout     urandom    watchdog0  watchdog2   \n```\n\n### Relevant log output\n\n```shell\n2026 Jan 20 19:40:12.180421 sonic INFO pmon#supervisord: message repeated 3 times: [ psud Error: Could not open file `/dev/i2c-102' or `/dev/i2c/102': No such file or directory]\n2026 Jan 20 19:40:12.180421 sonic INFO pmon#supervisord: psud Error: Could not open file `/dev/i2c-103' or `/dev/i2c/103': No such file or directory\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "rlhui",
+      "createdAt": "2026-01-21T18:44:17Z",
+      "body": "caused by https://github.com/sonic-net/sonic-buildimage/pull/23457\n"
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2026-01-21T19:40:24Z",
+      "body": "@gregoryboudreau Previously there was a PR https://github.com/sonic-net/sonic-buildimage/pull/24250 to resolve the issue on /dev/i2c-0 missing. If you add /dev/i2c-* on your platform, will it resolve this issue?"
+    },
+    {
+      "author": "gregoryboudreau",
+      "createdAt": "2026-01-21T20:18:53Z",
+      "body": "> [@gregoryboudreau](https://github.com/gregoryboudreau) Previously there was a PR [#24250](https://github.com/sonic-net/sonic-buildimage/pull/24250) to resolve the issue on /dev/i2c-0 missing. If you add /dev/i2c-* on your platform, will it resolve this issue?\n\nThat is one method but also introduces a race condition, when we iterate over the /dev/i2c-* instances during the docker create we won't get new i2c instances when they are created after the fact. Beyond that, we get into the idea of providing access to all devices to the platform monitor service which is the approach I prefer (don't see a real reason to limit PMON on this front, let me know if there's some security concern). \n\nOne AI from the chassis call was to see if we could just mount /dev/ in the docker, need to dig a little deeper on how docker manages these permissions."
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2026-01-23T23:21:20Z",
+      "body": "@gregoryboudreau , which code PR was directly causing this?"
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2026-01-24T00:17:36Z",
+      "body": "> > [@gregoryboudreau](https://github.com/gregoryboudreau) Previously there was a PR [#24250](https://github.com/sonic-net/sonic-buildimage/pull/24250) to resolve the issue on /dev/i2c-0 missing. If you add /dev/i2c-* on your platform, will it resolve this issue?\n> \n> That is one method but also introduces a race condition, when we iterate over the /dev/i2c-* instances during the docker create we won't get new i2c instances when they are created after the fact. Beyond that, we get into the idea of providing access to all devices to the platform monitor service which is the approach I prefer (don't see a real reason to limit PMON on this front, let me know if there's some security concern).\n> \n> One AI from the chassis call was to see if we could just mount /dev/ in the docker, need to dig a little deeper on how docker manages these permissions.\n\nIt's interesting that \"we won't get new i2c instances when they are created after the fact\". Which component will create new i2c instances? Is it pmon itself?"
+    },
+    {
+      "author": "gregoryboudreau",
+      "createdAt": "2026-01-26T06:36:28Z",
+      "body": "> [@gregoryboudreau](https://github.com/gregoryboudreau) , which code PR was directly causing this?\n\n@rlhui this pr is what removed the privileged flag at the root of this: https://github.com/sonic-net/sonic-buildimage/pull/23457"
+    },
+    {
+      "author": "gregoryboudreau",
+      "createdAt": "2026-01-26T06:38:19Z",
+      "body": "> > > [@gregoryboudreau](https://github.com/gregoryboudreau) Previously there was a PR [#24250](https://github.com/sonic-net/sonic-buildimage/pull/24250) to resolve the issue on /dev/i2c-0 missing. If you add /dev/i2c-* on your platform, will it resolve this issue?\n> > \n> > \n> > That is one method but also introduces a race condition, when we iterate over the /dev/i2c-* instances during the docker create we won't get new i2c instances when they are created after the fact. Beyond that, we get into the idea of providing access to all devices to the platform monitor service which is the approach I prefer (don't see a real reason to limit PMON on this front, let me know if there's some security concern).\n> > One AI from the chassis call was to see if we could just mount /dev/ in the docker, need to dig a little deeper on how docker manages these permissions.\n> \n> It's interesting that \"we won't get new i2c instances when they are created after the fact\". Which component will create new i2c instances? Is it pmon itself?\n\nThat is up to vendors, say for example you have a FRUable device like PSUs or fans, how the switch handles that, whether it tears down the i2c devices, etc., is fully up to the vendor, the point I was trying to make is that by iterating over and using --device for allowing device access, we run into a condition where PMON _can_ be unable to access real devices that get added or modified after the fact of the docker's creation."
+    },
+    {
+      "author": "Staphylo",
+      "createdAt": "2026-01-26T16:31:57Z",
+      "body": "I second @gregoryboudreau 's point of view here.\n`pmon` is a platform management targeted container and should therefore have access to the exact same view of the hardware as the host has.\n\nI proposed further mitigations to the removal of the `--privileged` flag in following PR which added some missing devices to pmon https://github.com/sonic-net/sonic-buildimage/pull/24463/ \nWhile it temporarily solves the problem for our use case it likely doesn't solve other vendor's nor our future use cases.\nThis list of devices to mount in `pmon` will keep growing and will not be shrinkable at the risk of breaking some platform support.\nThis `pmon` limitation is bound to hit vendors again in the future.\n\nAs pointed out above, everything dynamic is a problem, I would also like chassis cards (linecards, fabric) to the list.\nSame goes for `udev` rules that some vendors might chose to implement or rely on. Their result is not replicated in the container.\n\nI recently came across another issue related to the availability of the debugfs in the pmon container.\nSome driver expose some of their information via this filesystem, but it's no longer available in pmon.\n\nHaving a cat-and-mouse game on `pmon`'s availability of hardware resources is I think detrimental to platform support efforts."
+    },
+    {
+      "author": "gregoryboudreau",
+      "createdAt": "2026-01-26T16:38:15Z",
+      "body": "I am trying out some changes locally to mount the /dev/ directory directly along with providing broad device-cgroup-rule to the pmon container to see if that could work without previously mentioned race condition. The big question with any approach is what are the security implications that initially brought about this `--privileged` flag removal, we likely want the _minimal_ amount of permissions that allows PMON functionality without above-mentioned cat-and-mouse dynamic."
+    },
+    {
+      "author": "judyjoseph",
+      "createdAt": "2026-01-28T16:23:46Z",
+      "body": "@gpunathilell please add the sonic-mgmt test failures here or in PR , need to fix those \n"
+    },
+    {
+      "author": "gpunathilell",
+      "createdAt": "2026-01-30T01:03:20Z",
+      "body": "The sonic-mgmt test: tests/container_hardening/test_container_hardening.py fails after mounting devices \nhttps://github.com/sonic-net/sonic-mgmt/blob/bcec4f46ead4c2b21dbc2627c41a7bd3b07bddd8/tests/container_hardening/test_container_hardening.py#L26\n(this is because we recently enabled it for pmon container: https://github.com/sonic-net/sonic-mgmt/pull/21331). We are checking that non-privileged container cannot directly access the block device underlying /etc/hosts ). Skipping the partition to be mounted: https://github.com/sonic-net/sonic-buildimage/pull/25080 only causes test to pass, but the underlying issue (pmon having access to block device) is not solved. Need to figure out what to do with the test"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-03-11T17:37:45Z",
+      "body": "@gregoryboudreau working in the fix with logger issues seen with inital proposed fix"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27852,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27852",
+      "title": "pmon: tolerate /dev reordering and bus hot-plug",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-27T18:01:05Z",
+      "createdAt": "2026-06-12T08:11:45Z",
+      "author": "ashwnsri",
+      "body": "\r\n#### Why I did it\r\n\r\nAimed at #25142\r\n\r\npmon runs against a fixed --device list captured at 'docker create', which breaks in two ways: a block-device partition (e.g. sda1) named in kernel probe order can disappear after a disk reorder and fail 'docker start', and a bus node that appears after create (i2c/cpld/fpga/ipmi/uio/spidev/gpiochip/mtd) is denied and invisible to the container.\r\n\r\n#### How I did it\r\n\r\nPass reorder-invariant whole disks, pre-authorize the hot-plug device classes, and keep the container's /dev in sync at runtime. The change is strictly narrower than --privileged.\r\n\r\nfiles/build_templates/docker_image_ctl.j2\r\n  - get_pmon_device_mounts(): skip block-device partitions and pass the reorder-invariant whole disk instead.\r\n  - get_pmon_device_cgroup_rules() (new): emit 'c <major>:* rwm' for each hot-pluggable bus class so a sibling created after 'docker create' (e.g. an i2c bus behind a mux on optic insert) is already permitted.\r\n  - start(): pass those rules as --device-cgroup-rule on docker create.\r\n  - postStartAction(): call pmon-dev-bridge.sh resync to converge /dev.\r\n\r\nfiles/image_config/pmon/pmon-dev-bridge.sh (new)\r\n  - Helper that mirrors allowed character bus nodes into the running pmon container(s): 'resync' converges every allowed node on start; 'event add|remove' handles a single udev hot-plug event via mknod/rm.\r\n\r\nfiles/image_config/udev/rules.d/99-pmon-dev-bridge.rules (new)\r\n  - udev rule forwarding add/remove uevents to pmon-dev-bridge.sh so the container's device view tracks hot-plug after creation.\r\n\r\nfiles/build_templates/sonic_debian_extension.j2\r\n  - Install pmon-dev-bridge.sh to /usr/local/bin (mode 755) at image build time.\r\n\r\n#### How to verify it\r\n\r\nAll checks are read-only except the dynamic-bridge demonstration, which is **container-only\r\nand fully reversible** \u2014 the host `/dev` is never modified. Run on a device built from /\r\nflashed with this fix. \r\n\r\nResults: [pmon-how-to-verify-it.md](https://github.com/user-attachments/files/28871000/pmon-how-to-verify-it.md).\r\n\r\n[PMON-HOTPLUG-TEST-REPORT.md](https://github.com/user-attachments/files/29029346/PMON-HOTPLUG-TEST-REPORT.md)\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [x] 202605\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [x] masterI20260609135544_asrinivasan\r\n- [x] SONiC.hpe_202605.0-dirty-20260721.170244 - logs: [pmon-start-issue-logs-202605.txt](https://github.com/user-attachments/files/30248975/pmon-start-issue-logs-202605.txt),  \r\n[pmon-cgroup-all-char-logs-202605.txt](https://github.com/user-attachments/files/30300120/pmon-cgroup-all-char-logs-202605.txt) and \r\n[pmon-cgroup-scoped-logs-202605.txt](https://github.com/user-attachments/files/30765895/pmon-cgroup-scoped-logs-202605.txt)\r\n\r\n\r\n\r\n\r\n#### Description for the changelog\r\npmon: tolerate /dev reordering and bus hot-plug (fixes #25142)",
+      "files": [
+        {
+          "path": "files/build_templates/docker_image_ctl.j2",
+          "additions": 35,
+          "deletions": 3
+        },
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "files/image_config/pmon/pmon-dev-bridge.sh",
+          "additions": 78,
+          "deletions": 0
+        },
+        {
+          "path": "files/image_config/udev/rules.d/99-pmon-dev-bridge.rules",
+          "additions": 17,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-12T08:12:00Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-12T08:12:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ashwnsri",
+          "createdAt": "2026-06-12T08:34:34Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-12T08:41:49Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-12T11:12:46Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "ashwnsri",
+          "createdAt": "2026-06-12T18:40:51Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-12T18:40:53Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "ashwnsri",
+          "createdAt": "2026-06-14T19:10:01Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-14T19:10:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-17T03:43:49Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-17T03:44:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T07:10:31Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T07:10:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ashwnsri",
+          "createdAt": "2026-06-24T23:51:45Z",
+          "body": "Hi @judyjoseph, please help review. TYSM."
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2026-07-08T16:51:08Z",
+          "body": "@gregoryboudreau can you review this PR, to see if this will fix the issue with your device as well ?"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2026-07-08T16:51:22Z",
+          "body": "/azp run Azure.sonic-buildimage\r\n\r\n"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-08T16:51:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2026-07-09T06:14:44Z",
+          "body": "few comments, LGTM. @Staphylo could you take a look as well?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-10T03:04:58Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-10T03:05:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

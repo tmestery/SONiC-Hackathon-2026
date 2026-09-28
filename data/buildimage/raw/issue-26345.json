@@ -1,0 +1,174 @@
+{
+  "number": 26345,
+  "title": "Bug: bgp suppress-fib-pending introduces hardcoded 1-second delay in BGP update advertisement",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26345",
+  "createdAt": "2026-03-24T00:05:08Z",
+  "closedAt": "2026-04-04T05:48:46Z",
+  "author": "deepak-singhal0408",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "routing"
+  ],
+  "assignees": [
+    "deepak-singhal0408"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen `bgp suppress-fib-pending` is enabled in FRR, there is a **hardcoded 1-second batching delay** added to BGP UPDATE advertisement after a route receives FIB installation confirmation from zebra.\n\nThis is caused by `BGP_UPDATE_GROUP_TIMER_ON` macro in `bgp_fsm.h` which schedules `bgp_generate_updgrp_packets` with a 1000ms delay (`BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME * 1000`) when both conditions are met:\n1. `BGP_SUPPRESS_FIB_ENABLED(peer->bgp)` is true\n2. `PEER_ROUTE_ADV_DELAY(peer)` is true (`PEER_THREAD_SUBGRP_ADV_DELAY` flag set when advertisement queue is empty and no withdrawals pending)\n\n```c\n// bgpd/bgpd.h:2060\n#define BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME  1   // 1 second, not configurable\n```\n\nThis delay was introduced in FRR commit `a77e2f4bab` as a batching optimization for bulk convergence, but it penalizes individual steady-state route updates where the queue only has 1 route.\n\n#### Why this affects SONiC even without real FIB suppression\n\nIn SONiC, the suppress-fib-pending feature involves two independent components:\n\n1. **bgpcfgd** (`managers_bgp.py`) \u2014 unconditionally enables `bgp suppress-fib-pending` in FRR on every SONiC 202411+ device, regardless of device role or ConfigDB state. This is done intentionally so that FRR is pre-armed, allowing the feature to be toggled hitlessly via ConfigDB without requiring BGP peer restarts.\n\n2. **fpmsyncd** (`routesync.cpp`) \u2014 checks `DEVICE_METADATA|localhost|suppress-fib-pending` in ConfigDB to decide whether to wait for real ASIC confirmation before sending `RTM_F_OFFLOAD` back to zebra, or to auto-offload immediately.\n\nOn a standard 202411 TOR **without** the ConfigDB flag set:\n- fpmsyncd auto-offloads routes immediately (no real FIB suppression)\n- But FRR still has `bgp suppress-fib-pending` enabled (from bgpcfgd)\n- FRR's 1-second batching timer activates on every route update\n\n**Result:** The device pays the full 1-second delay penalty with none of the actual FIB suppression benefit. FRR waits 1 second to \"batch\" routes, but fpmsyncd is rubber-stamping the offload reply instantly.\n\n**Code path:**\n1. Route received \u2192 best-path \u2192 `bgp_zebra_announce()` \u2192 `FIB_INSTALL_PENDING` set \u2192 route suppressed from advertisement\n2. Zebra \u2192 fpmsyncd: fpmsyncd sees suppression NOT enabled in ConfigDB \u2192 sends `RTM_F_OFFLOAD` back immediately\n3. Zebra \u2192 bgpd: `ZAPI_ROUTE_INSTALLED` (fast, since fpmsyncd auto-offloaded)\n4. `bgp_adj_out_set_subgroup()`: queue empty \u2192 sets `PEER_THREAD_SUBGRP_ADV_DELAY` flag\n5. `bgp_adjust_routeadv()` \u2192 `BGP_UPDATE_GROUP_TIMER_ON` \u2192 **1000ms timer**\n6. Timer fires \u2192 UPDATE sent to all peers\n\n**Key source files:**\n| File | Lines | Description |\n|------|-------|-------------|\n| `bgpd/bgp_fsm.h` | 31-42 | `BGP_UPDATE_GROUP_TIMER_ON` macro \u2014 applies the 1s delay |\n| `bgpd/bgpd.h` | 2060 | `BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME = 1` |\n| `bgpd/bgp_updgrp_adv.c` | 600-620 | Sets `ADV_DELAY` flag when queue empty + suppress-fib |\n| `bgpd/bgp_fsm.c` | 944-966 | `bgp_adjust_routeadv()` \u2014 triggers the macro |\n| `bgpd/bgp_zebra.c` | 2611-2626 | `ZAPI_ROUTE_INSTALLED` handler |\n| `sonic-bgpcfgd/bgpcfgd/managers_bgp.py` | 331 | Unconditionally enables `bgp suppress-fib-pending` in FRR |\n| `sonic-swss/fpmsyncd/routesync.cpp` | 1612-1614 | Auto-offloads when ConfigDB flag is NOT set |\n| `sonic-swss/fpmsyncd/fpmsyncd.cpp` | 103 | Reads `suppress-fib-pending` from ConfigDB |\n\n### Steps to Reproduce\n\n1. DUT(T0) with `bgp suppress-fib-pending` enabled (default in SONiC 202411+ via bgpcfgd).\n2. Verify ConfigDB does NOT have `suppress-fib-pending` set in `DEVICE_METADATA|localhost` (default state).\n3. Establish eBGP sessions with downstream peers and upstream T1 peers\n4. Inject a single BGP route from a downstream peer\n5. Capture BGP packets on T1-facing interfaces:\n   ```\n   tcpdump -i any -w /tmp/bgp-capture.pcap \"tcp port 179\"\n   ```\n6. Measure the time delta between the inbound UPDATE (from downstream) and outbound UPDATEs (to T1 peers)\n\n### Actual Behavior and Expected Behavior\n\n**Expected:** Route relayed to T1 peers in sub-millisecond (as observed on SONiC 202305 TORs without `suppress-fib-pending`)\n\n**Actual:** Route relayed to T1 peers after ~1 second delay. The delay consists of:\n- Variable FIB install round-trip time (bgpd \u2192 zebra \u2192 fpmsyncd \u2192 zebra \u2192 bgpd), depends on system load\n- Fixed 1000ms `BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME` batching timer\n\nAll T1 peers receive the update in a sub-millisecond burst after the timer expires.\n\n**Note:** This affects ALL device roles (T0, T1, T2, chassis) on SONiC 202411 and 202505, since bgpcfgd unconditionally enables `bgp suppress-fib-pending` in FRR with no device role or ConfigDB check.\n\n### Relevant log output\n\n```shell\n# Verify suppress-fib-pending is enabled in FRR (always, via bgpcfgd)\nvtysh -c \"show running-config\" | grep suppress-fib\n bgp suppress-fib-pending\n\n# Verify ConfigDB does NOT have suppress-fib-pending set (default state)\nredis-cli -n 4 hgetall \"DEVICE_METADATA|localhost\" | grep suppress\n# (empty \u2014 not set)\n\n# fpmsyncd is auto-offloading (not waiting for ASIC)\n# Yet FRR still applies the 1-second batching delay\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n# FRR version on SONiC 202411\nFRRouting 10.0.1\n```\n\n### Attach files (if any)\n\nN/A\n\n---\n\n---\n\n### Fix Tracking\n\n| Target | PR | Type | Status |\n|--------|-----|------|--------|\n| **master** | #26442 | Code PR | \u2705 Merged |\n| **202511** | #26466 | Backport | \u2705 Merged |\n| **202411** | #26464 | Backport | \u274c Closed (no plans to backport) |\n| **202505** | #26465 | Backport | \u274c Closed (no plans to backport) |\n| **sonic-mgmt** | sonic-net/sonic-mgmt#23390 | Test PR | \u2705 Merged |\n| **FRR upstream** | [FRRouting/frr#21384](https://github.com/FRRouting/frr/pull/21384) | Upstream | \u2705 Merged |\n",
+  "comments": [
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-03-24T02:58:21Z",
+      "body": "### Proposed Fix\n\nReduce `BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME` from 1 second to **50-100ms**.\n\nThe 1-second batching window is too aggressive for steady-state operation. Individual route updates (health checks, failovers, prefix changes) sit in the advertisement queue for a full second waiting for more routes that may never arrive \u2014 adding unnecessary convergence latency.\n\nA 50-100ms window still provides meaningful batching during bulk convergence (restart, peer flap with 10K+ routes), since zebra's batched kernel installs produce FIB confirmations in clusters well within this range. This reduces steady-state relay latency by 10-20x while preserving system efficiency during scale events.\n\n```diff\n# bgpd/bgpd.h \u2014 replace the seconds-based constant with a millisecond value\n\n-#define BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME  1\n+#define BGP_SUPPRESS_FIB_ADV_DELAY_MS  100\n\n# bgpd/bgp_fsm.h \u2014 use the new constant directly\n\n-   (BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME * 1000),\n+   BGP_SUPPRESS_FIB_ADV_DELAY_MS,\n```\n\nLong-term, this should be made configurable via FRR CLI so operators can tune the tradeoff for their environment."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-03-24T03:13:19Z",
+      "body": "@StormLiangMS FYI.."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-03-24T03:30:31Z",
+      "body": "@dgsudharsan "
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-03-26T22:38:54Z",
+      "body": "In addition to `bgpcfgd/managers_bgp.py` unconditionally injecting `bgp suppress-fib-pending`, `bgpd.main.conf.j2` also hardcodes it for startup:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/911f9a39c9594bd40e780d9089065b933b2609d7/dockers/docker-fpm-frr/frr/bgpd/bgpd.main.conf.j2#L75-L77\n\nThe 100ms reduction would help steady-state convergence, but on devices where ConfigDB doesn't have `suppress-fib-pending` set to enabled, `fpmsyncd` auto-offloads immediately, so we are adding delay with no benefit regardless of the window size.\n\nWould it make sense to also make the SONiC-side injection conditional on `suppress-fib-pending`? That way devices without real FIB suppression skip the delay entirely, and the timer only applies where suppression is actually active.\n\nThis seems like an interesting issue to work on. Happy to file a PR"
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-03-27T23:28:59Z",
+      "body": "> In addition to `bgpcfgd/managers_bgp.py` unconditionally injecting `bgp suppress-fib-pending`, `bgpd.main.conf.j2` also hardcodes it for startup:\n> \n> [sonic-buildimage/dockers/docker-fpm-frr/frr/bgpd/bgpd.main.conf.j2](https://github.com/sonic-net/sonic-buildimage/blob/911f9a39c9594bd40e780d9089065b933b2609d7/dockers/docker-fpm-frr/frr/bgpd/bgpd.main.conf.j2#L75-L77)\n> \n> Lines 75 to 77 in [911f9a3](/sonic-net/sonic-buildimage/commit/911f9a39c9594bd40e780d9089065b933b2609d7)\n> \n>  {% block bgp_init %} \n>    bgp log-neighbor-changes \n>    bgp suppress-fib-pending \n> The 100ms reduction would help steady-state convergence, but on devices where ConfigDB doesn't have `suppress-fib-pending` set to enabled, `fpmsyncd` auto-offloads immediately, so we are adding delay with no benefit regardless of the window size.\n> \n> Would it make sense to also make the SONiC-side injection conditional on `suppress-fib-pending`? That way devices without real FIB suppression skip the delay entirely, and the timer only applies where suppression is actually active.\n> \n> This seems like an interesting issue to work on. Happy to file a PR\n\nHi @Bojun-Feng , thanks for the offer. Actually there is some history behind why we have hardcoded config in bgpcfgd. The PRs were already in flight. its raised, take a look and let me know if any comments."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26442,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26442",
+      "title": "[SONiC-only] bgpd: reduce suppress-fib advertisement delay from 1s to 50ms",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-04T05:48:44Z",
+      "createdAt": "2026-03-27T22:51:17Z",
+      "author": "deepak-singhal0408",
+      "body": "> **Note:** This is a SONiC-only interim patch. The upstream FRR PR ([FRRouting/frr#21384](https://github.com/FRRouting/frr/pull/21384)) adds a configurable `bgp suppress-fib-pending [(0-1000)]` knob. Once that lands in the FRR version used by SONiC (target: 202611), this patch should be removed and replaced with the upstream knob configured via bgpcfgd/config_db.\n\n#### Why I did it\n\nWhen `bgp suppress-fib-pending` is enabled in FRR (unconditionally configured by bgpcfgd since 202411 via `apply_op()`), the `BGP_UPDATE_GROUP_TIMER_ON` macro in `bgp_fsm.h` adds an **additional 1-second batching delay** to BGP UPDATE advertisement after FIB confirmation. This additional delay is always active \u2014 even when real FIB suppression is not occurring (fpmsyncd auto-offloads when ConfigDB `suppress-fib-pending` is NOT set).\n\nFixes #26345\n\n##### Work item tracking\n- Microsoft ADO: 37212783\n\n#### How I did it\n\nAdded FRR patch `0065-bgpd-reduce-suppress-fib-advertisement-delay-to-50ms.patch` that:\n1. Introduces `BGP_SUPPRESS_FIB_ADV_DELAY_MSEC` (50ms) as a named constant in `bgpd/bgpd.h`\n2. Changes `BGP_UPDATE_GROUP_TIMER_ON` macro in `bgpd/bgp_fsm.h` to use the new constant instead of `BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME * 1000` (was 1000ms)\n3. Removes the `BGP_DEFAULT_UPDATE_ADVERTISEMENT_TIME` define in `bgpd/bgpd.h` (no longer needed \u2014 replaced by the new constant)\n\nThe suppress-fib mechanism remains fully intact \u2014 routes still wait for FIB confirmation before advertising. This only reduces the post-confirmation batching window from 1s to 50ms, which still allows zebra batch processing to coalesce routes during bulk convergence.\n\n**Why not remove `bgp suppress-fib-pending` from bgpcfgd?**\nPer PR #24883 revert rationale, the unconditional `bgp suppress-fib-pending` in `apply_op()` is intentional by design. The feature has been enabled/reverted 5 times (#17072, #17578, #19027, #19836, #23187, #24883), and the current design deliberately keeps FRR config static while controlling behavior via fpmsyncd.\n\n**New integration test to catch regressions:**\nA companion sonic-mgmt test ([sonic-net/sonic-mgmt#23390](https://github.com/sonic-net/sonic-mgmt/pull/23390)) is being added to continuously validate BGP UPDATE relay latency. The test injects a route from a downstream peer, captures BGP traffic via tcpdump, and measures the time between inbound UPDATE and outbound UPDATE relay using scapy pcap analysis. It covers both `fib_suppress_off` (default) and `fib_suppress_on` scenarios and asserts relay latency stays below 500ms, ensuring any future regression that reintroduces the additional 1-second delay will be caught automatically.\n\n#### How to verify it\n\n**Test setup:** VS image on cSONiC KVM testbed (t0 topology, 4 BGP peers)\n\n**Relay latency measurement (tcpdump + scapy pcap analysis):**\n- Injected `99.99.99.0/24` from downstream peer via vtysh\n- Captured BGP traffic on DUT\n- **Result: 113ms relay latency** (inbound UPDATE at T+0, outbound UPDATE at T+113ms)\n- **Without this fix:** the additional 1-second batching delay would push relay latency above 1 second\n\n**BGP health check:** All 4 IPv4 BGP sessions remain Established after fix.\n\n```\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down      State/PfxRcd\n10.0.0.57      4  64600         33         34         2      0       0  00:01:27                1\n10.0.0.59      4  64600         33         34         2      0       0  00:01:27                1\n10.0.0.61      4  64600         33         34         2      0       0  00:01:27                1\n10.0.0.63      4  64600         33         34         2      0       0  00:01:27                1\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\nAll branches with `bgp suppress-fib-pending` unconditionally enabled are affected.\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [x] 202411\n- [x] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] SONiC.master.0-dirty-20260327.215611\n\n#### Description for the changelog\n\nReduce BGP UPDATE relay delay from 1s to 50ms when suppress-fib-pending is enabled\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no ConfigDB or YANG changes\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83d\udc38 (FRR frog)\n",
+      "files": [
+        {
+          "path": "src/sonic-frr/patch/0065-SONiC-ONLY-bgpd-reduce-suppress-fib-advertisement-delay-to-50ms.patch",
+          "additions": 60,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-frr/patch/series",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-27T22:53:40Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-27T22:53:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-27T23:27:26Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-27T23:27:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-03-27T23:37:32Z",
+          "body": "@deepak-singhal0408 , is there an issue created on FRR and this additional delay can be configured/removed in future?"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-03-27T23:56:03Z",
+          "body": "> @deepak-singhal0408 , is there an issue created on FRR and this additional delay can be configured/removed in future?\r\n\r\nyes, frr issue link: https://github.com/FRRouting/frr/issues/21298\r\nYes, wanted to give this setting(50ms) enough soak time in prod, and if all goes well, we could set it to 0 or have a configurable knob(could decide on this before 202611).."
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2026-03-28T00:17:47Z",
+          "body": "how this change will work if someone is using fib suppression feature ? "
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-03-28T04:54:26Z",
+          "body": "> how this change will work if someone is using fib suppression feature ?\r\n\r\nthis change will affect both cases fib-supression off/on in same way.. since the config \"bgp suppress-fib-pending\" is always present(irrespective of the fact whether fib supression is enabled or not), the current code adds 1second delay before it starts advertisememnt(I assume to pack more NLRIs in single update message), but 1Sec is too long. So after this change, both cases will have 50ms timer running to accommodate additional bulking on top of what we get implicitly. So for fib-supress on case, the advertisement time for first batch would be (50ms+feedback from asic time) vs fib supress off case this time would be (50ms)."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-30T06:44:19Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-30T06:44:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2026-03-30T14:52:15Z",
+          "body": "++ @r12f \r\n\r\n@deepak-singhal0408  Has this been tested with 514 neighbor based scale test?"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-04-01T21:13:34Z",
+          "body": "> ++ @r12f\r\n> \r\n> @deepak-singhal0408 Has this been tested with 514 neighbor based scale test?\r\n\r\nHi @dgsudharsan, AFAIK about the topologies with 512 neighbor scale, number of prefixes from each neighbor is quite low.. In those cases, this will provide benefit upfront. the change is in bgp advertisement path. \r\n\r\nAlso, JFYI, FRR upstream PR is updated with configurable knob.. and once we have that change available in SONiC(probably before 202611?), we could make further changes to allow configuration of this value from config_db.\r\n\r\n@prsunny FYI.\r\n\r\n"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2026-04-01T23:19:28Z",
+          "body": "> Also, JFYI, FRR upstream PR is updated with configurable knob.. and once we have that change available in SONiC(probably before 202611?), we could make further changes to allow configuration of this value from config_db.\r\n\r\nCan you share the upstream PR?\r\nIn this case please rename this patch as SONiC only and mention this needs to be removed in 202611 with the configuration knob.\r\n\r\n@eddieruan-alibaba FYI"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-04-01T23:31:07Z",
+          "body": "> > Also, JFYI, FRR upstream PR is updated with configurable knob.. and once we have that change available in SONiC(probably before 202611?), we could make further changes to allow configuration of this value from config_db.\r\n> \r\n> Can you share the upstream PR? In this case please rename this patch as SONiC only and mention this needs to be removed in 202611 with the configuration knob.\r\n> \r\n> @eddieruan-alibaba FYI\r\nthanks @dgsudharsan for the feedback.. Below is the FRR Upstream PR, and also updated the patch file name and added a note in the body..\r\nFRR PR: https://github.com/FRRouting/frr/pull/21384"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-01T23:57:43Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-01T23:57:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-02T03:08:20Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-02T04:53:00Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-02T04:53:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-02T15:11:20Z",
+          "body": "/azpw ms_conflict"
+        }
+      ]
+    }
+  ]
+}

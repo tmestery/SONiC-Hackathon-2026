@@ -1,0 +1,127 @@
+{
+  "number": 29279,
+  "title": "Bug: [warm-reboot] syncd SIGABRT on host_tx_ready when a port flaps",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/29279",
+  "createdAt": "2026-09-01T16:26:08Z",
+  "closedAt": "2026-09-22T09:28:46Z",
+  "author": "nazariig",
+  "labels": [
+    "Bug :bug:",
+    "warmboot :boot:"
+  ],
+  "assignees": [
+    "nazariig"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter warm-reboot, `syncd` can abort with `SIGABRT` if a `PORT_HOST_TX_READY`\nnotification arrives after switch create and before PORT objects exist.\nSWSS never finishes restore: orchagent times out talking to dead `syncd`,\nwarmboot finalizer stays waiting, and platform daemons that poll the SDK\n(e.g. xcvrd / CMIS) report empty / missing transceivers.\n\nThe trigger is a live link event (port flap) in that window. Platforms that\nregister `SAI_SWITCH_ATTR_PORT_HOST_TX_READY_NOTIFY` (CMIS-ASIC sync)\narm the callback from the PortsOrch constructor, so they hit\nthe window more easily. The abort itself is in generic sairedis, not in\nvendor SAI.\n\n### Investigation and suspected root cause\n\n`create_switch()` has already returned and the switch RID is in the\ntranslation table. PortsOrch then SETs\n`SAI_SWITCH_ATTR_PORT_HOST_TX_READY_NOTIFY`. Port RID\u2192VID mappings are only\ninserted later in `SaiSwitch::onPostPortsCreate` (after orchagent creates\nthe PORT objects, ~2 s on the failing SKU).\n\nA dedicated `syncd` thread (`NotificationProcessor::ntf_process_function`)\ndequeues the SAI notification and translates RIDs before forwarding to orchagent:\n\n```cpp\n// NotificationProcessor::process_on_port_host_tx_ready_change()\n\nport_vid   = translateRidToVid(port_id,   SAI_NULL_OBJECT_ID);\nswitch_vid = translateRidToVid(switch_id, SAI_NULL_OBJECT_ID);\n```\n\n`translateRidToVid()` is a mutating discovery helper (GET / snoop): on a\nmiss it calls `allocateNewObjectId(object_type, switchVid)`. The second\nargument is switch **context** for allocating a VID, passed by value \u2014 not a\ndestination and not \u201cconvert this RID to null\u201d. Passing `SAI_NULL_OBJECT_ID`\nis an invalid allocation context.\n\nOn the miss path (port RID not yet mapped):\n\n```text\nallocateNewObjectId(SAI_OBJECT_TYPE_PORT, switchVid=0)\n \u2192 saiObjectTypeQuery(0) == SAI_OBJECT_TYPE_NULL\n \u2192 SWSS_LOG_THROW(\"object type of switch oid:0x0 is SAI_OBJECT_TYPE_NULL, should be SWITCH\")\n \u2192 uncaught in the notification thread \u2192 std::terminate \u2192 SIGABRT\n```\n\nThe failing translation is the **port**. The switch RID was already mapped;\n`oid:0x0` in the throw is the hardcoded `switchVid` input, not a missing\nswitch object. The sibling handler `process_on_port_state_change()` already\nuses read-only `tryTranslateRidToVid()` and only WARNs on a miss; the same\nflap\u2019s port-state event does not abort.\n\nDropping an unknown-port `host_tx_ready` edge is safe: orchagent later GETs\n`SAI_PORT_ATTR_HOST_TX_READY_STATUS` (`initializePortHostTxReadyBulk` after\nPORT create) and `SAI_PORT_ATTR_OPER_STATUS` (`refreshPortStatus` at warm\nrestore end). Notifications are not the source of truth for the starting\npicture.\n\n#### Observed sequence (failing warm-reboot)\n\n```text\nsyncd:     SaiSwitch constructor done (switch RID mapped)\norchagent: SET SAI_SWITCH_ATTR_PORT_HOST_TX_READY_NOTIFY  [is_created:1]\nSAI:       host_tx_ready notification for a flapping port (no PORT VID yet)\nsyncd:     translateRidToVid(port_rid, SAI_NULL_OBJECT_ID) miss\nsyncd:     allocateNewObjectId(..., switch oid:0x0) \u2192 std::runtime_error\nsyncd:     SIGABRT (core dumped)\nkernel:    SDK watchdog \u2014 SDK terminated ungracefully\norchagent: TIMEOUT on getresponse; warmboot finalizer still waiting\n```\n\n### Steps to Reproduce\n\n1. DUT that registers `SAI_SWITCH_ATTR_PORT_HOST_TX_READY_NOTIFY`\n   (e.g. CMIS-ASIC sync SKU)\n2. At least one front-panel port that can flap while the ASIC stays up\n   (hardware links are not taken down for warm-reboot)\n3. Issue `sudo warm-reboot`\n4. If a `host_tx_ready` notification lands after switch create and before PORT\n   create, observe `syncd` abort and SWSS stuck in restore\n\nRepro is timing-dependent. A quiet box (no flap in that ~2 s window) will\nnot hit it. Cold boot usually misses the window because links are quiet\nuntil after `onPostPortsCreate`.\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior:\n`syncd` throws `std::runtime_error` from `allocateNewObjectId` while\ntranslating a `host_tx_ready` notification for a port that has no VID yet,\nthen `SIGABRT`s. SWSS does not come up; warmboot finalizer hangs.\n\n### Expected Behavior:\nAn unknown port (or switch) RID in a `host_tx_ready` notification is\ntreated like `port_state_change`: warn, drop the event, do not allocate a\nVID. `syncd` stays up. orchagent reads current `host_tx_ready` / oper\nstatus from HW after PORT objects exist.\n\n### Relevant log output\n\n```shell\nNOTICE syncd#SDK: :- SaiSwitch: constructor took 0.008510 sec\n\nNOTICE syncd#SDK: set_dispatch_attrib_handler: Set PORT_HOST_TX_READY_NOTIFY\n                  key:SWITCH [OID:0x100000021] [is_created:1]\n\nNOTICE syncd#SDK: handle_port_tx_ready_trap: Port 0x100fd\n                  tx_ready changed state to not ready\nERR    syncd#SDK: :- allocateNewObjectId: object type of switch oid:0x0\n                  is SAI_OBJECT_TYPE_NULL, should be SWITCH\nNOTICE syncd#SDK: event_processor_thread_func: Port 100fd changed state\n                  to down, error MAC_LOCAL_FAULT\nINFO   syncd#supervisord: syncd terminate called after throwing an instance of\n                  'std::runtime_error'\nINFO   syncd#supervisord: syncd   what():  :- allocateNewObjectId: object type\n                  of switch oid:0x0 is SAI_OBJECT_TYPE_NULL, should be SWITCH\nWARN   syncd#supervisord: exited: syncd (terminated by SIGABRT (core dumped);\n                  not expected)\n\nNOTICE root: WARMBOOT_FINALIZER : Waiting for components to reconcile: orchagent\nERR    swss#orchagent: TIMEOUT on getresponse\n```\n\n### Output of `show version`, `show techsupport`\n\n* N/A\n\n### Attach files (if any)\n\n* N/A",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2068,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2068",
+      "title": "[syncd]: Drop host_tx_ready ntf when port RID is not mapped yet",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-22T09:28:45Z",
+      "createdAt": "2026-09-02T13:05:38Z",
+      "author": "nazariig",
+      "body": "Signed-off-by: Nazarii Hnydyn <nazariig@nvidia.com>\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n\r\n### Description of PR\r\n\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\n## The bug\r\n\r\n`syncd` can `SIGABRT` during warm-reboot when a `PORT_HOST_TX_READY`\r\nnotification arrives after switch create and before PORT objects exist.\r\n\r\n`NotificationProcessor::process_on_port_host_tx_ready_change()` translated\r\nSAI RIDs with `translateRidToVid(rid, SAI_NULL_OBJECT_ID)`. That API is a\r\nmutating discovery helper: on a miss it calls\r\n`allocateNewObjectId(object_type, switchVid)`. The second argument is switch\r\n**context** for allocating a VID, not an in-place destination.\r\n`SAI_NULL_OBJECT_ID` is an invalid context, so a missing port RID throws:\r\n\r\n```text\r\nallocateNewObjectId: object type of switch oid:0x0 is SAI_OBJECT_TYPE_NULL,\r\nshould be SWITCH\r\n```\r\n\r\nuncaught in the notification thread \u2192 `std::terminate` \u2192 `SIGABRT`.\r\n\r\nPort RID\u2192VID is only inserted in `SaiSwitch::onPostPortsCreate`. Hardware\r\nlinks stay up across warm-reboot, so a flap in that window is a real SAI\r\nRID that sairedis has not mapped yet. The sibling\r\n`process_on_port_state_change()` already uses read-only\r\n`tryTranslateRidToVid()` and only WARNs on a miss.\r\n\r\n## Why dropping the notification is safe\r\n\r\norchagent does not depend on that one-shot edge for the starting picture.\r\nAfter PORT create it GETs `SAI_PORT_ATTR_HOST_TX_READY_STATUS`\r\n(`initializePortHostTxReadyBulk`). At warm restore end it GETs\r\n`SAI_PORT_ATTR_OPER_STATUS` (`refreshPortStatus`). A later flap still\r\ndelivers a mapped-RID notification.\r\n\r\n## The fix\r\n\r\nUse `tryTranslateRidToVid()` for both port and switch. On a miss, WARN and\r\nreturn without allocating a VID or calling `sendNotification`.\r\n\r\n```cpp\r\nif (!m_translator->tryTranslateRidToVid(port_id, port_vid))\r\n{\r\n    SWSS_LOG_WARN(\"Port RID %s translated to null VID!!!\",\r\n            sai_serialize_object_id(port_id).c_str());\r\n    return;\r\n}\r\n\r\nif (!m_translator->tryTranslateRidToVid(switch_id, switch_vid))\r\n{\r\n    SWSS_LOG_WARN(\"Switch RID %s translated to null VID!!!\",\r\n            sai_serialize_object_id(switch_id).c_str());\r\n    return;\r\n}\r\n```\r\n\r\nUnit test: unknown port RID and unknown switch RID must not throw\r\n(`allocateNewObjectId` \u2192 `SIGABRT`). Miss handling\r\nis `return` before `sendNotification`; the test does not spy on the\r\nproducer.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [x] Test improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nA `host_tx_ready` SAI notification during warm-reboot, before PORT create, must not\r\nkill `syncd`. The same race is already handled for port oper-state\r\nnotifications.\r\n\r\n#### Work item tracking\r\n\r\n* N/A\r\n\r\n#### How did you do it?\r\n\r\n* `syncd/NotificationProcessor.cpp` \u2014\r\n  `process_on_port_host_tx_ready_change()` uses `tryTranslateRidToVid()`\r\n  for port and switch; miss \u2192 WARN and drop\r\n* `unittest/syncd/TestNotificationProcessor.cpp` \u2014\r\n  unknown port RID and unknown switch RID must not throw (`EXPECT_NO_THROW`).\r\n  That is the `allocateNewObjectId` / `SIGABRT` regression. Dropping the ntf is the handler\r\n  `return` before `sendNotification`, not a separate UT assertion.\r\n\r\n#### How did you verify/test it?\r\n\r\n1. syncd unit test (existing `NotificationProcessorTest` plus the two\r\n   `host_tx_ready` miss cases):\r\n```\r\nmake -C unittest/syncd check\r\n```\r\n2. On a DUT that registers `SAI_SWITCH_ATTR_PORT_HOST_TX_READY_NOTIFY`,\r\n   warm-reboot with a port that can flap in the switch-create \u2192 PORT-create\r\n   window. Confirm `syncd` stays up (no\r\n   `allocateNewObjectId: object type of switch oid:0x0`) and orchagent\r\n   reaches reconciled. `host_tx_ready` in STATE_DB matches HW after\r\n   `initializePortHostTxReadyBulk`.\r\n\r\n#### Any platform specific information?\r\n\r\nNo. Generic sairedis notification path. More likely to show up where\r\nPortsOrch SETs `SAI_SWITCH_ATTR_PORT_HOST_TX_READY_NOTIFY` (CMIS-ASIC sync),\r\nbecause that arms the callback before PORT create.\r\nAny platform that delivers `host_tx_ready` in that window is affected.\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n\r\nN/A \u2014 bug fix; behavior documented in the handler comment and unit test.\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n```\r\n      .---.        .-----------\r\n     /     \\  __  /    ------\r\n    / /     \\(  )/    -----\r\n   //////   ' \\/ `   ---\r\n  //// / // :    : ---\r\n // /   /  /`    '--\r\n//          //..\\\\\r\n       ====UU====UU====\r\n           '//||\\\\`\r\n             ''``\r\n```\r\n",
+      "files": [
+        {
+          "path": "syncd/NotificationProcessor.cpp",
+          "additions": 19,
+          "deletions": 6
+        },
+        {
+          "path": "tests/aspell.en.pws",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "unittest/syncd/TestNotificationProcessor.cpp",
+          "additions": 22,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T13:05:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T13:05:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T13:06:09Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T15:15:16Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T15:15:29Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T18:21:10Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2026-09-07T09:20:29Z",
+          "body": "@nazariig  please check PR checkers and re run if needed"
+        },
+        {
+          "author": "nazariig",
+          "createdAt": "2026-09-08T15:12:13Z",
+          "body": "/azpw run all"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-08T15:12:15Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-08T15:12:18Z",
+          "body": "Retrying failed(or canceled) stages in build 1209854:\n\n\n\u2705Stage **Test**:\n- Job vstest: retried."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-08T15:12:57Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-08T15:13:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-08T15:13:21Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "nazariig",
+          "createdAt": "2026-09-08T18:50:11Z",
+          "body": "> @nazariig please check PR checkers and re run if needed\r\n\r\n@liat-grozovik done"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T15:27:16Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-sairedis/pull/2087"
+        }
+      ]
+    }
+  ]
+}

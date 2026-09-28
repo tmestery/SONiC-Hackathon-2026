@@ -1,0 +1,169 @@
+{
+  "number": 28540,
+  "title": "Bug: [SmartSwitch] DPU gNMI/gNOI service binds to loopback only after sonic-gnmi#712, breaking NPU proxy connectivity",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28540",
+  "createdAt": "2026-07-21T12:31:41Z",
+  "closedAt": "2026-08-19T18:16:17Z",
+  "author": "gpunathilell",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "smartswitch"
+  ],
+  "assignees": [
+    "hdwhdw"
+  ],
+  "milestone": null,
+  "body": "## Is it platform specific\n\ngeneric\n\n## Importance or Severity\n\nCritical\n\n## Description of the bug\n\nAfter [sonic-gnmi#712](https://github.com/sonic-net/sonic-gnmi/pull/712) was merged, the gNMI/gNOI telemetry service on each DPU in a SmartSwitch now binds exclusively to `127.0.0.1:50052` (loopback), making every DPU unreachable from the NPU's internal gNOI proxy.\n\n**Root cause:** In `gnmi-native.sh`, when no `CERTS` or `X509` entry exists in ConfigDB (which is the DPU's default state), the script falls into the `else` branch and hardcodes:\n\n```bash\nTELEMETRY_ARGS+=\" --noTLS --bind_address 127.0.0.1\"\n```\n\nPR #712 added a strict enforcement in `telemetry.go` (`setupFlags`): when `--noTLS` is set, `--bind_address` must be a loopback address (`net.IP.IsLoopback()`). Since `gnmi-native.sh` already supplies `127.0.0.1`, the service starts \u2014 but listens only on loopback.\n\nThe NPU's `DPUProxy` (`pkg/interceptors/dpuproxy/proxy.go`) dials each DPU directly at `169.254.200.x:{50052,8080}` over the SmartSwitch midplane fabric using insecure gRPC. With the DPU now bound to `127.0.0.1` only, all those dials fail with `connection refused`.\n\nNote: setting `bind_address` in the DPU's `GNMI|gnmi` ConfigDB entry would not help \u2014 the script never reads it, and even if it were passed to the binary, `169.254.x.x` would fail the `IsLoopback()` check and prevent the service from starting entirely.\n\n## Steps to Reproduce\n\n1. Deploy a SmartSwitch platform running a SONiC image built after sonic-gnmi#712, with no TLS certs configured on the DPUs.\n2. From the NPU, verify DPU gNOI connectivity:\n\n```bash\ngnoi_client -target 169.254.200.1:50052 -module System -rpc Time\n```\n\n3. Repeat for `169.254.200.2`, `169.254.200.3`, `169.254.200.4`. All fail with `connection refused`.\n4. On any DPU, confirm the service is listening only on loopback:\n\n```bash\nss -tlnp | grep 50052\n# LISTEN  0  128  127.0.0.1:50052  0.0.0.0:*\n```\n\n## Actual Behavior and Expected Behavior\n\n**Actual:** The DPU telemetry service starts with `--noTLS --bind_address 127.0.0.1`, binding only to loopback. The NPU's `DPUProxy` cannot reach `169.254.200.x:50052` or `169.254.200.x:8080`, causing all DPU gNOI operations (reboot, time, file) to fail. 100% reproduction rate.\n\n**Expected:** The DPU gNMI/gNOI service should be reachable from the NPU over the `169.254.200.x` midplane fabric. This network is internal and isolated \u2014 not exposed externally.\n\n## Relevant log output\n\n```\nERROR:\n  Code: Internal\n  Message: failed to connect to DPU2: failed to connect to DPU2 on any port [50052 8080]:\n  last error: rpc error: code = Unavailable desc = connection error:\n  desc = \"transport: Error while dialing: dial tcp 169.254.200.3:8080: connect: connection refused\"\n```\n\nOn the DPU (`ss -tlnp | grep 50052`):\n```\nLISTEN  0  128  127.0.0.1:50052  0.0.0.0:*  users:((\"telemetry\",pid=...,fd=...))\n```\n\n## Output of `show version`, `show techsupport`\n\n```\nSONiC.master-<commit>\n```\n\n## Attach files (if any)\n\nN/A",
+  "comments": [
+    {
+      "author": "gpunathilell",
+      "createdAt": "2026-07-21T12:32:53Z",
+      "body": "@vvolam fyi"
+    },
+    {
+      "author": "vvolam",
+      "createdAt": "2026-07-21T22:27:02Z",
+      "body": "@hdwhdw FYI"
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-07-21T23:51:08Z",
+      "body": "Thanks! Will take a look "
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-07-21T23:52:49Z",
+      "body": "@qiluo-msft fyi"
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-07-22T18:34:58Z",
+      "body": "Update: the issue is reproduced, fixed, and physically validated.\n\nRoot cause:\n\n- `sonic-gnmi#712` correctly restricted plaintext `--noTLS` listeners to loopback.\n- SmartSwitch NPU-to-DPU proxy traffic uses the DPU's chassis-internal\n  `eth0-midplane` IPv4 link-local address, so loopback-only DPU listeners reject\n  the proxy connection.\n\nFix:\n\n- sonic-net/sonic-gnmi#721 adds an explicit\n  `--no_tls_link_local_interface` mode. The binary waits for exactly one IPv4\n  link-local address on the named interface and binds that concrete address.\n  Direct `--noTLS --bind_address` remains loopback-only.\n- sonic-net/sonic-buildimage#28564 classifies SmartSwitch DPUs through the\n  launchers' existing `sonic-cfggen` render and passes only\n  `--noTLS --no_tls_link_local_interface eth0-midplane`.\n- The launch scripts do not query Redis directly, parse `ip` output, or poll.\n\nValidation:\n\n- Native arm64 gNMI and telemetry container build passed.\n- On a physical SmartSwitch, both services listened only on the concrete DPU\n  midplane address at ports `50052` and `8080`.\n- NPU TCP probes, direct gNOI `System.Time`, and the real UDS metadata-routed\n  DPUProxy call passed.\n- Negative probes confirmed no listener on the DPU management address or\n  loopback.\n- The DPU was restored to its original images, all DPUs remained reachable,\n  the baseline RPC passed, and the testbed was released.\n\nStatus:\n\n- All checks pass on sonic-net/sonic-gnmi#721.\n- Security, DCO/CLA, file protection, and internal conflict checks pass on\n  sonic-net/sonic-buildimage#28564; its broad platform build matrix is still\n  running.\n- Review has been requested on both PRs.\n"
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-08-07T22:48:53Z",
+      "body": "`--insecure` is approved for every platform, replacing the certificate-free plaintext loopback fallback.\n\nImplementation PRs:\n- sonic-net/sonic-gnmi#749: DPU proxy skip-verify TLS\n- sonic-net/sonic-host-services#423 and sonic-net/sonic-utilities#4761: direct DPU callers use `-insecure`\n- sonic-net/sonic-buildimage#28915: both launchers use `--insecure` and pin the source commits\n\nsonic-net/sonic-gnmi#721 and sonic-net/sonic-buildimage#28564 are closed as superseded.\n\nFocused tests pass. CI and physical SmartSwitch validation remain."
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-08-08T05:58:41Z",
+      "body": "Physical qualification found and corrected one integration gap: when existing ConfigDB had `client_auth=true`, the ephemeral TLS server still required a client certificate that callers cannot provision.\n\nsonic-buildimage#28915 now forces `--allow_no_client_auth` only for the certificate-free `--insecure` fallback. Configured certificate/mTLS paths remain unchanged. On the candidate DPU, the corrected launcher ran with `--insecure --allow_no_client_auth`, and direct NPU-to-DPU TLS `System.Time` passed. Rebuilt-image and full proxy/caller validation continue."
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-08-08T07:33:59Z",
+      "body": "Physical qualification also found that both direct reboot callers trusted only configured `gnmi_port=8080`, while the BF3 candidate exposed native gNMI on `50052`. DPUProxy already retries common ports.\n\nsonic-host-services#423 and sonic-utilities#4761 now mirror that robustness safely: probe configured/8080/50052 with bounded, side-effect-free `System.Time`, then send `Reboot` exactly once on the selected port and poll status there. sonic-buildimage#28915 pins these updated heads.\n\nThe testbed was restored to exact baseline images, all four DPUs were Online, temporary artifacts were removed, and the lock was released READY. Final rebuilt-image validation is pending."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28930,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28930",
+      "title": "[gNMI] Encrypt certificate-free DPU fallback",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-19T18:16:16Z",
+      "createdAt": "2026-08-09T21:53:27Z",
+      "author": "hdwhdw",
+      "body": "## Why\n\nSmartSwitch DPUs need TLS-encrypted native gNMI on the isolated midplane when no usable server certificate/key pair is configured. Other platforms must retain their existing launch behavior.\n\nFixes #28540. Source-pointer integration is separate in #28931.\n\nMicrosoft ADO (number only): 39179389\n\n## What\n\n- Detect a SmartSwitch DPU when `DEVICE_METADATA|localhost` has `type=SmartSwitchDPU` or `switch_type=dpu`.\n- On a DPU only, use ephemeral self-signed TLS when no usable server certificate/key pair is configured.\n- Add `--allow_no_client_auth` for that DPU fallback so DPUProxy can connect without a client certificate.\n- Preserve configured-certificate, explicit application-authentication, and UDS-only native gNMI behavior.\n- Preserve non-DPU transport selection, including the existing plaintext loopback fallback.\n- Quote JSON/filter input and normalize top-level JSON `null` to empty so a missing `certs` object does not hide a valid legacy `x509` configuration.\n\n### Examples\n\n| Device metadata | Certificate configuration | Result |\n| --- | --- | --- |\n| `type=SmartSwitchDPU` | none | `--insecure --allow_no_client_auth` |\n| `switch_type=dpu` | `server_crt=null`, key configured | ignore the incomplete pair and use the same DPU ephemeral-TLS fallback |\n| DPU | complete certificate/key and CA | preserve configured TLS/mTLS arguments |\n| non-DPU | none | preserve `--noTLS --bind_address 127.0.0.1` |\n| non-DPU | `certs=null`, complete legacy `x509` | use the configured `x509` certificate/key instead of treating `\"null\"` as a `certs` object |\n\n## Validation\n\n- `bash -n dockers/docker-sonic-gnmi/gnmi-native.sh` passed.\n- A container matrix passed both DPU metadata forms, no certificates, partial/null certificates, configured certificates, legacy `x509` fallback, explicit password authentication, and UDS-only mode.\n- The same matrix compared no-cert, partial-cert, and configured-cert non-DPU arguments with master commit `d7ad3d29d`; all matched.\n- On an integrated physical DPU0 image, five of five direct TLS `System.Time` calls and one metadata-routed DPUProxy `System.Time` call passed.\n\n## Scope Boundary\n\n- This PR changes only `dockers/docker-sonic-gnmi/gnmi-native.sh`.\n- `docker-sonic-telemetry/telemetry.sh` is unchanged. The DPU TLS fallback is the only intentional transport-mode change; general parsing corrections also prevent top-level JSON `null` from being treated as configured data.\n- Source-pointer updates are tracked separately.\n- The physical image also contained the source changes referenced by #28931; physical evidence validates the integrated DPU TLS path, not this one-file diff in isolation.\n",
+      "files": [
+        {
+          "path": "dockers/docker-sonic-gnmi/gnmi-native.sh",
+          "additions": 30,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-09T21:53:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-09T21:53:35Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-09T21:53:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-09T21:53:56Z",
+          "body": "On an integrated physical DPU0 image, five of five direct TLS `System.Time` calls and one metadata-routed DPUProxy `System.Time` call passed. Exact baseline images were restored, all four DPUs reported Online, and the testbed was released READY.\n\nScope boundary: the image contained this launcher behavior and the source changes referenced by #28931. This evidence validates the integrated DPU TLS path; it does not isolate the one-file launcher diff."
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-10T04:22:34Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-08-10T09:50:34Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-10T14:23:49Z",
+          "body": "/azpw ms_conflict -f"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-12T19:26:56Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-12T19:27:12Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T01:54:09Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-13T01:54:23Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-13T11:14:31Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T11:14:34Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T11:14:37Z",
+          "body": "Retrying failed(or canceled) stages in build 1191453:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t2 by Elastictest: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T19:20:27Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-13T19:20:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-18T00:43:05Z",
+          "body": "@qiluo-msft All review threads are resolved. All required CI checks pass. Please review again."
+        }
+      ]
+    }
+  ]
+}

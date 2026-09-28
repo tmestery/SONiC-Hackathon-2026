@@ -1,0 +1,169 @@
+{
+  "number": 25261,
+  "title": "Bug: [HFT] [otel]: Enabling otel container using config feature state does not work",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25261",
+  "createdAt": "2026-01-29T12:09:57Z",
+  "closedAt": "2026-02-14T01:07:00Z",
+  "author": "DavidZagury",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "qiluo-msft"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nTrying to enable otel docker using CLI fails since the FEATURE table does not have otel.\nCan only be done by setting the config DB manully.\n\n### Steps to Reproduce\n\nInstall SONiC\nRun `sudo config feature state otel enabled` to enable the otel collector feature\n\n\n### Actual Behavior and Expected Behavior\n\n```\n# config feature state otel enabled\nFeature 'otel' doesn't exist\n```\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-02-01T17:44:51Z",
+      "body": "Just took a look at the code, seems like the root cause is straightforward - all the otel infrastructure is already in place, we just need to register it in the FEATURE table in `files/build_templates/init_cfg.json.j2`. Opening a PR to check if that fixes the issue."
+    },
+    {
+      "author": "DavidZagury",
+      "createdAt": "2026-02-01T17:46:59Z",
+      "body": "@Bojun-Feng - just a heads up - the init_cfg.json.j2 file is closed to merging any changes, which as you correctly pointed out creates this issue\n\n@r12f  @Pterosaur "
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-02-01T17:53:40Z",
+      "body": "@DavidZagury Thanks for the heads up - I wasn't aware of the merge restriction. Here's the one-liner addition that goes after the telemetry line, in case anyone is interested:\n```\n{%- if include_system_otel == \"y\" %}{% do features.append((\"otel\", \"disabled\", false, \"enabled\")) %}{% endif %}\n```"
+    },
+    {
+      "author": "Pterosaur",
+      "createdAt": "2026-02-03T01:10:16Z",
+      "body": "Hi @qiluo-msft , we can discuss the FEATURE table issue on here."
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2026-02-03T01:40:29Z",
+      "body": "The reason is that /etc/sonic/config_db.json lack the FEATURE table entry:\n```json\n    \"FEATURE\": {\n        ...\n        \"otel\": {\n            \"auto_restart\": \"disabled\",\n            \"check_up_status\": \"false\",\n            \"delayed\": \"False\",\n            \"has_global_scope\": \"False\",\n            \"has_per_asic_scope\": \"True\",\n            \"high_mem_alert\": \"disabled\",\n            \"state\": \"enabled\",\n            \"support_syslog_rate_limit\": \"true\"\n        },\n        ...\n    },\n```\n\nI understand modifying files/build_templates/init_cfg.json.j2 is one shortest way to resolve the issue, however, it has other implications, becuase in production, it will be completely override by a config_db.json pushed from outside switch. So we prevent any future changes on files/build_templates/init_cfg.json.j2 (except obvious bugfix), and any change there will not take effect in production."
+    },
+    {
+      "author": "liat-grozovik",
+      "createdAt": "2026-02-11T14:28:17Z",
+      "body": "@qiluo-msft this is a change in SONiC Arch which was not discussed at least that i am aware of.\nevery feature we added in the past (and including in the HFT desig) was upside to controlled by the feature command and if the feature is added to SONiC it was expected to be added as part of the implementation even with disabled by default.\n\nWe had also discussion on quality guarantee that this is the way to add features to SONiC as initial stage while it is being disabled. this cannot be just a user responsibility.\n\n@lguohan could you please also help to understand the motivation of this arch change ? how can we see the new guidelines for new HLDs?\n\n"
+    },
+    {
+      "author": "vmittal-msft",
+      "createdAt": "2026-02-11T16:25:31Z",
+      "body": "@qiluo-msft  please help on this"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2026-02-11T16:36:50Z",
+      "body": "@qiluo-msft , what is the suggested route here? Not sure I understand."
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2026-02-11T20:49:48Z",
+      "body": "I rethink of this issue, previously we made a decision to keep minigraph parser behavior by blocking PR changes specific files https://github.com/sonic-net/sonic-buildimage/blob/55b6a69b7ca5bfd7357361875c4d3d07f780fb30/.github/workflows/protect-file.yml#L27.\n\nHowever, in general, any new feature requires an entry inside FEATURE table, so people still want to add it into 'files/build_templates/init_cfg.json.j2'.This kind of new entry is okay as long as they are by default disabled. The behavior is still backward-compatible.\n\n@DavidZagury @Bojun-Feng Do you have a PR? I think we can go ahead with proposed change."
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-02-11T21:08:33Z",
+      "body": "@qiluo-msft Happy to create a PR tonight, I believe it is disabled by default but let me double check."
+    },
+    {
+      "author": "DavidZagury",
+      "createdAt": "2026-02-11T21:16:10Z",
+      "body": "@Pterosaur @r12f  @Janetxxx fyi - Qi has approved adding the otel docker to the FEATURE table."
+    },
+    {
+      "author": "r12f",
+      "createdAt": "2026-02-11T22:15:00Z",
+      "body": "Yep yep! looking forward to the PR!"
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-02-12T07:10:34Z",
+      "body": "Opened PR #25464 and double checked backward compatibility. The one line change seems to be sufficient, now `otel` follows same pattern as `nat` or `sflow`."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25464,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25464",
+      "title": "[build_templates]: Add otel feature to FEATURE table in init_cfg.json.j2",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-14T01:06:59Z",
+      "createdAt": "2026-02-12T06:54:20Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix #25261\r\n\r\n`config feature state otel enabled` fails with `Feature 'otel' doesn't exist`. Without the FEATURE table entry, users cannot enable/disable the OTEL collector via CLI.\r\n\r\n#### How I did it\r\n\r\n* Added the otel feature entry to `files/build_templates/init_cfg.json.j2` with default state set to disabled\r\n* The feature is only added to the FEATURE table when `INCLUDE_SYSTEM_OTEL=y` is set at build time; otherwise no entry is created\r\n\r\nNote: Since the default state is disabled, existing deployments are unaffected and users must explicitly run `config feature state otel enabled` to activate the container. This ensures backward compatibility as the change is opt-in only and follows the same pattern as other disabled-by-default optional features.\r\n\r\n#### How to verify it\r\n\r\n1. Build a SONiC image with `INCLUDE_SYSTEM_OTEL=y`\r\n2. Boot the image and run `show feature status otel` - should show the feature exists\r\n3. Run `sudo config feature state otel enabled` - should succeed without error\r\n4. Run `show feature status otel` - should show state as enabled\r\n\r\n#### Description for the changelog\r\n\r\nAdd otel feature to FEATURE table to enable CLI configuration of the OTEL collector container\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/init_cfg.json.j2",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-12T06:54:29Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-12T06:54:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Pterosaur",
+          "createdAt": "2026-02-12T07:31:38Z",
+          "body": "Hi @Janetxxx , is this PR the same as your previous PR? Could you please help to review it?\r\nWe want to open the edit permission to that file. Detail can be found in the issue."
+        },
+        {
+          "author": "r12f",
+          "createdAt": "2026-02-12T17:07:44Z",
+          "body": "hi @qiluo-msft do you mind to help approve the PR for bypassing the following CI failure:\r\n<img width=\"671\" height=\"54\" alt=\"image\" src=\"https://github.com/user-attachments/assets/1e7930a4-be3d-4f70-81ac-fe204f0063e5\" />\r\n"
+        },
+        {
+          "author": "liushilongbuaa",
+          "createdAt": "2026-02-12T19:11:06Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-12T22:03:01Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-12T22:03:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-02-12T22:28:46Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-02-12T22:48:38Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-02-12T22:55:26Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-19T16:18:17Z",
+          "body": "Cherry-pick PR to msft-202412: https://github.com/Azure/sonic-buildimage-msft/pull/2003"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-19T17:32:08Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25582"
+        }
+      ]
+    }
+  ]
+}

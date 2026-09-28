@@ -1,0 +1,145 @@
+{
+  "number": 14213,
+  "title": "[PMON] | ERR pmon#xcvrd: Exception occured at SfpStateUpdateTask thread due to KeyError('status')",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/14213",
+  "createdAt": "2023-03-13T03:55:11Z",
+  "closedAt": "2023-03-29T02:21:14Z",
+  "author": "Junchao-Mellanox",
+  "labels": [
+    "Issue for 202205",
+    "Issue for 202211"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nThe issue is probably introduced by commit: https://github.com/sonic-net/sonic-platform-daemons/commit/56046dc36907c7e873911ef60e9193fe8717b12c. In this commit, it added several new fieds to TRANSECIVER_STATUS table. It casues a potential race condition:\r\n\r\n- DomInfoUpdateTask would update TRANSECIVER_STATUS table by calling function `update_port_transceiver_status_table_hw`\r\n- SfpStateUpdateTask would update TRANSECIVER_STATUS table by calling function `update_port_transceiver_status_table_sw`. It also  reads TRANSECIVER_STATUS table by line https://github.com/sonic-net/sonic-platform-daemons/blob/03374b24ac049f6476690208b482c72a35c974df/sonic-xcvrd/xcvrd/xcvrd.py#L2144 and access the table data by line https://github.com/sonic-net/sonic-platform-daemons/blob/03374b24ac049f6476690208b482c72a35c974df/sonic-xcvrd/xcvrd/xcvrd.py#L2155\r\n\r\nSo, there could be chance that, DomInfoUpdateTask has called update_port_transceiver_status_table_hw, but SfpStateUpdateTask  has not called update_port_transceiver_status_table_sw. In that case, 'status' would not exist in TRANSECIVER_STATUS table which causes a crash.\r\n\r\nNot sure that updating the same table from different threads is a good idea, but as the change in https://github.com/sonic-net/sonic-platform-daemons/commit/56046dc36907c7e873911ef60e9193fe8717b12c is big, I would recommend to fix the issue in `SfpStateUpdateTask::on_add_logical_port` if we don't want to revert that change.\r\n\r\n#### Steps to reproduce the issue:\r\nUse dynamic port breakout CLI to split port, there is a **small chance** to hit this issue.\r\n\r\n#### Describe the results you received:\r\n\r\nxcvrd crashed:\r\n```\r\nMar  9 01:26:48.894733 sonic ERR pmon#xcvrd: Exception occured at SfpStateUpdateTask thread due to KeyError('status')\r\nMar  9 01:26:48.896630 sonic ERR pmon#xcvrd: Traceback (most recent call last):\r\nMar  9 01:26:48.896630 sonic ERR pmon#xcvrd:   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd.py\", line 2049, in run\r\nMar  9 01:26:48.896720 sonic ERR pmon#xcvrd:     self.task_worker(self.task_stopping_event, self.sfp_error_event)\r\nMar  9 01:26:48.896732 sonic ERR pmon#xcvrd:   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd.py\", line 1862, in task_worker\r\nMar  9 01:26:48.896757 sonic ERR pmon#xcvrd:     port_mapping.handle_port_config_change(sel, asic_context, stopping_event, self.port_mapping, helper_logger, self.on_port_config_change)\r\nMar  9 01:26:48.896778 sonic ERR pmon#xcvrd:   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd_utilities/port_mapping.py\", line 225, in handle_port_config_change\r\nMar  9 01:26:48.896799 sonic ERR pmon#xcvrd:     read_port_config_change(asic_context, port_mapping, logger, port_change_event_handler)\r\nMar  9 01:26:48.896820 sonic ERR pmon#xcvrd:   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd_utilities/port_mapping.py\", line 244, in read_port_config_change\r\nMar  9 01:26:48.896837 sonic ERR pmon#xcvrd:     port_change_event_handler(port_change_event)\r\nMar  9 01:26:48.896869 sonic ERR pmon#xcvrd:   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd.py\", line 2082, in on_port_config_change\r\nMar  9 01:26:48.896869 sonic ERR pmon#xcvrd:     self.on_add_logical_port(port_change_event)\r\nMar  9 01:26:48.896869 sonic ERR pmon#xcvrd:   File \"/usr/local/lib/python3.9/dist-packages/xcvrd/xcvrd.py\", line 2155, in on_add_logical_port\r\nMar  9 01:26:48.896904 sonic ERR pmon#xcvrd:     logical_port_event_dict[port_change_event.port_name] = dict(sfp_status)['status']\r\nMar  9 01:26:48.896936 sonic ERR pmon#xcvrd: KeyError: 'status'\r\nMar  9 01:26:48.897069 sonic ERR pmon#xcvrd: Xcvrd: exception found at child thread SfpStateUpdateTask due to KeyError('status')\r\nMar  9 01:26:48.897069 sonic ERR pmon#xcvrd: Exiting main loop as child thread raised exception!\r\n```\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\nxcvrd should not crash\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 346,
+      "repository": "sonic-net/sonic-platform-daemons",
+      "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/346",
+      "title": "Fix issue: Exception occured at SfpStateUpdateTask thread due to KeyError('status')",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-03-29T02:21:12Z",
+      "createdAt": "2023-03-16T02:45:21Z",
+      "author": "Junchao-Mellanox",
+      "body": "<!-- Provide a general summary of your changes in the Title above -->\r\n\r\n#### Description\r\nFix issue https://github.com/sonic-net/sonic-buildimage/issues/14213.\r\n\r\nhttps://github.com/sonic-net/sonic-platform-daemons/commit/56046dc36907c7e873911ef60e9193fe8717b12c introduces a race condition between DomInfoUpdateTask and SfpStateUpdateTask. In this PR, `SfpStateUpdateTask::on_add_logical_port` is changed to no longer depending on TRANSECIVER_STATUS table and always get SFP data from platform API.\r\n\r\n#### Motivation and Context\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/14213\r\n\r\n#### How Has This Been Tested?\r\nManual test\r\nUT logs:\r\n```\r\nplatform linux -- Python 3.9.2, pytest-6.0.2, py-1.10.0, pluggy-0.13.0 -- /usr/bin/python3\r\ncachedir: .pytest_cache\r\nrootdir: /sonic/src/sonic-platform-daemons/sonic-xcvrd, configfile: pytest.ini\r\nplugins: pyfakefs-5.1.0, cov-2.10.1\r\ncollecting ... collected 54 items\r\n\r\ntests/test_xcvrd.py::TestXcvrdThreadException::test_CmisManagerTask_task_run_with_exception PASSED [  1%]\r\ntests/test_xcvrd.py::TestXcvrdThreadException::test_DomInfoUpdateTask_task_run_with_exception PASSED [  3%]\r\ntests/test_xcvrd.py::TestXcvrdThreadException::test_SfpStateUpdateTask_task_run_with_exception PASSED [  5%]\r\ntests/test_xcvrd.py::TestXcvrdThreadException::test_DaemonXcvrd_run_with_exception PASSED [  7%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_post_port_dom_info_to_db PASSED [  9%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_post_port_pm_info_to_db PASSED [ 11%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_del_port_sfp_dom_info_from_db PASSED [ 12%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_update_port_transceiver_status_table_hw PASSED [ 14%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_delete_port_from_status_table_hw PASSED [ 16%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_delete_port_from_status_table_sw PASSED [ 18%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_post_port_dom_threshold_info_to_db PASSED [ 20%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_post_port_sfp_info_to_db PASSED [ 22%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_post_port_sfp_dom_info_to_db PASSED [ 24%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_init_port_sfp_status_tbl PASSED [ 25%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_get_media_settings_key PASSED [ 27%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_notify_media_setting PASSED   [ 29%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_notify_media_setting_with_comma PASSED [ 31%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_detect_port_in_error_status PASSED [ 33%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_is_error_sfp_status PASSED    [ 35%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_handle_port_update_event PASSED [ 37%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_handle_port_config_change PASSED [ 38%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_get_port_mapping PASSED       [ 40%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_DaemonXcvrd_wait_for_port_config_done PASSED [ 42%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_DaemonXcvrd_run PASSED        [ 44%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_CmisManagerTask_handle_port_change_event PASSED [ 46%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_CmisManagerTask_get_configured_freq PASSED [ 48%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_CmisManagerTask_get_configured_tx_power_from_db PASSED [ 50%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_CmisManagerTask_task_run_stop PASSED [ 51%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_CmisManagerTask_task_worker PASSED [ 53%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_DomInfoUpdateTask_handle_port_change_event PASSED [ 55%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_DomInfoUpdateTask_task_run_stop PASSED [ 57%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_DomInfoUpdateTask_task_worker PASSED [ 59%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_SfpStateUpdateTask_handle_port_change_event PASSED [ 61%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_SfpStateUpdateTask_task_run_stop PASSED [ 62%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_SfpStateUpdateTask_retry_eeprom_reading PASSED [ 64%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_SfpStateUpdateTask_mapping_event_from_change_event PASSED [ 66%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_SfpStateUpdateTask_task_worker PASSED [ 68%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_SfpStateUpdateTask_on_add_logical_port PASSED [ 70%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_sfp_insert_events PASSED      [ 72%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_sfp_remove_events PASSED      [ 74%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_presence PASSED   [ 75%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_is_replaceable PASSED [ 77%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_transceiver_info PASSED [ 79%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_transceiver_dom_info PASSED [ 81%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_transceiver_dom_threshold_info PASSED [ 83%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_transceiver_status PASSED [ 85%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_transceiver_pm PASSED [ 87%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_transceiver_change_event PASSED [ 88%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_sfp_type PASSED   [ 90%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_wrapper_get_sfp_error_description PASSED [ 92%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_check_port_in_range PASSED    [ 94%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_get_media_val_str_from_dict PASSED [ 96%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_get_media_val_str PASSED      [ 98%]\r\ntests/test_xcvrd.py::TestXcvrdScript::test_DaemonXcvrd_init_deinit PASSED [100%]\r\n\r\n=============================== warnings summary ===============================\r\n/usr/lib/python3/dist-packages/_pytest/junitxml.py:446\r\n  /usr/lib/python3/dist-packages/_pytest/junitxml.py:446: PytestDeprecationWarning: The 'junit_family' default value will change to 'xunit2' in pytest 6.0. See:\r\n    https://docs.pytest.org/en/stable/deprecations.html#junit-family-default-value-change-to-xunit2\r\n  for more information.\r\n    _issue_warning_captured(deprecated.JUNIT_XML_DEFAULT_FAMILY, config.hook, 2)\r\n\r\n-- Docs: https://docs.pytest.org/en/stable/warnings.html\r\n- generated xml file: /sonic/src/sonic-platform-daemons/sonic-xcvrd/test-results.xml -\r\n\r\n----------- coverage: platform linux, python 3.9.2-final-0 -----------\r\nName                                         Stmts   Miss  Cover\r\n----------------------------------------------------------------\r\nxcvrd/__init__.py                                0      0   100%\r\nxcvrd/xcvrd.py                                1508    352    77%\r\nxcvrd/xcvrd_utilities/__init__.py                0      0   100%\r\nxcvrd/xcvrd_utilities/port_mapping.py          191     26    86%\r\nxcvrd/xcvrd_utilities/sfp_status_helper.py      25      1    96%\r\n----------------------------------------------------------------\r\nTOTAL                                         1724    379    78%\r\nCoverage HTML written to dir htmlcov\r\nCoverage XML written to file coverage.xml\r\n\r\n======================== 54 passed, 1 warning in 8.67s =========================\r\n```\r\n\r\n#### Additional Information (Optional)\r\n",
+      "files": [
+        {
+          "path": "sonic-xcvrd/tests/test_xcvrd.py",
+          "additions": 0,
+          "deletions": 10
+        },
+        {
+          "path": "sonic-xcvrd/xcvrd/xcvrd.py",
+          "additions": 41,
+          "deletions": 80
+        }
+      ],
+      "comments": [
+        {
+          "author": "prgeor",
+          "createdAt": "2023-03-17T05:56:03Z",
+          "body": "@longhuan-cisco can you review this PR?"
+        },
+        {
+          "author": "prgeor",
+          "createdAt": "2023-03-21T17:35:11Z",
+          "body": "@Junchao-Mellanox please provide more information in the description how the race condition is being resolved?"
+        },
+        {
+          "author": "prgeor",
+          "createdAt": "2023-03-21T17:36:50Z",
+          "body": "@Junchao-Mellanox please test the optics insertion and removal"
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-22T02:27:42Z",
+          "body": "> SfpStateUpdateTask:\r\n\r\nBy this PR, SfpStateUpdateTask no longger access TRANSCEIVER_STATUS table, so, no race condition here anymore."
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-22T04:00:36Z",
+          "body": "> @Junchao-Mellanox please test the optics insertion and removal\r\n\r\nThe test has been done before raising the PR."
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-22T04:01:20Z",
+          "body": "/azpw run Azure.sonic-platform-daemons"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-03-22T04:01:22Z",
+          "body": "/AzurePipelines run Azure.sonic-platform-daemons"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-03-22T04:01:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "shyam77git",
+          "createdAt": "2023-03-24T00:35:03Z",
+          "body": "could you add the DPB (Dynamic Port Breakout) CLI being validated here?\r\nis it validating DPB CLI on 100G or 400G optical module (transceiver)?\r\n\r\nAlso, please add the UT logs to the PR"
+        },
+        {
+          "author": "prgeor",
+          "createdAt": "2023-03-24T02:22:43Z",
+          "body": "@Junchao-Mellanox please check the build failure"
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-24T02:26:28Z",
+          "body": "/azpw run Azure.sonic-platform-daemons"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-03-24T02:26:31Z",
+          "body": "/AzurePipelines run Azure.sonic-platform-daemons"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-03-24T02:26:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-24T02:49:13Z",
+          "body": "> could you add the DPB (Dynamic Port Breakout) CLI being validated here? is it validating DPB CLI on 100G or 400G optical module (transceiver)?\r\n> \r\n> Also, please add the UT logs to the PR\r\n\r\nI added UT logs. I validated it via DPB CLI for both 100G and 400G. But I don't think DPB is a major concern here. The problem is that if we removing/adding logic port, there would be a race condition in xcvrd. I used a private script to delete/add logic port to CONFIG DB in a while loop. The issue can be reproduced without my fix, and it is gone with my fix. "
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-24T02:50:26Z",
+          "body": "Hi @prgeor , checker passed. Could you please review and sign-off?"
+        },
+        {
+          "author": "shyam77git",
+          "createdAt": "2023-03-24T04:42:26Z",
+          "body": ">> I validated it via DPB CLI for both 100G and 400G.\r\n\r\nsonic 400G optics model is based on CMIS FSM (state machine) driven by xcvrd.\r\nport breakout with CMIS enabled is under works and yet not there.\r\nSo, could you clarify if you did 400G optical module DPB validation with xcvrd but without CMIS in play?\r\n"
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-24T05:27:39Z",
+          "body": "If you are talking about CMIS manager, Nvidia platform does not use it. CMIS manager is disabled on Nvidia platform. Why do you think DPB and CMIS manager is related this PR? It is all about race condition while removing and adding logical port."
+        },
+        {
+          "author": "shyam77git",
+          "createdAt": "2023-03-24T15:37:18Z",
+          "body": "> If you are talking about CMIS manager, Nvidia platform does not use it. CMIS manager is disabled on Nvidia platform. Why do you think DPB and CMIS manager is related this PR? It is all about race condition while removing and adding logical port.\r\n\r\nThanks for the update.\r\nReason I asked: In its git issue, you mentioned \"steps to reproduce the issue\"\r\nUse dynamic port breakout CLI to split port, there is a small chance to hit this issue.\r\n\r\nSo, looking for following UT test case (steps). could you attach the following data to this PR?\r\n1.  snippet of platform.json and hwsku.json for the interface where DPB CLI was issued\r\n2. config DB snippet for the interface (before issuing DPB CLI)\r\n3. DPB CLI issued\r\n4. config DB snippet for this interface (after issuing DPB CLI)\r\n5. syslog etc. traces (esp. syncd) showing removal (of existing ports) and creation of new logical/sub-ports\r\n6. syslog etc. traces for xcvrd flow for this scenario\r\n"
+        },
+        {
+          "author": "prgeor",
+          "createdAt": "2023-03-24T16:49:48Z",
+          "body": "@shyam77git please review"
+        },
+        {
+          "author": "Junchao-Mellanox",
+          "createdAt": "2023-03-25T07:25:03Z",
+          "body": "> > If you are talking about CMIS manager, Nvidia platform does not use it. CMIS manager is disabled on Nvidia platform. Why do you think DPB and CMIS manager is related this PR? It is all about race condition while removing and adding logical port.\r\n> \r\n> Thanks for the update. Reason I asked: In its git issue, you mentioned \"steps to reproduce the issue\" Use dynamic port breakout CLI to split port, there is a small chance to hit this issue.\r\n> \r\n> So, looking for following UT test case (steps). could you attach the following data to this PR?\r\n> \r\n> 1. snippet of platform.json and hwsku.json for the interface where DPB CLI was issued\r\n> 2. config DB snippet for the interface (before issuing DPB CLI)\r\n> 3. DPB CLI issued\r\n> 4. config DB snippet for this interface (after issuing DPB CLI)\r\n> 5. syslog etc. traces (esp. syncd) showing removal (of existing ports) and creation of new logical/sub-ports\r\n> 6. syslog etc. traces for xcvrd flow for this scenario\r\n\r\nHi @shyam77git, \r\n\r\n1. The issue is not related to platform.json or hwsku.json. It is just related to adding/removing logical port. DPB CLI will remove the existing logic port and create new ones no matter what platform.json/hwsku.json is. You can use `config interface breakout <interface> <mode>` on ANY interface with ANY valid mode to reproduce the issue, but you may need to run it in a while loop for few hours to hit the race condition.\r\n2. I found the root cause not by analyzing the syslog. Actually, there is no clue in the syslog. I found the issue by reading the code. So, I am not sure that providing the trace is helpful to understand the issue. \r\n\r\nExample, say we are going to break Ethernet0 to (Ethernet0 and Ethernet2)  :\r\n1. It removes Ethernet0 first, `TRANSCEIVER_STATUS|Ethernet0` will be removed from TRANSCEIVER_STATUS table\r\n2. It adds Ethernet0 back to CONFIG_DB, both SfpStateUpdateTask and DomInfoUpdateTask notice the new logic port.  SfpStateUpdateTask and DomInfoUpdateTask run in two different thread. So, there could be 2 possible cases:\r\n  a. SfpStateUpdateTask get port add event first. No issue for this flow.\r\n  b. DomInfoUpdateTask get port add event first. This flow causes issue. See below.\r\n\r\nLet discuss case b:\r\n1. DomInfoUpdateTask get port add event first. It calls update_port_transceiver_status_table_hw which will populate a few data to `TRANSCEIVER_STATUS|Ethernet0`, but it does not populate \"status\" field.\r\n2. Then, SfpStateUpdateTask gets new port add event. It calls on_port_config_change -> on_add_logical_port and hit the line:\r\n```\r\n        logical_port_event_dict[port_change_event.port_name] = dict(sfp_status)['status']   <===== crash because 'status' is not a valid key in dict(sfp_status)\r\n```\r\n\r\n`TRANSCEIVER_STATUS|Ethernet0` has no 'status' field yet, so the above line get an KeyError and crashes. \r\n\r\nI hope this is clear now."
+        }
+      ]
+    }
+  ]
+}

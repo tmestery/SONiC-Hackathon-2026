@@ -1,0 +1,130 @@
+{
+  "number": 28463,
+  "title": "[BGP] IPv4 routes stuck invalid (nexthop inaccessible) after a brief connected eBGP peer link flap \u2014 FRR NHT regression",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28463",
+  "createdAt": "2026-07-17T00:38:37Z",
+  "closedAt": "2026-08-04T01:21:16Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "FRR :traffic_light:",
+    "Triaged",
+    "regression",
+    "routing"
+  ],
+  "assignees": [
+    "tirupatihemanth"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\nNo. This is generic FRR/bgpd nexthop-tracking logic \u2014 not vendor/ASIC specific.\n\n### Importance or Severity\nHigh \u2014 functional regression causing a persistent traffic blackhole for the affected prefixes until `clear bgp *` / session reset.\n\n### Description of the bug\nOn a SONiC DUT running FRR, after a **brief** flap of a directly-connected single-hop eBGP peer's interface (e.g. a PortChannel/LACP micro-flap), the IPv4 routes learned from that peer remain in the BGP table but are permanently marked `invalid` with nexthop `(inaccessible, import-check enabled)` \u2014 even though the nexthop is pingable and the session is `Established` with the expected `PfxRcd`. With no best path, nothing is installed into the zebra RIB/FIB and transit traffic to those prefixes is dropped (0 received).\n\n**Regression:** not seen on images shipping FRR < 10.5.2; reproduced on FRR 10.5.4.\n\nThe two layers disagree \u2014 zebra knows the nexthop is reachable, but bgpd's nexthop cache (bnc) is stuck invalid, so `BGP_PATH_VALID` is never re-set:\n\n- `show ip nht` (zebra): nexthop **resolved via connected**, `bgp` registered as client \u2705\n- `show bgp nexthop` (bgpd): **no valid entry** for that nexthop \u274c\n\n### Steps to Reproduce\n1. DUT with two directly-connected single-hop eBGP peers over separate PortChannels (LACP), both advertising the same IPv4 prefixes (ECMP, `maximum-paths 2`). `import-check` is on (default).\n2. Establish sessions; confirm routes are valid/best and traffic forwards with no loss.\n3. Cause a **brief** flap of the peer PortChannels \u2014 e.g. bounce LACP so the member briefly deselects/reselects (observed PortChannel carrier down\u2192up in ~0.6\u20130.9 ms).\n4. Sessions re-establish, `PfxRcd` correct \u2014 but the routes stay `invalid (inaccessible)` and traffic stays black-holed.\n\n### Actual Behavior and Expected Behavior\n**Actual** \u2014 nexthop reachable but route invalid:\n```\n# show bgp ipv4 unicast <prefix>\nPaths: (2 available, no best path)\n  65200 ...\n    192.168.0.2 (inaccessible, import-check enabled) from 192.168.0.2 (...)\n      Origin IGP, invalid, external\n\n# show ip nht\n192.168.0.2(Connected)\n resolved via connected, prefix 192.168.0.0/24\n is directly connected, PortChannel2 (vrf default), weight 1\n Client list: bgp(fd 48)\n\n# ping 192.168.0.2   -> success\n```\n**Expected** \u2014 on interface-up the nexthop is re-validated; routes become valid/best, get installed into RIB/FIB, and traffic forwards.\n\n### Relevant log output\n**Root cause** is bgpd's interface up/down nexthop handler `bgp_nht_ifp_table_handle()` in `src/sonic-frr/frr/bgpd/bgp_nht.c`:\n\n```c\nfrr_each (bgp_nexthop_cache, table, bnc) {\n    if (!(bnc->nexthop_num == 1 && bnc->nexthop &&\n          bnc->nexthop->ifindex == ifp->ifindex) &&\n        (bnc->ifindex_ipv6_ll != ifp->ifindex))\n        continue;                    /* match keys on nexthop_num == 1 */\n    ...\n    if (up) {\n        SET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);\n        bnc->nexthop_num = 1;\n    } else {\n        UNSET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);\n        bnc->nexthop_num = 0;        /* down zeroes the field the match needs */\n    }\n}\n```\n\nDown/up asymmetry: on interface **down**, the IPv4 connected-peer bnc matches (`nexthop_num == 1`), so it clears `BGP_NEXTHOP_VALID` **and sets `nexthop_num = 0`**. On the following **up**, that same bnc no longer matches (`nexthop_num` is now 0, and `ifindex_ipv6_ll` is 0 for IPv4), so the `continue` skips it and `BGP_NEXTHOP_VALID` is **never restored**. The down path destroyed the exact field the up path needs to re-match.\n\nThe normal backstop \u2014 zebra's async `ZEBRA_NEXTHOP_UPDATE` \u2014 does not recover it here: for a **brief** flap the connected route's delete+add is coalesced within zebra's RIB metaqueue window, so the nexthop's resolution shows no net change and zebra sends no update to bgpd. The path therefore stays invalid indefinitely.\n\n**Introduced by** FRR commit `d1252ec2a6a8` (\"bgpd: On interface up/down events allow for more interfaces to be affected\"), which broadened this handler to IPv4 single-nexthop connected peers \u2014 merged in FRRouting/frr#20482 (first in FRR 10.5.2). The buggy handler is still present on FRR `master`; no upstream fix exists yet.\n\n**Suggested fix:** make the interface-**up** match independent of the down-cleared `nexthop_num` (e.g. match on the saved `bnc->nexthop->ifindex` / `bnc->ifindex`), or do not zero `nexthop_num` on down.\n\n",
+  "comments": [
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-07-23T18:29:23Z",
+      "body": "Thanks @tirupatihemanth for catching this regression on 10.5.4. 202605 branch is also affected.\nWould you like to submit an FRR upstream issue/fix for this? we could create a patch PR for sonic once the solution is accepted upstream. thanks, "
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-24T00:55:52Z",
+      "body": "Upstream FRR tracking issue: https://github.com/FRRouting/frr/issues/22780 \u2014 root cause is in FRR bgpd (`bgp_nht_ifp_table_handle()`); fix will land in FRR (`src/sonic-frr`)."
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-07-29T00:55:05Z",
+      "body": "Hi @tirupatihemanth @dgsudharsan,\nWondering if there is any update on its fix. \n\nFYI, we are also hitting this issue in our 202605 Nightly runs.  "
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-07-29T15:17:05Z",
+      "body": "@deepak-singhal0408  could you work with @tirupatihemanth on a fix plan for this?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28736,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28736",
+      "title": "[FRR] Backport zebra fix for quick interface flaps in nexthop tracking",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-04T01:21:15Z",
+      "createdAt": "2026-07-30T19:54:34Z",
+      "author": "tirupatihemanth",
+      "body": "#### Why I did it\r\n\r\nFixes #28463\r\n\r\nOn a quick interface down/up, zebra can coalesce the connected route delete+add into \"no state change\" and therefore send no `ZEBRA_NEXTHOP_UPDATE` to its clients. bgpd's nexthop cache is then never revalidated, so IPv4 routes learned from a **directly-connected single-hop eBGP peer** stay permanently `invalid` with `(inaccessible, import-check enabled)` \u2014 even though the nexthop is pingable and the BGP session is `Established` with the expected `PfxRcd`.\r\n\r\nWith no best path, nothing is installed into the zebra RIB/FIB, so transit traffic to those prefixes is dropped. It does not self-recover; it needs a `clear bgp *` or a session reset.\r\n\r\nThe two layers disagree while it is stuck:\r\n\r\n```\r\n# show ip nht           (zebra: reachable)\r\n192.168.0.2(Connected)\r\n resolved via connected, prefix 192.168.0.0/24\r\n is directly connected, PortChannel2 (vrf default), weight 1\r\n Client list: bgp(fd 48)\r\n\r\n# show bgp nexthop      (bgpd: nothing)\r\nInstance default:\r\n\r\n# show bgp ipv4 unicast <prefix>\r\nPaths: (2 available, no best path)\r\n    192.168.0.2 (inaccessible, import-check enabled) from 192.168.0.2 (...)\r\n      Origin IGP, invalid, external\r\n\r\n# ping 192.168.0.2      -> success\r\n```\r\n\r\nReproduced after a sub-millisecond PortChannel/LACP flap (carrier down\u2192up in ~0.6\u20130.9 ms \u2014 short enough that the PortChannel `oper_status` never even reached APPL_DB). This is a regression relative to images carrying FRR < 10.5.2.\r\n\r\nUpstream FRR issue: FRRouting/frr#22780\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\nBackport upstream FRR commit `cea0c4fb742e` (\"zebra: Allow quick flaps of interfaces to be handled properly in nexthop tracking\", FRRouting/frr#21769) as `src/sonic-frr/patch/0117-...`, plus the `series` entry.\r\n\r\nThe fix makes zebra notice that a connected/local/kernel route was removed and re-added, and emit an NHT **withdraw-then-add** instead of silently coalescing to \"no change\":\r\n\r\n- `zebra/rib.h` \u2014 new `ROUTE_ENTRY_SEND_NHT_REMOVAL 0x100` flag\r\n- `zebra/zebra_rib.c` \u2014 set it in `rib_process()` when the old selected system route was `ROUTE_ENTRY_REMOVED` and a new one exists; clear it after dplane processing\r\n- `zebra/zebra_rnh.c` \u2014 notify clients even when `state_changed == 0`, sending an empty-state (withdraw) notification first\r\n- `zebra/zebra_vty.c` \u2014 expose `kernelRemoved` in JSON route output\r\n\r\nThe commit is not in any FRR 10.5.x release (upstream backported it only to `stable/10.6`), so it is carried as a patch until the FRR version is uprevved, at which point it can be dropped.\r\n\r\n**Rebase note:** rebased onto `frr-10.5.4`. The `zebra_vty.c` hunk was re-placed because the `json_route` field ordering differs from upstream master (display-only). The three functional hunks (`rib.h`, `zebra_rib.c`, `zebra_rnh.c`) apply unchanged. Totals match upstream exactly: 39 insertions, 1 deletion.\r\n\r\n#### How to verify it\r\n\r\n1. Configure two directly-connected single-hop eBGP peers over separate PortChannels, both advertising the same IPv4 prefixes (ECMP, `maximum-paths 2`, default `import-check`).\r\n2. Confirm the routes are valid/best, installed, and traffic forwards without loss.\r\n3. Briefly flap the peer-facing PortChannels \u2014 e.g. bounce LACP so the member deselects and immediately reselects.\r\n4. **With this fix:** the sessions re-establish and the routes return to valid/best, are reinstalled into the RIB/FIB, and traffic recovers.\r\n   **Without it:** the routes stay `invalid (inaccessible, import-check enabled)` indefinitely and traffic stays black-holed, while `show ip nht` still shows the nexthop resolved.\r\n\r\nPatch application verified: applies cleanly to `frr-10.5.4`, and the full patch series applies in order with `0117` last (several existing patches touch `zebra_rib.c` and `zebra_vty.c`).\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n\r\nReason: 202605 ships FRR 10.5.4, which contains the regression and lacks this fix. Without the backport, BGP routes from a directly-connected eBGP peer can be permanently black-holed after a brief link flap on that branch.\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): #28463\r\nFailure type: regression\r\n\r\n#### Tested branch\r\n\r\n- [x] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\n\r\nPatch application verified against `frr-10.5.4` (clean apply of the full series with this patch last). Image-level test results on master and 202605 to follow before merge.\r\n\r\n#### Description for the changelog\r\n\r\n[frr]: Backport upstream zebra fix so quick interface flaps are handled properly in nexthop tracking, preventing BGP routes from a directly-connected eBGP peer from being stuck invalid with an inaccessible nexthop.\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\nN/A \u2014 no config_db schema or YANG changes.\r\n",
+      "files": [
+        {
+          "path": "src/sonic-frr/patch/0117-zebra-Allow-quick-flaps-of-interfaces-to-be-handled.patch",
+          "additions": 127,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-frr/patch/series",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T19:54:42Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T19:54:43Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T19:54:55Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-07-30T20:31:16Z",
+          "body": "Here's the 202605 cherry-pick PR: https://github.com/sonic-net/sonic-buildimage/pull/28738"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T22:24:29Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T22:24:41Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-07-31T05:43:35Z",
+          "body": "Thanks @tirupatihemanth for the fix, looks good to me.\n\nThis repairs the authoritative zebra NHR path, which recovers the connected peers. But the synchronous fast-path in bgpd (`bgp_nht_ifp_table_handle()`) still has a latent issue: interface-DOWN sets `bnc->nexthop_num = 0`, and the interface-UP is gated on `nexthop_num == 1`, so after a down/up the fast-path silently skips the peer. It's masked now that the NHR override kicks in \u2014 should we track it separately (maybe a new issue) and pursue the bgpd fix upstream?"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2026-07-31T16:00:15Z",
+          "body": "> Thanks @tirupatihemanth for the fix, looks good to me.\r\n> \r\n> This repairs the authoritative zebra NHR path, which recovers the connected peers. But the synchronous fast-path in bgpd (`bgp_nht_ifp_table_handle()`) still has a latent issue: interface-DOWN sets `bnc->nexthop_num = 0`, and the interface-UP is gated on `nexthop_num == 1`, so after a down/up the fast-path silently skips the peer. It's masked now that the NHR override kicks in \u2014 should we track it separately (maybe a new issue) and pursue the bgpd fix upstream?\r\n\r\n@donaldsharp can you please give your feedback here?"
+        },
+        {
+          "author": "donaldsharp",
+          "createdAt": "2026-07-31T16:31:01Z",
+          "body": "This makes no sense to me.  interface up sets the nexthop_num =1:\r\n\r\n```\r\n\t\tif (up) {\r\n\t\t\tstruct nexthop *nh;\r\n\r\n\t\t\t/* Clear PEER_NOTIFIED so evaluate_paths() always\r\n\t\t\t * re-notifies the FSM on an UP transition.\r\n\t\t\t */\r\n\t\t\tUNSET_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED);\r\n\t\t\tSET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);\r\n\t\t\tSET_FLAG(bnc->change_flags, BGP_NEXTHOP_CHANGED);\r\n\r\n\t\t\tbnc_nexthop_free(bnc);\r\n\t\t\tnh = nexthop_new();\r\n\t\t\tnh->type = NEXTHOP_TYPE_IFINDEX;\r\n\t\t\tnh->ifindex = ifp->ifindex;\r\n\t\t\tnh->vrf_id = ifp->vrf->vrf_id;\r\n\t\t\tbnc->nexthop = nh;\r\n\t\t\tbnc->nexthop_num = 1;\r\n```"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-07-31T18:28:46Z",
+          "body": "> This makes no sense to me. interface up sets the nexthop_num =1:\r\n> \r\n> ```\r\n> \t\tif (up) {\r\n> \t\t\tstruct nexthop *nh;\r\n> \r\n> \t\t\t/* Clear PEER_NOTIFIED so evaluate_paths() always\r\n> \t\t\t * re-notifies the FSM on an UP transition.\r\n> \t\t\t */\r\n> \t\t\tUNSET_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED);\r\n> \t\t\tSET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);\r\n> \t\t\tSET_FLAG(bnc->change_flags, BGP_NEXTHOP_CHANGED);\r\n> \r\n> \t\t\tbnc_nexthop_free(bnc);\r\n> \t\t\tnh = nexthop_new();\r\n> \t\t\tnh->type = NEXTHOP_TYPE_IFINDEX;\r\n> \t\t\tnh->ifindex = ifp->ifindex;\r\n> \t\t\tnh->vrf_id = ifp->vrf->vrf_id;\r\n> \t\t\tbnc->nexthop = nh;\r\n> \t\t\tbnc->nexthop_num = 1;\r\n> ```\r\n\r\n```\r\nstatic void bgp_nht_ifp_table_handle(struct bgp *bgp,\r\n\t\t\t\t     struct bgp_nexthop_cache_head *table,\r\n\t\t\t\t     struct interface *ifp, bool up)\r\n{\r\n\tstruct bgp_nexthop_cache *bnc;\r\n\r\n\tif (ifp->ifindex == IFINDEX_INTERNAL) {\r\n\t\tzlog_warn(\"%s: The interface %s ignored\", __func__, ifp->name);\r\n\t\treturn;\r\n\t}\r\n\r\n\tfrr_each (bgp_nexthop_cache, table, bnc) {\r\n\t\tif (!(**bnc->nexthop_num == 1** && bnc->nexthop &&   **<<<<<<<<<<<< For non v6_ll case, UP case would get skipped**\r\n\t\t      bnc->nexthop->ifindex == ifp->ifindex) &&\r\n\t\t    (bnc->ifindex_ipv6_ll != ifp->ifindex))\r\n\t\t\tcontinue;\r\n\r\n\t\tbnc->last_update = monotime(NULL);\r\n\t\tbnc->change_flags = 0;\r\n\r\n\t\t/*\r\n\t\t * For interface based routes ( ala the v6 LL routes\r\n\t\t * that this was written for ) the metric received\r\n\t\t * for the connected route is 0 not 1.\r\n\t\t */\r\n\t\tbnc->metric = 0;\r\n\t\tif (up) {\r\n\t\t\tstruct nexthop *nh;\r\n\r\n\t\t\t/* Clear PEER_NOTIFIED so evaluate_paths() always\r\n\t\t\t * re-notifies the FSM on an UP transition.\r\n\t\t\t */\r\n\t\t\tUNSET_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED);\r\n\t\t\tSET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);\r\n\t\t\tSET_FLAG(bnc->change_flags, BGP_NEXTHOP_CHANGED);\r\n\r\n\t\t\tbnc_nexthop_free(bnc);\r\n\t\t\tnh = nexthop_new();\r\n\t\t\tnh->type = NEXTHOP_TYPE_IFINDEX;\r\n\t\t\tnh->ifindex = ifp->ifindex;\r\n\t\t\tnh->vrf_id = ifp->vrf->vrf_id;\r\n\t\t\tbnc->nexthop = nh;\r\n\t\t\tbnc->nexthop_num = 1;\r\n\t\t} else {\r\n\t\t\tUNSET_FLAG(bnc->flags, BGP_NEXTHOP_PEER_NOTIFIED);\r\n\t\t\tUNSET_FLAG(bnc->flags, BGP_NEXTHOP_VALID);\r\n\t\t\tSET_FLAG(bnc->change_flags, BGP_NEXTHOP_CHANGED);\r\n\t\t\tbnc_nexthop_free(bnc);\r\n\t\t\tbnc->nexthop = NULL;\r\n\t\t\tbnc->nexthop_num = 0;    <<<<<<<<<< **Down case: sets nexthop_num=0**\r\n\t\t}\r\n\r\n\t\tevaluate_paths(bnc);\r\n\t}\r\n}\r\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T01:21:46Z",
+          "body": "Cherry-pick PR to 202605: "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T02:14:48Z",
+          "body": "The cherry pick conflict has been handled manually. Removing cherry pick conflict label...\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

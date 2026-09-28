@@ -1,0 +1,139 @@
+{
+  "number": 26225,
+  "title": "[smartswitch] monit and dualtorNeighborCheck failures on DPU hosts during post-test health checks",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26225",
+  "createdAt": "2026-03-16T23:54:26Z",
+  "closedAt": "2026-04-01T00:08:54Z",
+  "author": "vvolam",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "smartswitch"
+  ],
+  "assignees": [
+    "vvolam"
+  ],
+  "milestone": null,
+  "body": "## Description\n\nAfter switch reload/reboot operations on SmartSwitch platforms, post-test DPU health checks fail because `monit` and `dualtorNeighborCheck` services report non-OK status on DPU hosts. These failures are reported by `check_dpu_critical_processes()` in `tests/smartswitch/common/device_utils_dpu.py` which runs `sudo show system-health detail` on each DPU and treats any non-OK service as a failure.\n\n## Error\n\n```\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU0\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU1\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU2\nERROR    root:device_utils_dpu.py:499 'monit' has failed in DPU3\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU0\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU1\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU2\nERROR    root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU3\n```\n\nThese failures occur repeatedly during `test_dpu_status_post_switch_config_reload`, `test_dpu_status_post_switch_mem_exhaustion`, and `test_dpu_status_post_switch_kernel_panic` in `tests/smartswitch/platform_tests/test_reload_dpu.py`.\n\n## Root Cause\n\nThe `check_dpu_critical_processes()` function at `device_utils_dpu.py:465` SSHes into each DPU, runs `sudo show system-health detail`, and iterates over all entries. If any entry has `status != \"ok\"` and is not in `DPU_CRITICAL_PROCESS_SKIP`, it returns `False`.\n\nThe current skip list (`DPU_CRITICAL_PROCESS_SKIP`) includes:\n```python\nfrozenset({\"container_checker\", \"snmp\", \"acms:acms\", \"routeCheck\",\n           \"PSU0\", \"PSU1\", \"PSU2\", \"PSU3\"})\n```\n\nBut `monit` and `dualtorNeighborCheck` are **not** in the skip list. After a switch reload, these services on DPU hosts may take additional time to converge or may not be applicable to DPU environments at all:\n\n- **`monit`**: The monit daemon on DPU hosts may be in a transient failure state after a switch-level reload. On some DPU platforms, monit may not be fully applicable.\n- **`dualtorNeighborCheck`**: This check verifies neighbor reachability for dualtor configurations. On DPU hosts, this check may not be relevant or may fail because the dataplane has not fully converged after a switch reload.\n\n## Affected Tests\n\n- `test_dpu_status_post_switch_config_reload`\n- `test_dpu_status_post_switch_mem_exhaustion`\n- `test_dpu_status_post_switch_kernel_panic`\n\nAll in `tests/smartswitch/platform_tests/test_reload_dpu.py`.\n\n## Suggested Fix\n\n### Option A: Add to skip list (test-side fix)\n\nAdd `monit` and `dualtorNeighborCheck` to `DPU_CRITICAL_PROCESS_SKIP` in `device_utils_dpu.py`:\n\n```python\nDPU_CRITICAL_PROCESS_SKIP = frozenset({\n    \"container_checker\", \"snmp\", \"acms:acms\", \"routeCheck\",\n    \"PSU0\", \"PSU1\", \"PSU2\", \"PSU3\",\n    \"monit\", \"dualtorNeighborCheck\",\n})\n```\n\n### Option B: Buildimage fix\n\nIf `dualtorNeighborCheck` is not applicable on DPU hosts, it should be disabled in the DPU monit configuration at the buildimage level.\n\n### Option C: Increase convergence timeout\n\nIf these services eventually recover, increase the `wait_until` timeout for `check_dpu_critical_processes` after reload operations.\n\n## Environment\n\n- Platform: Cisco 8102-28FH-DPU-O SmartSwitch\n- DPU type: AMD Pensando DSC\n- SONiC release: 202511\n- Test files:\n  - `tests/smartswitch/common/device_utils_dpu.py` (check logic, line 465)\n  - `tests/smartswitch/platform_tests/test_reload_dpu.py` (affected tests)\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4405,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4405",
+      "title": "[config reload] Skip routeCheck monit calls on DPU platforms",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-01T00:17:12Z",
+      "createdAt": "2026-03-31T00:26:32Z",
+      "author": "vvolam",
+      "body": "#### What I did\n\nOn DPU platforms (pensando, nvidia-bluefield), the `routeCheck` monit service is removed from the monit config (sonic-net/sonic-buildimage#26214) since route checking is not applicable on DPUs. However, `config reload` unconditionally tries to `monit unmonitor/monitor routeCheck`, causing:\n```\nDisabling container and routeCheck monitoring ...\nThere is no service named \"routeCheck\"\n```\n\nAdded a `_monit_service_exists()` helper and guarded `routeCheck` monit calls in `_stop_services()` and `_restart_services()` so they only execute when the service is present in monit.\n\n#### How I did it\n\n- Added `_monit_service_exists(service)` helper that runs `sudo monit summary <service>` and returns `True`/`False` based on exit code.\n- In `_stop_services()`: only call `monit unmonitor routeCheck` if `_monit_service_exists(\"routeCheck\")` returns `True`.\n- In `_restart_services()`: only call `monit monitor routeCheck` and `_wait_for_monit_service_monitored(\"routeCheck\")` if the service exists.\n\n#### How to verify it\n\n1. On a DPU platform (nvidia-bluefield / pensando) with routeCheck removed from monit config:\n   - Run `config reload -y` \u2014 should complete without `\"There is no service named routeCheck\"` error\n2. On a non-DPU platform where routeCheck exists in monit:\n   - Run `config reload -y` \u2014 routeCheck monitoring should still be disabled/re-enabled as before\n\n#### Previous command output (if the output of a command-line utility has changed)\n\nOn DPU with routeCheck removed from monit:\n```\nroot@sonic-dpu-3:/home/admin# config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container and routeCheck monitoring ...\nThere is no service named \"routeCheck\"\nReleased lock on /etc/sonic/reload.lock\n```\n\n#### New command output (if the output of a command-line utility has changed)\n\nOn DPU with routeCheck removed from monit:\n```\nroot@sonic-dpu-3:/home/admin# config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container monitoring ...\n...\nEnabling container monitoring ...\nReleased lock on /etc/sonic/reload.lock\n```\n\nCompanion PR: sonic-net/sonic-buildimage#26214\nFixes: sonic-net/sonic-buildimage#26225",
+      "files": [
+        {
+          "path": "config/main.py",
+          "additions": 19,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T00:26:40Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-31T00:26:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T01:57:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-31T01:57:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-04-01T00:14:54Z",
+          "body": "@qiluo-msft , please help merge"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-01T00:17:35Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-utilities/pull/4410"
+        }
+      ]
+    },
+    {
+      "number": 26214,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26214",
+      "title": "Disable routeCheck, dualtorNeighborCheck and vnetRouteCheck in monit config on DPU platforms",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-01T00:08:52Z",
+      "createdAt": "2026-03-17T00:34:25Z",
+      "author": "vvolam",
+      "body": "#### Why I did it\n\nrouteCheck, dualtorNeighborCheck and vnetRouteCheck monit checks are not applicable on DPU hosts:\n- **routeCheck** verifies routes between APPL-DB and ASIC-DB, which are not relevant on DPUs.\n- **dualtorNeighborCheck** verifies neighbor/tunnel route entries for dualtor configurations, which don't exist on DPUs.\n- **vnetRouteCheck** verifies VNET routes consistency between SONiC and vendor SDK DBs, which is not applicable on DPUs.\n\nWhen monit runs these checks on DPU hosts, they report failures that cause post-test DPU health checks to fail with errors like:\n```\nERROR root:device_utils_dpu.py:499 'dualtorNeighborCheck' has failed in DPU0\nERROR root:device_utils_dpu.py:499 'routeCheck' has failed in DPU0\n```\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/26225\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nRemove `routeCheck`, `dualtorNeighborCheck` and `vnetRouteCheck` entries from the monit `sonic-host` config during image build for DPU platforms (pensando, nvidia-bluefield) using sed in `sonic_debian_extension.j2`.\n\nEach sed command matches the comment line (e.g. `# route_check.py`) through the next blank/whitespace-only line, deleting the entire monit check block. The sed range terminator uses `^[[:space:]]*$` instead of `^$` for robustness against trailing whitespace.\n\n**Companion PR:** https://github.com/sonic-net/sonic-utilities/pull/4405 \u2014 guards `monit unmonitor/monitor routeCheck` calls in `config reload` so they don't fail on DPU platforms where routeCheck is removed.\n\n#### How to verify it\n\n1. Build a SONiC image for a DPU platform:\n   ```bash\n   make configure PLATFORM=nvidia-bluefield\n   make target/sonic-nvidia-bluefield.bin\n   ```\n2. On the built image, verify the monit config no longer contains the removed checks:\n   ```bash\n   grep -E \"route_check|dualtor_neighbor_check|vnet_route_check\" /etc/monit/conf.d/sonic-host\n   ```\n   Should return no output.\n3. Verify monit runs without errors:\n   ```bash\n   sudo monit summary\n   ```\n4. Verify non-DPU platforms are unaffected (e.g. `PLATFORM=broadcom` image still has all three checks).\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ] <!-- image version -->\n\n#### Description for the changelog\n\nDisable routeCheck, dualtorNeighborCheck and vnetRouteCheck monit checks on DPU platforms (pensando, nvidia-bluefield).\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no YANG model changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n",
+      "files": [
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 6,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-17T00:34:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-17T00:34:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vvolam",
+          "createdAt": "2026-03-17T16:39:35Z",
+          "body": "> Please make sure monit config file formatting is correct after this change.\r\n\r\nYes @prabhataravind, I have compared the monit config with existing and the PR image on both NPU and DPU of 4280 smartswitch. Here are the outputs\r\n\r\nvvolam@vvolam-XXX:/mnt/vvolam/testing/monit-change$ diff sonic-host sonic-host.current \r\nvvolam@vvolam-XXX:/mnt/vvolam/testing/monit-change$ diff sonic-host-dpu sonic-host-dpu.current \r\n23a24,40\r\n> # route_check.py Verify routes between APPL-DB & ASIC-DB are in sync.\r\n> # For any discrepancy, details are logged and a non-zero code is returned\r\n> # which would trigger a monit alert.\r\n> # Hence for any discrepancy, there will be log messages for \"ERR\" level\r\n> # from both route_check.py & monit.\r\n> #\r\n> check program routeCheck with path \"/usr/local/bin/route_check.py\"\r\n>     every 5 cycles\r\n>     if status != 0 for 3 cycle then alert repeat every 1 cycles\r\n> \r\n> # dualtor_neighbor_check.py: script to check if the neighbor entries in APPL_DB\r\n> # has correct neighbor or tunnel route entries in ASIC_DB based on the mux\r\n> # states.\r\n> check program dualtorNeighborCheck with path \"/usr/local/bin/dualtor_neighbor_check.py -o SYSLOG -s ERROR\"\r\n>     every 5 cycles\r\n>     if status != 0 for 3 cycle then alert repeat every 1 cycles\r\n> \r\n32a50,54\r\n> \r\n> # vnet_route_check.py: tool that verifies VNET routes consistancy between SONiC and vendor SDK DBs.\r\n> check program vnetRouteCheck with path \"/usr/local/bin/vnet_route_check.py\"\r\n>     every 5 cycles\r\n>     if status != 0 for 3 cycle then alert repeat every 1 cycles"
+        },
+        {
+          "author": "gpunathilell",
+          "createdAt": "2026-03-18T23:09:20Z",
+          "body": "@vvolam This PR needs change in sonic-utilties to handle config reload update since we are disabling route check:\r\n```\r\nroot@sonic-dpu-3:/home/admin# config reload -y -f\r\nAcquired lock on /etc/sonic/reload.lock\r\nDisabling container and routeCheck monitoring ...\r\nThere is no service named \"routeCheck\"\r\nReleased lock on /etc/sonic/reload.lock\r\n```"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-03-22T00:33:27Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-22T00:33:31Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-22T00:33:33Z",
+          "body": "Retrying failed(or canceled) stages in build 1061978:\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t0 by Elastictest: retried."
+        },
+        {
+          "author": "vvolam",
+          "createdAt": "2026-03-31T00:28:49Z",
+          "body": "> @vvolam This PR needs change in sonic-utilties to handle config reload update since we are disabling route check:\r\n> \r\n> ```\r\n> root@sonic-dpu-3:/home/admin# config reload -y -f\r\n> Acquired lock on /etc/sonic/reload.lock\r\n> Disabling container and routeCheck monitoring ...\r\n> There is no service named \"routeCheck\"\r\n> Released lock on /etc/sonic/reload.lock\r\n> ```\r\n\r\n@gpunathilell Raised a separate PR https://github.com/sonic-net/sonic-utilities/pull/4405 in sonic-utilities. Thank you!"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-01T00:14:31Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/26497"
+        }
+      ]
+    }
+  ]
+}

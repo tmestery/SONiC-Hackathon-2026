@@ -1,0 +1,82 @@
+{
+  "number": 7566,
+  "title": "Arista platform installation failure",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/7566",
+  "createdAt": "2021-05-09T05:06:24Z",
+  "closedAt": "2021-05-28T21:26:01Z",
+  "author": "yxieca",
+  "labels": [
+    "P0",
+    "Master Branch Quality"
+  ],
+  "assignees": [
+    "stepanblyschak"
+  ],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nArista platform installation is failing after https://github.com/Azure/sonic-utilities/pull/1527\r\n\r\n#### Steps to reproduce the issue:\r\n1. Install master image with the change.\r\n2. Install another master image with the change\r\n3.\r\n\r\n#### Describe the results you received:\r\n\r\n```\r\nTraceback (most recent call last):\r\n  File \"/usr/local/bin/sonic_installer\", line 8, in <module>\r\n    sys.exit(sonic_installer())\r\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 764, in __call__\r\n    return self.main(*args, **kwargs)\r\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 717, in main\r\n    rv = self.invoke(ctx)\r\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 1137, in invoke\r\n    return _process_result(sub_ctx.command.invoke(sub_ctx))\r\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 956, in invoke\r\n    return ctx.invoke(self.callback, **ctx.params)\r\n  File \"/usr/local/lib/python3.7/dist-packages/click/core.py\", line 555, in invoke\r\n    return callback(*args, **kwargs)\r\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/main.py\", line 437, in install\r\n    migrate_sonic_packages(bootloader, binary_image_version)\r\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/main.py\", line 332, in migrate_sonic_packages\r\n    new_image_upper_dir = get_path(UPPERDIR_NAME)\r\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/main.py\", line 329, in get_path\r\n    return stack.enter_context(bootloader.get_path_in_image(new_image_dir, path))\r\n  File \"/usr/lib/python3.7/contextlib.py\", line 426, in enter_context\r\n    result = _cm_type.__enter__(cm)\r\n  File \"/usr/lib/python3.7/contextlib.py\", line 112, in __enter__\r\n    return next(self.gen)\r\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/bootloader/aboot.py\", line 198, in get_path_in_image\r\n    offset = self._get_swi_file_offset(swipath, path)\r\n  File \"/usr/local/lib/python3.7/dist-packages/sonic_installer/bootloader/aboot.py\", line 186, in _get_swi_file_offset\r\n    with zipfile.ZipFile(swipath) as swi:\r\n  File \"/usr/lib/python3.7/zipfile.py\", line 1204, in __init__\r\n    self.fp = io.open(file, filemode)\r\nFileNotFoundError: [Errno 2] No such file or directory: '/host/image-HEAD.725-bfae15fb/sonic.swi'\r\nadmin@str-7260cx3-acs-2:~$ ls /host/image-HEAD.725-bfae15fb/\r\nallowlist_paths.conf  docker/               .imagehash            platform/             sonic-config/         version               \r\nboot/                 fs.squashfs           kernel-cmdline        .sonic-boot.swi       swi-signature         \r\nadmin@str-7260cx3-acs-2:~$ ls /host/image-HEAD.725-bfae15fb/.sonic-boot.swi \r\n/host/image-HEAD.725-bfae15fb/.sonic-boot.swi\r\nadmin@str-7260cx3-acs-2:~$ vi /usr/local/lib/python3.7/dist-packages/sonic_installer/bootloader/aboot.py\r\n```\r\n\r\n#### Describe the results you expected:\r\n\r\nInstall image successful.\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nadmin@str-7260cx3-acs-2:~$ show version\r\n\r\nSONiC Software Version: SONiC.HEAD.725-bfae15fb\r\nDistribution: Debian 10.9\r\nKernel: 4.19.0-12-2-amd64\r\nBuild commit: bfae15fb\r\nBuild date: Sun May  9 03:04:43 UTC 2021\r\nBuilt by: johnar@jenkins-worker-22\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 1625,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/1625",
+      "title": "Fix Aboot breakage sonic-installer due to package migration",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-05-28T21:26:01Z",
+      "createdAt": "2021-05-19T18:44:50Z",
+      "author": "Staphylo",
+      "body": "#### Failure cause\r\n\r\nFixes https://github.com/Azure/sonic-buildimage/issues/7566\r\n\r\nThe `get_rootfs_path` contextmanager was recently repurposed to implement\r\n`get_file_in_image` . It then got used as a function by leveraging some\r\npython complexity to bypass the restrictions coming with the contextmanager construct.\r\nThis was a conscious decision to prevent exactly what happened.\r\nThe method was then called multiple times to compute relative paths to the image directory.\r\nSimple path joins using `new_image_dir` could have been performed instead.\r\n\r\nThe `get_rootfs_path` implementation for Aboot bootloaders behaves differently\r\nwhen a rootfs is extracted or kept within the SWI image. It also behaves differently on secureboot systems.\r\nThe updated method was used by providing parameters it was never meant to process.\r\n\r\n#### Context around the failure\r\n\r\nOver time, the installation and boot process on Aboot has slightly diverged from\r\nthe ONIE one. There are 3 scenarios to consider.\r\n\r\n1) Regular boot similar to ONIE\r\nThis one should just work the same as the filesystem layout is unchanged.\r\n\r\n2) docker_inram where dockerfs.tar.gz is extracted in tmpfs at boot\r\nIn this scenario the boot is similar to the regular one beside that\r\n`dockerfs.tar.gz` is preserved intact on the flash and not extracted.\r\nBy design this does not fit the sonic-package-manager requierements and\r\nthe migration should be skipped which is what I did in this review.\r\nIn the coming months this boot mode will look closer to `3)` below.\r\n\r\n3) Secureboot on Arista devices\r\nIn this scenario the SWI image is kept intact and nothing extracted\r\nfrom it. By ensuring the integrity of the SWI we can guarantee that no\r\ncode/data has been tampered with. This mode also relies on\r\n`docker_inram` at the moment.\r\nIt could be enhanced when sonic-package-manager can guarantee the\r\nintegrity of code and data that is both installed and migrated.\r\n\r\n#### Solution provided\r\n\r\nThe method `get_file_in_image` was reverted to its original meaning\r\n`get_rootfs_path` as there is no point in keeping the new one.\r\nIt doesn't have the necessary logic to handle more than the rootfs and\r\nthe logic for which it was repurposed can easily be achieved by the following line.\r\n`os.path.join(bootloader.get_image_path(binary_image_name), 'something')`\r\nIf this is a desirable helper it should become a method of its own.\r\n\r\nA new `Bootloader` method called `support_package_migration` is\r\nintroduced to allow the bootloader to skip the package migration based\r\non the image (e.g docker_inram) or its own configuration (e.g secureboot).\r\nBy default all bootloaders enable the package migration.\r\n\r\nThat change leads to `1)` above running package migration while `2)` and `3)`\r\nskip it.\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\nThe temporary error message now becomes a warning message for platforms that do not\r\nsupport package migration.\r\n\r\n```\r\nCommand: losetup -d /dev/loop2\r\nWarning: SONiC package migration is not supported for this bootloader/image\r\nCommand: sync;sync;sync\r\n```\r\n\r\n",
+      "files": [
+        {
+          "path": "sonic_installer/bootloader/aboot.py",
+          "additions": 49,
+          "deletions": 11
+        },
+        {
+          "path": "sonic_installer/bootloader/bootloader.py",
+          "additions": 7,
+          "deletions": 2
+        },
+        {
+          "path": "sonic_installer/main.py",
+          "additions": 17,
+          "deletions": 20
+        }
+      ],
+      "comments": [
+        {
+          "author": "lgtm-com",
+          "createdAt": "2021-05-19T18:54:29Z",
+          "body": "This pull request **introduces 2 alerts** when merging 29e4061c675480aba9571e973579a525b6820636 into 00bd0cea4f260ca8cecc382a6bcea05272dfd070 - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-utilities/rev/pr-a8a20638288c26df4cee0304681acbf8086e85e2)\n\n**new alerts:**\n\n* 2 for Unused import"
+        },
+        {
+          "author": "jleveque",
+          "createdAt": "2021-05-19T23:59:31Z",
+          "body": "@stepanblyschak: Please review."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2021-05-28T04:34:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-05-28T04:34:47Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2021-05-28T17:59:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-05-28T18:00:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+{
+  "number": 27586,
+  "title": "Bug: dhcpmon exits when eth0 management interface has multiple IPv6 LLAs",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27586",
+  "createdAt": "2026-05-28T20:23:53Z",
+  "closedAt": "2026-07-28T14:12:44Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "Xichen96"
+  ],
+  "milestone": null,
+  "body": "## Is it platform specific\ngeneric\n\n## Importance or Severity\ncritical\n\n## Description of the bug\nAfter sonic-net/sonic-dhcpmon#62, `dhcpmon` can exit during startup when the management interface has more than one IPv6 link-local address. This causes DHCP relay service readiness checks to fail after switching back to legacy DHCP relay mode when executing the tests in https://github.com/sonic-net/sonic-mgmt/blob/master/tests/dhcp_relay/test_dhcpv4_relay.py\nWe see the following failure\n```\nFailed: dhcp_relay is not ready after restarting\n```\n\nThe new IPv6 initialization path scans all interface addresses and requires exactly one IPv4 address and either exactly one IPv6 GUA or exactly one IPv6 LLA. Some systems have both a kernel-generated LLA and a statically configured management LLA on `eth0`, which is valid Linux IPv6 behavior. `dhcpmon` treats this as fatal and exits after printing usage.\n\nRelevant PR: sonic-net/sonic-dhcpmon#62:\n- `src/dhcp_device.cpp`: `initialize_intf_mac_and_ip_addr()` counts IPv6 LLAs and fails when `num_ipv6_lla != 1`.\n- `src/main.cpp`: failed interface initialization calls `usage()`, which exits with success, so supervisor reports the process exited too quickly.\n\n\n```\nsrc/dhcp_device.cpp:\n        if (num_ip_addr != 1 || (num_ipv6_gua != 1 && num_ipv6_lla != 1)) {\n            syslog(LOG_ALERT, \"Unable to find exactly 1 ip addr, 1 ipv6 GUA and 1 ipv6 LLA on physical interface \"\n                   \"and 1 ipv6 loopback addr on loopback interface: %s\", context->intf);\n            break;\n        }\n```\n\n## Steps to Reproduce\nRun the [test_dhcpv4_relay](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/dhcp_relay/test_dhcpv4_relay.py) sonic-mgmt tests with eth0 MANAGEMENT_INTERFACE configured with two Link-Local-Addresses.\n\n\n## Actual Behavior and Expected Behavior\nActual behavior:\n`dhcpmon-Vlan1000` exits immediately and supervisor marks it `FATAL`. Test teardown then fails with `dhcp_relay is not ready after restarting`.\n\nExpected behavior:\n`dhcpmon` should tolerate multiple IPv6 LLAs on an interface or select the configured/primary address. DHCP relay readiness should not fail solely because `eth0` has both kernel-generated and configured link-local addresses.\n\n## Relevant log output\n```shell\n2026 May 27 00:21:03 sonic INFO dhcp_relay#dhcpmon[67]: Interface eth0 has IPv6 LLA fe80::b65c:b5ff:fedf:2362\n2026 May 27 00:21:03 sonic INFO dhcp_relay#dhcpmon[67]: Interface eth0 has IPv6 LLA fe80::966d:aeff:fe04:1f58\n2026 May 27 00:21:03 sonic ALERT dhcp_relay#dhcpmon[67]: Unable to find exactly 1 ip addr, 1 ipv6 GUA and 1 ipv6 LLA on physical interface and 1 ipv6 loopback addr on loopback interface: eth0\n2026 May 27 00:21:03 sonic ALERT dhcp_relay#dhcpmon[67]: Failed to initialize mac/ip address for interface eth0\n\nsupervisor status:\ndhcp-relay:dhcp6relay            RUNNING\ndhcp-relay:dhcprelayd            RUNNING\ndhcpmon:dhcpmon-Vlan1000         FATAL     Exited too quickly (process log may have details)\nisc-dhcpv4-relay-Vlan1000        RUNNING\n\nmanual run:\n/usr/sbin/dhcpmon -id Vlan1000 -iu PortChannel101 -im eth0\nUsage: dhcpmon -id <south interface> {-iu <north interface>}+ -im <mgmt interface> [-u <loopback interface>][-w <snapshot window in sec>] [-c <unhealthy status count>] [-s <snap length>] [-D] [-d][-I <db update interval in sec>]\n```\n",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-06-03T15:06:25Z",
+      "body": "Hi, I took a look at this. I believe the fix would be to relax the validation to require at least 1 LLA (instead of exactly 1) and stores the first LLA found for packet identification. The change itself is not complicated as the code path is well-isolated and the downstream usage is purely for relay packet matching.\n\nI've opened a PR: https://github.com/sonic-net/sonic-dhcpmon/pull/79\n\nCI is all green. Would appreciate if a reviewer could be assigned when possible, happy to address any feedback."
+    },
+    {
+      "author": "vmittal-msft",
+      "createdAt": "2026-06-03T15:55:08Z",
+      "body": "@Xichen96 please help review"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 87,
+      "repository": "sonic-net/sonic-dhcpmon",
+      "url": "https://github.com/sonic-net/sonic-dhcpmon/pull/87",
+      "title": "[dhcp_device] Skip address initialization for management interface",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-28T14:12:43Z",
+      "createdAt": "2026-07-21T16:29:58Z",
+      "author": "Xichen96",
+      "body": "### Description of PR\n\nSummary:\n\n`dhcpmon` registers the management interface to classify and count DHCP traffic that incorrectly traverses the management network. The management interface's MAC, IPv4 address, IPv6 GUA, and IPv6 LLA are not consumed by packet validation, counters, or health checks.\n\nThe shared address initialization path nevertheless rejects a valid management configuration with multiple IPv6 LLAs. This change classifies the interface before address discovery, skips unused MAC/IP initialization for management contexts, zero-initializes the context so unused address fields remain deterministic, and retains lightweight management-interface existence validation with `if_nametoindex()`. Uplink and downstream initialization is unchanged.\n\nFixes sonic-net/sonic-buildimage#27586\n\nDependencies: None.\n\n##### Work item tracking\n- Microsoft ADO (number only): 38912123\n- Child Task: 38912124\n\n### Type of change\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor / cleanup\n- [ ] Documentation update\n- [ ] Test improvement\n\n### Approach\n\n#### What is the motivation for this PR?\n\nValid Linux configurations may have both a kernel-generated and a statically configured IPv6 LLA on `eth0`. Address discovery is unnecessary for the management context, so this condition must not prevent `dhcpmon` startup.\n\n#### How did you do it?\n\n- Classify the interface context before address discovery.\n- Skip `initialize_intf_mac_and_ip_addr()` only for management contexts.\n- Zero-initialize the allocated context before setting interface identity.\n- Validate the original management `-im` argument with `if_nametoindex()` so missing, stale, and overlong names are rejected.\n- Preserve existing address discovery and validation for uplink and downstream contexts.\n\n#### How did you verify/test it?\n\n- Final-head PR CI build `1173576` passed for amd64, arm64, and armhf; DCO and EasyCLA passed.\n- Hardware: `testbed-bjw-can-720dt-3` (`m0`).\n- DUT: `bjw-can-720dt-3`, platform `x86_64-arista_720dt_48s`, HWSKU `Arista-720DT-G48S4`.\n- Image: `SONiC.20260510.07`, build commit `1df5b92630`.\n- Test branch: `internal-202605`.\n- Exact reproduction with two IPv6 LLAs and no management IPv6 GUA:\n  - Stock 202605 `dhcpmon` entered `FATAL` and logged `Unable to find exactly 1 ip addr, 1 ipv6 GUA and 1 ipv6 LLA ... eth0`.\n  - PR package entered `RUNNING` under the identical address state.\n- Management interface validation after the review follow-up:\n  - valid `eth0` with two LLAs and no GUA remained `RUNNING`;\n  - missing `-im does-not-exist` was rejected with `No such device`;\n  - an overlong `-im` name was rejected with `No such device`.\n- Five consecutive full runs passed; each run executed all three affected tests (**15/15 test executions passed**):\n  - `dhcp_relay/test_dhcp_relay.py::test_dhcp_relay_with_source_port_ip_in_relay_enabled[isc-relay-agent]`\n  - `dhcp_relay/test_dhcp_relay.py::test_interface_binding[isc-relay-agent]`\n  - `dhcp_relay/test_dhcpv6_relay.py::test_dhcp_relay_default`\n- Run durations: `14m52s`, `14m58s`, `14m46s`, `14m56s`, `15m02s`.\n- After the management-existence follow-up, the same three-test set passed again (3/3 in `15m03s`). The final two commits only removed redundant include additions and are covered by final-head CI.\n\n#### Any platform specific information?\n\nNo. The failure is caused by valid Linux IPv6 address configuration and is not platform-specific.\n\n### Back port request\n\n- [x] 202605\n\n### Tested branch\n\n- [x] 202605 \u2014 `SONiC.20260510.07` (`1df5b92630`), `internal-202605` sonic-mgmt, Arista-720DT-G48S4 m0.\n\n### Test result\n\n- 202605: stock failure reproduced with two LLAs/no GUA; PR package remained `RUNNING`; five consecutive runs of the three affected tests passed (15/15).\n\n### Documentation\n\nNot applicable; this is an internal initialization fix with no user-facing interface change.\n",
+      "files": [
+        {
+          "path": "src/dhcp_device.cpp",
+          "additions": 13,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T16:30:06Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T16:30:06Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T16:30:16Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T16:36:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T16:36:35Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "nhe-NV",
+          "createdAt": "2026-07-22T02:52:58Z",
+          "body": "@Xichen96 should 202605 label added for this PR?"
+        },
+        {
+          "author": "Xichen96",
+          "createdAt": "2026-07-22T06:02:59Z",
+          "body": "@nhe-NV Yes\u2014added `Request for 202605 Branch`. I am validating this fix on a tagged 202605 image now and will post the exact image, platform/HWSKU, and results here."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T06:20:26Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "Xichen96",
+          "createdAt": "2026-07-23T05:40:37Z",
+          "body": "202605 hardware validation is complete.\n\n- Image: `SONiC.20260510.07` (`1df5b92630`)\n- Platform/HWSKU/topology: `x86_64-arista_720dt_48s` / `Arista-720DT-G48S4` / `m0`\n- Stock reproduction: with two IPv6 LLAs and no management IPv6 GUA, `dhcpmon-Vlan1000` entered `FATAL` with the exact multiple-LLA initialization error.\n- PR package: remained `RUNNING` under the identical address state.\n- Functional validation: five consecutive runs of the three affected tests passed, **15/15 test executions**.\n\nTracking:\n- PBI: https://msazure.visualstudio.com/One/_workitems/edit/38912123\n- Child Task: https://msazure.visualstudio.com/One/_workitems/edit/38912124\n"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-07-23T09:42:49Z",
+          "body": "@Xichen96 Thanks for fixing the multiple-LLA startup failure and adding the 202605 hardware validation.\n\nOne concern: skipping `initialize_intf_mac_and_ip_addr()` for the management interface also removes the existing validation that the interface exists. Previously, `SIOCGIFHWADDR` failed initialization for an invalid or stale `-im` value. Now any interface name is accepted; because the sockets bind to all interfaces and packets without a matching device context are ignored, `dhcpmon` could remain healthy while traffic on the real management interface is not monitored.\n\nCould we retain a lightweight existence check, such as `if_nametoindex()`, while continuing to skip MAC/IP address discovery for management interfaces?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T09:52:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T09:53:00Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T10:03:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T10:03:16Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T12:22:58Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T17:40:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T17:41:04Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T17:45:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T17:46:07Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Xichen96",
+          "createdAt": "2026-07-23T17:46:58Z",
+          "body": "@StormLiangMS Implemented the lightweight management-interface existence check as suggested. Management contexts still skip MAC/IP address discovery, but now call `if_nametoindex(ifname)` and fail initialization when the original `-im` value does not identify an existing interface. Using the original argument also ensures overlong names cannot pass via truncation.\n\n202605 manual validation of the functional fix (`942ac44`, CI build `1172862`) confirmed:\n- valid `eth0` with two LLAs and no IPv6 GUA: `dhcpmon` remained `RUNNING`;\n- missing `-im does-not-exist`: rejected with `No such device`;\n- overlong `-im` name: rejected with `No such device`.\n\nThe current head only removes two redundant include additions from that implementation; its CI build is running now. Thanks for catching this."
+        }
+      ]
+    }
+  ]
+}

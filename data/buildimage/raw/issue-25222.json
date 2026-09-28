@@ -1,0 +1,319 @@
+{
+  "number": 25222,
+  "title": "Enhancement: watchdog API implementation for Nexthop devices",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25222",
+  "createdAt": "2026-01-28T06:18:40Z",
+  "closedAt": "2026-02-18T22:31:01Z",
+  "author": "domingo-nexthop",
+  "labels": [
+    "Enhancement :heavy_plus_sign:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [
+    "geans-pin"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the enhancement\n\nTo support arming the watchdog via a persistent \"watchdog puncher\" service while also allowing for manual override calls.\n\n### Current Behavior\n\n- No support of watchdog puncher by software\n- The Watchdog API cannot distinguish between an arming request from a watchdog puncher and an explicit manual arm. Consequently, a manual arm may be inadvertently overridden by the watchdog puncher.\n\n**Example Scenario:** Assume a device has watchdog puncher software that arms the watchdog every 10 seconds. If a user manually arms the watchdog using `watchdogutil arm -s 20` (setting it to 20 seconds) but does not call `watchdogutil disarm`, the device will never reboot or power cycle. This is because the watchdog puncher will re-arm the watchdog within 10 seconds, effectively nullifying the user's manual timer.\n\n### Proposed Behavior\n\n- Separate code paths to allow watchdog puncher to re-arm the watchdog and explicit, manual arm\n- Add a watchdog puncher (a systemd service and timer to arm watchdog using `watchdogutil`. Install and enable the timer. Every minute, the FPGA watchdog is armed (punched) with 3 minutes\n\nCreate a dedicated API for use by only watchdog puncher. For other explicit arming (by `watchdogutil arm` call, for example), create a watchdog pause file `/var/lock/pddf-locks/watchdog.pause`. While the pause file is present, the watchdog punching will have no effect. \n\n**Example Scenario (Revised):** Assume the device has a watchdog puncher arming the watchdog every 10 seconds. If a user arms the watchdog manually with `watchdogutil arm -s 20`, the puncher is paused. If the user does not call `watchdogutil disarm`, the device will successfully reboot or power cycle after approximately `20` seconds as intended.\n",
+  "comments": [
+    {
+      "author": "vmittal-msft",
+      "createdAt": "2026-02-11T16:14:24Z",
+      "body": "@adyeung  please work with @domingo-nexthop for offline closure on this,"
+    },
+    {
+      "author": "adyeung",
+      "createdAt": "2026-02-11T19:56:30Z",
+      "body": "@geans-pin Please help review"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25220,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25220",
+      "title": "[Nexthop] Improve Nexthop watchdog support",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-18T22:31:00Z",
+      "createdAt": "2026-01-28T03:36:12Z",
+      "author": "domingo-nexthop",
+      "body": "#### Why I did it\r\n\r\nFixes #25222\r\n\r\n- Please ignore commits like `IGNORE THIS COMMIT: Refactor unit tests for sonic-platform-modules-nexthop (PR #25166)`\r\n- To add a persistent software watchdog puncher \r\n- To support arming the watchdog via a persistent \"watchdog puncher\" service while also allowing for manual `arm` calls.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n- Add a separate API `arm_from_daemon()` for exclusive use by watchdog puncher\r\n- Create a pause file `/var/lock/pddf-locks/watchdog.pause` when a manual `arm` has been called\r\n- Remove the pause file when `disarm` is called. `/var/lock/pddf-locks/watchdog.pause` is ideal because it is not persistent across reboot. The path is also mounted on pmon so that it is accessible in sonic-mgmt testing. \r\n- Add a systemd watchdog puncher on Nexthop devices\r\n- Add `override.conf` to disable `watchdog-control.service`, so that FPGA watchdog is enabled permanently \r\n\r\n\r\n#### How to verify it\r\n\r\n- Unit tests\r\n- [sonic-mgmt test](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/platform_tests/api/test_watchdog.py) \r\n\r\n\r\n ```\r\n$ sudo systemctl list-timers watchdog\r\nNEXT                        LEFT LAST                         PASSED UNIT           ACTIVATES\r\nWed 2026-01-28 19:33:52 UTC  12s Wed 2026-01-28 19:32:52 UTC 47s ago watchdog.timer watchdog.service\r\n\r\n1 timers listed.\r\nPass --all to see loaded but inactive timers, too.\r\n$ sudo python -c \"import sonic_platform; print(sonic_platform.platform.Platform().get_chassis().get_watchdog().get_remaining_time())\"\r\n359\r\n```\r\n\r\nWait for the next run.\r\n\r\n```\r\n$ sudo systemctl list-timers watchdog\r\nNEXT                        LEFT LAST                         PASSED UNIT           ACTIVATES\r\nWed 2026-01-28 19:34:52 UTC   6s Wed 2026-01-28 19:33:52 UTC 53s ago watchdog.timer watchdog.service\r\n\r\n1 timers listed.\r\nPass --all to see loaded but inactive timers, too.\r\n\r\n$ sudo python -c \"import sonic_platform; print(sonic_platform.platform.Platform().get_chassis().get_watchdog().get_remaining_time())\"\r\n357\r\n```\r\n\r\nStop the watchdog.timer. System should powercycle eventually\r\n\r\n```\r\n$ sudo systemctl stop watchdog.timer\r\n```\r\n\r\nLock file is created after `watchdogutil arm`\r\n```\r\n$ sudo watchdogutil status\r\nStatus: Armed\r\nTime remaining: 323 seconds\r\n\r\n$ sudo ls -l /var/lock/pddf-locks/watchdog.pause\r\nls: cannot access '/var/lock/pddf-locks/watchdog.pause': No such file or directory\r\n\r\n$ date +%s; sudo watchdogutil arm -s 100\r\n1769629448\r\nWatchdog armed for 100 seconds\r\n\r\n$ sudo ls -l /var/lock/pddf-locks/watchdog.pause\r\n-rw-r--r-- 1 root root 10 Jan 28 19:42 /var/lock/pddf-locks/watchdog.pause\r\n```\r\n\r\nWatchdog is still armed after 60 seconds (punch frequency)\r\n\r\n```\r\n$ date +%s; sudo watchdogutil status\r\n1769629510\r\nStatus: Armed\r\nTime remaining: 38 seconds\r\n```\r\n\r\n```\r\n$ sudo watchdogutil disarm\r\nWatchdog disarmed successfully\r\n\r\n$ date +%s; sudo ls -l /var/run/lock/pddf-locks/watchdog.pause\r\n1769629534\r\nls: cannot access '/var/run/lock/pddf-locks/watchdog.pause': No such file or directory\r\n```\r\n\r\nWatchdog is re-armed by puncher eventually\r\n```\r\n$ date +%s; sudo watchdogutil status\r\n1769629570\r\nStatus: Armed\r\nTime remaining: 357 seconds\r\n```\r\n\r\n```\r\n$ systemctl status watchdog-control.service\r\n\u25cb watchdog-control.service - watchdog control service\r\n     Loaded: loaded (/usr/lib/systemd/system/watchdog-control.service; enabled-runtime; preset: enabled)\r\n    Drop-In: /run/systemd/generator/watchdog-control.service.d\r\n             \u2514\u2500environment.conf\r\n             /etc/systemd/system/watchdog-control.service.d\r\n             \u2514\u2500override.conf\r\n     Active: inactive (dead) since Wed 2026-01-28 19:42:04 UTC; 4min 14s ago\r\n   Duration: 13ms\r\n Invocation: 66f49e0f82f84d6e893c6c47f12305b0\r\n   Main PID: 14372 (code=exited, status=0/SUCCESS)\r\n   Mem peak: 2.7M\r\n        CPU: 9ms\r\n```\r\n\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [x] 202505\r\n- [x] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n\r\nSupport arming watchdog via a persistent \"watchdog puncher\" while also allowing for manual `arm` calls.",
+      "files": [
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/etc/systemd/system/watchdog-control.service.d/override.conf",
+          "additions": 6,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/nexthop/eeprom_utils.py",
+          "additions": 13,
+          "deletions": 3
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/service/watchdog.service",
+          "additions": 16,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/service/watchdog.timer",
+          "additions": 14,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/common/sonic_platform/watchdog.py",
+          "additions": 63,
+          "deletions": 11
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/debian/rules",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/debian/sonic-platform-nexthop-4010-r0.postinst",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/debian/sonic-platform-nexthop-5010-r0.postinst",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/README.md",
+          "additions": 140,
+          "deletions": 24
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/conftest.py",
+          "additions": 3,
+          "deletions": 4
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/fake_swsscommon.py",
+          "additions": 46,
+          "deletions": 5
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/fixtures_unit_test.py",
+          "additions": 0,
+          "deletions": 503
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/mock_imports_common.py",
+          "additions": 0,
+          "deletions": 71
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/mock_imports_unit_tests.py",
+          "additions": 114,
+          "deletions": 59
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/test_helpers_adm1266.py",
+          "additions": 232,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/test_helpers_chassis.py",
+          "additions": 70,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/test_helpers_common.py",
+          "additions": 53,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/fixtures/test_helpers_eeprom.py",
+          "additions": 2,
+          "deletions": 4
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/integration/conftest.py",
+          "additions": 21,
+          "deletions": 10
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/integration/nexthop/test_adm1266_chassis_integration.py",
+          "additions": 31,
+          "deletions": 30
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/integration/nexthop/test_eeprom_utils_integration.py",
+          "additions": 32,
+          "deletions": 45
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/integration/sonic_platform/test_chassis_sfp_integration.py",
+          "additions": 225,
+          "deletions": 0
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/conftest.py",
+          "additions": 10,
+          "deletions": 14
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_eeprom_utils_unit.py",
+          "additions": 8,
+          "deletions": 8
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_fpga_cli.py",
+          "additions": 43,
+          "deletions": 46
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_fpga_lib.py",
+          "additions": 63,
+          "deletions": 70
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_gen_cli.py",
+          "additions": 31,
+          "deletions": 25
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_led_control.py",
+          "additions": 15,
+          "deletions": 15
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/nexthop/test_pddf_config_parser.py",
+          "additions": 64,
+          "deletions": 27
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/sonic_platform/test_adm1266.py",
+          "additions": 74,
+          "deletions": 87
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/sonic_platform/test_chassis.py",
+          "additions": 80,
+          "deletions": 196
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/sonic_platform/test_fan.py",
+          "additions": 54,
+          "deletions": 67
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/sonic_platform/test_thermal.py",
+          "additions": 67,
+          "deletions": 194
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/sonic_platform/test_watchdog.py",
+          "additions": 206,
+          "deletions": 53
+        },
+        {
+          "path": "platform/broadcom/sonic-platform-modules-nexthop/test/unit/utils/test_nh_reboot_cause.py",
+          "additions": 42,
+          "deletions": 59
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-28T03:36:21Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-28T03:36:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-28T03:37:04Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-28T03:37:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-28T06:05:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-28T06:05:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-28T06:08:00Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-28T06:08:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2026-02-09T19:45:52Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2026-02-12T18:01:37Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-12T18:01:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-17T21:50:57Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-17T21:51:09Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T16:49:38Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T16:49:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T22:31:32Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25566"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T18:14:02Z",
+          "body": "This PR has backport request for branch(es): 202505,202511.<br><br>Request label(s) for branch(es) 202511 already exists.<br>Added label(s) for branch(es) 202505.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T18:14:04Z",
+          "body": "This PR has backport request label(s) for branch(es): 202505,202511, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202505: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T18:18:14Z",
+          "body": "The change is not in 202505 yet. @domingo-nexthop, please manually create the cherry pick PR for branch 202505.<br>You can ping the release branch owner(github account: yejianquan) to approve your cherry pick PR.<br>If this change is already in 202505, please comment \"already in 202505\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

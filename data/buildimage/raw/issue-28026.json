@@ -1,0 +1,104 @@
+{
+  "number": 28026,
+  "title": "Bug:[FRR][bgpd] running tcpdump on a BGP-neighbor interface triggers a full route re-download",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28026",
+  "createdAt": "2026-06-22T23:16:25Z",
+  "closedAt": "2026-06-26T00:35:16Z",
+  "author": "yizhenzha",
+  "labels": [
+    "Bug :bug:",
+    "regression",
+    "routing"
+  ],
+  "assignees": [
+    "deepak-singhal0408"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nRunning `tcpdump` on an interface that has BGP neighbors triggers an unnecessary full route re-download, even without fib suppression enabled. Opening the capture puts the interface in promiscuous mode, which makes the kernel emit a netlink link message; zebra forwards it as a duplicate ZEBRA_INTERFACE_UP (oper up\u2192up) even though nothing changed, and bgpd then re-evaluates the BGP nexthop cache (BNC) and re-installs/re-advertises every route via that interface.\n\nOn a router with thousands of routes via an uplink this is a full-RIB re-install per tcpdump; with `bgp suppress-fib-pending` it floods the offload-confirmation path and delays BGP advertisement by multiple seconds.\n\nThis is a regression: it was fixed by PR #21805 \n\n### Steps to Reproduce\n\n**Preconditions**: a SONiC switch running BGP with many routes via an uplink (e.g. a T1 with several thousand routes over an uplink PortChannel), bgp suppress-fib-pending enabled (makes the re-download trivially visible via the offload flag; the route re-download itself happens regardless).\n\n**_method 1:_** Run community test on t1 topology: `bgp/test_bgp_suppress_fib.py::test_bgp_update_relay_latency`, which  recently merged in https://github.com/sonic-net/sonic-mgmt/pull/23390. The test\u2019s [tcpdump sniffer step ](https://github.com/sonic-net/sonic-mgmt/blob/c93b8c4f0e722e45c1ddf90c2f6fee98f5ebcef8/tests/bgp/test_bgp_suppress_fib.py#L1659)triggered a full-RIB re-installs (~8k routes), which caused the latency of seconds during offload confirmation (orchagent \u2192 ROUTE_TABLE_RESPONSE_CHANNEL \u2192 fpmsyncd). The test itself will fail sincethe latency added\n<img width=\"670\" height=\"65\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/52aa0512-48a7-4c85-9837-9310fbfbca9d\" />\n\n**_method 2:_** manual reproduction on switch with T2 neighbour\n**1.Find the uplink interface toward an upstream (T2) BGP neighbor:**\n```bash\nshow ip bgp summary | grep T2          # pick a T2 neighbor IP, e.g. 10.0.0.1\nshow ip route 10.0.0.1                 # -> \"directly connected, PortChannelXXX\"  (the uplink iface)\n```\n**2.Confirm steady state \u2014 zero routes pending offload:**\n  ```bash\n  sudo vtysh -c \"show ip route json\" | python3 -c \\\n  'import sys,json;d=json.load(sys.stdin);print(\"not_offloaded=\",sum(1 for p in d.values() for r in p if r.get(\"installed\") and not r.get(\"offloaded\")))'\n  # expect: not_offloaded= 0\n  ```\n**3.Watch the pending-offload count (terminal 1) and start a capture on the uplink (terminal 2):**\n```bash\n# terminal 1 \u2014 watch:\nwhile true; do date +%H:%M:%S | tr -d '\\n'; \\\n  sudo vtysh -c \"show ip route json\" | python3 -c \\\n  'import sys,json;d=json.load(sys.stdin);print(\" not_offloaded=\",sum(1 for p in d.values() for r in p if r.get(\"installed\") and not r.get(\"offloaded\")))'; \\\n  sleep 1; done\n\n# terminal 2 \u2014 trigger (replace with your uplink ifa\nsudo timeout 5 tcpdump -ni PortChannelXXX 'tcp port 179'\n```\n**4.Observe: the instant tcpdump opens the interface (promiscuous mode), not_offloaded jumps from 0 \u2192 ~full RIB (~7,500 on this box) and drains over ~10s \u2014 i.e. tcpdump alone re-downloaded . No clear bgp, no config change.**\n\nCorroborating logs:\n```bash\n# duplicate link-up from promiscuous mode:\nsudo grep -E \"entered promiscuous mode|updatePortOpe /var/log/syslog\n\n#   -> \"Port PortChannelXXX oper state set from up to up\"   (a no-op up->up)\n\n# the route re-install storm:\nsudo docker exec swss sh -c \\\n  \"grep ROUTE_TABLE /var/log/swss/swss.rec | grep '|SET|' | tail -3000 | grep -oE '[0-9][0-9]:[0-9][0-9]:[0-9][0-9]' | uniq -c | tail\"\n#   -> a SET burst of thousands/sec right after the tcpdump\n```\n\n### Actual Behavior and Expected Behavior\n\n**Actual:** Running `tcpdump` on a BGP-neighbor / uplink interface causes a duplicate interface up\u2192up event and a full route re-download. Reproduced on FRR 10.5.4: `tcpdump -ni PortChannel102 'tcp port 179'` on an idle box drove installed-but-not-offloaded routes from 0 to ~7,500 (the whole RIB via that uplink), draining over ~10s \u2014 with no clear/config/topology change. Both entering and leaving promiscuous mode fired it:\n\n kernel: PortChannel102: entered promiscuous mode\n orchagent: updatePortOperStatus: Port PortChannel102 oper state set from up to up\n       -> swss.rec ROUTE_TABLE |SET burst up to 5120/s (BGP routes via the uplinks)\n\n**Expected:** `tcpdump` / promiscuous mode is a passive, local monitoring operation that does not change reachability or topology \u2014 it must NOT trigger any route update or download. The pending-offload count should stay 0 and there should be no route re-install. (Control: the same tcpdump on a non-BGP interface, e.g. eth0, causes no route churn.)\n\n### Relevant log output\n\n```shell\n1. not_offloaded curve (the effect \u2014 tcpdump alone re-downloads the RIB)\n\n02:03:13  not_offloaded=0          \u2190 steady state\n02:03:15  not_offloaded=0          \u2190 tcpdump opened here\n02:03:17  not_offloaded=7526       \u2190 jumped: ~7.5k routes re-downloaded\n02:03:19  not_offloaded=6136\n02:03:20  not_offloaded=7076       \u2190 tcpdump closed (adds a 2nd wave)\n02:03:22  not_offloaded=6532\n02:03:24  not_offloaded=1706\n02:03:25  not_offloaded=387\n02:03:27  not_offloaded=0          \u2190 drained (~10s total)\n\n2. syslog \u2014 the trigger (promiscuous \u2192 duplicate link-up \u2192 MTU re-set), on BOTH open and close\n\n# --- tcpdump OPEN ---\n02:03:16.019  kernel: PortChannel102: entered promiscuous mode\n02:03:16.019  kernel: Ethernet96: entered promiscuous mode          (PC102 members)\n02:03:16.019  kernel: Ethernet104: entered promiscuous mode\n02:03:16.019  swss#portsyncd: onMsg: nlmsg type:16 key:Ethernet96   admin:1 oper:1 ... master:193 type:sx_netdev\n02:03:16.019  swss#portsyncd: onMsg: nlmsg type:16 kr:1 ... type:team\n02:03:16.022  swss#orchagent: updatePortOperStatus: Port PortChannel102 oper state set from up to up   \u2190 DUPLICATE up\u2192up\n02:03:16.024  swss#orchagent: setRouterIntfsMtu: Set102 MTU to 9100\n\n# --- tcpdump CLOSE (5s later) \u2014 fires it AGAIN ---\n02:03:20.019  kernel: PortChannel102: left promiscuous mode\n02:03:20.019  kernel: Ethernet96/Ethernet104: left p\n02:03:20.069  swss#orchagent: updatePortOperStatus: Port PortChannel102 oper state set from up to up   \u2190 DUPLICATE up\u2192up\n02:03:20.126  swss#orchagent: setRouterIntfsMtu: Set102 MTU to 9100\n\n3. swss.rec \u2014 the route re-install storm\n\nROUTE_TABLE |SET per second:\n  02:03:16  1146/s    \u2190 begins right after promiscuous-mode entry\n  02:03:17  1907/s\n  02:03:18  3072/s\n  02:03:19  2048/s\n  02:03:20  2048/s    (tcpdump close adds more)\n  02:03:24  5120/s    \u2190 peak\n  02:03:25  5120/s\n  02:03:26  2059/s\n\nSample re-installed routes (these are the T2-learned\n  02:03:24.046  ROUTE_TABLE:20c0:e658::/64       SET protocol:bgp nexthop:fc00::2,fc00::a,fc00::12,fc00::1a  ifname:PortChannel102,105,108,111\n  02:03:24.053  ROUTE_TABLE:192.251.142.128/25   SET protocol:bgp nexthop:10.0.0.1,10.0.0.5,10.0.0.9,10.0.0.13\nifname:PortChannel102,105,108,111\n  02:03:24.301  ROUTE_TABLE:193.63.214.128/25    SET protocol:bgp nexthop:10.0.0.1,10.0.0.5,10.0.0.9,10.0.0.13\nifname:PortChannel102,105,108,111\n  02:03:24.517  ROUTE_TABLE:20c1:4da:0:80::/64   SET protocol:bgp nexthop:fc00::2,fc00::a,fc00::12,fc00::1a\nifname:PortChannel102,105,108,111\n\n4. offload-confirm churn (fpmsyncd RESPONSE_CHANNEL\n\n02:03:16  received=322560\n02:03:21  received=325632\n02:03:26  received=350208      \u2190 ~27.6k confirms pro\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-06-23T17:13:35Z",
+      "body": "**Root cause \u2014 generic FRR (zebra + bgpd), two conditions both required:**\n\n- **(A)** A `tcpdump` toggles `IFF_PROMISC`; zebra's `zebra_if_dplane_ifp_handling` doesn't filter promiscuity-only `RTM_NEWLINK` changes, so it sends a spurious `ZEBRA_INTERFACE_UP` to bgpd. (long-standing)\n- **(B)** bgpd's `bgp_nht_ifp_table_handle` was broadened by upstream [`d1252ec`](https://github.com/FRRouting/frr/commit/d1252ec2a6a) (2026-01-15) to re-evaluate **regular** single-nexthop BNCs on an interface-up \u2014 not just link-local ones. So on the spurious up, `evaluate_paths()` runs for every route via that interface \u2192 full re-advertise/re-install (both tcpdump open and close).\n\n**When introduced:** condition (B) \u2014 [`d1252ec`](https://github.com/FRRouting/frr/commit/d1252ec2a6a), first released in **FRR 10.5.4**. In 10.5.1 and earlier, only link-local nexthops were matched, so regular-nexthop routes were untouched and the symptom didn't occur.\n\n**Affected branches (by FRR pin):**\n\n| SONiC branch | FRR pin | (B) present? | Affected? |\n|---|---|---|---|\n| `master` | 10.5.4 | \u2705 ([`d1252ec`](https://github.com/FRRouting/frr/commit/d1252ec2a6a)) | \u2705 **Yes** |\n| `202511` | 10.4.1 | \u274c | \u274c No |\n| \u2264 202505 | \u2264 10.4.x | \u274c | \u274c No |\n\n**Upstream fix:** [FRRouting/frr#20181](https://github.com/FRRouting/frr/pull/20181) (commit [`257edcc`](https://github.com/FRRouting/frr/commit/257edcc948), merged 2026-01-07) fixes (A) at the source \u2014 when `change_flags == IFF_PROMISC` it updates `ifp->flags` and returns early, suppressing the notification. It currently lands in **10.6.0+ only** and is **not** on `stable/10.5`, so frr-10.5.4 lacks it.\n\n**Quick fix:** backport [FRRouting/frr#20181](https://github.com/FRRouting/frr/pull/20181) onto frr-10.5.4 \u2192 [sonic-buildimage#28043](https://github.com/sonic-net/sonic-buildimage/pull/28043). No `202511` backport needed (10.4.1 predates [`d1252ec`](https://github.com/FRRouting/frr/commit/d1252ec2a6a)). Since the fix is in 10.6.0+ only, SONiC must carry this patch on the 10.5.x line; requesting an upstream `stable/10.5` backport of [FRRouting/frr#20181](https://github.com/FRRouting/frr/pull/20181) would let the carried patch be dropped on a future 10.5.x bump.\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28043,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28043",
+      "title": "[sonic-frr]: suppress full BGP route re-download when tcpdump toggles interface promiscuity",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-26T00:35:15Z",
+      "createdAt": "2026-06-23T10:17:26Z",
+      "author": "deepak-singhal0408",
+      "body": "#### Why I did it\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/28026\n\nOn a BGP-enabled port or PortChannel, running `tcpdump` (or opening any `AF_PACKET` socket) toggles `IFF_PROMISC`. FRR 10.5.4 zebra does not filter a promiscuity-only netlink change in `zebra_if_dplane_ifp_handling`, so it emits a spurious `ZEBRA_INTERFACE_UP`. bgpd then re-evaluates every nexthop tracked via that interface and re-advertises/re-installs the full RIB (thousands of routes, ~10 s of control-plane churn). A routine packet capture on a production device should never trigger a routing storm.\n\nRoot cause: the netlink `ifi_change` mask carrying `IFF_PROMISC` (`0x100`) is not inspected before the interface is treated as having changed operational state.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nAdd SONiC FRR patch `0115`, a backport of upstream [FRRouting/frr PR 20181](https://github.com/FRRouting/frr/pull/20181) (commit `257edcc948e0179c75933cdb862fe1ac4ac14085`, \"zebra: Update promiscuity flag silently without route resets\").\n\nThe patch plumbs the netlink `ifi_change` mask through the dplane (`dplane_ctx_set/get_ifp_change_flags`) and, in `zebra_if_dplane_ifp_handling`, skips the routing notification when promiscuity is the **only** changed flag (`change_flags == IFF_PROMISC`, exact match on the masked value). The interface flags are still updated, so `show interface` reflects the correct PROMISC state.\n\nPR scope \u2014 patch-based, **no submodule pointer change**:\n- `src/sonic-frr/patch/0115-zebra-Update-promiscuity-flag-silently-without-route.patch`\n- `src/sonic-frr/patch/series`\n\nPorting note: upstream's `frrtrace(... if_dplane_ifp_handling_new ...)` tracepoint does not exist on `frr-10.5.4` and is omitted; the suppression logic is otherwise verbatim. Upstream PR 20181 is not yet in a released `stable/10.5`, hence the SONiC patch.\n\n#### How to verify it\n\n- **Patch apply:** full series `0001`\u2013`0115` applies cleanly on a pristine `frr-10.5.4` tree (0 rejects).\n- **Compile:** `frr_10.5.4-sonic-0_amd64.deb` builds clean with the patch applied (and the `docker-fpm-frr` container assembles).\n- **Functional (KVM t1-lag, cEOS neighbors, before/after container swap):** Trigger (both runs): `tcpdump -ni PortChannel102 'tcp port 179'` (open+close) on a LAG uplink. DUT had 24 BGP sessions Established, RIB ~12.8k.\n\n  | Metric | BEFORE (unfixed FRR 10.5.4) | AFTER (patch 0115) |\n  |---|---:|---:|\n  | swss.rec `ROUTE_TABLE` ops | **25,512** | **0** |\n  | bgpd `eval path` lines | 10,059 | 0 |\n  | zebra `ZEBRA_INTERFACE_UP PortChannel102` | yes | no |\n  | zebra `PROMISC-only update \u2026 no routing notification` (fix firing) | n/a | yes |\n  | RIB ebgp routes (steady) | 6,427 | 6,427 |\n\nBEFORE: the promisc toggle produced a spurious `ZEBRA_INTERFACE_UP`, bgpd re-evaluated the paths, and the full RIB was re-downloaded (25,512 `ROUTE_TABLE` ops). AFTER: the same toggle produced **zero** route ops, zero path re-evaluation, and no `ZEBRA_INTERFACE_UP`; `not_offloaded` stayed 0. `ip monitor` confirmed the netlink delta is `promiscuity` only (`ifi_change == IFF_PROMISC`, `0x100`), not allmulti.\n- **sonic-mgmt:** `bgp/test_bgp_suppress_fib.py::test_bgp_update_relay_latency` \u2192 **PASS**.\n\n#### Which release branch to backport (provide reason below if selected)\n\n<!-- Not requesting a backport in this PR: the fix is specific to the frr-10.5.4 tree pinned on master and was validated on master only. A backport to a release branch on an earlier FRR would require a separately authored/validated port. -->\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202605\n\n#### Tested branch (Please provide the tested image version)\n\n- [x] master \u2014 base image `sonic-vs` build `1145536` (master, 2026-06-22) with the patched `docker-fpm-frr` container swapped in.\n\n#### Description for the changelog\n\n[sonic-frr] zebra: suppress full BGP route re-download on interface promiscuity-only changes (tcpdump toggling `IFF_PROMISC`).\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no CONFIG_DB schema or YANG changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n\ud83e\udda6\n",
+      "files": [
+        {
+          "path": "src/sonic-frr/patch/0115-zebra-Update-promiscuity-flag-silently-without-route.patch",
+          "additions": 153,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-frr/patch/series",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T10:18:29Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-23T10:18:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T16:47:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-23T16:47:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "eddieruan-alibaba",
+          "createdAt": "2026-06-25T00:34:54Z",
+          "body": "@GaladrielZhao  will review it on Alibaba's behalf. "
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2026-06-25T20:40:37Z",
+          "body": "@yizhenzha  Tested this patch and we found it solves the bug. Once this PR is merged we can close the bug"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-06-25T20:43:37Z",
+          "body": "> @yizhenzha Tested this patch and we found it solves the bug. Once this PR is merged we can close the bug\r\n\r\nthanks @yizhenzha and @dgsudharsan for finding this regression coming from FRR 10.5.1->10.5.4 upgrade and validating the fix."
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-07-08T05:02:57Z",
+          "body": "### 202605 branch verification \u2705 (cherry-pick request)\n\nVerified this fix on the **202605 release branch** with a matched A/B on a KVM `t1-lag` testbed (vlab-03), 202605 nightly `202605.1157773-9c84048a4` (FRR 10.5.4, Debian 13/trixie) \u2014 BGP 24/24, ARISTA01T2 (10.0.0.1) on PortChannel102 = 6371 prefixes. The 202605 nightly is pre-fix (unfixed baseline); the container image is the only variable.\n\n**Trigger:** `sudo timeout 3 tcpdump -ni PortChannel102 'tcp port 179'` (promisc open+close).\n**Signal:** ROUTE_TABLE ops in `/var/log/swss/swss.rec` during the trigger window.\n\n| Build | tcpdump promisc toggle on PortChannel102 | ROUTE_TABLE ops |\n|---|---|---|\n| **UNFIXED** 202605 nightly | full RIB re-download | **25,488** |\n| **FIXED** (this PR's patch 0115, container-swap) | silent, no reset | **0** |\n\n`regression_confirmed = true`, `fix_confirmed = true` on 202605 \u2014 the promisc toggle drives a whole-RIB re-download on the unfixed nightly (25,488 ops), and **0** ops with the promiscuity-silent patch. The FRR pin is identical master\u2194202605 and the patch cherry-picks cleanly. Requesting cherry-pick approval to 202605.\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T19:52:23Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-buildimage/pull/28340"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-12T23:12:58Z",
+          "body": "@deepak-singhal0408 cherry pick PR didn't pass PR checker after retry. Please help check! Thanks.<br>https://github.com/sonic-net/sonic-buildimage/pull/28340\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "number": 26641,
+  "title": "Bug: [yang] sonic-kdump.yang ssh_string accepts POSIX-invalid usernames",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26641",
+  "createdAt": "2026-04-07T21:08:13Z",
+  "closedAt": "2026-06-20T17:37:43Z",
+  "author": "xq9mend",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "KeshavSM10"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n**Description**\n\nThe `ssh_string` leaf in `sonic-kdump.yang` uses:\n\n    pattern \"([a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+|[0-9]{1,3}(\\\\.[0-9]{1,3}){3}))\";\n\nThe user portion `[a-zA-Z0-9._%+-]+` allows the first character to be\nany of `. _ % + -`, but POSIX login names (per `useradd(8)` /\nNAME_REGEX) must start with `[a-zA-Z_]`. Values like `-x@host`,\n`.x@host`, `+x@host` pass YANG validation but cannot correspond to a\nreal account on the remote kdump target \u2014 the SSH login will always\nfail.\n\nA leading `-` also makes the value look like a CLI option flag when\npassed positionally to downstream tools.\n\n**Steps to reproduce**\n\n    config kdump ssh-string -- '-foo@10.0.0.1'   # accepted by YANG\n\n**Expected**\n\nPattern restricts first char of the user part to `[a-zA-Z_]`:\n\n    pattern \"([a-zA-Z_][a-zA-Z0-9._%+-]*@([a-zA-Z0-9.-]+|[0-9]{1,3}(\\\\.[0-9]{1,3}){3}))\";\n\n**Affected file**\n\n`src/sonic-yang-models/yang-models/sonic-kdump.yang:65`\n\n### Steps to Reproduce\n\nNA\n\n### Actual Behavior and Expected Behavior\n\nNA\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "KeshavSM10",
+      "createdAt": "2026-04-08T17:11:39Z",
+      "body": "I\u2019ve submitted a PR to address this issue: #26663 \n\nThe fix updates the ssh_string YANG pattern to enforce POSIX-compliant usernames,\npreventing invalid configurations that would fail at runtime.\n\nPlease review and let me know if any changes are needed."
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-04-22T15:18:31Z",
+      "body": "PR for the fix available"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26663,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26663",
+      "title": "[yang] Restrict ssh_string username to POSIX-compliant format",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-20T17:37:42Z",
+      "createdAt": "2026-04-08T17:02:23Z",
+      "author": "KeshavSM10",
+      "body": "Fixes #26641 \r\n\r\n1] Problem\r\nThe existing ssh_string YANG pattern allows usernames starting with characters\r\nsuch as '-', '.', '+', or digits. These are not valid POSIX login names.\r\n\r\nAs a result:\r\n- The configuration is accepted at the YANG validation layer.\r\n- SSH attempts fail at runtime because the username is invalid.\r\n- This leads to silent failures in remote kdump dump transfer.\r\n\r\n2] Root Cause\r\nThe regex:\r\n[a-zA-Z0-9._%+-]+\r\n\r\nallows any of these characters at the start of the username, without enforcing\r\nPOSIX-compliant username rules.\r\n\r\n3] Solution\r\nUpdate the pattern to enforce a valid starting character:\r\n\r\n[a-zA-Z_][a-zA-Z0-9._%+-]*\r\n\r\nThis ensures:\r\n- The username starts with a letter or underscore.\r\n- Remaining characters follow the existing allowed set.\r\n- Host validation logic remains unchanged.\r\n\r\n4] Impact\r\n- Invalid usernames are rejected at configuration time.\r\n- Prevents runtime SSH failures.\r\n- Improves system reliability and debugging correctness for kdump.\r\n\r\n5] Validation\r\nTested via logical validation of regex behavior:\r\n\r\nRejected inputs:\r\n- '-foo@10.0.0.1'\r\n- '.user@host'\r\n- '+abc@host'\r\n- '1user@host'\r\n\r\nAccepted inputs:\r\n- 'user@10.0.0.1'\r\n- 'abc_123@host'\r\n- 'a@host'\r\n\r\n6] Scope\r\n- Change is limited to YANG schema validation.\r\n- No impact on runtime logic or other modules.",
+      "files": [
+        {
+          "path": "src/sonic-yang-models/tests/yang_model_tests/tests/kdump.json",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-models/tests/yang_model_tests/tests_config/kdump.json",
+          "additions": 15,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-models/yang-models/sonic-kdump.yang",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T17:02:32Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T17:02:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-10T05:26:03Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-10T05:26:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2026-04-15T20:57:57Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-15T20:58:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "xq9mend",
+          "createdAt": "2026-04-23T01:31:51Z",
+          "body": "@KeshavSM10 could you please merge latest master into this branch to trigger a fresh CI run? The previous failures appear to be pre-existing test flakes."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-23T04:52:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-23T04:52:47Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2026-06-16T01:03:06Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-16T01:03:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

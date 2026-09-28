@@ -1,0 +1,79 @@
+{
+  "number": 27992,
+  "title": "Bug: [memory_checker] Containers removed during listing to causes spurious dockerd 404",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27992",
+  "createdAt": "2026-06-19T16:57:05Z",
+  "closedAt": "2026-06-24T02:26:56Z",
+  "author": "antonio-nexthop",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nmemory_checker (run by Monit, files/image_config/monit/memory_checker) intermittently logs an ERR-level message and exits non-zero when a container is restarted or removed at the same time it is polling the docker daemon:\n\n```\n  ERR memory_checker: Failed to retrieve the running container list from docker daemon! Error message is: '404 Client Error for http+docker://localhost/v1.43/containers/<id>/json: Not Found (\"No such container: <id>\")'\n```\n\nThe error comes from `get_running_container_names()`:\n\n```\nrunning_container_list = docker_client.containers.list(filters={\"status\": \"running\"})\nrunning_container_names = [container.name for container in running_container_list]\n```\n\n### Steps to Reproduce\n\nThe race is non-deterministic in the wild, but can be triggered reliably two ways.\n\n  Terminal 1 \u2014 continuously list running containers the same way memory_checker does:\n```\n  python3 - <<'EOF'\n  import docker\n  c = docker.DockerClient(base_url='unix://var/run/docker.sock')\n  while True:\n      try:\n          c.containers.list(filters={\"status\": \"running\"})\n      except docker.errors.NotFound as e:\n          print(\"REPRODUCED:\", e); break\n  EOF\n```\n  Terminal 2 \u2014 churn a throwaway container so one is being removed during the inspect loop (use any image present on the\n  box, e.g. docker images):\n  IMG=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -m1 .)\n  while true; do\n    docker run -d --rm --name repro --entrypoint \"\" \"$IMG\" sleep 3600 >/dev/null 2>&1\n    docker rm -f repro >/dev/null 2>&1\n  done\n\n  Terminal 1 prints REPRODUCED: 404 ... No such container ... \u2014 the exact failure memory_checker hits.\n\n### Actual Behavior and Expected Behavior\n\nThere should not be 404 error\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27991,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27991",
+      "title": "[memory_checker] Skip containers removed during listing to avoid spurious dockerd 404",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-24T02:26:55Z",
+      "createdAt": "2026-06-19T16:50:08Z",
+      "author": "antonio-nexthop",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nTo address intermittent errors like the following:\r\n\r\n```\r\n2026 May 21 09:32:49.818977 xxxx413 ERR memory_checker: Failed to retrieve the running container list from docker daemon! Error message is: '404 Client Error for http+docker://localhost/v1.43/containers/<hash>/json: Not Found (\"No such container: <hash>\")'\r\n```\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: 27992\r\n\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/27992\r\n\r\n#### How I did it\r\n\r\nThis issue looks very similar to https://github.com/docker/docker-py/issues/2451\r\n\r\nBy default, `containers.list()` lists the containers and then inspects each one. If a container is restarted or removed between the list and the per-container inspect, dockerd returns a transient 404 (\"No such container\") and the whole call raises NotFound.\r\n\r\nAdding `ignore_removed=True` to ignore failures due to missing containers when attempting to inspect containers from the original list.\r\n\r\nReference: https://docker-py.readthedocs.io/en/stable/containers.html#docker.models.containers.ContainerCollection.list\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\nThe failure is a race \u2014 a container removed between docker's container list and its\r\nper-container inspect \u2014 so it is verified **deterministically** by running the actual\r\n`get_running_container_names()` from the unpatched and patched files while injecting that\r\nexact race (a throwaway container is removed right before the first inspect). No flaky\r\ntiming, no load. Run on an DUT (`SONiC`, docker-py 7.1.0).\r\n\r\n<details>\r\n<summary><code>verify_fix.py</code></summary>\r\n\r\n```python\r\n#!/usr/bin/env python3\r\n# Deterministically reproduce the dockerd-404 race and verify the fix.\r\n# Usage: verify_fix.py <original_memory_checker> <patched_memory_checker>\r\nimport importlib.machinery as m, importlib.util as u, sys, syslog, docker\r\nfrom docker.api.client import APIClient\r\nsyslog.openlog(ident=\"memory_checker\")   # so the ERR line is tagged like the daemon's\r\ncli = docker.DockerClient(base_url=\"unix://var/run/docker.sock\")\r\nIMG = next(i for im in cli.images.list() for i in im.tags\r\n           if \"orchagent\" in i or \"database\" in i)\r\nNAME = \"abc1234_verify\"\r\n\r\ndef load(path):\r\n    l = m.SourceFileLoader(path, path); s = u.spec_from_loader(path, l)\r\n    mod = u.module_from_spec(s); l.exec_module(mod); return mod\r\n\r\ndef case(label, path):\r\n    try: cli.containers.get(NAME).remove(force=True)\r\n    except Exception: pass\r\n    cli.containers.run(IMG, command=[\"sleep\", \"3600\"], name=NAME,\r\n                       detach=True, network_mode=\"none\", entrypoint=[\"\"])\r\n    real = APIClient.inspect_container; fired = []\r\n    def racing(self, c):                      # remove throwaway just before the\r\n        if not fired:                         # first inspect == the documented race\r\n            fired.append(1)\r\n            try: cli.containers.get(NAME).remove(force=True)\r\n            except Exception: pass\r\n        return real(self, c)\r\n    APIClient.inspect_container = racing\r\n    print(f\"\\n== {label} ==\")\r\n    try:\r\n        names = load(path).get_running_container_names()\r\n        print(f\"RESULT: returned {len(names)} names, exit 0 (no error)\")\r\n    except SystemExit as e:\r\n        print(f\"RESULT: logged ERR and sys.exit({e.code})\")\r\n    finally:\r\n        APIClient.inspect_container = real\r\n        try: cli.containers.get(NAME).remove(force=True)\r\n        except Exception: pass\r\n\r\ncase(\"WITHOUT fix (containers.list)\", sys.argv[1])\r\ncase(\"WITH fix    (ignore_removed=True)\", sys.argv[2])\r\n```\r\n</details>\r\n\r\n**Run on the DUT:**\r\n\r\n```bash\r\ncp -a /usr/bin/memory_checker /tmp/memory_checker.original      # unpatched baseline\r\n# scp the patched file -> /tmp/memory_checker and harness -> /tmp/verify_fix.py\r\nMARK=\"abc1234-$$\"; logger -t harness \"$MARK BEGIN\"\r\nsudo python3 /tmp/verify_fix.py /tmp/memory_checker.original /tmp/memory_checker\r\nlogger -t harness \"$MARK END\"\r\nsudo awk -v s=\"$MARK BEGIN\" -v e=\"$MARK END\" '$0~s{on=1} on{print} $0~e{on=0}' \\\r\n  /var/log/syslog | grep \"ERR memory_checker: Failed to retrieve the running container list\"\r\n```\r\n\r\n**Result:**\r\n\r\n| | Outcome |\r\n|---|---|\r\n| **Without fix** (`containers.list()`) | inspect of the removed container \u2192 `404` \u2192 logs `ERR` and `sys.exit(1)` \u274c |\r\n| **With fix** (`ignore_removed=True`) | removed container skipped \u2192 returns the live container list, exit 0, **no ERR** \u2705 |\r\n\r\nHarness output:\r\n\r\n```\r\n== WITHOUT fix (containers.list) ==\r\nRESULT: logged ERR and sys.exit(1)\r\n\r\n== WITH fix    (ignore_removed=True) ==\r\nRESULT: returned 15 names, exit 0 (no error)\r\n```\r\n\r\nActual syslog line emitted by the **without-fix** run \u2014 identical to the reported error,\r\nand **not** emitted by the with-fix run:\r\n\r\n```\r\n2026 Jun 19 00:21:01 xxxx107 ERR memory_checker: Failed to retrieve the running container list from docker daemon! Error message is: '404 Client Error for http+docker://localhost/v1.43/containers/1be32c43dce0897d1394455344bfaa46ddf5195b1b0ecf9b67d38b06982c0b86/json: Not Found (\"No such container: 1be32c43dce0897d1394455344bfaa46ddf5195b1b0ecf9b67d38b06982c0b86\")'\r\n```\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202605\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/image_config/monit/memory_checker",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T16:50:17Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T16:50:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T16:51:53Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T16:52:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "antonio-nexthop",
+          "createdAt": "2026-06-19T17:10:49Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T17:10:52Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T17:51:28Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T17:51:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

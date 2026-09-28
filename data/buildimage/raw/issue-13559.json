@@ -1,0 +1,153 @@
+{
+  "number": 13559,
+  "title": "chassis: test_container_checker failure for swss/syncd/teamd on multi-asic Supervisor",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/13559",
+  "createdAt": "2023-01-30T22:12:21Z",
+  "closedAt": "2023-03-16T02:05:46Z",
+  "author": "anamehra",
+  "labels": [
+    "P0",
+    "Triaged"
+  ],
+  "assignees": [
+    "mlok-nokia"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\ntest_container_checker test fails for swss, syncd and teamd on Chassis supervisor.\r\n\r\nThe testcase calls, 'systemctl stop <service>' adn expects the docker associated with service goes down and container_checker to report 'Expected docker not running'.\r\n\r\ncontainer_checker process does not report the 'Expected docker not running' message for swss, syncd and teamd on Supervisor and the test cases fail.\r\n\r\nRoot cause:\r\nThe test case runs for all features and shuts down pmon service before swss/syncd/teamd. When pmon docker goes down, the CHASSIS_FABRIC_ASIC_TABLE entries also gets deleted.\r\nThe testcase does not start the pmon before running the test for next service.\r\n\r\nWhen swss, syncd or teamd is tested and the service is stopped. The docker goes down. At this point container_checker script chcks for expected docker state. The container_cheaker depends on CHASSIS_FABRIC_ASIC_TABLE to provide the available asic list to calsulate the expected dockers but as pmon is down and the table is cleared from chassis db, asic information is not present. Due to this, container_checker does not include the swss, syncd, teamd services in the expected docker list and fails to report the error.\r\n\r\n#### Steps to reproduce the issue:\r\n1. Run container_checker/test_container_checker.py on Supervisor\r\n2.\r\n3.\r\n\r\n#### Describe the results you received:\r\ncontainer_checker failed to report the 'Expected docker not running' error for swss, syncd, and teamd\r\n\r\n#### Describe the results you expected:\r\ncontainer_checker should report these containers down after systemctl stop <service>\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "anamehra",
+      "createdAt": "2023-01-30T22:13:26Z",
+      "body": "Hi @abdosi , @SuvarnaMeenakshi , FYI-"
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2023-02-03T19:01:03Z",
+      "body": "@mlok-nokia would help address this, thanks."
+    },
+    {
+      "author": "abdosi",
+      "createdAt": "2023-02-13T22:52:14Z",
+      "body": "@mlok-nokia any update on this ? More than test case itself this is generic design issue"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 340,
+      "repository": "sonic-net/sonic-platform-daemons",
+      "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/340",
+      "title": "Fixed chassis: test_container_checker failure for swss/syncd/teamd on multi-asic Supervisor - issue #13559",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-03-16T02:05:43Z",
+      "createdAt": "2023-02-21T22:40:41Z",
+      "author": "prem-nokia",
+      "body": "#### Description\r\nCode changes are implemented in deinit function such that it does not remove entries in CHASSI_FABRIC_ASIC_TABLE when supervisorctl stop chassisd is triggered.\r\n\r\n#### Motivation and Context\r\nfixes https://github.com/sonic-net/sonic-buildimage/issues/13559: The container_cheaker depends on CHASSIS_FABRIC_ASIC_TABLE to provide the available asic list to calculate the expected dockers but as pmon is down and the table is cleared from chassis db, asic information is not present. Due to this, container_checker does not include the swss, syncd, teamd services in the expected docker list and fails to report the error.\r\n\r\n#### How Has This Been Tested?\r\n1) Execute the below cmd.\r\n```\r\nadmin@supervisor:~$docker exec pmon supervisorctl stop chassisd\r\nchassisd: stopped\r\n```\r\n2) Look for the table entries using below cmd.\r\n```\r\nadmin@supervisor:~$ sonic-db-dump -n CHASSIS_STATE_DB -y -k \"CHASSIS*\"\r\n{\r\n  \"CHASSIS_FABRIC_ASIC_TABLE|asic6\": {\r\n    \"expireat\": 1677006173.948722,\r\n    \"ttl\": -0.001,\r\n    \"type\": \"hash\",\r\n    \"value\": {\r\n      \"asic_id_in_module\": \"0\",\r\n      \"asic_pci_address\": \"nokia-bdb:4:0\",\r\n      \"name\": \"FABRIC-CARD3\"\r\n    }\r\n  },\r\n  \"CHASSIS_FABRIC_ASIC_TABLE|asic7\": {\r\n    \"expireat\": 1677006173.9487307,\r\n    \"ttl\": -0.001,\r\n    \"type\": \"hash\",\r\n    \"value\": {\r\n      \"asic_id_in_module\": \"1\",\r\n      \"asic_pci_address\": \"nokia-bdb:4:1\",\r\n      \"name\": \"FABRIC-CARD3\"\r\n    }\r\n  }\r\n}\r\n```\r\n#### Additional Information (Optional)\r\n",
+      "files": [
+        {
+          "path": "sonic-chassisd/scripts/chassisd",
+          "additions": 4,
+          "deletions": 3
+        },
+        {
+          "path": "sonic-chassisd/tests/test_chassisd.py",
+          "additions": 2,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2023-02-21T22:40:44Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: prem-nokia  (7b4f3a8c91ca003fdb5f672c243b62150348df72)</li></ul>"
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2023-02-25T02:33:09Z",
+          "body": "instead of note deleting it should we repopulate every time during init ?"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2023-02-25T02:33:20Z",
+          "body": "@anamehra - would you like to review this?"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2023-02-25T02:36:45Z",
+          "body": "Can we please have a more descriptive PR title?  thanks."
+        },
+        {
+          "author": "anamehra",
+          "createdAt": "2023-02-25T04:37:18Z",
+          "body": "> @anamehra - would you like to review this?\r\n\r\nI will review, @rlhui . Thanks for tagging me!"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2023-03-02T03:37:29Z",
+          "body": "@prgeor , @anamehra - please approve if it looks good to you, thanks"
+        },
+        {
+          "author": "anamehra",
+          "createdAt": "2023-03-02T04:04:13Z",
+          "body": "> Can we please have a more descriptive PR title? thanks.\r\n\r\nPlease resolve this comment as well."
+        },
+        {
+          "author": "mlok-nokia",
+          "createdAt": "2023-03-02T18:15:59Z",
+          "body": "> \r\n\r\n\r\n\r\n> instead of note deleting it should we repopulate every time during init\r\n\r\nThe entries will be recreated when chassisd is started.\r\n"
+        },
+        {
+          "author": "prem-nokia",
+          "createdAt": "2023-03-07T18:23:28Z",
+          "body": "> \r\n\r\n\r\n\r\n> Can we please have a more descriptive PR title? thanks.\r\n\r\nTitle changed as suggested. Thx"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2023-03-08T05:47:08Z",
+          "body": "> Please address the comment\r\n\r\n@prem-nokia reminder on this"
+        },
+        {
+          "author": "mlok-nokia",
+          "createdAt": "2023-03-08T15:24:17Z",
+          "body": "> Please address the comment\r\n> @mlok-nokia can you point to code where this happens? If i understand correctly issue was once we do de-init we were losing the entry and not getting repopulated\r\n\r\n@rlhui @abdosi  The reply has been made last week.  Somehow it has been moved to the section before this comment. \r\n --  Before this PR, these \"FABRIC_ASIC\" entries will be removed if stop chassisd or PMON (which trigger the de_init). The entries will be recreated when chassisd or PMON is restarted. Function module_updater.module_db_update() will recreate them. We have manaully test it. But, after this PR, these fabric entries will not be removed when PMON/chassis is stopped. \r\n"
+        },
+        {
+          "author": "prem-nokia",
+          "createdAt": "2023-03-08T15:35:08Z",
+          "body": "> > Please address the comment\r\n> \r\n> @prem-nokia reminder on this\r\n\r\nThis is already addressed by @mlok-nokia last week. Thanks  "
+        },
+        {
+          "author": "prgeor",
+          "createdAt": "2023-03-13T18:56:02Z",
+          "body": "@prem-nokia Instead of making this workaround the problem, can we make the test more intelligent? It doesn't look correct to NOT delete the DB entries owned/created by PMON to be NOT deleted once PMON is dead. In the test we can get the list of asics before PMON  is stopped and use that list after PMON is stopped.?"
+        },
+        {
+          "author": "mlok-nokia",
+          "createdAt": "2023-03-13T21:47:33Z",
+          "body": "> @prem-nokia Instead of making this workaround the problem, can we make the test more intelligent? It doesn't look correct to NOT delete the DB entries owned/created by PMON to be NOT deleted once PMON is dead. In the test we can get the list of asics before PMON is stopped and use that list after PMON is stopped.?\r\n\r\n@arlakshm @prgeor @anamehra @rlhui  Please help to decide what we should do here.  Based on the feature, these entries should not be removed since they are used to start the swss/syncd on the Supervisor card. "
+        },
+        {
+          "author": "anamehra",
+          "createdAt": "2023-03-13T22:24:03Z",
+          "body": "> @prem-nokia Instead of making this workaround the problem, can we make the test more intelligent? It doesn't look correct to NOT delete the DB entries owned/created by PMON to be NOT deleted once PMON is dead. In the test we can get the list of asics before PMON is stopped and use that list after PMON is stopped.?\r\n\r\n@prgeor , the issue is not limited to the test case. It's more of a design issue. How do we want to handle a situation where pmon goes down due to some error and later syncd/swss restarts?"
+        },
+        {
+          "author": "prgeor",
+          "createdAt": "2023-03-15T18:31:53Z",
+          "body": "> > @prem-nokia Instead of making this workaround the problem, can we make the test more intelligent? It doesn't look correct to NOT delete the DB entries owned/created by PMON to be NOT deleted once PMON is dead. In the test we can get the list of asics before PMON is stopped and use that list after PMON is stopped.?\r\n> \r\n> @prgeor , the issue is not limited to the test case. It's more of a design issue. How do we want to handle a situation where pmon goes down due to some error and later syncd/swss restarts?\r\n\r\n@prem-nokia @anamehra PMON going down is highly unlikely event which could happen with swss/syncd docker as well.  I think the issue is mainly to do with the design where PMON is now critical docker"
+        },
+        {
+          "author": "anamehra",
+          "createdAt": "2023-03-16T02:58:08Z",
+          "body": "> > > @prem-nokia Instead of making this workaround the problem, can we make the test more intelligent? It doesn't look correct to NOT delete the DB entries owned/created by PMON to be NOT deleted once PMON is dead. In the test we can get the list of asics before PMON is stopped and use that list after PMON is stopped.?\r\n> > \r\n> > \r\n> > @prgeor , the issue is not limited to the test case. It's more of a design issue. How do we want to handle a situation where pmon goes down due to some error and later syncd/swss restarts?\r\n> \r\n> @prem-nokia @anamehra PMON going down is highly unlikely event which could happen with swss/syncd docker as well. I think the issue is mainly to do with the design where PMON is now critical docker\r\n\r\nYes, @prgeor , I agree with that. As we discussed in the meeting, this PR is good to have fix to the time being to handle double failure scenarios. We should track the design improvements to handle the possible PMON failure as a critical issue."
+        },
+        {
+          "author": "wenyiz2021",
+          "createdAt": "2023-03-20T19:00:16Z",
+          "body": "can we please backport this PR to 202205 and 202211? thanks! @yxieca "
+        }
+      ]
+    }
+  ]
+}

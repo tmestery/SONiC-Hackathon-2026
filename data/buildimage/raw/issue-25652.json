@@ -1,0 +1,138 @@
+{
+  "number": 25652,
+  "title": "Bug: Race condition in PHYSICAL_ENTITY_INFO table cleanup during daemon shutdown",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25652",
+  "createdAt": "2026-02-24T20:16:41Z",
+  "closedAt": "2026-04-29T16:55:53Z",
+  "author": "ymd-arista",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "ymd-arista"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nCurrently, `sensormond` and `thermalctld` delete **all entries** in the `PHYSICAL_ENTITY_INFO` table of `STATE_DB` when their class objects are garbage collected during shutdown. This creates race conditions where one daemon's data can be inadvertently deleted by another daemon.\n\nMeanwhile, `psud` does **not** delete its entries from `PHYSICAL_ENTITY_INFO` at all during shutdown, which was masked with `thermalctld`/`sensormond` deleting all entries from the table.\n\n### Steps to Reproduce\n\n1. Modify `PSU_INFO_UPDATE_PERIOD_SECS` from 3 seconds to 100 seconds (this is to have larger window to illustrate that even with periodically updating `PSU_INFO`, race condition can still happen)\n2. Restart `thermalctld` daemon\n3. When `thermalctld` stops, it deletes all `PHYSICAL_ENTITY_INFO` entries (including PSU entries owned by `psud`)\n4. During the 100-second window before `psud` re-populates its data, SNMP queries will fail to retrieve PSU entity information.\n\nYou would see an error with below signature:\n\n```\nERROR: MIBUpdater.start() caught an unexpected exception during update_data()\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.11/dist-packages/ax_interface/mib.py\", line 51, in start\n    self.reinit_data()\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 347, in reinit_data\n    raise Exception(exceptions)\nException: [ValueError(\"invalid literal for int() with base 10: ''\")]\nERROR: invalid literal for int() with base 10: ''\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 332, in reinit_data\n    updater.reinit_data()\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 703, in reinit_data\n    self._update_entity_cache(name)\n  File \"/usr/local/lib/python3.11/dist-packages/sonic_ax_impl/mibs/ietf/rfc2737.py\", line 893, in _update_entity_cache\n    psu_position = int(psu_position)\n    ^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: ''\n```\n\n### Actual Behavior and Expected Behavior\n\nExpected Behavior:\n\n1. We should not be seeing exceptions/errors in the syslog when we shutdown any daemons.\n2. Shutting down one daemon shouldn't affect the data populated by other daemons.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "ymd-arista",
+      "createdAt": "2026-02-24T20:18:13Z",
+      "body": "I am currently working on a fix for this issue: In the new design, in the daemons, we only delete entries in the `PHYSICAL_TABLE_INFO` that daemon has added and not all entries. It will also modify the snmp-subagent to be defensive when there are no relevant entries in the table."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 770,
+      "repository": "sonic-net/sonic-platform-daemons",
+      "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/770",
+      "title": "Delete only 'PHYSICAL_ENTITY_INFO' entries that daemon has added",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-29T16:55:51Z",
+      "createdAt": "2026-03-10T17:36:37Z",
+      "author": "ymd-arista",
+      "body": "#### Description\r\n\r\nIn the current design, daemons like psud, sensormond, and thermalctld delete all entries in the `PHYSICAL_ENTITY_INFO` table of `STATE_DB` when their classes are being garbage collected.\r\n\r\nThis creates race conditions where one daemon might try to access its own data in the `PHYSICAL_ENTITY_INFO` table that another daemon has deleted.\r\n\r\nFor example, during system shutdown, if `thermalctld` daemon stops first, its class objects get garbage collected and all entries in the `PHYSICAL_ENTITY_INFO` table are deleted. If `psud` is still running and periodically updating its own data, SNMP queries between the deletion and re-population will fail to retrieve PSU entity information.\r\n\r\nThis patch fixes the issue by limiting what each daemon deletes to only the entries it\r\nhas added to the `PHYSICAL_ENTITY_INFO` table:\r\n- `psud`: Deletes only PSU entries\r\n- `thermalctld`: Deletes only fan, drawer, and temperature entries\r\n- `sensormond`: Deletes only voltage and current entries\r\n\r\nAdditionally, defensive `.get()` checks are added before deletion to prevent KeyError exceptions if entries have already been removed by other processes.\r\n\r\nThis fixes https://github.com/sonic-net/sonic-buildimage/issues/25652\r\n\r\n<!-- Provide a general summary of your changes in the Title above -->\r\n\r\n\r\n#### How Has This Been Tested?\r\n<!--\r\n     Please describe in detail how you tested your changes.\r\n     Include details of your testing environment, and the tests you ran to\r\n     see how your change affects other areas of the code, etc.\r\n-->\r\n\r\n1. Ran the snmp sonic-mgmt test suite.\r\n2. Ran a stress test which reboots the dut containing these changes over 100 times and didn't observe  https://github.com/sonic-net/sonic-buildimage/issues/25652.\r\n3. Also added corresponding unit tests for this new design and ran those tests.\r\n",
+      "files": [
+        {
+          "path": "sonic-psud/scripts/psud",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "sonic-psud/tests/test_DaemonPsud.py",
+          "additions": 34,
+          "deletions": 0
+        },
+        {
+          "path": "sonic-sensormond/scripts/sensormond",
+          "additions": 16,
+          "deletions": 4
+        },
+        {
+          "path": "sonic-sensormond/tests/test_sensormond.py",
+          "additions": 20,
+          "deletions": 2
+        },
+        {
+          "path": "sonic-thermalctld/scripts/thermalctld",
+          "additions": 9,
+          "deletions": 8
+        },
+        {
+          "path": "sonic-thermalctld/tests/test_thermalctld.py",
+          "additions": 59,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "ymd-arista",
+          "createdAt": "2026-03-24T17:49:57Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T17:50:00Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T17:50:02Z",
+          "body": "No Azure DevOps builds found for sonic-net/sonic-platform-daemons#770."
+        },
+        {
+          "author": "ymd-arista",
+          "createdAt": "2026-03-24T17:57:30Z",
+          "body": "Closing and re-opening this review to re-trigger 'Azure.sonic-platform-daemons' & 'coverage.Azure.sonic-platform-daemons.build_test' checks which are stuck from long time."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T17:57:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-24T17:57:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-04-22T17:06:59Z",
+          "body": "@judyjoseph , can we review please? thx"
+        },
+        {
+          "author": "bmridul",
+          "createdAt": "2026-04-27T21:55:38Z",
+          "body": "Does chassisd need similar changes?"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2026-04-29T16:57:08Z",
+          "body": "> Does chassisd need similar changes?\r\n\r\n@ymd-arista could you check.. I am merging this PR as it is open for a while. Will try to get in 202511"
+        },
+        {
+          "author": "ymd-arista",
+          "createdAt": "2026-04-29T16:58:38Z",
+          "body": "No, chassisd doesn't need similar changes. We only delete specific information populated by chassisd from the `PHYSICAL_ENTITY_INFO` table."
+        },
+        {
+          "author": "bmridul",
+          "createdAt": "2026-04-29T18:05:47Z",
+          "body": "> No, chassisd doesn't need similar changes. We only delete specific information populated by chassisd from the `PHYSICAL_ENTITY_INFO` table.\r\n\r\nPls check, Looks like same issue might be here. Chassisd is deleting entries on module removal (OIR) not process kill (unless  I am missing something)\r\n\r\nhttps://github.com/sonic-net/sonic-platform-daemons/blob/e5da370eab1a1d424b8d6e02aa7353ad3ff0e6da/sonic-chassisd/scripts/chassisd#L400"
+        },
+        {
+          "author": "ymd-arista",
+          "createdAt": "2026-05-05T21:27:30Z",
+          "body": "@bmridul\r\n\r\nWhat this PR changes: When a daemon exits, it must delete only the entires it added to the `PHYSICAL_ENTITY_INFO` table in `STATE_DB`. Previously, the exiting daemons were deleting _all_ the entries in the `PHYSICAL_ENTITY_INFO` table, wiping out entries other daemons had written and breaking those daemons when they tried to read their own entries.\r\n\r\nWhat this PR is not: It doesn't propose that daemons only delete entries at termination. That approach would leave `STATE_DB` full of stale entries during normal operation.\r\n\r\n`Chassisd` writes to PHYSICAL_ENTITY_INFO as modules are added or removed. On termination, `Chassisd` already deletes only its own module entries, leaving the rest of the table intact."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-07T17:49:10Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-platform-daemons/pull/812"
+        }
+      ]
+    }
+  ]
+}

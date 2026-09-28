@@ -1,0 +1,86 @@
+{
+  "number": 19762,
+  "title": "[BFD] [ACL] Unexpected BFD state change (up->down) after applying ACL",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/19762",
+  "createdAt": "2024-08-01T11:32:57Z",
+  "closedAt": "2024-08-29T01:25:35Z",
+  "author": "volodymyrsamotiy",
+  "labels": [
+    "P0",
+    "Triaged",
+    "MSFT",
+    "Issue for 202305",
+    "Issue for 202311"
+  ],
+  "assignees": [
+    "dgsudharsan"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nApplying ACL triggers state change for the existing BFD sessions.\r\n\r\nIf there is BFD session configured which is up and then user applies some ACL rule then BFD session is going down.\r\nAfter some time BFD session will go back to up state.\r\n\r\nLooks like this issue is happening due to the design of caclmgrd.\r\nBFD feature is using control plane ACLs in order to route BFD packets.\r\nAnd in caclmgrd it is mentioned that it will take Control Plane ACTION for any ACL Table Event: [caclmgrd#L1087](https://github.com/sonic-net/sonic-host-services/blob/ca6b3cdb9a56604765ada4ac67234c117f0fb5ad/scripts/caclmgrd#L1087\r\n).\r\n\r\nSo each time we add some ACL it causes caclmgrd to reconfigure all control plane ACLs.\r\nWhich means that control plane ACLs are first removed and then added again.\r\nSo there is some period of time when BFD control plane ACL was removed but not added yet.\r\nAs a result  BFD session goes down.\r\n\r\n#### Steps to reproduce the issue:\r\n1. Connect 2 SONiC switches via 1 physical link (DUT 1 <-> DUT 2)\r\n2. Configure IP connection (1.1.1.1/30 <-> 1.1.1.2/30)\r\n3. Configure 2 loopback interfaces on both sides\r\n4. Configure static route on both devices to reach each other loopbacks\r\n5. On both switches configure 2 BFD sessions\r\n6. Verify that all BFD sessions are up\r\n7. Config ACL on DUT 2 switch to block all ingress traffic except one subnet on which 2nd BFD session is cofigured\r\n8. Verify that 1st BFD session is \"down\" on DUT 2 and \"init\" DUT 1, which is expected according to applied ACL\r\n9. Observe that 2nd BFD session changed state to \"down\" and then back to \"up\" which is not expected according to applied ACL\r\n\r\n\r\nTopology and BFD configuration (steps 1-6):\r\n```\r\n+--------------------------+                       +--------------------------+\r\n| DUT 1                    |                       | DUT 2                    |\r\n|                          |                       |                          | \r\n|                          |                       |                          | \r\n|      [Ethernet0|1.1.1.1/30]---------------------[Ethernet0||1.1.1.2/30]     |\r\n|                          |                       |                          |\r\n|                          |          BFD          |                          |\r\n|   [Loopback0|10.10.0.1/32]- - - - - - - - - - - -[Loopback0|20.20.0.1/32]   |\r\n|   [Loopback1|10.10.1.1/32]- - - - - - - - - - - -[Loopback1|20.20.1.1/32]   |\r\n|                          |                       |                          |\r\n|                          |                       |                          |\r\n| Route:                   |                       | Route:                   |\r\n| 20.20.0.0/16 via 1.1.1.2 |                       | 10.10.0.0/16 via 1.1.1.1 |\r\n|                          |                       |                          |\r\n+--------------------------+                       +--------------------------+\r\n```\r\n\r\nACL Rule that is applied (step 7):\r\n```\r\n{\r\n    \"ACL_RULE\": {\r\n        \"DATAACL|ALLOW_RULE\": {\r\n            \"DST_IP\": \"20.20.1.0/24\",\r\n            \"ETHER_TYPE\": \"2048\",\r\n            \"PACKET_ACTION\": \"FORWARD\",\r\n            \"PRIORITY\": \"999\"\r\n        },\r\n        \"DATAACL|DEFAULT_RULE\": {\r\n            \"ETHER_TYPE\": \"2048\",\r\n            \"PACKET_ACTION\": \"DROP\",\r\n            \"PRIORITY\": \"1\"\r\n        }\r\n    }\r\n}\r\n```\r\n\r\n#### Describe the results you received:\r\n\r\nApplying ACL triggers state change for the existing BFD sessions.\r\n\r\nIf there is BFD session configured which is up and then user applies some ACL rule then BFD session is going down.\r\nAfter some time BFD session will go back to up state.\r\n\r\n#### Describe the results you expected:\r\n\r\nApplying ACL should not trigger any state change for the existing BFD sessions.\r\nBFD sessions of the subnet that is not affected by ACL should not change state and should stay in Up state after applying ACL.\r\n\r\n#### Output of `show version`:\r\nAll versions (caclmgrd didn't change implementation recently)\r\n\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2024-08-05T14:29:54Z",
+      "body": "@prsunny @kperumalbfn FYI. This is a restriction on applying acl rules while we have active BFD sessions in Nvidia platforms due to the delete and recreation of control plane rules by caclmgrd"
+    },
+    {
+      "author": "zjswhhh",
+      "createdAt": "2024-08-14T15:19:58Z",
+      "body": "This scenario should be discussed between @dgsudharsan and @prsunny. Can any update to control plane ACLs effect BFD? "
+    },
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2024-08-14T15:21:43Z",
+      "body": "@ZhaohuiS FYI."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 150,
+      "repository": "sonic-net/sonic-host-services",
+      "url": "https://github.com/sonic-net/sonic-host-services/pull/150",
+      "title": "[BFD]Fix BFD blackout issue",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-08-29T01:25:34Z",
+      "createdAt": "2024-08-22T18:39:25Z",
+      "author": "dgsudharsan",
+      "body": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/19762\r\n\r\nWhen caclmgrd processes any ACL table change, this results in rules flushed and readded which was introduced in https://github.com/sonic-net/sonic-host-services/pull/114 . However in this flow the BFD and vxlan rules were added at the end which may result in traffic loss because of the DROP rule for ip2me installed. To overcome this added BFD and vxlan rules at the very start so that there is no drop seen for BFD.\r\n\r\nExisting UT should verify the flows.\r\n\r\nAdditionally manually verified\r\n\r\n",
+      "files": [
+        {
+          "path": "scripts/caclmgrd",
+          "additions": 25,
+          "deletions": 13
+        },
+        {
+          "path": "tests/caclmgrd/caclmgrd_bfd_test.py",
+          "additions": 20,
+          "deletions": 2
+        },
+        {
+          "path": "tests/caclmgrd/test_bfd_vectors.py",
+          "additions": 10,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "prsunny",
+          "createdAt": "2024-08-28T23:26:43Z",
+          "body": "@ganglyu , can you please merge this PR?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-09-11T00:31:41Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-host-services/pull/162"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-09-17T18:30:23Z",
+          "body": "Cherry-pick PR to 202311: https://github.com/sonic-net/sonic-host-services/pull/165"
+        }
+      ]
+    }
+  ]
+}

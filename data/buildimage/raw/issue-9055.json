@@ -1,0 +1,125 @@
+{
+  "number": 9055,
+  "title": "Default route is not deleted from H/W in some cases",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/9055",
+  "createdAt": "2021-10-25T23:42:17Z",
+  "closedAt": "2021-11-24T23:32:17Z",
+  "author": "prsunny",
+  "labels": [
+    "Issue for 202012"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "#### Description\r\nWith the fix for skipping eth0 route, observed that default route is not deleted from HW in some cases. (PR - [1606](https://github.com/Azure/sonic-swss/pull/1606)). \r\n\r\nOld issue - https://github.com/Azure/sonic-buildimage/issues/6483\r\n\r\n\r\n#### Steps to reproduce the issue:\r\n1. Learn default route via BGP\r\n2. Confirm default route for Mgmt IP is present in table default\r\n3. Shutdown all bgp interfaces\r\n\r\n#### Describe the results you received:\r\nDefault route still present in APP_DB/ASIC_DB\r\n\r\n#### Describe the results you expected:\r\nDefault route must be deleted \r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nSONiC.20201231.39\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n```\r\nshow ip route 0.0.0.0/0\r\nRouting entry for 0.0.0.0/0\r\n  Known via \"bgp\", distance 20, metric 0, best\r\n  Last update 00:00:12 ago\r\n  * 10.0.0.57, via PortChannel0001, weight 1\r\n  * 10.0.0.59, via PortChannel0002, weight 1\r\n  * 10.0.0.61, via PortChannel0003, weight 1\r\n  * 10.0.0.63, via PortChannel0004, weight 1\r\n\r\nredis-cli \r\n127.0.0.1:6379> HGETALL ROUTE_TABLE:0.0.0.0/0\r\n1) \"nexthop\"\r\n2) \"10.0.0.57,10.0.0.59,10.0.0.61,10.0.0.63\"\r\n3) \"ifname\"\r\n\r\nconfig bgp shutdown all\r\nShutting down BGP session with neighbor 10.0.0.59...\r\nShutting down BGP session with neighbor fc00::72...\r\nShutting down BGP session with neighbor 10.0.0.63...\r\nShutting down BGP session with neighbor fc00::7a...\r\nShutting down BGP session with neighbor fc00::76...\r\nShutting down BGP session with neighbor 10.0.0.61...\r\nShutting down BGP session with neighbor 10.0.0.57...\r\nShutting down BGP session with neighbor fc00::7e...\r\nadmin@str2-7050cx3-acs-02:~/mux$ show ip route 0.0.0.0/0\r\nRouting entry for 0.0.0.0/0\r\n  Known via \"static\", distance 200, metric 0, best\r\n  Last update 00:16:53 ago\r\n  * 10.3.146.1, via eth0, weight 1\r\n\r\n$ redis-cli \r\n127.0.0.1:6379> HGETALL ROUTE_TABLE:0.0.0.0/0\r\n1) \"nexthop\"\r\n2) \"10.0.0.57,10.0.0.61\"\r\n3) \"ifname\"\r\n4) \"PortChannel0001,PortChannel0003\"\r\n127.0.0.1:6379> \r\n```\r\n",
+  "comments": [
+    {
+      "author": "Minkang-Tsai",
+      "createdAt": "2021-12-09T09:32:43Z",
+      "body": "@prsunny \r\nIf a user set default route which nexthop is eth0 after learn default route via BGP and then shutdown all BGP interfaces, the problem still happened, right?\r\nWe think that root cause is FRR doesn't notify fpmsyncd remove the default route which learned by BGP when shutdown all BGP interfaces.   From FRR point of view, it can chose the default route added by user under this situation, so it just updates default route. Fpmsyncd can not updates default route from APP DB because the default route which nexthop is eth0, it will be skipped by the following condition in routersync.cpp\r\n````\r\n    vector<string> alsv = tokenize(ifnames, ',');\r\n    for (auto alias : alsv)\r\n    {\r\n        /*\r\n         * An FRR behavior change from 7.2 to 7.5 makes FRR update default route to eth0 in interface\r\n         * up/down events. Skipping routes to eth0 or docker0 to avoid such behavior\r\n         */\r\n        if (alias == \"eth0\" || alias == \"docker0\")\r\n        {\r\n            SWSS_LOG_DEBUG(\"Skip routes to eth0 or docker0: %s %s %s\",\r\n                    destipprefix, nexthops.c_str(), ifnames.c_str());\r\n            return;\r\n        }\r\n    }\r\n````\r\nOn the other hand, FRR will updates routes which added by kernel when interface down, so fpmsyncd need to update routes\r\nfrom local/main/default routing table for default VRF. On booting, linux kernel will add default route to default routing table according to [interfaces.j2](https://github.com/Azure/sonic-buildimage/blob/fc91dae0237097804fc6bf7a569881feb6069123/files/image_config/interfaces/interfaces.j2), so fpmsyncd will get the route update for default route when interface down. According to this issue we think that fpmsyncd need to do the following modification\r\n\r\n- Need to revert [0003-Use-vrf_id-for-vrf-not-tabled_id.patch](https://github.com/Azure/sonic-buildimage/blob/fc91dae0237097804fc6bf7a569881feb6069123/src/sonic-frr/patch/0003-Use-vrf_id-for-vrf-not-tabled_id.patch)\r\n- Vrfmgrd need to save mapping between VRF name and table ID to REDIS DB.\r\n- fpmsyncd need to distinguish local/main/default routing table for default VRF.\r\n- fpmsyncd apply route to default VRF according to routing table policy.\r\n- fpmsyncd need to remove route1 from APP_DB if it receives a route which nexthop is eth0 and prefix is same the route1.\r\n\r\nWhat do you think about it?"
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2021-12-09T18:41:55Z",
+      "body": "@Minkang-Tsai , I think with the fix for skipping eth0 in routesync and the fix to remove static route from FRR (#9182 ), we've this issue resolved, correct?. Agree with the approach that you proposed but it seems to be significant changes. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 9182,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/9182",
+      "title": "remove staticd.conf.j2",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-11-24T23:32:16Z",
+      "createdAt": "2021-11-05T06:45:11Z",
+      "author": "arlakshm",
+      "body": "Signed-off-by: Arvindsrinivasan Lakshmi Narasimhan <arlakshm@microsoft.com>\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nresolves #8979 and #9055 \r\n\r\n#### How I did it\r\nRemove the file `static.conf.j2`,which adds the default route on eth0  from frr docker \r\n\r\n#### How to verify it\r\n\r\n- Check no default route present on eth0 when all eBGP sessions are shutdown\r\n```\r\nadmin@str2-sonic-lc3-1:~$ show ip bgp summary\r\n\r\nIPv4 Unicast Summary:\r\nBGP router identifier 10.3.147.15, local AS number 65100 vrf-id 0\r\nBGP table version 144872\r\nRIB entries 425, using 81600 bytes of memory\r\nPeers 23, using 501768 KiB of memory\r\nPeer groups 3, using 192 bytes of memory\r\n\r\n\r\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down    State/PfxRcd    NeighborName\r\n-----------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\r\n3.3.3.6        4  65100        806     191275         0      0       0  00:02:59   1458\r\n3.3.3.7        4  65100        806     191275         0      0       0  00:02:59   1458\r\n10.0.0.1       4  65200       4277      10673         0      0       0  00:00:54   Idle (Admin)    ARISTA01T3\r\n10.0.0.9       4  65202       4278      13527         0      0       0  00:00:49   Idle (Admin)    ARISTA05T3\r\n10.0.0.13      4  65203       4276      10985         0      0       0  00:00:54   Idle (Admin)    ARISTA07T3\r\n10.0.0.17      4  65204       4276      11024         0      0       0  00:00:54   Idle (Admin)    ARISTA09T3\r\n10.0.0.21      4  65205       4274      11141         0      0       0  00:00:53   Idle (Admin)    ARISTA11T3\r\n10.0.0.25      4  65206       4276      11219         0      0       0  00:00:53   Idle (Admin)    ARISTA13T3\r\n10.0.0.29      4  65207       4275      11297         0      0       0  00:00:53   Idle (Admin)    ARISTA15T3\r\n10.0.0.33      4  65208       4274      11336         0      0       0  00:00:52   Idle (Admin)    ARISTA17T3\r\n10.0.0.37      4  65210       4276      11454         0      0       0  00:00:52   Idle (Admin)    ARISTA19T3\r\n10.0.0.39      4  65211       4275      11571         0      0       0  00:00:52   Idle (Admin)    ARISTA20T3\r\n10.0.0.41      4  65212       4276      11688         0      0       0  00:00:51   Idle (Admin)    ARISTA21T3\r\n10.0.0.43      4  65213       4276      11805         0      0       0  00:00:51   Idle (Admin)    ARISTA22T3\r\n10.0.0.45      4  65214       4276      11961         0      0       0  00:00:51   Idle (Admin)    ARISTA23T3\r\n10.0.0.47      4  65215       4275      12156         0      0       0  00:00:50   Idle (Admin)    ARISTA24T3\r\n10.0.0.49      4  65216       4278      12312         0      0       0  00:00:50   Idle (Admin)    ARISTA25T3\r\n10.0.0.51      4  65217       4278      12507         0      0       0  00:00:50   Idle (Admin)    ARISTA26T3\r\n10.0.0.53      4  65218       4277      12585         0      0       0  00:00:50   Idle (Admin)    ARISTA27T3\r\n10.0.0.55      4  65219       4277      12780         0      0       0  00:00:49   Idle (Admin)    ARISTA28T3\r\n10.0.0.57      4  65220       4278      12936         0      0       0  00:00:49   Idle (Admin)    ARISTA29T3\r\n10.0.0.59      4  65221       4278      13054         0      0       0  00:00:49   Idle (Admin)    ARISTA30T3\r\n10.0.0.61      4  65222       4278      13296         0      0       0  00:00:49   Idle (Admin)    ARISTA31T3\r\n\r\nTotal number of neighbors 23\r\nadmin@str2-sonic-lc3-1:~$ show ip route 0.0.0.0/0\r\n\r\nadmin@str2-sonic-lc3-1:~$ \r\n```\r\n- Start the eBGP session and verify the default route is learnt from all the external peers and install in APP_DB\r\n```\r\nadmin@str2-sonic-lc3-1:~$ sudo config bgp startup all\r\nStarting up BGP session with neighbor 10.0.0.1...\r\nStarting up BGP session with neighbor 10.0.0.13...\r\nStarting up BGP session with neighbor 10.0.0.17...\r\nStarting up BGP session with neighbor 10.0.0.21...\r\nStarting up BGP session with neighbor 10.0.0.25...\r\nStarting up BGP session with neighbor 10.0.0.29...\r\nStarting up BGP session with neighbor 10.0.0.33...\r\nStarting up BGP session with neighbor 10.0.0.37...\r\nStarting up BGP session with neighbor 10.0.0.39...\r\nStarting up BGP session with neighbor 10.0.0.41...\r\nStarting up BGP session with neighbor 10.0.0.43...\r\nStarting up BGP session with neighbor 10.0.0.45...\r\nStarting up BGP session with neighbor 10.0.0.47...\r\nStarting up BGP session with neighbor 10.0.0.49...\r\nStarting up BGP session with neighbor 10.0.0.51...\r\nStarting up BGP session with neighbor 10.0.0.53...\r\nStarting up BGP session with neighbor 10.0.0.55...\r\nStarting up BGP session with neighbor 10.0.0.57...\r\nStarting up BGP session with neighbor 10.0.0.59...\r\nStarting up BGP session with neighbor 10.0.0.61...\r\nStarting up BGP session with neighbor 10.0.0.9...\r\nStarting up BGP session with neighbor fc00::12...\r\nStarting up BGP session with neighbor fc00::1a...\r\nStarting up BGP session with neighbor fc00::2...\r\nStarting up BGP session with neighbor fc00::22...\r\nStarting up BGP session with neighbor fc00::2a...\r\nStarting up BGP session with neighbor fc00::32...\r\nStarting up BGP session with neighbor fc00::3a...\r\nStarting up BGP session with neighbor fc00::42...\r\nStarting up BGP session with neighbor fc00::4a...\r\nStarting up BGP session with neighbor fc00::4e...\r\nStarting up BGP session with neighbor fc00::52...\r\nStarting up BGP session with neighbor fc00::56...\r\nStarting up BGP session with neighbor fc00::5a...\r\nStarting up BGP session with neighbor fc00::5e...\r\nStarting up BGP session with neighbor fc00::62...\r\nStarting up BGP session with neighbor fc00::66...\r\nStarting up BGP session with neighbor fc00::6a...\r\nStarting up BGP session with neighbor fc00::6e...\r\nStarting up BGP session with neighbor fc00::72...\r\nStarting up BGP session with neighbor fc00::76...\r\nStarting up BGP session with neighbor fc00::7a...\r\nadmin@str2-sonic-lc3-1:~$ show ip route 0.0.0.0/0\r\nRouting entry for 0.0.0.0/0\r\n  Known via \"bgp\", distance 20, metric 0, best\r\n  Last update 00:00:15 ago\r\n  * 10.0.0.1, via PortChannel0002, weight 1\r\n  * 10.0.0.9, via PortChannel0004, weight 1\r\n  * 10.0.0.13, via PortChannel0006, weight 1\r\n  * 10.0.0.17, via PortChannel0008, weight 1\r\n  * 10.0.0.21, via PortChannel0010, weight 1\r\n  * 10.0.0.25, via PortChannel0012, weight 1\r\n  * 10.0.0.29, via PortChannel0014, weight 1\r\n  * 10.0.0.33, via Ethernet64, weight 1\r\n  * 10.0.0.37, via Ethernet72, weight 1\r\n  * 10.0.0.39, via Ethernet76, weight 1\r\n  * 10.0.0.41, via Ethernet80, weight 1\r\n  * 10.0.0.43, via Ethernet84, weight 1\r\n  * 10.0.0.45, via Ethernet88, weight 1\r\n  * 10.0.0.47, via Ethernet92, weight 1\r\n  * 10.0.0.49, via Ethernet96, weight 1\r\n  * 10.0.0.51, via Ethernet100, weight 1\r\n  * 10.0.0.53, via Ethernet104, weight 1\r\n  * 10.0.0.55, via Ethernet108, weight 1\r\n  * 10.0.0.57, via Ethernet112, weight 1\r\n  * 10.0.0.59, via Ethernet116, weight 1\r\n  * 10.0.0.61, via Ethernet120, weight 1\r\n\r\n\r\nadmin@str2-sonic-lc3-1:~$ redis-cli HGETALL \"ROUTE_TABLE:0.0.0.0/0\"\r\n1) \"ifname\"\r\n2) \"PortChannel0002,PortChannel0004,PortChannel0006,PortChannel0008,PortChannel0010,PortChannel0012,PortChannel0014,Ethernet64,Ethernet72,Ethernet76,Ethernet80,Ethernet84,Ethernet88,Ethernet92,Ethernet96,Ethernet100,Ethernet104,Ethernet108,Ethernet112,Ethernet116,Ethernet120\"\r\n3) \"nexthop\"\r\n4) \"10.0.0.1,10.0.0.9,10.0.0.13,10.0.0.17,10.0.0.21,10.0.0.25,10.0.0.29,10.0.0.33,10.0.0.37,10.0.0.39,10.0.0.41,10.0.0.43,10.0.0.45,10.0.0.47,10.0.0.49,10.0.0.51,10.0.0.53,10.0.0.55,10.0.0.57,10.0.0.59,10.0.0.61\"\r\nadmin@str2-sonic-lc3-1:~$\r\n```\r\n- Shutdown eBGP session and verify the default route is removed from kernel and APP_DB\r\n```\r\nadmin@str2-sonic-lc3-1:~$\r\nadmin@str2-sonic-lc3-1:~$ sudo config bgp shutdown all\r\nShutting down BGP session with neighbor 10.0.0.1...\r\nShutting down BGP session with neighbor 10.0.0.13...\r\nShutting down BGP session with neighbor 10.0.0.17...\r\nShutting down BGP session with neighbor 10.0.0.21...\r\nShutting down BGP session with neighbor 10.0.0.25...\r\nShutting down BGP session with neighbor 10.0.0.29...\r\nShutting down BGP session with neighbor 10.0.0.33...\r\nShutting down BGP session with neighbor 10.0.0.37...\r\nShutting down BGP session with neighbor 10.0.0.39...\r\nShutting down BGP session with neighbor 10.0.0.41...\r\nShutting down BGP session with neighbor 10.0.0.43...\r\nShutting down BGP session with neighbor 10.0.0.45...\r\nShutting down BGP session with neighbor 10.0.0.47...\r\nShutting down BGP session with neighbor 10.0.0.49...\r\nShutting down BGP session with neighbor 10.0.0.51...\r\nShutting down BGP session with neighbor 10.0.0.53...\r\nShutting down BGP session with neighbor 10.0.0.55...\r\nShutting down BGP session with neighbor 10.0.0.57...\r\nShutting down BGP session with neighbor 10.0.0.59...\r\nShutting down BGP session with neighbor 10.0.0.61...\r\nShutting down BGP session with neighbor 10.0.0.9...\r\nShutting down BGP session with neighbor fc00::12...\r\nShutting down BGP session with neighbor fc00::1a...\r\nShutting down BGP session with neighbor fc00::2...\r\nShutting down BGP session with neighbor fc00::22...\r\nShutting down BGP session with neighbor fc00::2a...\r\nShutting down BGP session with neighbor fc00::32...\r\nShutting down BGP session with neighbor fc00::3a...\r\nShutting down BGP session with neighbor fc00::42...\r\nShutting down BGP session with neighbor fc00::4a...\r\nShutting down BGP session with neighbor fc00::4e...\r\nShutting down BGP session with neighbor fc00::52...\r\nShutting down BGP session with neighbor fc00::56...\r\nShutting down BGP session with neighbor fc00::5a...\r\nShutting down BGP session with neighbor fc00::5e...\r\nShutting down BGP session with neighbor fc00::62...\r\nShutting down BGP session with neighbor fc00::66...\r\nShutting down BGP session with neighbor fc00::6a...\r\nShutting down BGP session with neighbor fc00::6e...\r\nShutting down BGP session with neighbor fc00::72...\r\nShutting down BGP session with neighbor fc00::76...\r\nShutting down BGP session with neighbor fc00::7a...\r\nadmin@str2-sonic-lc3-1:~$ redis-cli HGETALL \"ROUTE_TABLE:0.0.0.0/0\"\r\n(empty array)\r\nadmin@str2-sonic-lc3-1:~$\r\n```\r\n\r\nTo verify the issue #8979 check if the default route is present in APP_DB on the peer linecard\r\n```\r\nadmin@str2-sonic-lc6-1:~$ show ip route 0.0.0.0/0\r\nRouting entry for 0.0.0.0/0\r\n  Known via \"bgp\", distance 200, metric 0, best\r\n  Last update 00:00:09 ago\r\n    10.0.0.1 (recursive), weight 1\r\n  *   10.0.0.1, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.9 (recursive), weight 1\r\n  *   10.0.0.9, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.13 (recursive), weight 1\r\n  *   10.0.0.13, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.17 (recursive), weight 1\r\n  *   10.0.0.17, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.21 (recursive), weight 1\r\n  *   10.0.0.21, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.25 (recursive), weight 1\r\n  *   10.0.0.25, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.29 (recursive), weight 1\r\n  *   10.0.0.29, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.33 (recursive), weight 1\r\n  *   10.0.0.33, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.37 (recursive), weight 1\r\n  *   10.0.0.37, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.39 (recursive), weight 1\r\n  *   10.0.0.39, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.41 (recursive), weight 1\r\n  *   10.0.0.41, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.43 (recursive), weight 1\r\n  *   10.0.0.43, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.45 (recursive), weight 1\r\n  *   10.0.0.45, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.47 (recursive), weight 1\r\n  *   10.0.0.47, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.49 (recursive), weight 1\r\n  *   10.0.0.49, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.51 (recursive), weight 1\r\n  *   10.0.0.51, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.53 (recursive), weight 1\r\n  *   10.0.0.53, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.55 (recursive), weight 1\r\n  *   10.0.0.55, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.57 (recursive), weight 1\r\n  *   10.0.0.57, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.59 (recursive), weight 1\r\n  *   10.0.0.59, via Ethernet-IB0 onlink, weight 1\r\n    10.0.0.61 (recursive), weight 1\r\n  *   10.0.0.61, via Ethernet-IB0 onlink, weight 1\r\n\r\n\r\nadmin@str2-sonic-lc6-1:~$ redis-cli -n 0 KEYS *0.0.0.0/0*\r\n1) \"ROUTE_TABLE:0.0.0.0/0\"\r\nadmin@str2-sonic-lc6-1:~$ redis-cli -n 0 HGETALL *0.0.0.0/0*\r\n(empty array)\r\nadmin@str2-sonic-lc6-1:~$ redis-cli -n 0 HGETALL \"ROUTE_TABLE:0.0.0.0/0\"\r\n1) \"ifname\"\r\n2) \"Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0,Ethernet-IB0\"\r\n3) \"nexthop\"\r\n4) \"10.0.0.1,10.0.0.9,10.0.0.13,10.0.0.17,10.0.0.21,10.0.0.25,10.0.0.29,10.0.0.33,10.0.0.37,10.0.0.39,10.0.0.41,10.0.0.43,10.0.0.45,10.0.0.47,10.0.0.49,10.0.0.51,10.0.0.53,10.0.0.55,10.0.0.57,10.0.0.59,10.0.0.61\"\r\nadmin@str2-sonic-lc6-1:~$\r\n```\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ x] 201911\r\n- [ ] 202006\r\n- [ x] 202012\r\n- [ x] 202106\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-fpm-frr/frr/frr.conf.j2",
+          "additions": 0,
+          "deletions": 2
+        },
+        {
+          "path": "dockers/docker-fpm-frr/frr/staticd/staticd.conf.j2",
+          "additions": 0,
+          "deletions": 2
+        },
+        {
+          "path": "dockers/docker-fpm-frr/frr/staticd/staticd.default_route.conf.j2",
+          "additions": 0,
+          "deletions": 10
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/frr.conf.j2/all.conf",
+          "additions": 0,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.conf",
+          "additions": 0,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.conf.json",
+          "additions": 0,
+          "deletions": 5
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.default_route.conf",
+          "additions": 0,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/sonic-cfggen/staticd/staticd.default_route.conf.json",
+          "additions": 0,
+          "deletions": 7
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_sonic-cfggen.py",
+          "additions": 0,
+          "deletions": 6
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py2/frr.conf",
+          "additions": 0,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/frr.conf",
+          "additions": 0,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_frr.py",
+          "additions": 0,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "abdosi",
+          "createdAt": "2021-11-05T16:52:13Z",
+          "body": "@arlakshm can we test the behavior if we have default route learnt via bgp and also eth0 default route and if we toggle eth0 interface how does it impact dataplane/app_db default ?"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2021-11-06T05:41:31Z",
+          "body": "> @arlakshm can we test the behavior if we have default route learnt via bgp and also eth0 default route and if we toggle eth0 interface how does it impact dataplane/app_db default ?\r\n\r\n@abdosi, @prsunny. On toggling the `eth0` the default route is removed from APP_DB on master and 201231 images without this fix. Details in issue #9188. This seems to be different issue. "
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2021-11-24T22:38:50Z",
+          "body": "> > @arlakshm can we test the behavior if we have default route learnt via bgp and also eth0 default route and if we toggle eth0 interface how does it impact dataplane/app_db default ?\r\n> \r\n> @abdosi, @prsunny. On toggling the `eth0` the default route is removed from APP_DB on master and 201231 images without this fix. Details in issue #9188. This seems to be different issue.\r\n@prsunny, @abdosi, on flapping eth0 link by shutting down the port on the peer device, default route is  not removed. Please find the logs for image with the changes of this PR.\r\n[pr_9182_test.log](https://github.com/Azure/sonic-buildimage/files/7599025/pr_9182_test.log)\r\n\r\n\r\n"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2021-11-24T22:39:28Z",
+          "body": "> > @arlakshm can we test the behavior if we have default route learnt via bgp and also eth0 default route and if we toggle eth0 interface how does it impact dataplane/app_db default ?\r\n> \r\n> @abdosi, @prsunny. On toggling the `eth0` the default route is removed from APP_DB on master and 201231 images without this fix. Details in issue #9188. This seems to be different issue.\r\n@prsunny, @abdosi, on flapping eth0 link by shutting down the port on the peer device, default route is  not removed. Please find the logs for image with the changes of this PR.\r\n[pr_9182_test.log](https://github.com/Azure/sonic-buildimage/files/7599025/pr_9182_test.log)\r\n\r\n\r\nPlease take a look and approve if no other comments"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,176 @@
+{
+  "number": 29188,
+  "title": "Bug:[SmartSwitch] `gnoi-shutdown` daemon is orphaned by `config reload`, causing DPU graceful shutdown to hang for the full `dpu_halt_services_timeout` (~3 min)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/29188",
+  "createdAt": "2026-08-25T22:13:34Z",
+  "closedAt": "2026-09-09T19:32:57Z",
+  "author": "dypet",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nSmartswitch\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n# [SmartSwitch] `gnoi-shutdown` daemon is orphaned by `config reload`, causing DPU graceful shutdown to hang for the full `dpu_halt_services_timeout` (~3 min)\n\n## Description\nOn a SmartSwitch NPU, the `gnoi-shutdown.service` daemon has a hard dependency on `database.service`/`gnmi.service` but is **not restarted after a `config reload`**. A `config reload` on the NPU stops the daemon until reboot.\n\nOnce the daemon is dead, `config chassis module shutdown DPU<N>` no longer completes quickly. `show chassis modules status` reports the DPU `Offline` within ~30s, but `show system-health dpu DPU<N>` and `CHASSIS_STATE_DB|DPU_STATE|DPU<N>` (`dpu_midplane_link_state` / `dpu_control_plane_state` / `dpu_data_plane_state`) stay `up` for ~3 minutes. The DPU itself is not signaled to shut down for ~3 minutes, then halts normally after the timeout.\n\n\n\n\n\n## Root cause\n\n**1) The daemon is orphaned by `config reload`.**\nInstalled unit `sonic-host-services-data.gnoi-shutdown.service`:\n```ini\n[Unit]\nRequires=database.service gnmi.service\nAfter=network-online.target database.service gnmi.service pmon.service\n[Service]\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n```\n`config reload` restarts the SONiC target (database/gnmi), which propagates a **clean stop** to `gnoi-shutdown` via `Requires=`. A clean stop is not a failure, so `Restart=on-failure` does not restart it; and because the unit is `WantedBy=multi-user.target` (not part of `sonic.target`), the SONiC-target restart never pulls it back up. `config reload` has no explicit knowledge of this unit. Result: dead until the next reboot.\n\n**2) Why that makes shutdown wait the full timeout.**\n`config chassis module shutdown` runs the graceful path in `sonic-platform-common/sonic_platform_base/module_base.py`. `set_admin_state_gracefully()` calls `_graceful_shutdown_handler()`:\n```python\nhalt_timeout = self._load_transition_timeouts().get(\"halt_services\", 60)  # = dpu_halt_services_timeout + 10\nend_time = time.time() + halt_timeout\nself._set_module_gnoi_halt_in_progress()          # STATE_DB CHASSIS_MODULE_TABLE|DPUx gnoi_halt_in_progress=True\nwhile time.time() <= end_time:\n    if not self._get_module_gnoi_halt_in_progress():   # cleared by the daemon?\n        return True\n    time.sleep(0.5)\n# timeout branch:\nself.clear_module_gnoi_halt_in_progress()\nsys.stderr.write(\"Shutdown timeout reached for module: {}. Proceeding with shutdown.\\n\".format(module_name))\n```\n`gnoi_halt_in_progress` is normally cleared by `gnoi_shutdown_daemon.py` (`_clear_halt_flag()`) after it drives the gNOI HALT. **With the daemon dead, nothing ever clears the flag**, so `_graceful_shutdown_handler()` spins until `end_time` \u2014 the full `halt_services` timeout (`dpu_halt_services_timeout + 10`, \u22483 min on this platform). Only after that timeout does chassisd proceed to `module_pre_shutdown()` + `set_admin_state(False)`, which is when the DPU is finally signaled (then it halts in the normal ~30s). The plane states (`DPU_STATE`) drop only once the DPU is actually gone, hence the ~3-min lag behind `show chassis modules status` (which reflects `oper_status` immediately).\n\n## Impact\n- Operator/automation `config chassis module shutdown` appears hung for ~3 min after any `config reload`.\n- `show system-health dpu` and `CHASSIS_STATE_DB DPU_STATE` are inconsistent with `show chassis modules status` for ~3 min, which can fail health checks and HA tests that gate on the plane states going `down`.\n\n\n\n\n\n\n### Steps to Reproduce\n\n```bash\nsystemctl is-active gnoi-shutdown          # active\nsudo config reload -y ; sleep 45\nsystemctl is-active gnoi-shutdown          # inactive (dead) \u2014 NOT restarted\n# now shut down any Online DPU and time DPU_STATE going down:\nsudo config chassis module shutdown DPU1   # DPU_STATE planes stay 'up' ~3 min\n```\n\n### Actual Behavior and Expected Behavior\n\n## Expected results\n`gnoi-shutdown` should survive (or be restarted by) `config reload`, and DPU graceful shutdown should complete before the timeout regardless of a prior `config reload`.\n\n## Actual results\n`config reload` leaves `gnoi-shutdown` dead; subsequent DPU graceful shutdown blocks for ~3 min; `show system-health dpu` / `DPU_STATE` lag `show chassis modules status` by that interval.\n\n### Relevant log output\n\n```shell\n## Repro output:\n\nadmin@MtFuji-dut01:~$ date\nTue Aug 25 09:41:33 PM UTC 2026\nadmin@MtFuji-dut01:~$ systemctl status gnoi-shutdown\n\u25cf gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon\n     Loaded: loaded (/usr/lib/systemd/system/gnoi-shutdown.service; enabled; preset: enabled)\n     Active: active (running) since Tue 2026-08-25 21:18:32 UTC; 23min ago\n Invocation: 7147fa9a0b3c45ff91a20544aafbda09\n    Process: 768057 ExecCondition=/usr/bin/python3 -c import sys; from sonic_py_common import device_info; sys.exit(0 if (device_info.is_smartswitch() and not device_info.is_dpu()) >\n   Main PID: 768059 (python3)\n      Tasks: 1 (limit: 153222)\n     Memory: 49.1M (peak: 52.8M)\n        CPU: 6.115s\n     CGroup: /system.slice/gnoi-shutdown.service\n             \u2514\u2500768059 /usr/bin/python3 /usr/local/bin/gnoi_shutdown_daemon.py\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ sudo config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container and routeCheck monitoring ...\nRunning command: sudo systemctl stop aaastatsd.timer\nRunning command: sudo systemctl stop featured.timer\nRunning command: sudo systemctl stop hostcfgd.timer\nRunning command: sudo systemctl stop tacacs-config.timer\nStopping SONiC target ...\nRunning command: /usr/local/bin/sonic-cfggen -j /etc/sonic/init_cfg.json -j /etc/sonic/config_db.json --write-to-db\nRunning command: /usr/local/bin/db_migrator.py -o migrate\nRunning command: /usr/local/bin/sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t /usr/share/sonic/templates/sonic-environment.j2,/etc/sonic/sonic-environment\nRestarting SONiC target ...\nEnabling container and routeCheck monitoring ...\nReloading Monit configuration ...\nReinitializing monit daemon\nReleased lock on /etc/sonic/reload.lock\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ date\nTue Aug 25 09:43:41 PM UTC 2026\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ date\nTue Aug 25 09:45:20 PM UTC 2026\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ systemctl status gnoi-shutdown\n\u25cb gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon\n     Loaded: loaded (/usr/lib/systemd/system/gnoi-shutdown.service; enabled; preset: enabled)\n     Active: inactive (dead) since Tue 2026-08-25 21:41:45 UTC; 3min 38s ago\n   Duration: 23min 12.734s\n Invocation: 7147fa9a0b3c45ff91a20544aafbda09\n   Main PID: 768059 (code=killed, signal=TERM)\n   Mem peak: 52.8M\n        CPU: 6.129s\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ sudo journalctl -u gnoi-shutdown --no-pager | tail -5\nAug 25 21:31:46 MtFuji-dut01 python3[768059]: NOTICE:gnoi-shutdown-daemon:DPU0: DPU is already offline/powered-down, skipping gNOI shutdown sequence\nAug 25 21:41:45 MtFuji-dut01 systemd[1]: Stopping gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon...\nAug 25 21:41:45 MtFuji-dut01 systemd[1]: gnoi-shutdown.service: Deactivated successfully.\nAug 25 21:41:45 MtFuji-dut01 systemd[1]: Stopped gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon.\nAug 25 21:41:45 MtFuji-dut01 systemd[1]: gnoi-shutdown.service: Consumed 6.129s CPU time, 52.8M memory peak.\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ systemctl cat gnoi-shutdown    \n# /usr/lib/systemd/system/gnoi-shutdown.service\n[Unit]\nDescription=gNOI based DPU Graceful Shutdown Daemon\nRequires=database.service gnmi.service\nWants=network-online.target pmon.service\nAfter=network-online.target database.service gnmi.service pmon.service\n\n[Service]\nType=simple\nExecStart=/usr/bin/python3 /usr/local/bin/gnoi_shutdown_daemon.py\nExecCondition=/usr/bin/python3 -c \"import sys; from sonic_py_common import device_info; sys.exit(0 if (device_info.is_smartswitch() and not device_info.is_dpu()) else 1)\"\nRestart=on-failure\nRestartSec=5\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n## Version\n\nSONiC Software Version: SONiC.20260510.09   (branch 202605, build 2026-08-03, commit ed7a797580)\nPlatform: x86_64-8102_28fh_dpu_o-r0   HwSKU: Cisco-8102-28FH-DPU-O   ASIC: cisco-8000\nKernel: 6.12.41+deb13-sonic-amd64   Distribution: Debian 13.5\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "dlanov",
+      "createdAt": "2026-08-25T22:33:16Z",
+      "body": "I'm working on a focused fix in sonic-host-services to tie gnoi-shutdown to the sonic.target lifecycle so it is restarted after config reload, while preserving the existing gnmi and pmon dependency behavior."
+    },
+    {
+      "author": "vmittal-msft",
+      "createdAt": "2026-08-26T15:47:47Z",
+      "body": "@hdwhdw please check."
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-08-27T03:32:14Z",
+      "body": "`gnoi-shutdown.service` should shut down each data processing unit (DPU) without depending on the `gnmi` container or `sonic.target`.\n\nThe host daemon currently runs `docker exec gnmi gnoi_client` to send gRPC Network Operations Interface (gNOI) requests to each DPU. The shutdown path therefore depends on the NPU's `gnmi` container and `gnmi.service`.\n\nOn `master`, `sonic-py-common` provides `sonic_grpc.GnoiClient` and the gNOI `System` stubs from #28341. Implement the change as follows:\n\n- Use `GnoiClient` in the host daemon to call each DPU directly.\n- Preserve Transport Layer Security (TLS) encryption and the existing trust policy for ephemeral certificates.\n- Probe the configured port, `8080`, and `50052` with `System.Time`. Send one `System.Reboot` request with `HALT`. Poll `System.RebootStatus` on the selected port.\n- Remove `gnmi.service` from `Wants=` and `After=` in `gnoi-shutdown.service`.\n- Keep `WantedBy=multi-user.target`. Do not make `sonic.target` stop the service.\n\nThis design removes the failure mode in which an unavailable `gnmi` container leaves a DPU running. It avoids starting `gnmi.service` before `PortInitDone`. It also prevents `config reload` from stopping an active DPU shutdown worker.\n\nUse the shared `sonic-py-common` client in sonic-net/sonic-host-services#367. Do not include a separate client copy. A 202605 backport must first include the shared client changes from #28341.\n"
+    },
+    {
+      "author": "dlanov",
+      "createdAt": "2026-08-27T14:14:16Z",
+      "body": "Thanks, understood. One TLS detail before I update sonic-host-services#427: Python grpc.secure_channel/ssl_channel_credentials does not expose a public equivalent of the Go InsecureSkipVerify=true policy currently used for DPU connections. I verified that a workable Python approach is to fetch the DPU ephemeral self-signed leaf certificate, use it as root_certificates, and set ssl_target_name_override to the certificate SAN/CN. This preserves TLS encryption, but pins the current ephemeral certificate rather than literally disabling verification. Is that the intended approach for GnoiClient, or is there another shared SONiC pattern you want used here?"
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-08-27T14:23:12Z",
+      "body": "yes, you can do something like this\n```python\nimport ssl\n\npem = ssl.get_server_certificate((dpu_ip, port), timeout=10)\n\ncredentials = grpc.ssl_channel_credentials(\n    root_certificates=pem.encode()\n)\n```"
+    },
+    {
+      "author": "hdwhdw",
+      "createdAt": "2026-08-27T14:26:38Z",
+      "body": "Correction: `sonic-net/sonic-host-services#367` does not need a vendored gNOI client or generated stubs. On `master`, `sonic-net/sonic-buildimage#28341` installs them in the host `sonic-py-common` wheel for x86-64.\n\nThe host daemon can use these imports:\n\n```python\nfrom sonic_grpc.gnoi import GnoiClient, system_pb2\n```\n\nUpdate `sonic-net/sonic-host-services#367` to:\n\n- Use these shared imports.\n- Call each data processing unit (DPU) directly.\n- Remove the `gnmi.service` dependency.\n- Update the daemon and its systemd unit.\n\nRevise PR #367 to contain only these changes, or supersede it. If revised, remove its vendored client and stub copies."
+    },
+    {
+      "author": "dlanov",
+      "createdAt": "2026-08-27T16:13:55Z",
+      "body": "Thanks. I updated sonic-net/sonic-host-services#427 based on your guidance. The daemon now uses the shared GnoiClient/system_pb2 directly from the host, pins the DPU ephemeral TLS certificate, probes the configured port/8080/50052 with System.Time, sends one Reboot(HALT), polls RebootStatus on the selected port, and no longer depends on gnmi.service or sonic.target. The PR is ready for review."
+    },
+    {
+      "author": "dypet",
+      "createdAt": "2026-09-01T16:00:11Z",
+      "body": "@dlanov For 202605 it looks like sonic_grpc.gnoi is not available; I tried building with the https://github.com/sonic-net/sonic-host-services/pull/427 on 202605 but there were build errors due to this:\n```\nE   ModuleNotFoundError: No module named 'sonic_grpc'\n```\nWill this solution work on 202605 or does it require a different fix? @rameshraghupathy for visibility"
+    },
+    {
+      "author": "dlanov",
+      "createdAt": "2026-09-01T16:37:28Z",
+      "body": "Correct, #427 currently targets master and will not work on 202605 as-is.\n\nThe immediate build failure occurs because sonic_grpc.gnoi was added to sonic-py-common by sonic-buildimage#28341 on master and is not present in 202605. A 202605 backport would first need the relevant shared-client changes from #28341.\n\nFor the same TLS design to work at runtime, 202605 would also need release-compatible backports of the DPU ephemeral-certificate mode from sonic-gnmi#772 and the launcher selection from sonic-buildimage#29238, before backporting #427.\n\nOtherwise, a separate 202605-specific fix would be required. The release maintainers should decide the backport scope and ownership."
+    },
+    {
+      "author": "dypet",
+      "createdAt": "2026-09-09T19:32:57Z",
+      "body": "```\nadmin@MtFuji-dut01:~$ sudo systemctl status gnoi-shutdown.service\n\u25cf gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon\n     Loaded: loaded (/usr/lib/systemd/system/gnoi-shutdown.service; enabled; preset: enabled)\n     Active: active (running) since Wed 2026-09-09 15:55:58 UTC; 2h 4min ago\n Invocation: 4c2d09c3d5c24844a5a6f2697a78aaf6\n   Main PID: 10118 (python3)\n      Tasks: 1 (limit: 153222)\n     Memory: 41.7M (peak: 42.2M)\n        CPU: 2.573s\n     CGroup: /system.slice/gnoi-shutdown.service\n             \u2514\u250010118 /usr/bin/python3 /usr/local/bin/gnoi_shutdown_daemon.py\n\nSep 09 15:55:57 MtFuji-dut01 systemd[1]: Starting gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon...\nSep 09 15:55:58 MtFuji-dut01 systemd[1]: Started gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon.\nSep 09 15:56:00 MtFuji-dut01 gnoi-shutdown-daemon[10118]: gnoi-shutdown-daemon started, monitoring CHASSIS_MODULE admin_status changes\nSep 09 15:56:00 MtFuji-dut01 python3[10118]: NOTICE:gnoi-shutdown-daemon:gnoi-shutdown-daemon started, monitoring CHASSIS_MODULE admin_status changes\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ sudo config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container and routeCheck monitoring ...\nRunning command: sudo systemctl stop aaastatsd.timer\nRunning command: sudo systemctl stop featured.timer\nRunning command: sudo systemctl stop hostcfgd.timer\nRunning command: sudo systemctl stop tacacs-config.timer\nStopping SONiC target ...\nRunning command: /usr/local/bin/sonic-cfggen -j /etc/sonic/init_cfg.json -j /etc/sonic/config_db.json --write-to-db\nRunning command: /usr/local/bin/db_migrator.py -o migrate\nRunning command: /usr/local/bin/sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t /usr/share/sonic/templates/sonic-environment.j2,/etc/sonic/sonic-environment\nRestarting SONiC target ...\nEnabling container and routeCheck monitoring ...\nReloading Monit configuration ...\nReinitializing monit daemon\nReleased lock on /etc/sonic/reload.lock\nadmin@MtFuji-dut01:~$ date\nWed Sep  9 06:02:49 PM UTC 2026\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ date\nWed Sep  9 06:05:19 PM UTC 2026\nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ \nadmin@MtFuji-dut01:~$ sudo systemctl status gnoi-shutdown.service\n\u25cf gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon\n     Loaded: loaded (/usr/lib/systemd/system/gnoi-shutdown.service; enabled; preset: enabled)\n     Active: active (running) since Wed 2026-09-09 15:55:58 UTC; 2h 9min ago\n Invocation: 4c2d09c3d5c24844a5a6f2697a78aaf6\n   Main PID: 10118 (python3)\n      Tasks: 1 (limit: 153222)\n     Memory: 41.7M (peak: 42.2M)\n        CPU: 2.602s\n     CGroup: /system.slice/gnoi-shutdown.service\n             \u2514\u250010118 /usr/bin/python3 /usr/local/bin/gnoi_shutdown_daemon.py\n\nSep 09 15:55:57 MtFuji-dut01 systemd[1]: Starting gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon...\nSep 09 15:55:58 MtFuji-dut01 systemd[1]: Started gnoi-shutdown.service - gNOI based DPU Graceful Shutdown Daemon.\nSep 09 15:56:00 MtFuji-dut01 gnoi-shutdown-daemon[10118]: gnoi-shutdown-daemon started, monitoring CHASSIS_MODULE admin_status changes\nSep 09 15:56:00 MtFuji-dut01 python3[10118]: NOTICE:gnoi-shutdown-daemon:gnoi-shutdown-daemon started, monitoring CHASSIS_MODULE admin_status changes\n\n\n\nadmin@MtFuji-dut01:~$ show version\n\nSONiC Software Version: SONiC.20260510.11\nSONiC OS Version: 13\nDistribution: Debian 13.5\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 8b5b8dc6ed\nBuild date: Mon Aug 17 12:53:29 UTC 2026\nBuilt by: azureuser@e0c4ea01c000000\n\nPlatform: x86_64-8102_28fh_dpu_o-r0\nHwSKU: Cisco-8102-28FH-DPU-O\nASIC: cisco-8000\nASIC Count: 1\nSerial Number: FLM283606EQ\nModel Number: 8102-28FH-DPU-O\nHardware Revision: 0.30\nUptime: 18:08:52 up  2:14,  3 users,  load average: 2.14, 2.55, 2.39\nDate: Wed 09 Sep 2026 18:08:52\n\n```\nAfter upgrading to a more recent 202605 image the issue has been resolved; gnoi-shutdown.service is surviving config reload and the DPU are shutting down as expected."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 427,
+      "repository": "sonic-net/sonic-host-services",
+      "url": "https://github.com/sonic-net/sonic-host-services/pull/427",
+      "title": "[gnoi-shutdown]: Use host GnoiClient for DPU shutdown",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-08-25T22:55:15Z",
+      "author": "dlanov",
+      "body": "#### Why I did it\n\nFixes sonic-net/sonic-buildimage#29188\n\n`gnoi-shutdown` currently shells into the `gnmi` container to run `gnoi_client` for DPU shutdown. This couples the host shutdown daemon to `gnmi.service` and can leave the DPU graceful-shutdown path unavailable when `gnmi` is stopped or unavailable during service lifecycle operations such as `config reload`.\n\n#### How I did it\n\nUse the shared gNOI client and System stubs from `sonic-py-common` directly on the host:\n\n- Import `GnoiClient` and `system_pb2` from `sonic_grpc.gnoi`.\n- Fetch the DPU's ephemeral TLS certificate with `ssl.get_server_certificate()` and pin it as `root_certificates` for the secure gRPC channel.\n- Probe the configured gNMI port, `8080`, and `50052` in order with `System.Time`, without probing duplicates.\n- Bound certificate fetch plus `System.Time` to one 10-second budget per candidate port.\n- Send one `System.Reboot` request with `HALT` on the selected port.\n- Poll `System.RebootStatus` on the same port, bounded by the configured DPU halt timeout. Treat `active=false` with either no status field or `STATUS_SUCCESS` as complete.\n- Remove `gnmi.service` from `Wants=` and `After=` in `gnoi-shutdown.service`.\n- Keep `Requires=database.service`, `pmon.service` ordering, and `WantedBy=multi-user.target`; do not tie the daemon to `sonic.target`.\n\n#### How to verify it\n\nOn a SmartSwitch NPU:\n\n1. Confirm the daemon is active:\n   ```bash\n   systemctl is-active gnoi-shutdown\n   ```\n2. Run a configuration reload:\n   ```bash\n   sudo config reload -y\n   ```\n3. Confirm `gnoi-shutdown` remains available independently of `gnmi.service`.\n4. Run a graceful DPU shutdown:\n   ```bash\n   sudo config chassis module shutdown DPU1\n   ```\n5. Confirm the host daemon probes the DPU directly, sends a single HALT request, and does not wait for the full halt-services timeout when RebootStatus reports completion.\n\n#### Local verification\n\n- `git diff --check` passes.\n- `python3 -m py_compile` passes for the daemon and its test file.\n- `systemd-analyze verify` passes against the modified unit with dependency stubs.\n- Offline `systemctl enable` validation creates `multi-user.target.wants/gnoi-shutdown.service`.\n- Integration-style smoke validation using the shared `GnoiClient` with a real TLS gRPC fake server covers TLS certificate pinning, port fallback, one `Reboot(HALT)`, RebootStatus handling, and deadline-bounded polling.\n- The full SmartSwitch hardware scenario requires a suitable SONiC SmartSwitch test environment.\n\n#### Description for the changelog\n\nCall DPU gNOI directly from the host shutdown daemon and remove its dependency on `gnmi.service`.",
+      "files": [
+        {
+          "path": "data/debian/sonic-host-services-data.gnoi-shutdown.service",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "scripts/gnoi_shutdown_daemon.py",
+          "additions": 150,
+          "deletions": 61
+        },
+        {
+          "path": "tests/gnoi_shutdown_daemon_test.py",
+          "additions": 386,
+          "deletions": 107
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T22:55:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T22:55:24Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T22:55:33Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-26T02:09:05Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T14:17:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-27T14:17:37Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T16:11:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-27T16:11:34Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dlanov",
+          "createdAt": "2026-08-28T01:58:13Z",
+          "body": "Thanks, It's confirmed. We reproduced both TLS failures with real gNOI/TLS handshakes:\r\n\r\n* The default SONiC ephemeral certificate uses SAN `example.com`, so the current client fails when connecting by DPU IP.\r\n* `ssl_target_name_override` fixes the hostname mismatch, but not the second issue.\r\n* The same certificate is valid for only one hour, so after that grpc-python rejects it as expired.\r\n* gRPC Core supports encrypted TLS without server-certificate verification, matching the policy used by the Go DPU proxy.\r\n* grpc-python does not currently expose that Core option through its Python API.\r\n\r\nBefore changing #427 again, would you prefer that we pursue:\r\n\r\n* a shared gRPC credential path exposing the existing Core capability, or\r\n* a shared `sonic-py-common` helper for this DPU TLS policy?\r\n"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-28T03:41:53Z",
+          "body": "These options address different layers.\n\nMatching Go\u2019s `InsecureSkipVerify` requires a Python binding for gRPC Core\u2019s custom certificate verifier. This is a generic, security-sensitive grpcio capability. A sonic-py-common helper cannot provide it through the current public Python API.\n\nsonic-py-common could centralize DPU endpoint configuration, leaf certificate retrieval, and credential creation. However, standard grpc-python verification still checks SANs and expiration. The sonic-gnmi `--insecure` server path calls `testdata/tls.NewCert()` in production. That certificate uses `example.com` as its SAN and expires after one hour. Wrapping `ssl.get_server_certificate()` does not address this server defect.\n\nI recommend fixing the server contract rather than adding a generic verification-bypass API:\n\n1. Add a DPU-specific ephemeral TLS mode to sonic-gnmi. Keep it separate from generic `--insecure`.\n2. Generate a production certificate with SANs for the dynamically discovered listener and interface identities.\n3. Issue the certificate for the supported uptime, or rotate it before expiration.\n4. Update the sonic-buildimage DPU launcher to use this mode.\n5. Optionally add a shared `sonic_grpc` helper that pins the ephemeral leaf certificate and creates a normally verified channel. PR #427 can then use this helper.\n\nThis removes the production dependency on a test certificate. It preserves encrypted host-to-DPU gNOI without introducing a broad verification-bypass API.\n\nI am happy to review the sonic-gnmi and sonic-buildimage follow-up PRs.\n"
+        },
+        {
+          "author": "dlanov",
+          "createdAt": "2026-08-28T12:16:24Z",
+          "body": "Thanks, understood. This appears to require prerequisite changes in sonic-gnmi and sonic-buildimage. Are those changes already planned or owned by someone, and should #427 remain on hold until they are available?"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-28T12:55:55Z",
+          "body": "@dlanov, do you mind owning the prerequisite changes in sonic-gnmi and sonic-buildimage? This work has no current owner.\r\n\r\nScope:\r\n- Add a DPU-specific ephemeral TLS mode in sonic-gnmi. Keep generic `--insecure` unchanged.\r\n- Replace `testdata/tls.NewCert()` for this mode. Use dynamically discovered SANs and a supported certificate lifetime or rotation. Do not hard-code a midplane IP.\r\n- Update the sonic-buildimage DPU launcher to select this mode.\r\n- Update #427 to use normal grpc-python verification after both prerequisite changes.\r\n\r\nI can review both prerequisite PRs.\r\n"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-29T02:00:47Z",
+          "body": "By the way, I opened the two prerequisite PRs for this approach:\n\n- sonic-net/sonic-gnmi#772 adds the DPU-specific ephemeral TLS certificate mode.\n- sonic-net/sonic-buildimage#29238 selects this mode in the DPU launcher while supporting older telemetry binaries.\n\nAll required checks pass. @dlanov, please take a look when you have time. If the direction looks right, I would appreciate your approval.\n\nThese changes let #427 use standard grpc-python verification without the generic skip-verify path.\n"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-08-29T03:19:47Z",
+          "body": "I verified the non-destructive path:\n\n- `sonic-net/sonic-gnmi#772` generated an ephemeral certificate with the DPU IP in its SAN.\n- `#427` fetched and pinned the certificate. `System.Time` succeeded directly from the NPU host to the DPU IP.\n- `System.Time` also succeeded without `gnmi.service` running.\n\nThis test covered TLS setup and the direct `System.Time` RPC path. I did not send `Reboot(HALT)`.\n"
+        },
+        {
+          "author": "dlanov",
+          "createdAt": "2026-08-29T12:30:15Z",
+          "body": "Thanks for opening and validating these. I don\u2019t have maintainer approval rights in these repositories, but I can review the changes from the #427 integration perspective and leave feedback. Formal approval will still need to come from a repository maintainer."
+        }
+      ]
+    }
+  ]
+}

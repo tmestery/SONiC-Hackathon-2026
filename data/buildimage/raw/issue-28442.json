@@ -1,0 +1,255 @@
+{
+  "number": 28442,
+  "title": "Secure Boot images fail to boot: Debian shim-unsigned 16.1-2 revokes SBAT grub,4 that SONiC's GRUB still ships",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28442",
+  "createdAt": "2026-07-16T00:57:50Z",
+  "closedAt": "2026-09-02T19:47:59Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Help Wanted :sos:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nNo \u2014 this is generic to any SONiC image built with Secure Boot support (`SECURE_UPGRADE_MODE=dev` or `prod`). It is not tied to a specific vendor/ASIC.\n\n### Importance/Severity\n\nHigh. Newly built Secure Boot images fail to boot with Secure Boot enabled, and because the failure is recorded in UEFI NVRAM it also blocks *any subsequently installed* image that ships the same GRUB \u2014 i.e. it breaks the upgrade/recovery path, not just the one image.\n\n### Description\n\n`build_debian.sh` installs `shim-unsigned` from the Debian archive **without pinning a version**:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/build_debian.sh#L724-L726\n```sh\n    # debian secure boot dependencies\n    sudo LANG=C DEBIAN_FRONTEND=noninteractive chroot $FILESYSTEM_ROOT apt-get -y install      \\\n        shim-unsigned\n```\n\nDebian trixie now serves **`shim-unsigned 16.1-2~deb13u1`**, which bumped its embedded SBAT revocation level to require **`grub,5`**. From the Debian `shim` changelog (`shim (16.1-2)`, Steve McIntyre, Fri, 03 Apr 2026 \u2014 https://metadata.ftp-master.debian.org/changelogs/main/s/shim/shim_16.1-2~deb13u1_changelog):\n\n> Bump SBAT revocation level to 2025021800 aka\n> `\"shim,4\\ngrub,5\\n\"`\n> after discussion with shim reviewers team. Let's block the older\n> GRUB binaries which we know are problematic.\n\nThe previous shim (`shim (16.1-1)`, Mon, 23 Mar 2026) only required `grub,4`:\n\n> Bump SBAT revocation level to 2024040900 aka\n> `\"shim,4\\ngrub,4\\ngrub.peimage,2\\n\"`\n\nHowever, the GRUB that SONiC builds (Debian `grub2` `2.06-13+deb13u1`, pinned in `rules/grub2.mk`) still declares **SBAT generation 4** (`grub,4`). Per the Debian `grub2` changelog (`grub2 (2.06-13+deb13u1)`, \"Bump SBAT to grub,4\", Julian Andres Klode, Mon, 02 Oct 2023), grub2 in trixie has never advanced past generation 4.\n\nAt boot, `shim 16.1-2` writes its embedded revocation level into the `SbatLevelRT` UEFI variable (a one-way ratchet in NVRAM), then refuses to load `grubx64.efi` because the binary's `grub,4` is below the required `grub,5`. Since `SbatLevelRT` persists in NVRAM, every later image that also ships a `grub,4` binary is blocked too. The only way out is to disable Secure Boot and clear/lower the variable.\n\nRoot cause: **shim (revocation policy) and grub (SBAT generation) are sourced independently, and shim is unpinned**, so a Debian shim update silently started revoking the grub that SONiC ships.\n\n### Steps to reproduce the issue\n\n1. Build a SONiC image with Secure Boot enabled (`SECURE_UPGRADE_MODE=dev` or `prod`) from a build environment whose Debian trixie mirror currently serves `shim-unsigned 16.1-2~deb13u1`.\n2. Install the image on a machine with UEFI Secure Boot **enabled**.\n3. Reboot.\n\n### Describe the results you received (actual behavior)\n\nThe device fails the Secure Boot check and does not boot. Inspecting the installed EFI binaries and the SBAT NVRAM state (device name sanitized to `sonic`):\n\n```\n# grep -a 'grub,' /boot/efi/EFI/SONiC-OS/grubx64.efi\ngrub,4,Free Software Foundation,grub,2.06,https://www.gnu.org/software/grub/\n\n# cat /sys/firmware/efi/efivars/SbatLevelRT-605dab50-e046-4300-abb6-3dd810dd8b23 | grep -a ','\nsbat,1,2025021800\nshim,4\ngrub,5\n```\n\nThe grub binary is `grub,4`; the NVRAM `SbatLevelRT` (written by the new shim) requires `grub,5` \u2192 grub is revoked and refused. Disabling Secure Boot lets the device boot. Once in the \"grub,5 in NVRAM\" state, installing any other `grub,4` image also fails to boot until the variable is cleared.\n\n### Describe the results you expected (expected behavior)\n\nSecure Boot images should boot with Secure Boot enabled. The shim revocation policy embedded in the image must not revoke the GRUB that the same image ships \u2014 i.e. the shim version and the grub SBAT generation must be kept consistent.\n\n### Relevant log output\n\n```\nsbat,1,2025021800   # shim 16.1-2 embedded revocation level (requires grub,5)\nshim,4\ngrub,5              # <-- required minimum, ratcheted into SbatLevelRT NVRAM\n```\nvs. the shipped GRUB binary:\n```\ngrub,4              # <-- SONiC's grubx64.efi (Debian grub2 2.06-13, SBAT gen 4) \u2014 below required, revoked\n```\n\n### Additional notes / suggested fix\n\nOptions, roughly in order of robustness:\n\n1. **Advance GRUB to SBAT generation 5** \u2014 update `src/grub2` to a grub2 that includes the 2024 CVE patches and declares `grub,5` in `src/grub2/grub2/debian/sbat.debian.csv.in`, so the shipped grub satisfies the new shim policy. This is the correct long-term fix.\n2. **Pin `shim-unsigned` to a version whose revocation level matches the shipped grub** (e.g. `15.8-1`/`16.1-1`, which require only `grub,4`) until (1) lands. Note: the Debian trixie archive only serves the *current* shim version, so an old version must come from `snapshot.debian.org` or an internal mirror.\n3. Add CI that fails the build if the shim's embedded revocation level is higher than the shipped grub's SBAT generation, to catch this class of mismatch automatically.\n\nVerified from the Debian mirror that trixie currently serves only `shim-unsigned 16.1-2~deb13u1`; older versions are available only via `snapshot.debian.org`.\n",
+  "comments": [
+    {
+      "author": "roeebar-arista",
+      "createdAt": "2026-07-16T15:57:08Z",
+      "body": "We have a fix ready for this. I will publish a PR soon."
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-16T16:03:13Z",
+      "body": "@roeebar-arista could you share what approach you use to fix the issue?"
+    },
+    {
+      "author": "roeebar-arista",
+      "createdAt": "2026-07-16T16:06:14Z",
+      "body": "Approach 1. Advanced grub2 to gen5."
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-16T18:21:50Z",
+      "body": "@roeebar-arista We did have an issue with newer grub because it was incompatible with older onie during trixie upgrade. That was the reason the grub was locked to older version.\n\nhttps://github.com/sonic-net/sonic-buildimage/issues/24249\n\nTo fix this incompatibility @bhouse-nexthop  suggested we can backport patches which are now available to grub 2.12 may be we should add that as well?  \n\nhttps://github.com/sonic-net/sonic-buildimage/issues/24249#issuecomment-4935469701"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-17T21:17:07Z",
+      "body": "@roeebar-arista  I verified the two patches on top of your changes and can confirm that this is not going to address the https://github.com/sonic-net/sonic-buildimage/issues/24249 issue we had with onie. \n\ncc: @saiarcot895 "
+    },
+    {
+      "author": "roeebar-arista",
+      "createdAt": "2026-07-17T21:48:22Z",
+      "body": "Are you saying it's **not** going to address the #24249 issue? I am now testing grub2 debian/2.14-3 (not debian13-specific) in sonic-buildimage.     If this works, it should resolve issue #24249 according to the discussion in the issue."
+    },
+    {
+      "author": "bhouse-nexthop",
+      "createdAt": "2026-07-17T22:52:01Z",
+      "body": "I would strongly recommend just going to grub 2.14 from a debian forky."
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-18T01:21:35Z",
+      "body": "I verified with grub2 2.06-13+deb12u2 and it seems to fix this issue. But we would be stuck with bookworm grub. \n\nYes @roeebar-arista I second using grub 2.14 from forky. "
+    },
+    {
+      "author": "roeebar-arista",
+      "createdAt": "2026-07-20T19:32:27Z",
+      "body": "> I verified with grub2 2.06-13+deb12u2 and it seems to fix this issue. But we would be stuck with bookworm grub.\n> \n> Yes [@roeebar-arista](https://github.com/roeebar-arista) I second using grub 2.14 from forky.\n\n@tirupatihemanth Are you able to confirm if the image from https://github.com/sonic-net/sonic-buildimage/pull/28458 fixes the issue in https://github.com/sonic-net/sonic-buildimage/issues/24249? "
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-20T22:38:02Z",
+      "body": "@roeebar-arista  We still have the incompatibility with onie issue. Please see:  https://github.com/sonic-net/sonic-buildimage/issues/24249#issuecomment-5027943521"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-21T15:24:08Z",
+      "body": "@roeebar-arista  I think we are left with moving to newer bookworm grub 2.06-13+deb12u2 that fixes both these issues. \n\n@saiarcot895 Do you agree? "
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-07-23T18:55:15Z",
+      "body": "Update on this issue: Moving to bookworm grub 2.06-13+deb12u2 fixes this issue as expected. And it doesn't in itself reproduce the onie chainload issue as well. But that combined with shim-unsigned 16.1-2~deb13u1 reproduces the onie-chainload issue again.\n\nSo we might as well just go with trixie grub now and in future forky as we can't keep grub pinned to bookworm. For booting into onie we will have to directly boot to onie grub instead of chainloading. "
+    },
+    {
+      "author": "roeebar-arista",
+      "createdAt": "2026-07-23T19:14:12Z",
+      "body": "Okay, se let me revert https://github.com/sonic-net/sonic-buildimage/pull/28458 back to trixie"
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-07-29T15:11:59Z",
+      "body": "@saiarcot895 could you work with @roeebar-arista and @tirupatihemanth for a proper solution here?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28739,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28739",
+      "title": "[Secure Boot]: Remove locally compiled Debian 12 grub, use stock Trixie grub",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-02T19:47:57Z",
+      "createdAt": "2026-07-30T20:35:35Z",
+      "author": "tirupatihemanth",
+      "body": "#### Why I did it\r\n\r\nSONiC locally compiles grub `2.06-13+deb13u1` (the Debian 12 / Bookworm 2.06 source) for Trixie\r\nimages instead of using the stock Debian 13 grub (#23340). That workaround has now become a boot\r\nblocker.\r\n\r\nDebian's `shim-unsigned 16.1-2~deb13u1` bumped its SBAT revocation level to require `grub,5`. The\r\nlocally compiled 2.06 grub only declares `grub,4`, so shim refuses to load it and Secure Boot\r\nimages fail to boot. Because shim writes its revocation level into the `SbatLevelRT` UEFI variable\r\n(a one-way NVRAM ratchet), this also blocks every subsequently installed image shipping the same\r\ngrub \u2014 breaking the upgrade and recovery path, not just the one image.\r\n\r\nThe stock Trixie grub `2.12-9` already declares `grub,5`, so returning to it resolves the problem.\r\n\r\nFixes #28442.\r\n\r\nAdditionally, the amd64 host-image version lock pinned `grub-common` / `grub2-common` to\r\n`2.06-13+deb13u1` \u2014 a locally built version that does not exist in the Trixie apt archive \u2014 which\r\nmakes the grub install unsatisfiable once it is apt-installed with deb version control enabled.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: N/A\r\n\r\n#### How I did it\r\n\r\n- Removed the `src/grub2/` local build recipe (Makefile, patches, `.gitignore`)\r\n- Deleted `rules/grub2.mk` and `rules/grub2.dep`\r\n- Removed the grub2 build dependencies from `sonic-slave-trixie/Dockerfile.j2`\r\n- Dropped the local-deb (`--allow-downgrades`) grub install steps from `build_debian.sh`; grub is\r\n  again apt-installed from the Debian 13 archive\r\n- Removed the `$(GRUB2_COMMON)` RFS/installer target dependencies from `slave.mk`\r\n- Bumped the amd64 lock to the stock Trixie `2.12-9+deb13u2` (already used by the arm64/armhf locks)\r\n\r\nReverts #23340 and #25400.\r\n\r\n#### How to verify it\r\n\r\nBuild a Trixie image and confirm:\r\n\r\n1. No grub2 local-compile step runs during the build.\r\n2. The installed grub is `2.12-9+deb13u2` from the Debian archive (`dpkg -l grub2-common`).\r\n3. On a Secure Boot UEFI device the image boots, and the SBAT level is `grub,5`:\r\n   ```\r\n   cat /sys/firmware/efi/efivars/SbatLevelRT-605dab50-e046-4300-abb6-3dd810dd8b23 | grep -a ,\r\n   ```\r\n\r\n#### How to boot into ONIE (UEFI systems)\r\n\r\nTrixie grub cannot chain-load an older ONIE (#24249), so ONIE has to be entered directly rather\r\nthan through the ONIE entry of the SONiC grub menu:\r\n\r\n1. At the SONiC grub menu press `ESC` (or `c`) to fall back to the grub shell.\r\n2. Type `exit` \u2014 this leaves the SONiC grub and boots the ONIE grub directly.\r\n3. Choose the desired ONIE option (Install / Rescue / \u2026).\r\n\r\nTo boot into ONIE on the next reboot from a running SONiC:\r\n\r\n```\r\nsudo efibootmgr -n 0000\r\n```\r\n\r\nThis sets the UEFI firmware's `BootNext` variable and applies to the next boot only; later reboots\r\ngo back to SONiC.\r\n\r\nNote: `grub-editenv /host/grub/grubenv set next_entry=ONIE` must **not** be used \u2014 it still loads\r\nthe SONiC grub first and therefore hits the same chainload issue.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [x] 202605\r\n\r\nReason: the locally compiled grub is present on 202605 as well, so the same Secure Boot failure\r\napplies there.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n- [x] Tested on master and 202605\r\n\r\n#### Description for the changelog\r\n\r\n[build]: Remove locally compiled Debian 12 grub, use stock Trixie grub\r\n\r\n#### Known limitation: #24249 is still open\r\n\r\nThis change does not address #24249 \u2014 chain-loading ONIE from the Trixie grub still fails, and the\r\nsame behaviour is expected with Debian 14's grub 2.14, so staying on an older grub is not a viable\r\nlong-term option. A proper fix needs a newer ONIE, but the ONIE project\r\n(https://github.com/opencomputeproject/onie) has had no changes since a long time to update grub/kernel, and upgrading ONIE across already deployed switches is impractical. Until that is resolved, use the UEFI ONIE boot\r\nprocedure described above as the workaround.",
+      "files": [
+        {
+          "path": "build_debian.sh",
+          "additions": 6,
+          "deletions": 15
+        },
+        {
+          "path": "rules/grub2.dep",
+          "additions": 0,
+          "deletions": 8
+        },
+        {
+          "path": "rules/grub2.mk",
+          "additions": 0,
+          "deletions": 37
+        },
+        {
+          "path": "slave.mk",
+          "additions": 2,
+          "deletions": 3
+        },
+        {
+          "path": "sonic-slave-trixie/Dockerfile.j2",
+          "additions": 0,
+          "deletions": 13
+        },
+        {
+          "path": "src/grub2/.gitignore",
+          "additions": 0,
+          "deletions": 5
+        },
+        {
+          "path": "src/grub2/Makefile",
+          "additions": 0,
+          "deletions": 49
+        },
+        {
+          "path": "src/grub2/patch/adjust-build-rules-for-debian.patch",
+          "additions": 0,
+          "deletions": 71
+        },
+        {
+          "path": "src/grub2/patch/large-uid-skip-cpio-ustar.patch",
+          "additions": 0,
+          "deletions": 16
+        },
+        {
+          "path": "src/grub2/patch/series",
+          "additions": 0,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T20:35:44Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T20:35:45Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T20:35:57Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T20:49:31Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-07-30T22:34:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T22:34:33Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n2 pipeline(s) were filtered out due to trigger conditions.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-07-31T18:11:35Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T18:11:37Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T18:11:40Z",
+          "body": "Retrying failed(or canceled) stages in build 1179718:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t1-lag-vpp by Elastictest: retried.\n- Job impacted-area-kvmtest-t1-lag by Elastictest: retried."
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-07-31T23:58:27Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T23:58:30Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T23:58:32Z",
+          "body": "Retrying failed(or canceled) stages in build 1179718:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t1-lag-vpp by Elastictest: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T22:09:58Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T22:10:14Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "bmridul",
+          "createdAt": "2026-08-07T23:59:01Z",
+          "body": "@sacnaik "
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2026-08-10T23:30:49Z",
+          "body": "@kenneth-arista please check"
+        },
+        {
+          "author": "anamehra",
+          "createdAt": "2026-08-12T15:31:04Z",
+          "body": "Hi @gechiang , for your viz. Thanks"
+        },
+        {
+          "author": "kenneth-arista",
+          "createdAt": "2026-08-12T17:35:39Z",
+          "body": "@roeebar-arista"
+        },
+        {
+          "author": "roeebar-arista",
+          "createdAt": "2026-08-12T17:57:51Z",
+          "body": "Changes LGTM. @tirupatihemanth don't we want this in 202511 as well?"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-12T18:42:35Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

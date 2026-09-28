@@ -1,0 +1,79 @@
+{
+  "number": 11235,
+  "title": "Create ACL table fails due to incorrect check for supported ACL actions",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/11235",
+  "createdAt": "2022-06-23T17:37:27Z",
+  "closedAt": "2022-06-24T14:50:53Z",
+  "author": "rck-innovium",
+  "labels": [],
+  "assignees": [
+    "bingwang-ms"
+  ],
+  "milestone": null,
+  "body": "The recent change to add mandatory ACL actions has a bug when checking whether the ACL action is supported or not.\r\n\r\n\r\n\r\n__Steps to reproduce:__\r\n\r\n___CLI:___\r\n config acl add table DATA_EGRESS_IPV4_TEST L3 -s egress \r\n\r\n___Error:___\r\nJun 23 02:23:09.467384 sonic-dut ERR swss#orchagent: :- validate: Action SAI_ACL_ACTION_TYPE_REDIRECT is not supported on table DATA_EGRESS_IPV4_TEST\r\nJun 23 02:23:09.467384 sonic-dut ERR swss#orchagent: :- doAclTableTask: Failed to create ACL table DATA_EGRESS_IPV4_TEST, invalid configuration\r\n\r\n__Root-cause:__\r\n\r\nRefer: https://github.com/Azure/sonic-swss/blob/ec57bf101651b838156780b93d3300bf16bb7f74/orchagent/aclorch.cpp#L2048\r\n\r\nThe code is wrongly checking counter_action instead of checking each of the actions in defaultAclActionList. \r\n\r\nThe right fix is:\r\n```\r\ndiff --git a/orchagent/aclorch.cpp b/orchagent/aclorch.cpp\r\nindex c865a7f..9c47b6e 100644\r\n--- a/orchagent/aclorch.cpp\r\n+++ b/orchagent/aclorch.cpp\r\n@@ -2016,7 +2016,7 @@ bool AclTable::addMandatoryActions()\r\n         // Add the default action list\r\n         for (auto action : defaultAclActionList[type.getName()][stage])\r\n         {\r\n-            if (m_pAclOrch->isAclActionSupported(stage, acl_action))\r\n+            if (m_pAclOrch->isAclActionSupported(stage, action))\r\n             {\r\n                 SWSS_LOG_INFO(\"Added default action for table type %s stage %s\",\r\n                                     type.getName().c_str(),\r\n```\r\n\r\n__Version__\r\n\r\nSONiC Software Version: SONiC.202111.Innovium.0-dirty-20220602.094004\r\nDistribution: Debian 11.3\r\nKernel: 5.10.0-8-2-amd64\r\nBuild commit: ca284a1bf\r\nBuild date: Thu Jun  2 18:08:13 UTC 2022\r\nBuilt by: builder@sonic-xxx\r\nPlatform: x86_64-wistron_sw_to3200k-r0\r\nHwSKU: Wistron_sw_to3200k_32x100\r\nASIC: innovium\r\nASIC Count: 1\r\nSerial Number: N/A\r\nModel Number: N/A\r\nHardware Revision: N/A\r\nUptime: 10:40:32 up 10:26,  2 users,  load average: 0.76, 0.55, 0.65\r\n\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2351,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2351",
+      "title": "Create ACL table fails due to incorrect check for supported ACL actions",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-06-24T14:50:53Z",
+      "createdAt": "2022-06-24T03:51:52Z",
+      "author": "rck-innovium",
+      "body": "Create ACL table fails due to incorrect check for supported ACL actions #11235\r\n\r\nFixes https://github.com/Azure/sonic-buildimage/issues/11235\r\n\r\nSigned-off-by: rck-innovium <rck@innovium.com>\r\n\r\n<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nFixed error https://github.com/Azure/sonic-buildimage/issues/11235\r\n\r\n**Why I did it**\r\n\r\nEgress ACL table creation was failing.\r\n\r\nroot@sonic-dut:~#config acl add table DATA_EGRESS_IPV4_TEST L3 -s egress\r\n\r\nError:\r\nJun 23 02:23:09.467384 sonic-dut ERR swss#orchagent: :- validate: Action SAI_ACL_ACTION_TYPE_REDIRECT is not supported on table DATA_EGRESS_IPV4_TEST\r\nJun 23 02:23:09.467384 sonic-dut ERR swss#orchagent: :- doAclTableTask: Failed to create ACL table DATA_EGRESS_IPV4_TEST, invalid configur\r\n\r\n**How I verified it**\r\n\r\nroot@sonic-dut:~#config acl add table DATA_EGRESS_IPV4_TEST L3 -s egress\r\n\r\n\r\nJun 23 20:49:22.050411 sonic-dut INFO caclmgrd[1278536]: ACL change detected for namespace ''\r\nJun 23 20:49:22.050473 sonic-dut NOTICE swss#orchagent: :- doAclTableTask: Successfully updated existing ACL table DATA_EGRESS_IPV4_TEST\r\nJun 23 20:49:22.050546 sonic-dut INFO caclmgrd[1278536]: Spawning ACL update thread for namepsace '' ...\r\nJun 23 20:49:22.551196 sonic-dut INFO caclmgrd[1278536]: ACL config for namespace '' has not changed for 0.5 seconds. Applying updates ...\r\n\r\n```\r\nroot@sonic-dut:~# show acl table DATA_EGRESS_IPV4_TEST\r\nName                   Type    Binding      Description            Stage\r\n---------------------  ------  -----------  ---------------------  -------\r\nDATA_EGRESS_IPV4_TEST  L3      Ethernet0    DATA_EGRESS_IPV4_TEST  egress\r\n                               Ethernet8\r\n                               Ethernet16\r\n                               Ethernet24\r\n                               Ethernet32\r\n                               Ethernet40\r\n                               Ethernet48\r\n                               Ethernet56\r\n                               Ethernet64\r\n                               Ethernet72\r\n                               Ethernet80\r\n                               Ethernet88\r\n                               Ethernet96\r\n                               Ethernet104\r\n                               Ethernet112\r\n                               Ethernet120\r\n                               Ethernet128\r\n                               Ethernet136\r\n                               Ethernet144\r\n                               Ethernet152\r\n                               Ethernet160\r\n                               Ethernet168\r\n                               Ethernet176\r\n                               Ethernet184\r\n                               Ethernet192\r\n                               Ethernet200\r\n                               Ethernet208\r\n                               Ethernet216\r\n                               Ethernet224\r\n                               Ethernet232\r\n                               Ethernet240\r\n                               Ethernet248\r\nroot@sonic-dut:~#\r\n```\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/aclorch.cpp",
+          "additions": 3,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "rck-innovium",
+          "createdAt": "2022-07-21T06:32:57Z",
+          "body": "@bingwang-ms  @prsunny \r\n\r\nPlease help in backporting to 202111.\r\nWe are not able to create ACL tables on few platforms after the below commit.\r\n\r\n```\r\ncommit bb0733aa67ffc4e430e70bcf2db2dc6316172b32\r\nAuthor: Stepan Blyshchak <38952541+stepanblyschak@users.noreply.github.com>\r\nDate:   Tue Nov 23 04:32:49 2021 +0200\r\n\r\n    [aclorch] Add ACL_TABLE_TYPE configuration  (#1982)\r\n\r\n    * [aclorch] Add ACL_TABLE_TYPE configuration\r\n```\r\n\r\n **Please kindly backport the below 2 pull requests to sonic 202111 branch.** \r\n\r\n```\r\ncommit 910bfd4d17782a059daf2d81deb87673ae6ca58e\r\nAuthor: bingwang-ms <66248323+bingwang-ms@users.noreply.github.com>\r\nDate:   Sat May 28 03:04:14 2022 +0800\r\n \r\n    [ACL] Add default action_list for default ACL table type (#2298)\r\n\r\n```\r\n\r\n```\r\ncommit 1b8bd94ef7e44f6089fc12efd456a3caa7aafd3f\r\nAuthor: Ravindranath C K <rck@innovium.com>\r\nDate:   Fri Jun 24 20:20:52 2022 +0530\r\n\r\n    Create ACL table fails due to incorrect check for supported ACL actions #11235 (#2351)\r\n\r\n    Signed-off-by: rck-innovium <rck@innovium.com>\r\n```\r\n"
+        },
+        {
+          "author": "rck-innovium",
+          "createdAt": "2022-08-11T10:41:49Z",
+          "body": "> @bingwang-ms @prsunny\r\n> \r\n> Please help in backporting to 202111. We are not able to create ACL tables on few platforms after the below commit.\r\n> \r\n> ```\r\n> commit bb0733aa67ffc4e430e70bcf2db2dc6316172b32\r\n> Author: Stepan Blyshchak <38952541+stepanblyschak@users.noreply.github.com>\r\n> Date:   Tue Nov 23 04:32:49 2021 +0200\r\n> \r\n>     [aclorch] Add ACL_TABLE_TYPE configuration  (#1982)\r\n> \r\n>     * [aclorch] Add ACL_TABLE_TYPE configuration\r\n> ```\r\n> \r\n> **Please kindly backport the below 2 pull requests to sonic 202111 branch.**\r\n> \r\n> ```\r\n> commit 910bfd4d17782a059daf2d81deb87673ae6ca58e\r\n> Author: bingwang-ms <66248323+bingwang-ms@users.noreply.github.com>\r\n> Date:   Sat May 28 03:04:14 2022 +0800\r\n>  \r\n>     [ACL] Add default action_list for default ACL table type (#2298)\r\n> ```\r\n> \r\n> ```\r\n> commit 1b8bd94ef7e44f6089fc12efd456a3caa7aafd3f\r\n> Author: Ravindranath C K <rck@innovium.com>\r\n> Date:   Fri Jun 24 20:20:52 2022 +0530\r\n> \r\n>     Create ACL table fails due to incorrect check for supported ACL actions #11235 (#2351)\r\n> \r\n>     Signed-off-by: rck-innovium <rck@innovium.com>\r\n> ```\r\n\r\n@prsunny \r\n\r\nCan you please help backport or let us know if I can do something to get this backported.. This is blocking our basic 202111 ACL features.."
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2022-08-11T23:22:13Z",
+          "body": "This is already labeled for 202111. @judyjoseph , can you please help with cherry-pick? "
+        },
+        {
+          "author": "kishoreatreya",
+          "createdAt": "2022-09-07T20:54:14Z",
+          "body": "@judyjoseph could you help cherry-pick this to 202111? This has been pending for sometime."
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2022-09-19T18:00:16Z",
+          "body": "@rck-innovium @kishoreatreya Sorry for delay - Can you check if this PR is applicable in 202111 branch as I see the fix is in AclTable::addMandatoryActions() - and the function is not present in the 202111 codebase."
+        },
+        {
+          "author": "rck-innovium",
+          "createdAt": "2022-09-20T06:22:39Z",
+          "body": "> @rck-innovium @kishoreatreya Sorry for delay - Can you check if this PR is applicable in 202111 branch as I see the fix is in AclTable::addMandatoryActions() - and the function is not present in the 202111 codebase.\r\n\r\nHi @judyjoseph \r\n\r\nThanks for looking at this. This PR is applicable for 202111.  \r\nThe reason is:\r\n\r\n1) There was a commit to **202111 and master ** that breaks ACL table creation on some platforms. Refer commit bb0733aa67ffc4e430e70bcf2db2dc6316172b32\r\n\r\n2) A fix for this was made in **master**. Refer commit 910bfd4d17782a059daf2d81deb87673ae6ca58e\r\n\r\n3) The current PR (#2351) was made to fix a bug in the above commit it in **master**. Refer commit 1b8bd94ef7e44f6089fc12efd456a3caa7aafd3f\r\n\r\n\r\nSo, the sequence of backporting required is:\r\n\r\n1. Backport#1 commit 910bfd4d17782a059daf2d81deb87673ae6ca58e\r\n\r\n2. Backport#2 commit 1b8bd94ef7e44f6089fc12efd456a3caa7aafd3f\r\n\r\n\r\nThis has been detailed in an earlier comment here:\r\nhttps://github.com/sonic-net/sonic-swss/pull/2351#issuecomment-1211820441"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2022-10-27T02:14:09Z",
+          "body": "> > @rck-innovium @kishoreatreya Sorry for delay - Can you check if this PR is applicable in 202111 branch as I see the fix is in AclTable::addMandatoryActions() - and the function is not present in the 202111 codebase.\r\n> \r\n> Hi @judyjoseph\r\n> \r\n> Thanks for looking at this. This PR is applicable for 202111. The reason is:\r\n> \r\n> 1. There was a commit to **202111 and master ** that breaks ACL table creation on some platforms. Refer commit [bb0733a](https://github.com/sonic-net/sonic-swss/commit/bb0733aa67ffc4e430e70bcf2db2dc6316172b32)\r\n> 2. A fix for this was made in **master**. Refer commit [910bfd4](https://github.com/sonic-net/sonic-swss/commit/910bfd4d17782a059daf2d81deb87673ae6ca58e)\r\n> 3. The current PR ([Create ACL table fails due to incorrect check for supported ACL actions\u00a0#2351](https://github.com/sonic-net/sonic-swss/pull/2351)) was made to fix a bug in the above commit it in **master**. Refer commit [1b8bd94](https://github.com/sonic-net/sonic-swss/commit/1b8bd94ef7e44f6089fc12efd456a3caa7aafd3f)\r\n> \r\n> So, the sequence of backporting required is:\r\n> \r\n> 1. Backport#1 commit [910bfd4](https://github.com/sonic-net/sonic-swss/commit/910bfd4d17782a059daf2d81deb87673ae6ca58e)\r\n> 2. Backport#2 commit [1b8bd94](https://github.com/sonic-net/sonic-swss/commit/1b8bd94ef7e44f6089fc12efd456a3caa7aafd3f)\r\n> \r\n> This has been detailed in an earlier comment here: [#2351 (comment)](https://github.com/sonic-net/sonic-swss/pull/2351#issuecomment-1211820441)\r\n\r\nraised a cherry-pick PR https://github.com/sonic-net/sonic-swss/pull/2497"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2022-10-27T15:49:47Z",
+          "body": "Update sonic-swss submodule: https://github.com/sonic-net/sonic-buildimage/pull/12521"
+        }
+      ]
+    }
+  ]
+}

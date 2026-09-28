@@ -1,0 +1,65 @@
+{
+  "number": 26359,
+  "title": "[202511][Regression][snappi] PFCWD does not drop packets on congestion after changing from PFCWD forward mode to PFCWD drop mode.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26359",
+  "createdAt": "2026-03-24T15:20:25Z",
+  "closedAt": "2026-03-30T18:49:52Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nFollowing testcase was executed: tests/snappi_tests/pfcwd/test_pfcwd_actions.py\n\nThe test-script has following sub-testcases.\ntest_pfcwd_frwd_90_10\ntest_pfcwd_drop_over_subs_40_09\n\nIn the first test, the PFCWD is configured in the forward mode.\n\nIn the 2nd testcase, the PFCWD is set to default (drop mode).\n\nIn the 2nd testcase, it has 2 ingress and 1 egress port and is sending 49% traffic on each ingress. Hence there is no congestion on ingress side. However, egress is receiving PFCs and hence lossless traffic would be dropped on the egress side.\n\nIt is seen that although the PFCWD config shows that PFCWD is in \"drop\" mode, packets are passed to the egress and to IXIA without dropping any packets. Hence testcase fails.\n\nThe PFCWD stats show that egress port is in 'stormed' mode but does not drop any packets.\n\nOn further investigation, it was seen that no ACL is applied on egress and hence no drops on egress for the lossless traffic. \n\nSince this is not a production scenario, marking the issue as 'high'. Marking this as regression as this works fine in 202405. Workaround is to stop PFCWD before moving to 'drop' mode.\n\n@saksarav-nokia @rawal01\n\n### Steps to Reproduce\n\n1. Configure the PFCWD in forward mode on ingress port.\n```\n        sudo pfcwd stop\n        sudo pfcwd start --action forward 200 --restoration-time 200\n```\n\n2. Check the PFCWD configuration.\n3. Move the PFCWD to default mode.\n```\nsudo pfcwd start_default\n```\n4. Check the PFCWD configuration and ensure that it is in DROP mode.\n5. Start the traffic on ingress and ensure that egress receives PFC and is in stormed mode.\n6. Check for dropped packets on the egress. \n\n### Actual Behavior and Expected Behavior\n\nIf the PFCWD is in 'drop' mode, then PFC storm (for lossless priorities) is received on egress, it should drop lossless packets.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2026-03-24T16:59:04Z",
+      "body": "I debugged and here is the finding.\nIn the test , the following cli commands are configured\nsudo pfcwd start --action forward 200 --restoration-time 200\nsudo pfcwd start_default\n\nWhen \"sudo pfcwd start --action forward 200 --restoration-time 200\" is configured, the sonic-utilities pfcwd/main.py finds all the ports which have PFC enabled  and sets the \"|PFC_WD|Ethernet<port-num>|SET|action:forward|detection_time:200|restoration_time:200\"  in the CONIG_DB. \nWhen the orchagent process this config, it calls doTask->createEntry->startWdOnPort->registerInWdDb to add the counters in the flex_counter_db for the lossless TC's to start the polling and also adds the entry with action=action to m_entryMap with emplace.\n\nThen when \"sudo pfcwd start_default\" is configured, the pfcwd/main.py sets \"PFC_WD|Ethernet<port-num>|SET|action:drop|detection_time:200|restoration_time:200\"  in the CONFIG_DB and orchagent calls the same exact functions which it called for action=forward. It again updates the flex_counter_db for all the counters and also adds the entry with action=drop in m_entryMap. But since the key already exists in the m_entryMap map,  adding second time fails. \nSo when the storm is detected,  the function startWdActionOnQueue checks the action in m_entryMap and since it was not update to drop and still the action is forward, it invokes the PfcWdLossyHandler  as ForwardHandler instead of PfcWdAclHandler .\nSo PfcWdLossyHandler  just updates the SAI_PORT_ATTR_PRIORITY_FLOW_CONTROL for that port. If the action was updated to drop, then it would have called PfcWdAclHandler  which would install the ingress and egress Acl rules for the port to drop the packet for the TC in addition to updating SAI_PORT_ATTR_PRIORITY_FLOW_CONTROL .\n\nIn 202405 code, the pfcwd/main.py verify_pfc_enable_status_per_port sets the PFC_WD entry to None in CONFIG_DB first before creating a valid entry with the configured values. So in orchagent, the deleteEntry is called before createEntry which removes the counters from flex_counter_db and deletes it from m_entryMap\nBut in master/202511, the PR https://github.com/sonic-net/sonic-utilities/pull/3779 modified pfcwd/main.py verify_pfc_enable_status_per_port  and does not  set the PFC_WD entry to None in CONFIG_DB before creating a valid entry with the configured values. So action in m_entryMap never gets updated to drop after forward , so the issue is seen.\n\n@vmittal-msft @peterbailey-arista for your viz. I will create a PR and add you as reviewer.\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4393,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4393",
+      "title": "Delete the exisisting PFC_WD config in CONFIG_DB for the port when the PFC_WD config is changed.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-30T18:49:50Z",
+      "createdAt": "2026-03-25T15:23:18Z",
+      "author": "saksarav-nokia",
+      "body": "\r\n\r\n<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/26359 . Please read the comment in the issue for the detailed analysis of the root cause and the PR which broke it.\r\nAdded code to delete the PFC_WD config in CONFIG_DB for the port when the PFC_WD config is changed.\r\n\r\n#### How I did it\r\nAdded code to delete the PFC_WD config in CONFIG_DB for the port when the PFC_WD config is changed.\r\n#### How to verify it\r\nThe RDMA tests which failed in issue https://github.com/sonic-net/sonic-buildimage/issues/26359 passed.\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n",
+      "files": [
+        {
+          "path": "pfcwd/main.py",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T15:23:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-25T15:23:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "saksarav-nokia",
+          "createdAt": "2026-03-25T15:23:49Z",
+          "body": "@vmittal-msft @peterbailey-arista please review"
+        },
+        {
+          "author": "peterbailey-arista",
+          "createdAt": "2026-03-25T17:46:57Z",
+          "body": "I will need to take some time to verify this - there may have been a reason I removed the entry deletion and if this lead to other problems may need to consider a workaround\r\n\r\nThank you for looking into it and finding the root cause \ud83d\ude42 "
+        }
+      ]
+    }
+  ]
+}

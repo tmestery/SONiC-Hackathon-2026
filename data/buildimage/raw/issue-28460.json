@@ -1,0 +1,399 @@
+{
+  "number": 28460,
+  "title": "sonic-sairedis #1774 (Smart Counter Poll) does O(ports) per-port getStats at counter init, starving orchagent and crashing it on high port-count switches",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28460",
+  "createdAt": "2026-07-16T18:06:41Z",
+  "closedAt": "2026-08-03T10:06:59Z",
+  "author": "gpunathilell",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "justin-wong-ce"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nGeneric \u2014 affects any switch with a high number of ports. Root cause is in the vendor-agnostic `syncd` FlexCounter counter-initialization code.\n\n### Importance or Severity\n\nHigh \u2014 `orchagent` aborts during initialization; ports are never programmed and all interfaces stay `oper-down` (no data plane). Reproducible on every boot / `config reload`.\n\n### Description of the bug\n\nsonic-sairedis PR **#1774** (\"Smart Counter Poll to allow counters to work properly on Broadcom platforms\") changed FlexCounter counter initialization from *\"assume all ports support the same counters\"* to **per-port capability discovery**:\n- https://github.com/sonic-net/sonic-sairedis/pull/1774\n\n**What the change does at counter init (in `syncd`):**\n- Runs a **capability check** (`queryStatsCapability`) to get the set of counters the object type supports \u2014 this is cheap and done once.\n- Then, **for every port**, issues **individual `getStats` calls** to empirically determine which of those counters that specific port actually supports (a `getStats` of the candidate counter set per port, and per-counter `getStats` in the fallback). Ports are then bucketed into \"counter groups\" by what they support.\n\n**Why it breaks on high port-count switches:**\n- The per-port `getStats` step turns counter init into an **O(number-of-ports)** loop of live hardware reads.\n- A single `getStats` call costs on the order of **~136 ms**, and on a **512-port** switch that is **512 such calls \u2248 ~70 seconds** just to discover per-port capability.\n- While this loop runs, `syncd` holds vendor SAI/SDK access serialized. `orchagent`'s concurrent **synchronous** SAI calls (e.g. the `sai_query_stats_capability` it issues during counter setup) cannot be serviced \u2014 they **starve** behind the discovery loop.\n- Those synchronous calls hit the **60 s `getresponse` timeout**, which desynchronizes the request/response channel; `orchagent` then throws an **uncaught exception** and aborts (SIGABRT) in its `FLEX_COUNTER_TABLE` drain. Ports are never programmed.\n\nNote this is the *best case* (uniform ports, one `getStats` per port); heterogeneous ports fall back to per-counter probing and are even more expensive.\n\n**Confirmed on a 512-port switch (instrumented `syncd`/`orchagent`):** the entire per-port discovery runs inside a **single** `syncd` event. `syncd` processes its request queue with **one thread, in order**, so that one event holds the queue at the head for **~74 s** (`elapsed_ms=74220`, 514 ports) and blocks everything behind it. `orchagent`'s next synchronous call therefore waits past its **60 s** `getresponse` timeout \u2192 gets 0 values \u2192 aborts:\n\n```\ndiscovery START             t=0\norchagent TIMEOUT           t=+60.06 s   (60 s sync-op timeout)\ndiscovery DONE              t=+74.2 s\norchagent -> 0 values -> std::runtime_error -> SIGABRT (FLEX_COUNTER_TABLE drain)\n```\n\nThe failure condition is simply `ports \u00d7 per-port getStats > 60 s`, so it is **not platform specific**: invisible at low port counts, hit by any platform carrying #1774 once the count is high enough (empirically > ~256 ports).\n\n### Steps to Reproduce\n\n1. Boot (or run `sudo config reload -y`) an image that includes sonic-sairedis #1774, on a switch with a **high port count**.\n2. Watch `syncd` counter init and `orchagent` in the logs, and `show interface status`.\n\n### Actual Behavior and Expected Behavior\n\n**Actual:** During counter init, `syncd` spends tens of seconds in the per-port `getStats` discovery loop; `orchagent`'s synchronous SAI call times out at 60 s, and `orchagent` aborts (exception in the `FLEX_COUNTER_TABLE` drain) and hangs. All interfaces remain `oper-down`.\n\n**Expected:** Counter init completes within the SAI response-timeout window; `orchagent` stays up and programs ports; interfaces come up.\n\n### Relevant log output\n\n```\n# orchagent - synchronous SAI call to syncd times out during counter init, then aborts\nERR  swss#orchagent: wait: SELECT operation result: TIMEOUT on getresponse\nERR  swss#orchagent: waitForGetResponse: logic error, get response returned 0 values!\nERR  swss#orchagent: drain: Exception caught: table=FLEX_COUNTER_TABLE, error=...0 values!\n     swss#orchagent: terminate called after throwing an instance of 'std::runtime_error'   # SIGABRT\n\n# syncd - per-port counter-init discovery: one getStats per port, ~136 ms each, ~512 ports\n#   bulkAdd START  group=PORT  nports=512\n#   ... 512 x [ per-port getStats, ~136 ms each ] ...\n#   grouping DONE  group=PORT  nports=512  elapsed_ms=~70000\n```\n\n### Output of `show version`, `show techsupport`\n\nImage includes sonic-sairedis #1774. `show techsupport` available on request / to be attached.\n\n### Attach files (if any)\n\n_(attach `generate_dump` techsupport with the orchagent core + syncd/swss logs)_\n",
+  "comments": [
+    {
+      "author": "justin-wong-ce",
+      "createdAt": "2026-07-19T05:29:16Z",
+      "body": " Hi there, I am looking into this and have fixes locally to address it.\nThe fix will be enabling the per-port discovery code path based on the HWSKU config or ASIC type.\n\nI will have draft PRs opened to fix this on Monday EOD PST - I have 2 ways of going about it, one will be HWSKU config based, one will be ASIC type based. I will have both methods available as a draft PR to see which one fits the community more.\n\nI have also ran additional profiling tests on 2 TH5 topos with the merged master change (https://github.com/sonic-net/sonic-sairedis/pull/1774) cherry-picked to **202605**:\n`Arista-7060X6-64PE-B-C512S2` (512 intfs) and `Arista-7060X6-64PE-B-C448O16` (464 intfs + LAGs).\nThere is no crashing and please see the below data, this data is the averaged results from 3 runs:\n\n`Arista-7060X6-64PE-B-C512S2`, 512 intfs:\n| Item | Value |\n| --------------- | --------------- |\n| Total `addCounters` + `bulkAddCounters` execution time |  9599.063ms |\n| Execution time of new logic only|                                                       3421.033ms |\n| Additional size of data structures |                                        511KB |\n\n`Arista-7060X6-64PE-B-C448O16`, 464 intfs (+ some LAGs):\n| Item | Value |\n| --------------- | --------------- |\n| Total `addCounters` + `bulkAddCounters` execution time |  10131.861ms |\n| Execution time of new logic only |                                                       2376.12ms |\n| Additional size of data structures |                                        472.125KB |\n\n\nI think the biggest difference is the cost of the `getStats` call between Broadcom platforms and whichever platform the issue is seen on. On Broadcom platforms the `getStats` call cost is essentially 0.\n\n@gpunathilell do you mind providing more info on the platform and ASIC the issue is seen on?"
+    },
+    {
+      "author": "justin-wong-ce",
+      "createdAt": "2026-07-20T19:35:24Z",
+      "body": "I have 2 methods for consideration and I am splitting the fix into 2 PRs.\n\nThe 1st PR is generic to both methods and works by itself - adding an argument to `syncd`:\nhttps://github.com/sonic-net/sonic-sairedis/pull/2000\n\nI also have 2 sets of draft PRs, one for each method:\nHWSKU config based:\nbuildimage PR: https://github.com/sonic-net/sonic-buildimage/pull/28506\nsairedis PR: https://github.com/sonic-net/sonic-sairedis/pull/2002\n\nASIC type based:\nsairedis PR: https://github.com/sonic-net/sonic-sairedis/pull/2001\n- This one is currently using the logic of `enabling when Broadcom`.\n- Perhaps it should be `disable when [failing platform]`?"
+    },
+    {
+      "author": "justin-wong-ce",
+      "createdAt": "2026-07-23T18:16:10Z",
+      "body": "After some offline discussion, we will take in both methods.\n\nFor platforms matching the `Broadcom` ASIC type, it will auto-use the flag.\nWe will also have a HWSKU config knob to enable/disable the toggle, which should override the ASIC type-based toggle (in both `true` and `false` scenarios).\n\nAs a 1st step, https://github.com/sonic-net/sonic-sairedis/pull/2000 and https://github.com/sonic-net/sonic-sairedis/pull/2001 should be merged first to unblock qualification first. This will add the ASIC type-based toggle.\n\nThen, we should merge https://github.com/sonic-net/sonic-buildimage/pull/28506 and https://github.com/sonic-net/sonic-sairedis/pull/2002. These 2 changes adds HWSKU folder based conifg to toggle the feature and overrides the the ASIC-type toggle introduced in the previous 2 PRs.\n\nFYI @lolyu @gpunathilell "
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-07-29T15:15:47Z",
+      "body": "@justin-wong-ce has fixes to address this."
+    },
+    {
+      "author": "justin-wong-ce",
+      "createdAt": "2026-08-20T17:54:51Z",
+      "body": "> After some offline discussion, we will take in both methods.\n> \n> For platforms matching the `Broadcom` ASIC type, it will auto-use the flag. We will also have a HWSKU config knob to enable/disable the toggle, which should override the ASIC type-based toggle (in both `true` and `false` scenarios).\n> \n> As a 1st step, [sonic-net/sonic-sairedis#2000](https://github.com/sonic-net/sonic-sairedis/pull/2000) and [sonic-net/sonic-sairedis#2001](https://github.com/sonic-net/sonic-sairedis/pull/2001) should be merged first to unblock qualification first. This will add the ASIC type-based toggle.\n> \n> Then, we should merge [#28506](https://github.com/sonic-net/sonic-buildimage/pull/28506) and [sonic-net/sonic-sairedis#2002](https://github.com/sonic-net/sonic-sairedis/pull/2002). These 2 changes adds HWSKU folder based conifg to toggle the feature and overrides the the ASIC-type toggle introduced in the previous 2 PRs.\n> \n> FYI [@lolyu](https://github.com/lolyu) [@gpunathilell](https://github.com/gpunathilell)\n\nNote: The changes above has been tested with Arista configurations with high number of interfaces: `Arista-7060X6-64PE-B-C512S2` (512 intfs) and `Arista-7060X6-64PE-B-C448O16` (464 intfs + LAGs)."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2000,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2000",
+      "title": "Add per-port counter discovery toggle argument",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-03T10:06:58Z",
+      "createdAt": "2026-07-20T18:22:50Z",
+      "author": "justin-wong-ce",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nAdd an argument to `syncd` to toggle between the new per-port counter discovery feature in `FlexCounter` or to use the legacy method.\r\n\r\nThis is a part 1 of 2 fix in addressing https://github.com/sonic-net/sonic-buildimage/issues/28460. There are two fix methods under consideration, this part is generic to both methods.\r\n\r\nFixes # (issue)\r\nPartially Fixes https://github.com/sonic-net/sonic-buildimage/issues/28460\r\n\r\nNeeds backport to 202605.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [x] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [ ] Test improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nIn #1774 , a new counter support discovery method is introduced for being able to read counter support for platforms where different ports can have different capabilities.\r\nThe method worked well for some platforms, not so much for some others.\r\n\r\nThis change adds an argument to `syncd` so there is the capability to toggle the per-port counter discovery. The argument will default to `false` so the legacy code path is used by default.\r\n\r\nSince there is now an option to toggle the code path on or off, there is no longer a need for a runtime fallback.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How did you do it?\r\nAdd an argument to `syncd` as well as the logic needed to read the argument in various files in `syncd`.\r\nUnit tests are also updated to account for the new argument, as well as mocking the use of this argument for unit tests that only test for per-port discovery logic.\r\n\r\n#### Tested branch\r\n\r\n<!--\r\n- Select each branch where the change was tested.\r\n- If you request a backport/cherry-pick, select the base branch and the tested\r\n  target release branch(es).\r\n-->\r\n\r\n- [x] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### How did you verify/test it?\r\nUnit tests passes on both master and with the change casted to 202605.\r\n- master: Arista internal build on Jul 20, 2026\r\n- 202605: Arista internal build on Jul 20, 2026\r\n`syncd` is also able to boot on physical hardware and enter the expected code path based on whether the argument was provided for launch or not.\r\n\r\n#### Any platform specific information?\r\nGeneric \r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "syncd/CommandLineOptions.cpp",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/CommandLineOptions.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/CommandLineOptionsParser.cpp",
+          "additions": 11,
+          "deletions": 4
+        },
+        {
+          "path": "syncd/FlexCounter.cpp",
+          "additions": 26,
+          "deletions": 44
+        },
+        {
+          "path": "syncd/Syncd.cpp",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/VendorSaiOptions.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "unittest/syncd/TestCommandLineOptions.cpp",
+          "additions": 8,
+          "deletions": 3
+        },
+        {
+          "path": "unittest/syncd/TestFlexCounter.cpp",
+          "additions": 36,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T18:22:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T18:22:59Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T18:23:10Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T18:49:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T18:49:15Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T19:38:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T19:38:35Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T20:05:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T20:06:08Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-07-23T00:37:19Z",
+          "body": "> **1. Removal of the try/catch fallback (main question).** Previously the code tried `addObjectWithCounterGroups` and fell back to `addObject` on exception. With this change, when `-G` is enabled there is no longer any exception fallback \u2014 a throw from per-port discovery now propagates instead of degrading gracefully. If that's intentional (opt-in only for platforms known to work), please call it out explicitly in the PR/commit so it's clear the fallback was removed deliberately, not accidentally.\r\n\r\n\r\nAck, added to PR description\r\n\r\n\r\n> **2. Repeated `dynamic_pointer_cast` on hot paths.** `addCounter`/`bulkAddCounter` now do `getOptions` + `dynamic_pointer_cast<VendorSaiOptions>` on every invocation. Consider resolving the bool once (e.g. at FlexCounter construction) to avoid the repeated cast. Minor / non-blocking.\r\n\r\nLeaving it as is as adding the initialization to `FlexCounter` constructor an adding another variable to store class-wide is unecessarily complicated for a simple one-time toggle.\r\n\r\n\r\n> **3. Backport / part-2 dependency.** PR notes this is \"part 1 of 2\" and needs backport to 202605. Worth confirming part 2 (the actual per-port fix) lands before `-G` is flipped on in production, since this arg alone is inert.\r\n\r\nYes"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-07-30T23:19:14Z",
+          "body": "Reminder this needs backport to 202605."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-03T12:17:39Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T05:17:02Z",
+          "body": "The change is not in 202605 yet. @justin-wong-ce, please manually create the cherry pick PR for branch 202605.<br>You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-08-04T17:35:37Z",
+          "body": "> The change is not in 202605 yet. @justin-wong-ce, please manually create the cherry pick PR for branch 202605.You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.If this change is already in 202605, please comment \"already in 202605\". Thanks!\r\n> \r\n> ---Powered by SONiC BuildBot\r\n\r\nAck"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-08-04T21:55:36Z",
+          "body": "Cast PR created:\r\nhttps://github.com/sonic-net/sonic-sairedis/pull/2021\r\n\r\n> > The change is not in 202605 yet. @justin-wong-ce, please manually create the cherry pick PR for branch 202605.You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.If this change is already in 202605, please comment \"already in 202605\". Thanks!\r\n> > ---Powered by SONiC BuildBot\r\n> \r\n> Ack\r\n\r\n"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-18T07:41:45Z",
+          "body": "@justin-wong-ce \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\n\n1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\n2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\n3. **Add the \"Tested for 202605 branch\" label** once testing is complete\n\nAlso, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\n\nThank you!\n\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2026-09-14T18:59:17Z",
+          "body": "> @justin-wong-ce \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\r\n> \r\n> 1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\r\n> 2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\r\n> 3. **Add the \"Tested for 202605 branch\" label** once testing is complete\r\n> \r\n> Also, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\r\n> \r\n> Thank you!\r\n> \r\n> _Review by @vaibhavhd via automated tooling_\r\n\r\n@justin-wong-ce reminder for this please."
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-09-14T19:09:43Z",
+          "body": "> > @justin-wong-ce \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\r\n> > \r\n> > 1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\r\n> > 2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\r\n> > 3. **Add the \"Tested for 202605 branch\" label** once testing is complete\r\n> > \r\n> > Also, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\r\n> > Thank you!\r\n> > _Review by @vaibhavhd via automated tooling_\r\n> \r\n> @justin-wong-ce reminder for this please.\r\n\r\nUpdated PR description for both this PR and manual cast (https://github.com/sonic-net/sonic-sairedis/pull/2021)\r\n\r\nI don't have permissions to add labels"
+        }
+      ]
+    },
+    {
+      "number": 2001,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2001",
+      "title": "Auto-use enablePerPortCounterDiscovery syncd arg on Broadcom ASICs",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-05T05:44:00Z",
+      "createdAt": "2026-07-20T19:03:16Z",
+      "author": "justin-wong-ce",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nAuto-use the `enablePerPortCounterDiscovery` `syncd` arg for Broadcom ASICs in an easily expandable way such that other ASIC types can be easily added to use this behavior.\r\n\r\nThis is part 2 of 2 fix in addressing https://github.com/sonic-net/sonic-buildimage/issues/28460. There are two fix methods under consideration, this PR outlines the method of deciding code path via the ASIC type.\r\n\r\nThis change requires the changes in https://github.com/sonic-net/sonic-sairedis/pull/2000 to work.\r\n\r\nFixes -\r\nPartially Fixes: https://github.com/sonic-net/sonic-buildimage/issues/28460\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [ ] Test improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nIn #1774 , a new counter support discovery method is introduced for being able to read counter support for platforms where different ports can have different capabilities.\r\nThe method worked well for some platforms, not so much for some others.\r\n\r\nThis change auto-uses the new `syncd` arg `enablePerPortCounterDiscovery` (introduced in https://github.com/sonic-net/sonic-sairedis/pull/2000) when the `broadcom` ASIC type is detected in `syncd_init_common.sh`.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How did you do it?\r\nAdd logic in `syncd_init_common.sh` to auto apply the `syncd` arg when `broadcom` ASIC type is detected.\r\n\r\n#### How did you verify/test it?\r\n`syncd` unit tests pass on master and on 202605.\r\nOn physical hardware, an image is built with the changes cherry-picked to 202605 and tests are ran in 2 scenarios:\r\n1) With the change as is\r\n2) `syncd_init_common.sh` hotpatched to filter on another asic type.\r\n\r\nIn both scenarios, `syncd` enters the expected code path.\r\nAdditionally, a subset of counters-focused `sonic-mgmt` tests are ran. There is no test result difference compared to tests done without this change.\r\nTests were ran on `Arista-7260CX3-D108C8` and `Arista-7060X6-64PE-B-C512S2`.\r\n\r\nThe list of `sonic-mgmt` tests ran:\r\n```\r\ntest_pretest.py\r\ndhcp_relay/test_dhcp_counter_stress.py\r\ndrop_packets/test_drop_counters.py\r\ndrop_packets/test_configurable_drop_counters.py\r\ngnmi/test_gnmi_countersdb.py\r\nsnmp/test_snmp_queue_counters.py\r\ntest_posttest.py\r\n```\r\n\r\nTo ensure no warm and fast reboot issues from any potential time increase from `syncd`, some reboot-related tests are also ran. The following `sonic-mgmt` tests pass with this change casted, tested on `Arista-7260CX3-D108C8` and `Arista-7060CX-32S-C32`:\r\n```\r\nplatform_tests/test_advanced_reboot.py::test_warm_reboot_sad*\r\nplatform_tests/test_advanced_reboot.py::test_warm_reboot_mac_jump\r\nplatform_tests/test_advanced_reboot.py::test_warm_reboot\r\nplatform_tests/test_advanced_reboot.py::test_fast_reboot\r\n```\r\n\r\n#### Any platform specific information?\r\nBroadcom\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "syncd/scripts/syncd_init_common.sh",
+          "additions": 8,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T19:03:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T19:03:25Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T19:03:36Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T18:10:06Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-07-27T14:27:33Z",
+          "body": "Overall the approach is sound, but a few points worth addressing:\n\n**1. Placement \u2014 `-G` is added outside `config_syncd()`, unlike every other ASIC arg.**\nAll ASIC-specific arg logic lives in `config_syncd_*()` functions dispatched from `config_syncd()`, and there's already a `config_syncd_bcm()` doing `SONIC_ASIC_SUBTYPE`-gated handling. Adding this new `case` at top level (right after the bulk-counter block) splits Broadcom handling across two places, which a future reader won't expect. Moving `-G` into `config_syncd_bcm()` keeps all broadcom logic together and consistent with the rest of the file.\n\nIf the intent is genuinely a multi-ASIC-expandable table via one `case`, that's a fair design goal \u2014 but then it shouldn't be broadcom-only sitting outside the dispatch.\n\n**2. No explanatory comment.** Every other non-obvious arg here has at least a hint. A bare `-G` tells the reader nothing. Please add a comment referencing the motivation (per-port counter discovery, #1774 / sonic-buildimage#28460).\n\nSuggested:\n```bash\n# Enable per-port counter capability discovery (see sonic-buildimage#28460, #1774).\n# Broadcom platforms can have per-port counter support differences.\nCMD_ARGS+=\" -G\"\n```\n\n**3. Boot-type ordering.** This runs before `config_syncd()` / warm-fast-reboot arg assembly, so `-G` is unconditionally present across all boot types including warm/fast/express reboot. Presumably intended, but worth confirming per-port counter discovery is harmless (and desired) during warm/fast reboot.\n\n**4. Hard dependency on #2000.** `-G` is unknown to syncd until #2000 merges; if merge order is reversed, syncd fails to start on Broadcom. Please ensure #2000 lands first (worth calling out explicitly / gating)."
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-07-29T18:36:15Z",
+          "body": "> If the intent is genuinely a multi-ASIC-expandable table via one `case`, that's a fair design goal \u2014 but then it shouldn't be broadcom-only sitting outside the dispatch.\r\n\r\nThis is the intention, however it is currently unknown which platform the issue is affecting, therefore I do not know what other additional platforms to add here.\r\n\r\n> **2. No explanatory comment.** Every other non-obvious arg here has at least a hint. A bare `-G` tells the reader nothing. Please add a comment referencing the motivation (per-port counter discovery, #1774 / sonic-buildimage#28460).\r\n\r\nAck, will add.\r\n\r\n> **3. Boot-type ordering.** This runs before `config_syncd()` / warm-fast-reboot arg assembly, so `-G` is unconditionally present across all boot types including warm/fast/express reboot. Presumably intended, but worth confirming per-port counter discovery is harmless (and desired) during warm/fast reboot.\r\n\r\nThis is intentional. Warm and fast reboot will need to run this in order for counters to be setup properly in those scenarios as well.\r\nThe following `sonic-mgmt` tests pass with this change casted, tested on `Arista-7260CX3-D108C8` and `Arista-7060CX-32S-C32`:\r\n```\r\nplatform_tests/test_advanced_reboot.py::test_warm_reboot_sad*\r\nplatform_tests/test_advanced_reboot.py::test_warm_reboot_mac_jump\r\nplatform_tests/test_advanced_reboot.py::test_warm_reboot\r\nplatform_tests/test_advanced_reboot.py::test_fast_reboot\r\n```\r\nWill add this testing info to the PR description.\r\n\r\n> **4. Hard dependency on #2000.** `-G` is unknown to syncd until #2000 merges; if merge order is reversed, syncd fails to start on Broadcom. Please ensure #2000 lands first (worth calling out explicitly / gating).\r\n\r\nYes."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T20:07:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T20:07:35Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-07-30T04:08:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T04:08:34Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T05:05:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T05:05:16Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-07-30T23:19:18Z",
+          "body": "Reminder this needs backport to 202605."
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-08-03T10:09:24Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-03T10:09:37Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-03T12:17:37Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-04T17:01:00Z",
+          "body": "Hi \u2014 this PR is flagged for cherry-pick to the **202605 branch** (`Request for 202605 Branch`). To move forward with the cherry-pick, could you please:\n\n1. **Test this change on the 202605 branch** and add the test results to the PR description\n2. **Add the label `Tested for 202605 branch`** once testing is complete\n\nThis helps us track readiness and ensures we don't cherry-pick untested changes. Thanks!\n\n*Comment by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-08-20T00:58:15Z",
+          "body": "> Hi \u2014 this PR is flagged for cherry-pick to the **202605 branch** (`Request for 202605 Branch`). To move forward with the cherry-pick, could you please:\r\n> \r\n> 1. **Test this change on the 202605 branch** and add the test results to the PR description\r\n> 2. **Add the label `Tested for 202605 branch`** once testing is complete\r\n> \r\n> This helps us track readiness and ensures we don't cherry-pick untested changes. Thanks!\r\n> \r\n> _Comment by @vaibhavhd via automated tooling_\r\n\r\nThe test changes are included in the PR description."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-09T04:42:05Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-sairedis/pull/2072"
+        }
+      ]
+    },
+    {
+      "number": 2002,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2002",
+      "title": "Toggle enablePerPortCounterDiscovery based on HWSKU config",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-06T01:54:56Z",
+      "createdAt": "2026-07-20T19:27:12Z",
+      "author": "justin-wong-ce",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nApply the `enablePerPortCounterDiscovery` `syncd` arg when the file `enable_per_port_counter_discovery` exists and has the contents `true` in the machine's HWSKU config in `sonic-buildimage/device/...`.\r\n\r\nThis is part 2 of 2 fix in addressing https://github.com/sonic-net/sonic-buildimage/issues/28460. There are two fix methods under consideration, this PR outlines the method of deciding code path via the HWSKU config and needs to be used together with https://github.com/sonic-net/sonic-buildimage/pull/28506.\r\n\r\nThis change also requires the changes in https://github.com/sonic-net/sonic-sairedis/pull/2000, https://github.com/sonic-net/sonic-sairedis/pull/2001, and https://github.com/sonic-net/sonic-buildimage/pull/28506 to work.\r\n\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/28460\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [ ] Test improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nIn #1774 , a new counter support discovery method is introduced for being able to read counter support for platforms where different ports can have different capabilities.\r\nThe method worked well for some platforms, not so much for some others.\r\n\r\nThis change applies the new `syncd` arg `enablePerPortCounterDiscovery` (introduced in https://github.com/sonic-net/sonic-sairedis/pull/2000) when `enable_per_port_counter_discovery` is populated as `true` in `SYNCD_VARS`, which is retrieved from `DEVICE_METADATA` in `CONFIG_DB`.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How did you do it?\r\nAdd logic in `syncd_init_common.sh` to apply the `syncd` arg `enablePerPortCounterDiscovery` when it is defined as so in `SYNCD_VARS`. \r\n#### Tested branch\r\n\r\n<!--\r\n- Select each branch where the change was tested.\r\n- If you request a backport/cherry-pick, select the base branch and the tested\r\n  target release branch(es).\r\n-->\r\n\r\n- [x] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\n`syncd` unit tests pass on master and on 202605, internal Arista build from Jul 24, 2026.\r\nOn physical hardware, an image is built with the changes cherry-picked to 202605 and tests are ran in 6 scenarios:\r\n1):\r\n- ASIC check: use arg on `broadcom`\r\n- HWSKU config: not defined\r\n- Result: per-port counter discovery code path used\r\n\r\n2):\r\n- ASIC check: use arg on `broadcom`\r\n- HWSKU config: `enable_per_port_counter_discovery` set to `true`\r\n- Result: per-port counter discovery code path used\r\n\r\n3):\r\n- ASIC check: use arg on `broadcom`\r\n- HWSKU config: `enable_per_port_counter_discovery` set to `false`\r\n- Result: legacy code path used\r\n\r\n4):\r\n- ASIC check: use arg on `mellanox`\r\n- HWSKU config: not defined\r\n- Result: legacy code path used\r\n\r\n5):\r\n- ASIC check: use arg on `mellanox`\r\n- HWSKU config: `enable_per_port_counter_discovery` set to `true`\r\n- Result: per-port counter discovery code path used\r\n\r\n6):\r\n- ASIC check: use arg on `mellanox`\r\n- HWSKU config: `enable_per_port_counter_discovery` set to `false`\r\n- Result: legacy code path used\r\n\r\nIn all 6 scenarios, `syncd` enters the expected code path.\r\n\r\nAdditionally, a subset of counters-focused `sonic-mgmt` tests are ran. There is no test result difference compared to tests done without this change.\r\nTests were ran on `Arista-7260CX3-D108C8`.\r\n\r\nThe list of `sonic-mgmt` tests ran:\r\n```\r\ntest_pretest.py\r\ndhcp_relay/test_dhcp_counter_stress.py\r\ndrop_packets/test_drop_counters.py\r\ndrop_packets/test_configurable_drop_counters.py\r\ngnmi/test_gnmi_countersdb.py\r\nsnmp/test_snmp_queue_counters.py\r\ntest_posttest.py\r\n```\r\n\r\n#### Any platform specific information?\r\nBroadcom\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "syncd/scripts/syncd_init_common.sh",
+          "additions": 10,
+          "deletions": 7
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T19:27:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T19:27:20Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T19:27:32Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-07-23T18:19:18Z",
+          "body": "Need to update the condition to override the ASIC type-based check from https://github.com/sonic-net/sonic-sairedis/pull/2001 when `enable_per_port_counter_discovery` exists."
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-07-23T21:49:30Z",
+          "body": "I will update after #2001 gets merged, updating the condition now just means a merge conflict to deal with when #2001 gets merged."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T05:03:50Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-08-05T05:44:47Z",
+          "body": "Hi @justin-wong-ce, could you please help with the conflict?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T20:15:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-05T20:16:10Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-13T06:21:51Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-18T07:41:42Z",
+          "body": "@justin-wong-ce \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\n\n1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\n2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\n3. **Add the \"Tested for 202605 branch\" label** once testing is complete\n\nAlso, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\n\nThank you!\n\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "justin-wong-ce",
+          "createdAt": "2026-08-20T01:02:12Z",
+          "body": "> @justin-wong-ce \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\r\n> \r\n> 1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\r\n> 2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\r\n> 3. **Add the \"Tested for 202605 branch\" label** once testing is complete\r\n> \r\n> Also, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\r\n> \r\n> Thank you!\r\n> \r\n> _Review by @vaibhavhd via automated tooling_\r\nAck, done."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T06:22:48Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T04:36:35Z",
+          "body": "The change is not in 202605 yet. @justin-wong-ce, please manually create the cherry pick PR for branch 202605.<br>You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

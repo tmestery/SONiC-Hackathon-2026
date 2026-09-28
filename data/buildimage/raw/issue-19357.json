@@ -1,0 +1,80 @@
+{
+  "number": 19357,
+  "title": "[Chassis] sonic-mgmt PC suite  tests test_voq_po_update and test_po_update_io_no_loss are failing",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/19357",
+  "createdAt": "2024-06-20T14:00:14Z",
+  "closedAt": "2024-07-02T17:45:21Z",
+  "author": "saksarav-nokia",
+  "labels": [],
+  "assignees": [
+    "arlakshm"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nIn latest master, the Port Channel test cases test_voq_po_update and test_po_update_io_no_loss are failing  and looks like it is due to the changes made in https://github.com/sonic-net/sonic-swss/pull/3150. \r\n\r\nWhen the empty LAG is created in one IMM, the oper status of the Lag is changed from unknown to down as shown in the logs below. When this oper state change notification is processed, the voqSyncIntfState is called which writes to the  SYSTEM_INTERFACE in chassis_db and the other asics in the same IMM  and other IMM's receives SYSTEM_LAG_TABLE & SYSTEM_INTERFACE notifications from chassis_db as shown below. The Router interface is created in remote asics and reference to the Lag.\r\nBut when the LAG is deleted, the local asic does not  delete the SYSTEM_INTERFACE and only deletes the SYSTEM_LAG_TABLE in chassis_db, so when the remote asics receives the SYSTEM_LAG_TABLE delete, it calls removeLag and since RouterInterface is referencing this lag, the delete fails and the  test cases fail. \r\nDoes PortsOrch::updatePortOperStatusneed need to call  gIntfsOrch->voqSyncIntfStat when the oper state change from unknown to down?\r\n\r\n2024 Jun 19 16:54:19.889094 ixre-egl-board7 NOTICE swss0#orchagent: :- addLag: Create an empty LAG PortChannel999 lid:2000000000c55\r\n2024 Jun 19 16:54:19.889589 ixre-egl-board7 NOTICE swss0#orchagent: :- updatePortOperStatus: Port PortChannel999 oper state set from unknown to down\r\n2024 Jun 19 16:54:19.889589 ixre-egl-board7 NOTICE swss0#orchagent: :- voqSyncIntfState: Syncing system interface state down for port ixre-egl-board7|asic0|PortChannel999\r\n2024 Jun 19 16:54:19.891401 ixre-egl-board7 NOTICE swss1#orchagent: :- addLag: Create an empty LAG ixre-egl-board7|asic0|PortChannel999 lid:102000000000c0b\r\n2024 Jun 19 16:54:19.897058 ixre-egl-board7 INFO kernel: [ 5084.526940] PortChannel999: Mode changed to \"loadbalance\"\r\n2024 Jun 19 16:54:19.898792 ixre-egl-board7 NOTICE swss1#orchagent: :- addRouterIntfs: Create router interface ixre-egl-board7|asic0|PortChannel999 MTU 1492\r\n2024 Jun 19 16:54:19.901126 ixre-egl-board7 NOTICE teamd0#teammgrd: :- addLag: Start port channel PortChannel999 with teamd\r\n2024 Jun 19 16:54:19.904120 ixre-egl-board7 NOTICE swss0#portsyncd: :- onMsg: nlmsg type:16 key:PortChannel999 admin:1 oper:0 addr:40:7c:7d:bb:25:9d ifindex:62 master:0 type:team\r\n2024 Jun 19 16:54:19.904969 ixre-egl-board7 NOTICE teamd0#teammgrd: :- setLagAdminStatus: Set port channel PortChannel999 admin status to up\r\n2024 Jun 19 16:54:19.905031 ixre-egl-board7 INFO kernel: [ 5084.534338] 8021q: adding VLAN 0 to HW filter on device PortChannel999\r\n2024 Jun 19 16:54:19.929936 ixre-egl-board7 NOTICE teamd0#teammgrd: :- setLagMtu: Set port channel PortChannel999 MTU to 9100\r\n2024 Jun 19 16:54:19.930240 ixre-egl-board7 NOTICE teamd0#tlm_teamd: :- try_add_lag: The LAG 'PortChannel999' has been added.\r\n2024 Jun 19 16:54:19.945668 ixre-egl-board7 NOTICE swss0#orchagent: :- updatePortOperStatus: Port PortChannel999 oper state set from down to down\r\n2024 Jun 19 16:54:20.204105 ixre-egl-board7 NOTICE syncd1#syncd: :- addObject: Rif Counter oid:0x15100600003015 does not has supported counters\r\n\r\n1) \"pmessage\"\r\n2) \"__keyspace@12__:*\"\r\n3) \"__keyspace@12__:SYSTEM_LAG_TABLE|ixre-egl-board7|asic0|PortChannel999\"\r\n4) \"hset\"\r\n1) \"pmessage\"\r\n2) \"__keyspace@12__:*\"\r\n3) \"__keyspace@12__:SYSTEM_INTERFACE|ixre-egl-board7|asic0|PortChannel999\"\r\n4) \"hset\"\r\n1) \"pmessage\"\r\n2) \"__keyspace@12__:*\"\r\n3) \"__keyspace@12__:SYSTEM_LAG_ID_SET\"\r\n4) \"srem\"\r\n1) \"pmessage\"\r\n2) \"__keyspace@12__:*\"\r\n3) \"__keyspace@12__:SYSTEM_LAG_ID_TABLE\"\r\n4) \"hdel\"\r\n1) \"pmessage\"\r\n2) \"__keyspace@12__:*\"\r\n3) \"__keyspace@12__:SYSTEM_LAG_TABLE|ixre-egl-board7|asic0|PortChannel999\"\r\n4) \"del\"\r\n^C(1057.04s)\r\n \r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Run tests test_voq_po_update and test_po_update_io_no_loss in chassis\r\n2.\r\n3.\r\n\r\n#### Describe the results you received:\r\nThe tests should pass\r\n#### Describe the results you expected:\r\nThe tests are failing\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2024-06-20T14:00:42Z",
+      "body": "@arlakshm for your viz"
+    },
+    {
+      "author": "judyjoseph",
+      "createdAt": "2024-06-26T23:01:55Z",
+      "body": "@saksarav-nokia @arlakshm There was a PR recently to update the LAG operstatus when addLag is done, will this help here?\r\nhttps://github.com/sonic-net/sonic-swss/pull/3195"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2024-06-27T02:28:12Z",
+      "body": "Hi @saksarav-nokia, regarding are below comment.\r\n\"\"But when the LAG is deleted, the local asic does not delete the SYSTEM_INTERFACE and only deletes the SYSTEM_LAG_TABLE in chassis_db, so when the remote asics receives the SYSTEM_LAG_TABLE delete, it calls removeLag and since RouterInterface is referencing this lag, the delete fails and the test cases fail.\"\r\n\r\nIf the lag is deleted without removing the ip interface on the local card. It is expected the remove lag will fail. this is existing design; it has nothing to do changes in https://github.com/sonic-net/sonic-swss/pull/3150. Please let me know if I am missing something?\r\n'''\r\nun 27 02:24:39.701624 str2-sonic-lc3-1 NOTICE swss#orchagent: :- removeLagMember: Remove member Ethernet12 from LAG PortChannel101 lid:2000000000bef lmid:1b000000000bf1\r\nJun 27 02:24:48.899892 str2-sonic-lc3-1 NOTICE teamd#teammgrd: :- removeLag: Stop port channel PortChannel101\r\nJun 27 02:24:48.901268 str2-sonic-lc3-1 NOTICE swss#portsyncd: :- onMsg: nlmsg type:16 key:PortChannel101 admin:0 oper:0 addr:fc:bd:67:67:e4:1c ifindex:492 master:0 type:team\r\nJun 27 02:24:48.907396 str2-sonic-lc3-1 NOTICE swss#portsyncd: :- onMsg: nlmsg type:17 key:PortChannel101 admin:0 oper:0 addr:fc:bd:67:67:e4:1c ifindex:492 master:0 type:team\r\nJun 27 02:24:48.911889 str2-sonic-lc3-1 NOTICE swss#orchagent: :- updatePortOperStatus: Port PortChannel101 oper state set from down to down\r\nJun 27 02:24:48.912355 str2-sonic-lc3-1 ERR teamd#tlm_teamd: :- get_dump: Can't get dump for LAG 'PortChannel101'. Skipping\r\nJun 27 02:24:48.913092 str2-sonic-lc3-1 NOTICE teamd#tlm_teamd: :- remove_lag: The LAG 'PortChannel101' has been removed.\r\nJun 27 02:24:48.914067 str2-sonic-lc3-1 NOTICE swss#orchagent: :- setRouterIntfsMtu: Set router interface PortChannel101 MTU to 9100\r\nJun 27 02:24:48.916115 str2-sonic-lc3-1 ERR swss#orchagent: :- removeLag: Failed to remove ref count 4 LAG PortChannel101\r\n'''"
+    },
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2024-06-27T16:15:02Z",
+      "body": "@arlakshm , The test test_voq_po_update doesn't have ip address on the PortChannel999.  It creates empty lag and verifies in CHASSIS_DB and ASIC_DB and removes the lag.  The test was passing few week ago and started failing. \r\n            1. On any ASIC, add a new LAG\r\n            2. verify added lag gets a unique lag id in chassis app db\r\n            3. verify added lag exist in app db\r\n            4. verify lag exist in asic db on remote and local asic db\r\n            5. delete the added lag"
+    },
+    {
+      "author": "saksarav-nokia",
+      "createdAt": "2024-06-28T15:46:32Z",
+      "body": "@arlakshm , With the following code commented out, the tests are passing\r\ndiff --git a/orchagent/portsorch.cpp b/orchagent/portsorch.cpp\r\nindex 40f79eb1..0f7e6529 100644\r\n--- a/orchagent/portsorch.cpp\r\n+++ b/orchagent/portsorch.cpp\r\n@@ -8131,7 +8131,7 @@ void PortsOrch::updatePortOperStatus(Port &port, sai_port_oper_status_t status)\r\n             SWSS_LOG_WARN(\"Inform nexthop operation failed for sub interface %s\", child_port.c_str());\r\n         }\r\n     }\r\n-\r\n+#if 0\r\n     if(gMySwitchType == \"voq\")\r\n     {\r\n         if (gIntfsOrch->isLocalSystemPortIntf(port.m_alias))\r\n@@ -8139,6 +8139,7 @@ void PortsOrch::updatePortOperStatus(Port &port, sai_port_oper_status_t status)\r\n             gIntfsOrch->voqSyncIntfState(port.m_alias, isUp);\r\n         }\r\n     }\r\n+#endif\r\n \r\n \r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 3207,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/3207",
+      "title": "[Chassis][voq] do not synchronize the system interface state if there is no rif assciated with the port",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-07-02T17:45:20Z",
+      "createdAt": "2024-06-28T05:46:54Z",
+      "author": "arlakshm",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/19357\r\n\r\n**Why I did it**\r\nIn the  sonic-mgmt pc test suite. When an empty lag is created. The portchannel changed is sync'ed to the remote LC even if there portchannel has no route interface created. This results in a dummy route interface created on the remote LC.\r\n\r\nSo when the empty port channel is removed on the local card, the removal fails in the remote LC because of the dummy route interface.\r\n\r\nAdd a fix to sync the portchannel interface state to the remote LC only when there routeinterface is created on the local LC.\r\n\r\n\r\n**How I verified it**\r\nRun sonic-mgmt failed PC tests on chassis\r\n```\r\npc/test_po_update.py::test_po_update_io_no_loss[str2-sonic-lc5-1-0] PASSED \r\npc/test_po_update.py::test_po_update[str2-sonic-lc5-1-1] PASSED           \r\npc/test_po_update.py::test_po_update_io_no_loss[str2-sonic-lc5-1-1] PASSED \r\npc/test_po_update.py::test_po_update[str2-sonic-lc3-1-None] PASSED        \r\npc/test_po_update.py::test_po_update_io_no_loss[str2-sonic-lc3-1-None] PASSED \r\n```\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/intfsorch.cpp",
+          "additions": 5,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "arlakshm",
+          "createdAt": "2024-06-29T23:11:10Z",
+          "body": "@saksarav-nokia, fyi.."
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2024-07-05T22:49:08Z",
+          "body": "@yxieca : can you help cherry-pick into 202205"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-08-02T22:20:49Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-swss/pull/3251"
+        }
+      ]
+    }
+  ]
+}

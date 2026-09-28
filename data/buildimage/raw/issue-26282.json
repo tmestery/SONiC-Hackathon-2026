@@ -1,0 +1,89 @@
+{
+  "number": 26282,
+  "title": "Bug:[Smartswitch] Module state transition: nested lock / deadlock",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26282",
+  "createdAt": "2026-03-20T00:52:45Z",
+  "closedAt": "2026-04-06T20:35:06Z",
+  "author": "gpunathilell",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "smartswitch",
+    "Issues for 202511"
+  ],
+  "assignees": [
+    "vvolam"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n`get_module_state_transition()` in `module_base.py` enters `with self._transition_operation_lock()` (exclusive `fcntl.flock` on `/var/lock/<module>_transition.lock`), then\u2014when the transition flag is stale and past the configured timeout\u2014calls `clear_module_state_transition()`, which **enters the same lock again** in a nested `with self._transition_operation_lock()`.\n\nThat is **non-reentrant**: the same thread already holds the exclusive lock from the outer `with`. The inner `open()` + `flock(LOCK_EX)` must wait until the lock is released, but the outer critical section does not finish until `clear_module_state_transition()` returns. The inner call never completes \u2192 **self-deadlock** and the caller **hangs indefinitely**.\n\nA common user-visible trigger is the smartswitch CLI path that checks the transition flag before applying config:\n\n- `config chassis modules startup DPU0` \u2192 `config/chassis_modules.py` \u2192 `ModuleHelper.get_module_state_transition()` \u2192 platform `ModuleBase.get_module_state_transition()` (see `utilities_common/module.py`).\n\nWhen STATE_DB still has `transition_in_progress` set with an **expired** timeout, the timeout branch runs, hits the nested lock, and the command can block forever instead of returning or clearing the flag.\n\n### Steps to Reproduce\n\n1. Use a smartswitch platform where `config chassis modules startup <DPU>` calls `ModuleHelper.get_module_state_transition()` (see `config/chassis_modules.py`, `startup` command).\n2. In STATE_DB, set `CHASSIS_MODULE_TABLE|<DPU>|transition_in_progress` to `\"True\"` with valid `transition_start_time` and `transition_type` such that **now \u2212 start_time** is **greater than** the timeout for that type (`_load_transition_timeouts()` / `platform.json` DPU transition timeouts).\n3. Run: `config chassis modules startup DPU0` (adjust name to match your module).\n4. Observe the process **hang** while executing `get_module_state_transition()` \u2192 timeout path \u2192 `clear_module_state_transition()` (nested lock).\n\n### Actual Behavior and Expected Behavior\n\n| | **Actual** | **Expected** |\n|---|------------|----------------|\n| CLI / API | `config chassis modules startup DPU0` (and any caller of `get_module_state_transition` in the stale-timeout case) can **block forever**. | The check completes: stale transition fields are cleared (or the method returns) and the CLI returns promptly. |\n| Locking | Same thread holds the transition lock, then tries to take it again inside `clear_module_state_transition()` \u2192 **deadlock**. | Timeout handling deletes the transition hash fields **under the existing lock**, without re-entering `_transition_operation_lock()` (e.g. inline `hdel` in `get_module_state_transition`, or reuse a private helper that assumes the lock is already held). |\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n202511_RC latest hash\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 649,
+      "repository": "sonic-net/sonic-platform-common",
+      "url": "https://github.com/sonic-net/sonic-platform-common/pull/649",
+      "title": "[module_base]: Fix nested lock deadlock in get_module_state_transition",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-06T20:35:05Z",
+      "createdAt": "2026-04-02T16:28:38Z",
+      "author": "vvolam",
+      "body": "#### Description\n\nFix nested lock / self-deadlock in `get_module_state_transition()` in `module_base.py`.\n\n`get_module_state_transition()` holds `_transition_operation_lock()` (exclusive `fcntl.flock`), then \u2014 when the transition flag is stale and past timeout \u2014 calls `clear_module_state_transition()`, which tries to acquire the **same lock** via a new file descriptor. Since `fcntl.flock` is not reentrant across separate file descriptors, the inner `flock(LOCK_EX)` blocks forever, causing a self-deadlock.\n\nExtract a private `_clear_transition_fields()` helper that performs the `hdel` operations **without** acquiring the lock. `clear_module_state_transition()` acquires the lock then delegates to the helper, while `get_module_state_transition()` calls the helper directly since it already holds the lock.\n\n#### Motivation and Context\n\nFixes sonic-net/sonic-buildimage#26282\n\nOn SmartSwitch platforms, `config chassis modules startup DPU0` can hang indefinitely when STATE_DB has a stale `transition_in_progress` flag with an expired timeout. The CLI path calls `get_module_state_transition()` which hits the timeout branch, triggers the nested lock, and deadlocks.\n\n#### How Has This Been Tested?\n\n- Code review confirming the nested lock is eliminated\n- Manual verification on SmartSwitch platform: `config chassis modules startup DPU0` with a stale transition flag now returns promptly instead of hanging\n\n#### Additional Information (Optional)\n\nN/A",
+      "files": [
+        {
+          "path": "sonic_platform_base/module_base.py",
+          "additions": 22,
+          "deletions": 15
+        },
+        {
+          "path": "tests/module_base_test.py",
+          "additions": 36,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-02T16:28:47Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-02T16:28:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-02T17:59:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-02T18:00:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-03T17:05:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-03T17:06:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vvolam",
+          "createdAt": "2026-04-03T17:06:49Z",
+          "body": "> @vvolam The fix looks correct. I\u2019d recommend adding one focused unit test that explicitly simulates the timeout path while the transition lock is already held, and verifies we call _clear_transition_fields() without re-entering clear_module_state_transition(). That would exercise the actual deadlock scenario more directly than just changing the patched method name in the existing timeout tests.\r\n\r\n@rameshraghupathy I have added new test "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-06T20:35:26Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-platform-common/pull/651"
+        }
+      ]
+    }
+  ]
+}

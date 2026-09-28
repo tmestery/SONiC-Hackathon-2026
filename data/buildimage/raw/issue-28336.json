@@ -1,0 +1,159 @@
+{
+  "number": 28336,
+  "title": "Bug: [HA] Stale custom BFD monitor delete logs error after local endpoint route cleanup",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28336",
+  "createdAt": "2026-07-09T17:57:32Z",
+  "closedAt": "2026-09-22T20:29:57Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "smartswitch"
+  ],
+  "assignees": [
+    "zjswhhh"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nDuring `test_ha_launch_with_no_peer`, Log Analyzer reports an `orchagent` error while deleting a BFD session:\n\n```text\nERR swss#orchagent: :- remove_bfd_session: BFD session for default:default:20.0.200.1 does not exist\n```\n\nThe test itself passed, and the end state has no live BFD session for that key. The failure is a cleanup/logging issue: a delete for a BFD session is received after that session was already removed. \n\n### Steps to Reproduce\n\n1. Use SmartSwitch HA setup \n2. Run:\n```shell\npython3 -m pytest ha/test_ha_launch_with_no_peer.py \n```\n3. Check NPU syslog / Log Analyzer for `remove_bfd_session` errors.\n\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\n\nThe test function passes, but `orchagent` logs an error during BFD cleanup:\n\n```text\nERR swss#orchagent: :- remove_bfd_session: BFD session for default:default:20.0.200.1 does not exist\n```\n\nExpected behavior:\n\nNo error should be logged\n\n\n### Relevant log output\n\n```shell\n# Previous cycle: VNET route included 20.0.200.1, and BFD for 20.0.200.1 existed.\n2026-07-08.17:47:34.604220|VNET_ROUTE_TUNNEL_TABLE:Vnet_55:3.2.1.0|SET|endpoint:20.0.200.1,10.1.0.33|endpoint_monitor:20.0.200.1,20.0.201.1|primary:20.0.200.1|monitoring:custom_bfd\n2026-07-08.17:47:34.605789|BFD_SESSION_TABLE:default:default:20.0.200.1|SET|local_addr:10.1.0.32|multihop:true|shutdown_bfd_during_tsa:true\n2026-07-08.17:47:35.630979|BFD_SESSION_TABLE|default|default|20.0.200.1|SET|state:Up|local_discriminator:25|local_addr:10.1.0.32\n\n# Previous cycle cleanup: route and both BFD sessions are deleted.\n2026-07-08.17:48:54.320241|VNET_ROUTE_TUNNEL_TABLE:Vnet_55:3.2.1.0|DEL\n2026-07-08.17:48:54.321103|BFD_SESSION_TABLE:default:default:20.0.201.1|DEL\n2026-07-08.17:48:54.321130|BFD_SESSION_TABLE:default:default:20.0.200.1|DEL\n2026-07-08.17:48:54.323328|BFD_SESSION_TABLE|default|default|20.0.200.1|DEL\n2026-07-08.17:48:54.323356|BFD_SESSION_TABLE|default|default|20.0.201.1|DEL\n\n# New cycle starts: route first has only the local endpoint.\n2026-07-08.17:59:41.634202|VNET_ROUTE_TUNNEL_TABLE:Vnet_55:3.2.1.0|SET|endpoint:20.0.200.1|endpoint_monitor:20.0.200.1|primary:20.0.200.1|monitoring:custom_bfd\n\n# Orchagent treats this as a direct/local endpoint, not as an overlay NHG.\n2026 Jul  8 17:59:41.636080 r-bobcat-01 NOTICE swss#orchagent: :- addRoute: Input 20.0.200.1@Vlan55 is not overlay nexthop group\n2026 Jul  8 17:59:41.636214 r-bobcat-01 NOTICE swss#orchagent: :- postRouteState: Advertisement of prefix: 3.2.1.0/32 with profile: , status: active via prefix: 3.2.1.0/32\n\n# New cycle updates to two endpoints, but only 20.0.201.1 BFD is created.\n2026-07-08.17:59:58.857513|VNET_ROUTE_TUNNEL_TABLE:Vnet_55:3.2.1.0|SET|endpoint:20.0.200.1,10.1.0.33|endpoint_monitor:20.0.200.1,20.0.201.1|primary:20.0.200.1|monitoring:custom_bfd\n2026-07-08.17:59:58.885665|BFD_SESSION_TABLE:default:default:20.0.201.1|SET|local_addr:10.1.0.32|multihop:true|shutdown_bfd_during_tsa:true\n2026-07-08.18:00:10.161354|BFD_SESSION_TABLE|default|default|20.0.201.1|SET|state:Up|local_discriminator:27|local_addr:10.1.0.32\n\n# Route flips primary/monitor ordering to the peer endpoint. Immediately after,\n# a stale/late delete for 20.0.200.1 arrives even though no 20.0.200.1 BFD\n# session was created in this cycle.\n2026-07-08.18:00:33.615926|VNET_ROUTE_TUNNEL_TABLE:Vnet_55:3.2.1.0|SET|endpoint:10.1.0.33,20.0.200.1|endpoint_monitor:20.0.201.1,20.0.200.1|primary:10.1.0.33|monitoring:custom_bfd\n2026-07-08.18:00:33.619587|BFD_SESSION_TABLE:default:default:20.0.200.1|DEL\n2026 Jul  8 18:00:33.619652 r-bobcat-01 ERR swss#orchagent: :- remove_bfd_session: BFD session for default:default:20.0.200.1 does not exist\n```\n\n## Triage:\n\nThe route update at `17:59:41` did not recreate a BFD session for `20.0.200.1` (Don't know why). \n\nThe later `18:00:33` delete is treated as error since no entry exist\n\nNeed to understand VNetOrch why the entry at 17:59:41 wouldn't create a BFD session \n\n### Output of `show version`, `show techsupport`\n\n```shell\nmaster\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "vivekkarri",
+      "createdAt": "2026-07-09T18:01:21Z",
+      "body": "@BYGX-wcr , @zjswhhh Please take a look. Looks like a issue in VNetRouteOrch"
+    },
+    {
+      "author": "zjswhhh",
+      "createdAt": "2026-07-15T15:43:31Z",
+      "body": "Creation of bfd monitoring on DPU is potentially missing? "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4808,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4808",
+      "title": "[orchagent]: Recreate custom BFD monitor for reused nexthop",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-22T20:29:56Z",
+      "createdAt": "2026-07-31T18:18:31Z",
+      "author": "zjswhhh",
+      "body": "## What I did\n\nDecouple endpoint monitor setup from next-hop-group creation in `VNetRouteOrch::selectNextHopGroup()`.\n\nA directly connected next-hop group can survive route deletion. When the route was recreated, the existing NHG caused monitor setup to be skipped, so the route owned stale monitor state without recreating its custom BFD session. A later route update then emitted a delete for a session that had never been created in that cycle.\n\nThe updated logic recreates route-specific endpoint monitor state whenever either the NHG or route is new, while creating the shared NHG only when needed.\n\nAdded a DVS regression that deletes and recreates a local-only custom-BFD route while its directly connected next hop is reused.\n\n## Testing\n\n- `make -C orchagent -j2 orchagent`\n- Baseline `test_vnet.py::TestVnetOrch::test_vnet_orch_34`: fails at the second BFD-session check after route recreation\n- Fixed `test_vnet.py::TestVnetOrch::test_vnet_orch_34`: passed\n- `git diff --check`\n- `python3 -m py_compile tests/test_vnet.py`\n\nFixes sonic-net/sonic-buildimage#28336\n\n### sonic-mgmt validation\n\nTargeted SmartSwitch HA validation used `ha/test_ha_launch_with_no_peer.py::test_ha_launch_with_no_peer` with sonic-mgmt PR #26298 applied.\n\n- Baseline: 3 target custom-BFD session creates and 4 route-cleanup markers reproduced 1 stale `remove_bfd_session` error.\n- Fixed orchagent: the same 3 target session creates and 4 route-cleanup markers produced 0 stale session-deletion errors.\n- Post-cleanup checks found no residual target BFD session or VNET route entries.\n- SWSS, syncd, GNMI, and DASH HA services remained active with zero restarts and no cores.\n\nThe issue-specific lifecycle validation passed. The overall pytest result remained non-passing because of an unrelated traffic assertion and Log Analyzer sensor errors.",
+      "files": [
+        {
+          "path": "orchagent/vnetorch.cpp",
+          "additions": 21,
+          "deletions": 6
+        },
+        {
+          "path": "tests/mock_tests/vnetorch_ut.cpp",
+          "additions": 41,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T18:18:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T18:18:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T18:18:51Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-03T17:13:56Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T17:30:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-06T17:30:24Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "zjswhhh",
+          "createdAt": "2026-08-11T21:21:01Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-11T21:21:20Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "zjswhhh",
+          "createdAt": "2026-08-24T19:11:31Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T19:11:33Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T19:11:35Z",
+          "body": "Build not found. Please close and reopen the PR or rebase your branch to trigger a new build."
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-09-01T16:00:18Z",
+          "body": "@zjswhhh there are some conflicts. vnet tests have been converted to mock tests recently."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T20:14:34Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T20:14:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "zjswhhh",
+          "createdAt": "2026-09-02T20:17:32Z",
+          "body": "> @zjswhhh there are some conflicts. vnet tests have been converted to mock tests recently.\r\n\r\nThanks @prabhataravind - updated accordingly. "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-11T20:38:48Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-11T20:39:03Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "zjswhhh",
+          "createdAt": "2026-09-14T22:09:01Z",
+          "body": "/azpw retry\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-14T22:09:03Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-14T22:09:05Z",
+          "body": "Retrying failed(or canceled) stages in build 1218123:\n\n\n\u2705Stage **Test**:\n- Job vstest: retried."
+        }
+      ]
+    }
+  ]
+}

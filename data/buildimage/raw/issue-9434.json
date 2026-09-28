@@ -1,0 +1,153 @@
+{
+  "number": 9434,
+  "title": "Routeorch calls SAI API set attribute for a routing entry which was just removed from SAI in the same bulk operation. Should recreate it in such case.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/9434",
+  "createdAt": "2021-12-02T16:08:16Z",
+  "closedAt": "2021-12-14T06:50:15Z",
+  "author": "stephenxs",
+  "labels": [
+    "Bug :bug:",
+    "Issue for 202111"
+  ],
+  "assignees": [
+    "shi-su"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\nOrchagent exited due to setting a non-existing routing entry during bgp speaker test with the latest swss\r\nThe issue was observed during azure pipeline kvm t0 bgp speaker test of PR #9397.\r\n\r\n#### Steps to reproduce the issue:\r\n\r\n#### Describe the results you received:\r\nThe following error observed during bgp speaker test\r\n```\r\nNov 30 18:18:03.998387 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"193.9.80.128/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\r\nNov 30 18:18:03.998979 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1000, status: SAI_STATUS_INVALID_PARAMETER\r\nNov 30 18:18:03.999571 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"192.236.72.128/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\r\nNov 30 18:18:04.000069 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1000, status: SAI_STATUS_INVALID_PARAMETER\r\nNov 30 18:18:04.000690 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"192.254.80.128/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\r\nNov 30 18:18:04.001128 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 1000, status: SAI_STATUS_INVALID_PARAMETER\r\nNov 30 18:18:04.001549 vlab-01 ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"192.188.120.128/25\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000022\"} doesn't exist\r\nNov 30 18:18:04.001984 vlab-01 ERR swss#orchagent: :- flush_setting_entries: EntityBulker.flush set entry attribute failed, number of entries to set: 321, status: SAI_STATUS_INVALID_PARAMETER\r\nNov 30 18:18:04.003547 vlab-01 ERR swss#orchagent: :- addRoutePost: Failed to set route 0.0.0.0/0 with packet action forward, -23\r\nNov 30 18:18:04.003869 vlab-01 ERR swss#orchagent: :- handleSaiSetStatus: Encountered failure in set operation, exiting orchagent, SAI API: SAI_API_ROUTE, status: SAI_STATUS_NOT_EXECUTED\r\n```\r\n\r\nroute orchagent operating flow on the routing entries:\r\n- set,\r\n- then remove\r\n- and then set again.\r\n\r\nSo for the second set operation, route orchagent should call \"create\" instead of \"set\".\r\nHowever, according to sairedis.rec, it called \"set\" for the second set operation when the routing entries didn't exist in SAI, which caused SAIredis failure.\r\n\r\nROUTE_TABLE in swss.rec:\r\n```\r\n2021-11-30.18:17:48.627923|ROUTE_TABLE:192.188.120.128/25|SET|nexthop:10.0.0.59,10.0.0.61,10.0.0.63|ifname:PortChannel0002,PortChannel0003,PortChannel0004\r\n2021-11-30.18:17:49.928608|ROUTE_TABLE:192.236.72.128/25|SET|nexthop:10.0.0.59,10.0.0.61,10.0.0.63|ifname:PortChannel0002,PortChannel0003,PortChannel0004\r\n2021-11-30.18:17:50.119089|ROUTE_TABLE:192.254.80.128/25|SET|nexthop:10.0.0.59,10.0.0.61,10.0.0.63|ifname:PortChannel0002,PortChannel0003,PortChannel0004\r\n2021-11-30.18:17:50.380784|ROUTE_TABLE:193.9.80.128/25|SET|nexthop:10.0.0.59,10.0.0.61,10.0.0.63|ifname:PortChannel0002,PortChannel0003,PortChannel0004\r\n2021-11-30.18:17:58.852071|ROUTE_TABLE:192.188.120.128/25|DEL\r\n2021-11-30.18:17:58.872891|ROUTE_TABLE:192.254.80.128/25|DEL\r\n2021-11-30.18:17:58.901643|ROUTE_TABLE:193.9.80.128/25|DEL\r\n2021-11-30.18:17:58.941370|ROUTE_TABLE:192.236.72.128/25|DEL\r\n2021-11-30.18:18:00.723525|ROUTE_TABLE:192.236.72.128/25|SET|nexthop:10.0.0.57|ifname:PortChannel0001\r\n2021-11-30.18:18:00.997692|ROUTE_TABLE:193.9.80.128/25|SET|nexthop:10.0.0.57|ifname:PortChannel0001\r\n2021-11-30.18:18:01.004276|ROUTE_TABLE:192.254.80.128/25|SET|nexthop:10.0.0.57|ifname:PortChannel0001\r\n2021-11-30.18:18:01.455867|ROUTE_TABLE:192.188.120.128/25|SET|nexthop:10.0.0.57|ifname:PortChannel0001\r\n```\r\n\r\n#### Describe the results you expected:\r\n\r\nShould not be error.\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\nThe flow should be like this.\r\nDuring the previous test, it announced the routing entries at the beginning and withdrew them after test finished. And then the next test started, the same set of routing entries were announced again.\r\nSo for each routing entry P, `fpmsyncd` issued the next operations:\r\n- add route P\r\n- remove route P\r\n- add route P\r\n\r\n`routeorch` should handle the notifications as below:\r\n- add route P: call SAI API create_route in bulk mode and then insert P into `m_syncdRoutes` after bulk call returned\r\n- remove route P: call SAI API remove_route in bulk mode and then remove it from `m_syncdRoutes` after bulk call returned\r\n- add route P: call SAI API create_route in bulk mode and then insert P into `m_syncdRoutes` after bulk call returned\r\n\r\nHowever, since there were a large amount of routing entries being notified, the notifications of P for `remove` and the second `add` were packed and handled in the same bulk call.\r\n\r\nThen the flow was:\r\n- add route P: called SAI API `gRouteBulker.create_entry` in bulk mode and then inserted P into `m_syncdRoutes` after bulk call returned\r\n- remove route P: called SAI API `gRouteBulker.remove_entry` in bulk mode, the call was pending.\r\n- add route P: called SAI API `gRouteBulker.set_entry_attribute` since P had not been removed from `m_syncdRoutes`, which is problematic because when this operation would be handled by SAI P had been removed.\r\n- called bulk.flush and then handled the result:\r\n\r\nWhen SAI handled the operations,\r\n- remove_entry: notified vendor SAI to remove P and removed P from `m_saiObjectCollection` as well.\r\n- set_entry_attribute: reported error since P had been removed from `m_saiObjectCollection` when `remove_entry` was called for P. Therefore, it notified orchagent to exit.\r\n\r\nI think this is a bug in the routeorch for a while but it occurs only in the very rare scenarios.\r\nIt is observed after PR Azure/sonic-swss#1992 was merged because in that PR there is an optimization that pushes notifications from redis-db table to `m_toSync` as many as possible:\r\nThe old logic:\r\n```\r\n        std::deque<KeyOpFieldsValuesTuple> entries;\r\n        subTable->pops(entries);\r\n        return addToSync(entries);\r\n```\r\nThe new logic:\r\n```\r\n        do\r\n        {\r\n            std::deque<KeyOpFieldsValuesTuple> entries;\r\n            subTable->pops(entries);\r\n            update_size = addToSync(entries);\r\n            total_size += update_size;\r\n        } while (update_size != 0);\r\n        return total_size;\r\n```\r\nSo in the new logic, there is a higher probability for orchagent to merge all notifications together and for `remove` and the second `set` to be bundled in one bulk, and therefore, it is more likely to trigger the bug.\r\n\r\nA solution can be:\r\n- Introduce a flag indicating whether a prefix is `pending removal`.\r\n- In add route process, if a prefix with the `pending removal` flag is about to be added, don't handle it until the bulk has been flushed.\r\n\r\nWAs can be:\r\n- Revert the optimization\r\n- Add delay between two tests where orchagent was aborted.\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n--\r\n[sonic-buildimage.kvmtest.t0.log@1.zip](https://github.com/Azure/sonic-buildimage/files/7643332/sonic-buildimage.kvmtest.t0.log%401.zip)\r\n>\r\n",
+  "comments": [
+    {
+      "author": "prsunny",
+      "createdAt": "2021-12-02T16:49:31Z",
+      "body": "Can you check if the failure is due to a regression in code or test? Not sure if there was any recent change in route_orch for this flow. "
+    },
+    {
+      "author": "stephenxs",
+      "createdAt": "2021-12-04T11:48:19Z",
+      "body": "@prsunny  Looks like it's a production issue in route orch introduced by bulk operation but was hardly to be trigerred. Now with Azure/sonic-swss#1992 merged it is much easier to be."
+    },
+    {
+      "author": "stephenxs",
+      "createdAt": "2021-12-06T06:36:24Z",
+      "body": "This issue is reproducible by using gdb."
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2021-12-07T00:53:23Z",
+      "body": "@shi-su , could you please take a look?"
+    },
+    {
+      "author": "liat-grozovik",
+      "createdAt": "2021-12-07T11:21:39Z",
+      "body": "@shi-su  could you please update?\r\nthis is blocking swss submodule pr to get into sonic master"
+    },
+    {
+      "author": "shi-su",
+      "createdAt": "2021-12-07T20:14:32Z",
+      "body": "I'll check it today."
+    },
+    {
+      "author": "abdosi",
+      "createdAt": "2021-12-08T02:18:13Z",
+      "body": "@abdosi following this."
+    },
+    {
+      "author": "shi-su",
+      "createdAt": "2021-12-08T17:34:58Z",
+      "body": "@stephenxs I drafted a PR https://github.com/Azure/sonic-swss/pull/2071 that would potentially resolve the issue. Would you mind adding a test case for the issue?\r\n\r\n@abdosi Let me know if you have any thoughts or comments."
+    },
+    {
+      "author": "liat-grozovik",
+      "createdAt": "2021-12-08T17:40:22Z",
+      "body": "> @stephenxs I drafted a PR [Azure/sonic-swss#2071](https://github.com/Azure/sonic-swss/pull/2071) that would potentially resolve the issue. Would you mind adding a test case for the issue?\r\n> \r\n> @abdosi Let me know if you have any thoughts or comments.\r\n\r\nNot sure i understand your request to add test.\r\nThe issue has been raised while test was running so we have a test. \"azure pipeline kvm t0 bgp speaker test.\"\r\nIf you have new flow in your draft PR i suggest the test will be enhanced in that PR"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2071,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2071",
+      "title": "[bulk mode] Fix bulk conflict when in case there are both remove and set operations",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-12-14T06:50:15Z",
+      "createdAt": "2021-12-08T06:45:07Z",
+      "author": "shi-su",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nCheck if there are items pending removal in bulk before calling bulk set API.\r\n\r\nFixes https://github.com/Azure/sonic-buildimage/issues/9434\r\n\r\n**Why I did it**\r\nWhen there are items pending removal in bulk before calling set API, it means the item will be removed before the set and it should do create instead.\r\n\r\n**How I verified it**\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/bulker.h",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/mplsrouteorch.cpp",
+          "additions": 5,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/routeorch.cpp",
+          "additions": 5,
+          "deletions": 1
+        },
+        {
+          "path": "tests/mock_tests/bulker_ut.cpp",
+          "additions": 36,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2021-12-08T21:41:57Z",
+          "body": ">     auto it = consumer.m_toSync.begin();\r\n\r\nI have another idea. For route orch, if m_toSync gets a DEL/SET, we can safely merge it into a SET. Then it will simplify the bulking logic. his is possible because the new SET has covered all the fields compared the existing fields before DEL.\r\nAnd this will lead to a general solution.\r\n\r\n---\r\nIn reply to: [989219096](https://github.com/Azure/sonic-swss/pull/2071#issuecomment-989219096) [](http://example.com/codeflow?ancestors=989219096)\r\n\r\n---\r\nRefers to: orchagent/routeorch.cpp:468 in 2a72407. [](commit_id = 2a72407b7c18f84637ad3d11a2c1349c011a144e, deletion_comment = False)"
+        },
+        {
+          "author": "stephenxs",
+          "createdAt": "2021-12-09T14:40:34Z",
+          "body": "> > ```\r\n> > auto it = consumer.m_toSync.begin();\r\n> > ```\r\n> \r\n> I have another idea. For route orch, if m_toSync gets a DEL/SET, we can safely merge it into a SET. Then it will simplify the bulking logic. his is possible because the new SET has covered all the fields compared the existing fields before DEL. And this will lead to a general solution.\r\n> \r\n\r\nSounds good but I don't know what happens if the routing entry switches from a normal nexthop/nhg to some special thing like a tunnel/MPLS. In that case, is removing the old entry a must or it can just override the attributes?\r\nIn [addToSync](https://github.com/Azure/sonic-swss/blob/master/orchagent/orch.cpp#L94) there is similar logic to merge multiple operations on the same key, but it doesn't merge a removal to a setting (`S, D => D`). It only merges a setting to a removal. "
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-12-09T21:58:34Z",
+          "body": "> This logic works only if removing a routing entry always succeeds. If removing a routing entry can fail and the routing entry is still in SAI table in that case, the logic will be broken. Can that happen?\r\n\r\nThis is a valid concern. This logic is based on the assumption that the remove operation is successful. In the current stage, the removal failure would cause orchagent exit, thus the situation should not happen. Also, the original behavior does not seem to be working. Let's assume the remove operation fails, the set operation would become a set_entry_attribute. In case that the set is successful and the remove gets retried, it might end up with the route getting removed though it is supposed to be there."
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-12-09T22:02:13Z",
+          "body": "> > > ```\r\n> > > auto it = consumer.m_toSync.begin();\r\n> > > ```\r\n> > \r\n> > \r\n> > I have another idea. For route orch, if m_toSync gets a DEL/SET, we can safely merge it into a SET. Then it will simplify the bulking logic. his is possible because the new SET has covered all the fields compared the existing fields before DEL. And this will lead to a general solution.\r\n> \r\n> Sounds good but I don't know what happens if the routing entry switches from a normal nexthop/nhg to some special thing like a tunnel/MPLS. In that case, is removing the old entry a must or it can just override the attributes? In [addToSync](https://github.com/Azure/sonic-swss/blob/master/orchagent/orch.cpp#L94) there is similar logic to merge multiple operations on the same key, but it doesn't merge a removal to a setting (`S, D => D`). It only merges a setting to a removal.\r\n\r\nI have some concerns about making merging DEL and SET into one SET a general solution. For some SAI APIs, some attributes may only be configurable on creation. In such cases, we should keep both operations and strictly do a DEL and then CREATE. Yet I do agree that it is a valid solution specific to route orch. And it could be an additional performance improvement on top of this fix."
+        },
+        {
+          "author": "stephenxs",
+          "createdAt": "2021-12-10T06:37:32Z",
+          "body": "> > This logic works only if removing a routing entry always succeeds. If removing a routing entry can fail and the routing entry is still in SAI table in that case, the logic will be broken. Can that happen?\r\n> \r\n> This is a valid concern. This logic is based on the assumption that the remove operation is successful. In the current stage, the removal failure would cause orchagent exit, thus the situation should not happen. Also, the original behavior does not seem to be working. Let's assume the remove operation fails, the set operation would become a set_entry_attribute. In case that the set is successful and the remove gets retried, it might end up with the route getting removed though it is supposed to be there.\r\n\r\nOk. That means it doesn't introduce new risks or degradation."
+        },
+        {
+          "author": "dprital",
+          "createdAt": "2021-12-13T10:42:31Z",
+          "body": "@shi-su, Can you please retrigger the checkers for this PR ?"
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-12-13T22:27:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-12-13T22:27:11Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "stephenxs",
+          "createdAt": "2021-12-14T01:45:13Z",
+          "body": "vs test failed due to `##[error]Artifact sonic-gcov already exists for build 58142.`"
+        },
+        {
+          "author": "shi-su",
+          "createdAt": "2021-12-14T01:50:53Z",
+          "body": "> vs test failed due to `##[error]Artifact sonic-gcov already exists for build 58142.`\r\n\r\nI retriggered the tests. I believe the status of sonic-gcov will be refreshed after this run if it passes."
+        }
+      ]
+    }
+  ]
+}

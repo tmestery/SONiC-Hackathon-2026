@@ -1,0 +1,76 @@
+{
+  "number": 25311,
+  "title": "Bug: Uninitialized attr used in SAI call when speed unsupported",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25311",
+  "createdAt": "2026-02-02T21:54:33Z",
+  "closedAt": "2026-03-16T16:28:20Z",
+  "author": "arista-hpandya",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n**Overview**:\n\nIn the `setGearboxPortAttr()` function in `orchagent/portsorch.cpp`, there is a critical bug where the `sai_attribute_t attr` variable may be used uninitialized when setting the SAI_PORT_ATTR_SPEED attribute. If isSpeedSupported() returns false, the attr variable is never initialized, yet the code proceeds to make a SAI API call with this uninitialized data at line 3370, leading to undefined behavior.\n\n**Code Snippets**:\n\nWe create an uninitialized attr here: \nhttps://github.com/sonic-net/sonic-swss/blob/9b237a2e40c8698a167e6b8783afaf943191ff16/orchagent/portsorch.cpp#L3308\n\nWe only set the attr.id and attr.value.u32 if isSpeedSupported is True:\nhttps://github.com/sonic-net/sonic-swss/blob/9b237a2e40c8698a167e6b8783afaf943191ff16/orchagent/portsorch.cpp#L3343-L3354\n```\nif (isSpeedSupported(port.m_alias, dest_port_id, speed))\n{\n    // Gearbox may not implement speed check, so\n    // invalidate speed if it doesn't make sense.\n    if (to_string(speed).size() < 5)\n    {\n        speed = 0;\n    }\n\n    attr.id = SAI_PORT_ATTR_SPEED;\n    attr.value.u32 = speed;\n}\n```\n\nRegardless of whether attr is uninitialized we end up making the SAI call:\n`status = sai_port_api->set_port_attribute(dest_port_id, &attr);`\nhttps://github.com/sonic-net/sonic-swss/blob/9b237a2e40c8698a167e6b8783afaf943191ff16/orchagent/portsorch.cpp#L3370\n\n### Steps to Reproduce\n\nAttempt to set a speed which is not supported. Alternatively, set isSpeedSupported to return False, to hit the logical path where an uninitialized attr is passed to set_port_attribute SAI call.\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\nLeads to the following error logs:\n```\n\t E               2026 Jan 17 21:41:16.925694 ctn102 ERR swss#orchagent: :- setGearboxPortAttr: BOX: Failed to set Ethernet72 port attribute 31\n\t E\n\t E               2026 Jan 17 21:41:16.925694 ctn102 ERR swss#orchagent: :- handleSaiFailure: Encountered failure in set operation, SAI API: SAI_API_PORT, status: SAI_STATUS_INVALID_ATTR_VALUE_0\n\t E\n\t E               2026 Jan 17 21:41:16.932105 ctn102 ERR swss#orchagent: :- meta_generic_validation_set: unable to find attribute metadata SAI_OBJECT_TYPE_PORT:378307824\n\t E\n```\n\nExpected Behavior:\nThe code should never pass uninitialized attributes to SAI calls.\n\n### Relevant log output\n\n```shell\nE               2026 Jan 17 21:41:16.925694 ctn102 ERR swss#orchagent: :- setGearboxPortAttr: BOX: Failed to set Ethernet72 port attribute 31\n\t E\n\t E               2026 Jan 17 21:41:16.925694 ctn102 ERR swss#orchagent: :- handleSaiFailure: Encountered failure in set operation, SAI API: SAI_API_PORT, status: SAI_STATUS_INVALID_ATTR_VALUE_0\n\t E\n\t E               2026 Jan 17 21:41:16.932105 ctn102 ERR swss#orchagent: :- meta_generic_validation_set: unable to find attribute metadata SAI_OBJECT_TYPE_PORT:378307824\n\t E\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nroot@device107:~# show version\n\nSONiC Software Version: SONiC.branch.202511-ars.c91ecf5e-buildimage.origin.202511-review.566045.11-dbg-2026.01.30.18.56\nSONiC OS Version: 13\nDistribution: Debian 13.3\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 5f337bf6b\nBuild date: Fri Jan 30 22:20:28 UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-83350-tq325-sh1nj\n\nPlatform: x86_64-arista_7280r4k_32qf_32df\nHwSKU: Arista-7280R4K-32QF-32DF-64O\nASIC: broadcom\nASIC Count: 1\nSerial Number: SSN25392015\nModel Number: DCS-7280R4K-32QF-32DF\nHardware Revision: 01.00\nUptime: 21:53:43 up 1 day,  8:26,  1 user,  load average: 0.68, 0.85, 0.89\nDate: Mon 02 Feb 2026 21:53:43\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-03-11T17:13:28Z",
+      "body": "PR in review"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4189,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4189",
+      "title": "Gracefully handle case when speed is not supported in setGearboxPortAttr",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-16T16:28:18Z",
+      "createdAt": "2026-02-02T22:09:50Z",
+      "author": "arista-hpandya",
+      "body": "<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/25311\r\n\r\n**What I did**\r\nFixed a bug in setGearboxPortAttr() where an uninitialized sai_attribute_t attr variable could be passed to the SAI API when isSpeedSupported() returns false for SAI_PORT_ATTR_SPEED operations.\r\n\r\nThe fix adds an else block that logs the unsupported speed and returns false early, preventing the SAI call with uninitialized data\r\n\r\n**Why I did it**\r\nThis causes the following error logs to be printed:\r\n```\r\n\t E               2026 Jan 17 21:41:16.925578 ctn102 ERR gbsyncd#syncd: :- processQuadEvent: attr: SAI_PORT_ATTR_SPEED: 400000\r\n\t E\r\n\t E               2026 Jan 17 21:41:16.925694 ctn102 ERR swss#orchagent: :- setGearboxPortAttr: BOX: Failed to set Ethernet72 port attribute 31\r\n\t E\r\n\t E               2026 Jan 17 21:41:16.925694 ctn102 ERR swss#orchagent: :- handleSaiFailure: Encountered failure in set operation, SAI API: SAI_API_PORT, status: SAI_STATUS_INVALID_ATTR_VALUE_0\r\n\t E\r\n\t E               2026 Jan 17 21:41:16.932105 ctn102 ERR swss#orchagent: :- meta_generic_validation_set: unable to find attribute metadata SAI_OBJECT_TYPE_PORT:378307824\r\n```\r\n\r\n**How I verified it**\r\nVerified that the fix prevents the uninitialized variable from being used in a SAI call\r\n",
+      "files": [
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 5,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-02T22:09:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-02T22:10:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-02T22:10:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-02T22:10:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-02-04T19:07:07Z",
+          "body": "@arpit-nexthop \r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-09T17:54:55Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-swss/pull/4462"
+        }
+      ]
+    }
+  ]
+}

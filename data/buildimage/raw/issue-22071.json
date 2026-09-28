@@ -1,0 +1,112 @@
+{
+  "number": 22071,
+  "title": "[CMIS] Quick port toggle is sometimes causing port to be in oper down state",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/22071",
+  "createdAt": "2025-03-18T18:23:18Z",
+  "closedAt": "2025-03-27T16:27:37Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "prgeor"
+  ],
+  "milestone": null,
+  "body": "Issue can be reproduced with module T-OH8CNT-NMT on MSN5600 platform. It's not related to module or the platform either but a software problem\n\n**Steps to repro:**\n- Split the port to 2x400 or 4x200 or 8x100 mode and perform a config reload\n- Disable autoneg after the ports are in up state\n- With around 1/10 probability we should see some of the port to be in down state\n\n\n**Triage:**\n\nAuto neg configuration on faster CPU will lead to a port toggle as explained in point 2 here https://github.com/sonic-net/sonic-buildimage/issues/21959#issuecomment-2724492189 \n\nOper down will lead to DpTxOFF on the module and within 0.02 sec there is a DpTxON request to Xcvrd. DPState of the module is not moved from DataPathActivated -> DataPathInitialized after giving DpTxOFF within this time. \n\nXcvrd will skip sending powerOn signal if the DP State is DataPathActivated (assuming the module is already ON and need not be initialized). Ideally IMO, Xcvrd should be aware that the port state is changed and issue DpTxON\n\nAs it can be seen in the below example, after applying power OFF at 36.298, SONIC sends PowerOn Signal and xcvrd reads DPState at 36.492 i.e. within 0.02 secs. However state is still DataPathActivated which leads to xcvrd thinking the module is already on\n\n```\nsyslog.gz:2025 Mar 14 18:04:36.298333 sonic NOTICE pmon#xcvrd[67]: CMIS: Ethernet470 Forcing Tx laser OFF\nsyslog.gz:2025 Mar 14 18:04:36.472251 sonic WARNING pmon#xcvrd[67]: $$$ Ethernet470 handle_port_update_event() : op=SET DB:STATE_DB Table:PORT_TABLE fvp {'host_tx_ready': 'true', 'state': 'ok', 'netdev_oper_status': 'down', 'admin_status': 'up', 'mtu': '9100', 'supported_speeds': '100000,50000,25000,10000', 'supported_fecs': 'none,rs,fc,auto', 'NPU_SI_SETTINGS_SYNC_STATUS': 'NPU_SI_SETTINGS_NOTIFIED'}\nsyslog.gz:2025 Mar 14 18:04:36.474382 sonic WARNING pmon#xcvrd[67]: *** ('Ethernet470', 'STATE_DB', 'PORT_TABLE') handle_port_update_event() fvp {'host_tx_ready': 'true', 'index': '-1', 'port_name': 'Ethernet470', 'asic_id': 0, 'op': 'SET'}\nsyslog.gz:2025 Mar 14 18:04:36.492704 sonic NOTICE pmon#xcvrd[67]: CMIS: Ethernet470: 100G, lanemask=0x40, CMIS state=INSERTED, Module state=ModuleReady, DP state={'DP1State': 'DataPathTxTurnOn', 'DP2State': 'DataPathActivated', 'DP3State': 'DataPathTxTurnOn', 'DP4State': 'DataPathTxTurnOn', 'DP5State': 'DataPathActivated', 'DP6State': 'DataPathInitialized', 'DP7State': 'DataPathActivated', 'DP8State': 'DataPathActivated'}, appl 1 host_lane_count 1 retries=0\nsyslog.gz:2025 Mar 14 18:04:36.591341 sonic NOTICE pmon#xcvrd[67]: CMIS: Ethernet470: no CMIS application update required...READY\n```\n\n**Final State:**\n```\nEthernet464                              464     100G   9100    N/A   lmc59a  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet465                              465     100G   9100    N/A   lmc59b  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet466                              466     100G   9100    N/A   lmc59c  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet467                              467     100G   9100    N/A   lmc59d  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet468                              468     100G   9100    N/A   lmc59e  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet469                              469     100G   9100    N/A   lmc59f  routed      up       up  OSFP 8X Pluggable Transceiver         N/A\nEthernet470                              470     100G   9100    N/A   lmc59g  routed    down       up  OSFP 8X Pluggable Transceiver         N/A\n```",
+  "comments": [
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2025-03-18T18:27:27Z",
+      "body": "@prgeor @r12f @mihirpat1 FYI. We see this statistical issue in our 202412 qualification."
+    },
+    {
+      "author": "prgeor",
+      "createdAt": "2025-03-27T00:56:19Z",
+      "body": "@dgsudharsan @vivekrnv Thanks. We are aware of this issue. @mihirpat1 is working on that."
+    },
+    {
+      "author": "prgeor",
+      "createdAt": "2025-03-27T01:25:56Z",
+      "body": "@dgsudharsan @vivekrnv can you verify the fix https://github.com/sonic-net/sonic-platform-daemons/pull/602"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 602,
+      "repository": "sonic-net/sonic-platform-daemons",
+      "url": "https://github.com/sonic-net/sonic-platform-daemons/pull/602",
+      "title": "[xcvrd] Add wait based on MaxDurationDPTxTurnOff after disabling Tx",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-03-27T16:27:36Z",
+      "createdAt": "2025-03-26T23:32:04Z",
+      "author": "mihirpat1",
+      "body": "<!-- Provide a general summary of your changes in the Title above -->\r\n\r\n#### Description\r\n<!--\r\n     Describe your changes in detail\r\n-->\r\nXCVRD needs to wait for the MaxDurationDPTxTurnOff time after disabling Tx via the following API call:\r\nhttps://github.com/sonic-net/sonic-platform-daemons/blob/f581c06cd8adeb4b82816ee0fc38fd07b3f9e692/sonic-xcvrd/xcvrd/xcvrd.py#L1468\r\nThis waiting period is essential to allow the module to transition to the DataPathInitialized state after disabling Tx. Failing to wait for the DataPathInitialized state may cause the module to behave unexpectedly, especially if Tx is disabled during CMIS initialization.\r\n\r\n#### Motivation and Context\r\n<!--\r\n     Why is this change required? What problem does it solve?\r\n     If this pull request closes/resolves an open Issue, make sure you\r\n     include the text \"fixes #xxxx\", \"closes #xxxx\" or \"resolves #xxxx\" here\r\n-->\r\nOne possible way to run into port permanently having Tx disabled is during boot-up\r\nIn one case, following steps led to the Tx being disabled permanently on a module during switch boot-up\r\n\r\n- OA sets host_tx_ready to False (06:48:48.670346)\r\n- CMIS SM transitions to DP_TXON state (06:48:48.844797)\r\n- xcvrd updates port_dict with host_tx_ready as False (06:48:48.876416)\r\n- OA sets host_tx_ready to True (06:48:48.922804)\r\n- xcvrd hasn't updated port_dict yet and it disables the Tx now (06:48:49.103428)\r\n- xcvrd updates port_dict with host_tx_ready as True (06:48:49.128350)\r\n- xcvrd upon performing CMIS initialization finds that the port is already CMIS READY (06:48:49.468976)\r\n    - 264ms ago, 'DP6State': 'DataPathTxTurnOn' (06:48:49.204792)\r\n\r\nFix\r\n1. Added `DP_PRE_INIT_CHECK` state to allow the CMIS state machine to wait for the module to handle the Tx disabled event. The wait time for the module to handle the Tx disabled event can be read through the MaxDurationDPTxTurnOff register.\r\n2. The CMIS state machine does not wait for MaxDurationDPTxTurnOn after enabling Tx, as some modules do not honor this time, which can cause the link to remain down for those modules.\r\n3. Added the `update_cmis_state_expiration_time` function to update the expiration time based on the current time. Previously, the CMIS SM was reading the current time and then performing multiple accesses to the EEPROM, adding unaccounted time to the expiration time. A buffer time of 2ms is now added to the expiration time.\r\nhttps://github.com/sonic-net/sonic-platform-daemons/blob/ba47670352b1778ad3732d27c646e9a1f4b9c49b/sonic-xcvrd/xcvrd/xcvrd.py#L1199\r\n4. Added the `is_timer_expired` function to calculate the expiration time by comparing real-time rather than using the time stored in the `now` variable.\r\n\r\n#### How Has This Been Tested?\r\n<!--\r\n     Please describe in detail how you tested your changes.\r\n     Include details of your testing environment, and the tests you ran to\r\n     see how your change affects other areas of the code, etc.\r\n-->\r\nDR8 CMIS module test\r\n1. Issue shut and no shut on a port\r\n2. Reset port followed by shut and no shut on all subports\r\n4. shutdown port followed by sfputil reset followed no shutdown on 1 subport\r\n5. Change host_tx_ready to false followed by true while port is undergoing CMIS initialization\r\n6. Reboot the device\r\n7. xcvrd restart\r\n\r\n400ZR module test\r\n1. shut and no shut on a port\r\n2. Reset port followed by shut and no shut\r\n4. Reboot the device\r\n\r\n#### Additional Information (Optional)\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/22071",
+      "files": [
+        {
+          "path": "sonic-xcvrd/tests/test_xcvrd.py",
+          "additions": 107,
+          "deletions": 3
+        },
+        {
+          "path": "sonic-xcvrd/xcvrd/xcvrd.py",
+          "additions": 68,
+          "deletions": 10
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-26T23:32:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-26T23:32:20Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-27T01:22:59Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-27T01:23:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-27T04:21:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-27T04:21:11Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "r12f",
+          "createdAt": "2025-04-01T05:11:31Z",
+          "body": "hi @mihirpat1 , do you mind to help submit a PR to 202412 to resolve the conflict? thanks!"
+        },
+        {
+          "author": "mihirpat1",
+          "createdAt": "2025-04-01T05:18:20Z",
+          "body": "@r12f The PR has already been merged to 202412 via https://github.com/Azure/sonic-platform-daemons.msft/pull/12"
+        },
+        {
+          "author": "r12f",
+          "createdAt": "2025-04-01T05:19:36Z",
+          "body": "thanks Mihir! updating tag to reflect the state."
+        },
+        {
+          "author": "Pavan-Nokia",
+          "createdAt": "2025-04-15T18:39:19Z",
+          "body": "Can this PR be backported to 202411 branch please"
+        }
+      ]
+    }
+  ]
+}

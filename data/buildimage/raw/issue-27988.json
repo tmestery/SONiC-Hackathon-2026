@@ -1,0 +1,93 @@
+{
+  "number": 27988,
+  "title": "Bug: syslog errors \"parseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\"",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27988",
+  "createdAt": "2026-06-19T06:32:13Z",
+  "closedAt": "2026-07-15T05:15:55Z",
+  "author": "NAVINAAAA",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "pavannaregundi"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nWhile running SONiC management test cases, syslog errors are observed indicating that the SONiC database configuration file is missing:\n\n   parseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\n\nThis issue is consistently seen when executing the VRF warm reboot test case. Ideally, such syslog errors should not appear during normal test execution.\n\n###Test Case\n\nvrf/test_vrf.py::TestVrfWarmReboot::test_vrf_system_warm_reboot\n\n### Steps to Reproduce\n\nDeploy SONiC image on DUT.\nEnsure the testbed is up and accessible.\nExecute the following SONiC management test: vrf/test_vrf.py::TestVrfWarmReboot::test_vrf_system_warm_reboot\n\n### Actual Behavior and Expected Behavior\nActual Behavior\n\nSyslog reports the following error during reboot/test execution:\nparseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\n\nExpected Behavior\n\nNo syslog errors related to missing database_config.json should be observed.\nThe database configuration file should be present or correctly initialized before being accessed.\n\n\n### Relevant log output\n\n```shell\n2026 Jun 17 04:50:41.132925 str-marvell-tl10-01 ERR python: :- parseDatabaseConfig: Sonic database config file doesn't exist at /var/run/redis/sonic-db/database_config.json\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2026-07-01T15:09:24Z",
+      "body": "@NAVINAAAA Can you please add more details about the issue, such as image version, sonic-mgmt branch, and etc?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27989,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27989",
+      "title": "Remove unused hwsku read from pddf_util",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-15T05:15:54Z",
+      "createdAt": "2026-06-19T09:46:38Z",
+      "author": "pavannaregundi",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/27988\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nget_platform_and_hwsku() -> get_hwsku() \u2192 get_localhost_info('hwsku') with no config_db, which unconditionally opens a connection:\r\n\r\n```\r\ndevice_info.py:\r\n\r\ndef get_localhost_info(field, config_db=None):\r\n    try:\r\n        # TODO: enforce caller to provide config_db explicitly and remove its default value\r\n        if not config_db:\r\n            config_db = ConfigDBConnector()\r\n            config_db.connect()\r\n```\r\n\r\nConnect() is what triggers SonicDBConfig::initialize() \u2192 parseDatabaseConfig \u2192 the ERR line, because /var/run/redis/sonic-db/database_config.json doesn't exist that early in boot.\r\n\r\nAlso we see that 'hwsku' is not used in get_path_to_device().\r\n\r\n#### How to verify it\r\n\r\nVerified by checking the reboot logs on x86_64-marvell_d64p512t-r0 platform and by running the 'vrf/test_vrf.py::TestVrfWarmReboot::test_vrf_system_warm_reboot' sonic-mgmt tests. \r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n- [x] 202605\r\n\r\nFix is applicable to all older branches which have pddf support, however requested for backport to only above 2 branches as UT is covered on them.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [x] 202511\r\n- [x] 202605\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "platform/pddf/i2c/utils/pddf_util.py",
+          "additions": 2,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T09:46:46Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T09:46:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T11:12:40Z",
+          "body": "This PR has backport request for branch(es): 202511,202605.<br>Added label(s) for branch(es) 202511,202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2026-07-01T15:08:32Z",
+          "body": "@anders-nexthop Can you please help review?"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-07-01T15:10:39Z",
+          "body": "@lotus-nexthop can you take a look at this PR please?\r\n"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-07-01T16:04:05Z",
+          "body": "@bingwang-ms can you help merge this one?"
+        },
+        {
+          "author": "pavannaregundi",
+          "createdAt": "2026-07-15T04:05:22Z",
+          "body": "@bingwang-ms can we merge this change."
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-18T07:40:23Z",
+          "body": "@pavannaregundi \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\n\n1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\n2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\n3. **Add the \"Tested for 202605 branch\" label** once testing is complete\n\nAlso, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\n\nThank you!\n\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-18T12:14:42Z",
+          "body": "This PR has backport request label(s) for branch(es): 202006,202511,202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202006: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

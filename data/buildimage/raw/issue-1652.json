@@ -1,0 +1,72 @@
+{
+  "number": 1652,
+  "title": "rsyslog pushing \"old\" supervisor logs to syslog",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/1652",
+  "createdAt": "2018-04-26T23:56:36Z",
+  "closedAt": "2019-01-24T21:13:20Z",
+  "author": "prsunny",
+  "labels": [
+    "Enhancement :heavy_plus_sign:"
+  ],
+  "assignees": [
+    "jleveque"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\nWhile stopping and starting `snmp `service, it was observed that the same error message is repeatedly pushed to syslog. \r\n\r\nInitial analysis suggest the logic here may have issues. \r\n\r\n/etc/rsyslog.d/supervisor.conf => InputFileStateFile \r\n\r\n**Steps to reproduce the issue:**\r\n1. systemctl stop snmp, systemctl start snmp multiple times\r\n2. tail -F /var/log/syslog | grep \"not expected\"\r\n3. The following logging happens everytime snmp service start. Notice the syslog time vs supervisord time\r\n\r\n**Describe the results you received:**\r\n\r\n```\r\nApr 26 22:43:48.757317 str-a7060cx-acs-1 INFO supervisord 2018-04-26 21:07:20,342 INFO exited: snmpd (terminated by SIGHUP; not expected)\r\nApr 26 22:45:58.609038 str-a7060cx-acs-1 INFO supervisord 2018-04-26 21:07:20,342 INFO exited: snmpd (terminated by SIGHUP; not expected)\r\nApr 26 23:04:25.800888 str-a7060cx-acs-1 INFO supervisord 2018-04-26 21:07:20,342 INFO exited: snmpd (terminated by SIGHUP; not expected)\r\n```\r\n\r\n**Describe the results you expected:**\r\nAfter deleting the above line from `supervisor/supervisord.log`, and repeat the same steps of stopping and starting snmp, the issue was not observed\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\n\r\n    **Output of `show version`:**\r\n\r\n    ```\r\n    admin@str-a7060cx-acs-1:/$ show version \r\n    SONiC Software Version: SONiC.20180330.16\r\n    ```\r\n",
+  "comments": [
+    {
+      "author": "lguohan",
+      "createdAt": "2018-08-17T23:19:02Z",
+      "body": "we can potentially classify the logs based on the docker, then the problem is that we do not have merged events logs\r\n\r\n"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2018-08-17T23:22:06Z",
+      "body": "another solution is the let supervisord to send the syslog directly to outside the docker, this will also solve the dual timestamp issues."
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2018-10-23T09:57:37Z",
+      "body": "I found the supervisord activity log also goes to stdout/stderr, therefore you can use docker logs to see them. \r\n\r\nhttps://docs.docker.com/config/containers/logging/configure/#configure-the-delivery-mode-of-log-messages-from-container-to-log-driver"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2439,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/2439",
+      "title": "[dockers] Prevent old supervisord messages from gettting re-logged to syslog",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2019-01-24T21:13:20Z",
+      "createdAt": "2019-01-12T03:05:08Z",
+      "author": "jleveque",
+      "body": "Upon restarting a Docker container, one would notice that all supervisord log messages from prior runs of that container would be logged to syslog again. This cluttered the log and made it difficult to follow.\r\n\r\nI found that the rsyslog imfile module's statefile would not consistently get updated. According to the [documentation](https://www.rsyslog.com/doc/v8-stable/configuration/modules/imfile.html), by default, a new state file is only written when the monitored file is being closed (end of rsyslogd execution). It appears that this was not always happening (possibly a race condition between rsyslog exiting and container shutdown?). This behavior can be modified to update the state file after every `n` number of lines forwarded to the syslog by setting the value of `$InputFilePersistStateInterval`. Note that setting this to a small value can have an impact on performance. However, supervisord logs are very low-volume (we normally only get 10-20 messages when the container starts and stops--none during normal execution), so I decided to set the value to `1` in order to ensure the state file is updated after every supervisord message, thus ensuring that we will never see old messages appear in the syslog.\r\n\r\n- Resolves https://github.com/Azure/sonic-buildimage/issues/1652",
+      "files": [
+        {
+          "path": "dockers/docker-base/etc/rsyslog.d/supervisor.conf",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2019-01-15T09:39:51Z",
+          "body": "what overhead are we adding here? could this slow down container stop or start for some time critical task such as warm reboot, fast-reboot?"
+        },
+        {
+          "author": "jleveque",
+          "createdAt": "2019-01-19T19:12:31Z",
+          "body": "@lguohan: The overhead should be negligible. Supervisor doesn't write very many log messages. However, we could take measurements with and without the change to be certain."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2019-01-25T21:14:43Z",
+          "body": "Made to 201811 branch on 1/25/2019"
+        }
+      ]
+    }
+  ]
+}

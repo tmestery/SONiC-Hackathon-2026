@@ -1,0 +1,118 @@
+{
+  "number": 1488,
+  "title": "[Debian9-S6100]: In LLDP for port id , instead of interface name ,mac address  is advertised ",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/1488",
+  "createdAt": "2018-03-13T09:50:32Z",
+  "closedAt": "2018-08-24T23:21:12Z",
+  "author": "chitra-raghavan",
+  "labels": [
+    "Bug :bug:",
+    "Platform: DellEMC"
+  ],
+  "assignees": [
+    "jleveque"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\n\r\nIn LLDP for port id , instead of interface name ,mac address  is advertised \r\n\r\n**Steps to reproduce the issue:**\r\n1. Check for LLDP information in peer device\r\n\r\n\r\n**Describe the results you received:**\r\nIn Peer Arista VM : \r\n\r\nARISTA01T1#show lldp neighbors\r\nLast table change time   : 1:55:32 ago\r\nNumber of table inserts  : 19\r\nNumber of table deletes  : 18\r\nNumber of table drops    : 0\r\nNumber of table age-outs : 9\r\n\r\nPort       Neighbor Device ID               Neighbor Port ID           TTL\r\n**_Et1        sonic-s6100-01                   4c76.25f4.7081             120_**\r\nARISTA01T1#\r\n\r\n\r\n**Describe the results you expected:**\r\nThe sonic DUT should be advertising interface name as the port id.\r\n\r\n\r\n**Additional information **\r\n\r\n **Output of show version sonic DUT:**\r\n\r\n_Build : buildimage-brcm-stretch-all 138_\r\n\r\nroot@sonic-s6100-01:~# show ver\r\nSONiC Software Version: SONiC.HEAD.138-b0b8d69\r\nDistribution: Debian 9.4\r\nKernel: 4.9.0-5-amd64\r\nBuild commit: b0b8d69\r\nBuild date: Mon Mar 12 13:03:50 UTC 2018\r\nBuilt by: johnar@jenkins-worker-4\r\n\r\nDocker images:\r\nREPOSITORY                 TAG                 IMAGE ID            SIZE\r\ndocker-syncd-brcm          HEAD.138-b0b8d69    d92b77a90440        331.6 MB\r\ndocker-syncd-brcm          latest              d92b77a90440        331.6 MB\r\ndocker-orchagent-brcm      HEAD.138-b0b8d69    ae0ca94d991a        260.5 MB\r\ndocker-orchagent-brcm      latest              ae0ca94d991a        260.5 MB\r\ndocker-lldp-sv2            HEAD.138-b0b8d69    0451d4fe2056        270.7 MB\r\ndocker-lldp-sv2            latest              0451d4fe2056        270.7 MB\r\ndocker-dhcp-relay          HEAD.138-b0b8d69    d1c0ab97120f        253.6 MB\r\ndocker-dhcp-relay          latest              d1c0ab97120f        253.6 MB\r\ndocker-database            HEAD.138-b0b8d69    175362bcb375        252.3 MB\r\ndocker-database            latest              175362bcb375        252.3 MB\r\ndocker-teamd               HEAD.138-b0b8d69    d6911b887ad9        257.6 MB\r\ndocker-teamd               latest              d6911b887ad9        257.6 MB\r\ndocker-snmp-sv2            HEAD.138-b0b8d69    03312ccf30c8        292 MB\r\ndocker-snmp-sv2            latest              03312ccf30c8        292 MB\r\ndocker-router-advertiser   HEAD.138-b0b8d69    5400a265ea98        250 MB\r\ndocker-router-advertiser   latest              5400a265ea98        250 MB\r\ndocker-platform-monitor    HEAD.138-b0b8d69    56e07878c4d7        271.9 MB\r\ndocker-platform-monitor    latest              56e07878c4d7        271.9 MB\r\ndocker-fpm-quagga          HEAD.138-b0b8d69    94b4ade9f44d        264.1 MB\r\ndocker-fpm-quagga          latest              94b4ade9f44d        264.1 MB\r\n\r\n\r\n",
+  "comments": [
+    {
+      "author": "jleveque",
+      "createdAt": "2018-08-24T23:21:12Z",
+      "body": "Fixed in PR https://github.com/Azure/sonic-buildimage/pull/1469"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26144,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26144",
+      "title": "[lldp] Fix transient MAC address Port ID during LLDP daemon startup",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-17T06:20:02Z",
+      "createdAt": "2026-03-12T08:01:25Z",
+      "author": "ZhaohuiS",
+      "body": "#### Why I did it\r\n\r\nWhen lldpd starts (or restarts), it sends the first LLDP frames with **MAC addresses as Port IDs** instead of the configured interface aliases (e.g., `Ethernet1/1`). This is because:\r\n\r\n1. lldpd starts in paused state and loads its config file (`/etc/lldpd.conf`)\r\n2. The config file only configures the management port (`eth0`) portidsubtype \u2014 no front-panel port configs exist\r\n3. After processing all config lines, lldpd internally **auto-resumes** (hardcoded behavior in lldpd's internal lldpcli)\r\n4. The first LLDP frames are sent with default MAC-based Port IDs\r\n5. lldpmgrd starts 2-3 seconds later and reconfigures each port with the correct alias via `lldpcli`\r\n6. This triggers an **MSAP change** (shutdown frame + new frame with correct Port ID) on every port\r\n\r\nPeers see transient neighbor flapping: a MAC-based entry appears briefly, then gets replaced by the correct interface name entry. This can trigger monitoring alerts and confuse network management systems (e.g., LLDP-based topology discovery, automated cabling validation).\r\n\r\nRelated issues:\r\n- Fixes #1488\r\n- Fixes #1457\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **37084792**:\r\n\r\n#### How I did it\r\n\r\nAdded port ID subtype configuration for **all front-panel ports** directly in the `lldpd.conf.j2` Jinja2 template. The template iterates over the `PORT` table from ConfigDB and generates `configure ports <name> lldp portidsubtype local <alias>` lines for every port that has an alias defined.\r\n\r\nThese configuration lines are processed by lldpd during startup config loading, **before** the internal auto-resume fires. This ensures the very first LLDP frame already carries the correct interface alias as Port ID, eliminating the transient MAC-based Port ID window entirely.\r\n\r\nThe change is additive \u2014 lldpmgrd continues to handle dynamic port configuration changes at runtime. When lldpmgrd later processes the same ports, the portidsubtype is already correct, so no MSAP change occurs (only the port description gets added, which is expected).\r\n\r\n**Key technical findings from investigation:**\r\n- lldpd starts paused by default (the `pause` directive in config is actually redundant)\r\n- lldpd's internal lldpcli auto-resumes after ALL config file lines are processed \u2014 this cannot be prevented via config\r\n- The `resume` call in `waitfor_lldp_ready.sh` (from PR #5493) fires after auto-resume, so it's also redundant\r\n- The `PORT` variable is available in sonic-cfggen template context from ConfigDB's PORT table\r\n\r\n#### How to verify it\r\n\r\n**Tested on:** Arista-7260CX3-C64 running SONiC.20251110.15 (64 front-panel ports)\r\n\r\n**Test procedure:**\r\n1. Applied the template change inside the lldp container\r\n2. Verified template rendering: `sonic-cfggen -d -t /usr/share/sonic/templates/lldpd.conf.j2` \u2014 confirmed 67 portidsubtype lines (1 eth0 + 66 Ethernet ports)\r\n3. Started tcpdump on Ethernet0: `tcpdump -i Ethernet0 -e ether proto 0x88cc -v`\r\n4. Restarted lldp service: `systemctl restart lldp`\r\n5. Captured the **very first** LLDP frame from the DUT\r\n\r\n**tcpdump results \u2014 first frame after restart:**\r\n```\r\n07:38:41.610005 LLDP, length 233\r\n  Chassis ID TLV (1), length 7\r\n    Subtype MAC address (4): ec:8a:48:3c:e4:a8\r\n  Port ID TLV (2), length 12\r\n    Subtype Local (7): Ethernet1/1        <-- CORRECT from first frame!\r\n  Time to Live TLV (3), length 2: TTL 120s\r\n  System Name TLV (5), length 14: bjw-can-7260-8\r\n```\r\n\r\n**Before this fix**, the first frame showed:\r\n```\r\n  Port ID TLV (2), length 8\r\n    Subtype MAC address (3): ec:8a:48:3c:e4:a8   <-- MAC address, WRONG\r\n```\r\n\r\n**Before:** MAC address as Port ID for 2-3 seconds \u2192 MSAP change \u2192 correct alias\r\n**After:** Correct alias (`Ethernet1/1`) from the very first LLDP frame \u2192 no MSAP change\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [x] 202411\r\n- [x] 202505\r\n- [x] 202511\r\n\r\n**Reason:** This race condition affects all SONiC versions using lldpd with the current startup architecture. The transient MAC-based Port ID causes neighbor flapping visible to peers on every LLDP container restart or device boot, which can trigger false alerts in production monitoring systems.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n- [x] SONiC.20251110.15 (master-based, Arista-7260CX3-C64)\r\n\r\n#### Description for the changelog\r\n\r\nFix LLDP Port ID showing MAC address instead of interface name during daemon startup by pre-configuring portidsubtype in lldpd.conf.j2 template.\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\nN/A \u2014 no ConfigDB or YANG schema changes.\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n\ud83e\udd94\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-lldp/lldpd.conf.j2",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/data/lldp/mgmt_iface_ipv4_with_ports.json",
+          "additions": 41,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/sample_output/py3/lldp_conf/lldpd-ipv4-iface-with-ports.conf",
+          "additions": 8,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_j2files.py",
+          "additions": 7,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-12T08:01:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-12T08:01:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "liushilongbuaa",
+          "createdAt": "2026-03-12T09:21:15Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-12T10:01:35Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-12T10:01:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-03-12T10:02:15Z",
+          "body": "Addressed all 4 review comments in commit 82ef792:\n\n1. **Sort ports** (`PORT|sort`): \u2705 Applied. Ports are now iterated in deterministic sorted order.\n\n2. **Filter special ports**: \u2705 Added `startswith` checks for `Ethernet-IB`, `Ethernet-Rec`, `Ethernet-BP` \u2014 matching lldpmgrd's `inband_prefix()`, `recirc_prefix()`, `backplane_prefix()` filter logic. Updated comment to document scope.\n\n3. **Fallback for missing alias**: \u2705 Uses `PORT[port_name].alias|default('')` with an else branch that falls back to `port_name` \u2014 same behavior as lldpmgrd's `generate_pending_lldp_config_cmd_for_port()`.\n\n4. **Unit test**: \u2705 Added `mgmt_iface_ipv4_with_ports.json` test input with:\n   - Normal ports with aliases (`Ethernet0`, `Ethernet4`)\n   - Port with empty alias (`Ethernet8`) \u2192 falls back to port name\n   - Port with no alias key (`Ethernet12`) \u2192 falls back to port name\n   - Special ports (`Ethernet-IB0`, `Ethernet-Rec0`, `Ethernet-BP0`) \u2192 excluded from output\n   \n   Expected output in `lldpd-ipv4-iface-with-ports.conf` validates all scenarios."
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-03-12T13:16:35Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-03-12T13:50:19Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-03-17T02:58:44Z",
+          "body": "@lguohan could you please sign off this PR again, since a new commit(address comments) submitted, the previous approval is stale.\r\nthank you."
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-03-17T06:31:44Z",
+          "body": "@vmittal-msft  could you please approve the cherry pick for 202511?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-20T15:52:57Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/26294"
+        }
+      ]
+    }
+  ]
+}

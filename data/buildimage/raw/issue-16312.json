@@ -1,0 +1,99 @@
+{
+  "number": 16312,
+  "title": "chassis-packet: arp_update script failed to refresh a FAILED nexthop entry",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/16312",
+  "createdAt": "2023-08-29T04:01:07Z",
+  "closedAt": "2023-09-01T18:41:48Z",
+  "author": "anamehra",
+  "labels": [
+    "Triaged",
+    "Platform: Cisco",
+    "chassis-packet"
+  ],
+  "assignees": [
+    "anamehra"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nOn Chassis-packet Line-card, sometimes it was observed that arp_update script fails to refresh a FAILED neighbor entry.\r\n\r\n2603:10e2:400:3::1 dev PortChannel19 router FAILED\r\n\r\narp_update fetch the ip neighbor entry and use cut to get data from index 3 and 4.\r\n\r\nThis works fine when 'ip neigh show'  displays the entry as \r\n2603:10e2:400:3::1 dev PortChannel19 FAILED\r\n\r\nwhere index 4 gives state 'FAILED'\r\n\r\nBut in case of a failed entry where there is extra keyword 'router', it fails to retry as it does not match the compare criteria .\r\n\r\nThis kind of entry may happen when the state is in transition and the kernel is aware of the nexthop type and gets arp resultion failure.\r\n\r\ne.g. if the entry is in STALE state and far end goes down, a ping try will result in this state with 'router' keyword.\r\n\r\nThis affects the internal BFD session on the Cisco chassis-packet as the session is not created for FAILED arp neighbor.\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1.\r\n2.\r\n3.\r\n\r\n#### Describe the results you received:\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "anamehra",
+      "createdAt": "2023-08-29T04:02:51Z",
+      "body": "Hi @abdosi , please assign this to me."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16311,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/16311",
+      "title": "chassis-packet: Update arp_update script for FAILED and STALE check",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-09-01T18:41:47Z",
+      "createdAt": "2023-08-29T03:54:05Z",
+      "author": "anamehra",
+      "body": "Signed-off-by: anamehra anamehra@cisco.com\r\n\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/16312\r\n\r\n1. Fixing an issue with FAILED entry resolution retry. Neighbor entries in arp table may sometimes enter a FAILED state when the far end is down and reports the state as follows:\r\n```\r\n2603:10e2:400:3::1 dev PortChannel19 router FAILED\r\n```\r\n\r\nWhile the arp_update script handles the entries for FAILED in the following format, the above was not handled due to the token location (extra router keyword at index 4):\r\n```\r\n2603:10e2:400:3::1 dev PortChannel19 FAILED\r\n```\r\n\r\nThe former format may appear if an arp resolution is tried on a link that is known but the far end goes down, e.g., pinging a STALE entry while the far end is down.\r\n\r\n2. Refreshing STALE entries to make sure the far end is reachable. STALE entries for some backend ports may appear in chassis-packet when no traffic is received for a while on the port. When the far end goes down, it is expected for BFD to stop sending packets on the session for which the far end is not reachable. But as the entry is known as stale, on the Cisco chassis, BFD keeps sending packets. Refreshing the stale entry will keep active links as reachable in the neighbor table while the entries for the far end down will enter a failed state. FAILED state entries will be retired and entered reachable when far end comes back up.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nModified arp_update state check to use grep for states in neighbor data string place of using the position. If a string contains any of the matching patterns from INCOMPLETE, FAILED or STALE, try ping to resolve.\r\n\r\n\r\n#### How to verify it\r\n\r\nOn a chassis-packet Chassis LC:\r\n\r\n1. Bring down far end asic or LC.\r\n2. run arp_update on local namespace swss docker\r\n3. check ip netns exec ip -4 neigh show\r\n4. There will be FAILED entries\r\n5. bringup far end and wait for links to be up\r\n6. run arp_update on local namespace swss docker\r\n7. Failed entries for this far end should change to reachable\r\n8. Wait for couple of mins and check for STALE entries.\r\n9. run arp_update and this should resolve STALE entries to reachable\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [x] 202205\r\n- [ ] 202211\r\n- [x] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/scripts/arp_update",
+          "additions": 12,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "anamehra",
+          "createdAt": "2023-08-29T03:54:32Z",
+          "body": "@abdosi , Please review."
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2023-09-01T01:20:07Z",
+          "body": "/azp run Azure.sonic-buildimage "
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-09-01T01:20:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-09-01T18:42:16Z",
+          "body": "Cherry-pick PR to 202211: https://github.com/sonic-net/sonic-buildimage/pull/16384"
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2023-09-02T01:01:15Z",
+          "body": "@theasianpianist for viz."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-09-03T03:32:24Z",
+          "body": "Cherry-pick PR to 202305: https://github.com/sonic-net/sonic-buildimage/pull/16423"
+        },
+        {
+          "author": "gechiang",
+          "createdAt": "2023-09-06T18:30:28Z",
+          "body": "@yxieca , @StormLiangMS ,\r\nMSFT ADO: 25087618"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-09-08T16:58:03Z",
+          "body": "Cherry-pick PR to 202205: https://github.com/sonic-net/sonic-buildimage/pull/16501"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-09-08T16:58:05Z",
+          "body": "@anamehra PR conflicts with 202211 branch"
+        },
+        {
+          "author": "anamehra",
+          "createdAt": "2023-09-08T17:13:45Z",
+          "body": "> @anamehra PR conflicts with 202211 branch\r\n\r\nIts already in 202211 via #16384"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,138 @@
+{
+  "number": 21829,
+  "title": "FRR rejects SRv6 vtysh commands from bgpcfgd when doing bgp service restart",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21829",
+  "createdAt": "2025-02-21T23:32:35Z",
+  "closedAt": "2025-03-03T22:04:00Z",
+  "author": "BYGX-wcr",
+  "labels": [
+    "Triaged",
+    "routing"
+  ],
+  "assignees": [
+    "BYGX-wcr"
+  ],
+  "milestone": null,
+  "body": "When BGP container/service is restarted, the CONFIG_DB entries will be pushed to Bgpcfgd for programming into FRR. Bgpcfgd does so by batching a set of commands in a temporary file and run \"vtysh -f /tmp/<filename>\" to push the configuration to FRR.\n\nRecently, we noticed that when there is SRv6 configuration in CONFIG_DB, such an operation failed because FRR complained that \"segment-routing\" command was not complete.\n\n\nExample syslog:\n```\n2025 Feb 21 23:03:52.127094 vlab-01 DEBUG bgp#bgpcfgd: execute command '['vtysh', '-f', '/tmp/tmp_oxgkoog']'.\n2025 Feb 21 23:03:52.196510 vlab-01 ERR bgp#bgpcfgd: command execution returned 2. Command: '['vtysh', '-f', '/tmp/tmp_oxgkoog']', stdout: '[83|mgmtd] sending configuration#012[84|zebra] sending configuration#012[90|bgpd] sending configuration#012Waiting for children to finish applying config...#012[100|staticd] sending configuration#012', stderr: 'line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012[84|zebra] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012[100|staticd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012[83|mgmtd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012[90|bgpd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012'\n2025 Feb 21 23:03:52.196510 vlab-01 ERR bgp#bgpcfgd: ConfigMgr::commit(): can't push configuration from file='/tmp/tmp_oxgkoog', rc='2', stdout='[83|mgmtd] sending configuration#012[84|zebra] sending configuration#012[90|bgpd] sending configuration#012Waiting for children to finish applying config...#012[100|staticd] sending configuration#012', stderr='line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012[84|zebra] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012[100|staticd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012[83|mgmtd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012line 1485: % Command incomplete[30]: segment-routing#012#012line 1486: % Unknown command[30]: srv6#012line 1487: % Unknown command[30]: static-sids#012line 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN#012[90|bgpd] Configuration file[/etc/frr/frr.conf] processing failure: 2#012'\n2025 Feb 21 23:03:52.196510 vlab-01 CRIT bgp#bgpcfgd: Runner::commit was unsuccessful\n```\n\nRelevant content of the vtysh commands file in the case above:\n```\n!\n! template: bgpd/templates/msft.general/v4.tor/instance.conf.j2\n!\n  neighbor 10.0.0.57 remote-as 64600\n  neighbor 10.0.0.57 description ARISTA01T1\n  neighbor 10.0.0.57 peer-group TIER1_V4\n!\n\naddress-family ipv4 unicast\n  neighbor 10.0.0.57 allowas-in 1\nexit-address-family\n\n!\n\n\n\n!\n\n!\n! end of template: bgpd/templates/msft.general/v4.tor/instance.conf.j2\n!\n\n\n\n\n\n!\n! end of template: bgpd/templates/general/instance.conf.j2\n!\nsegment-routing\nsrv6\nstatic-sids\nsid 3000:1:10::/48 locator loc1 behavior uN\n!\n! Set ip source to loopback for bgp learned routes\n!\nroute-map RM_SET_SRC6 permit 10\n    set src FC00:1::32\n!\nipv6 protocol bgp route-map RM_SET_SRC6\n!\n!\n! Set ip source to loopback for bgp learned routes\n!\nroute-map RM_SET_SRC permit 10\n    set src 10.1.0.32\n!\nip protocol bgp route-map RM_SET_SRC\n!\n\n```\n",
+  "comments": [
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2025-02-21T23:35:10Z",
+      "body": "Manual push of the commands file shows the same error:\n```\nroot@vlab-01:/# vtysh -f /tmp/tmp_oxgkoog\n[348|mgmtd] sending configuration\n[349|zebra] sending configuration\nWaiting for children to finish applying config...\n[365|staticd] sending configuration\n[355|bgpd] sending configuration\nline 1485: % Command incomplete[30]: segment-routing\n\nline 1486: % Unknown command[30]: srv6\nline 1485: % Command incomplete[30]: segment-routing\n\nline 1486: % Unknown command[30]: srv6\nline 1487: % Unknown command[30]: static-sids\nline 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN\n[365|staticd] Configuration file[/etc/frr/frr.conf] processing failure: 2\nline 1487: % Unknown command[30]: static-sids\nline 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN\n[349|zebra] Configuration file[/etc/frr/frr.conf] processing failure: 2\nline 1485: % Command incomplete[30]: segment-routing\n\nline 1486: % Unknown command[30]: srv6\nline 1487: % Unknown command[30]: static-sids\nline 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN\nMGMTD: No changes found to be committed!\n[348|mgmtd] Configuration file[/etc/frr/frr.conf] processing failure: 2\nline 1485: % Command incomplete[30]: segment-routing\n\nline 1486: % Unknown command[30]: srv6\nline 1487: % Unknown command[30]: static-sids\nline 1488: % Unknown command[30]: sid 3000:1:10::/48 locator loc1 behavior uN\n[355|bgpd] Configuration file[/etc/frr/frr.conf] processing failure: 2\nroot@vlab-01:/# \n```"
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2025-02-21T23:39:01Z",
+      "body": "@ahsalam, @cscarpitta, Nvidia team and we both found this issue when testing the latest 202412 image."
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2025-02-22T00:00:02Z",
+      "body": "Note: this issue may not be reproduced deterministically."
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2025-02-24T23:44:00Z",
+      "body": "The issue seems to be caused by BGP commands section didn't clean up the CLI context. A config snippet that aimed to reproduce the issue is as follows:\n\n```\nroot@vlab-01:/# vtysh -f tmp/tmp1\n[3570|mgmtd] sending configuration\n[3571|zebra] sending configuration\nWaiting for children to finish applying config...\nline 6: % Unknown command[30]: ip route add 10.0.0.1/32 10.0.0.52 Portchannel101 tag 1\nline 8: % Command incomplete[30]: segment-routing\n\nline 9: % Unknown command[30]: srv6\nline 10: % Unknown command[30]: static-sids\nline 11: % Unknown command[30]: sid fcbb:bbbb:1:2::/64 locator loc1 behavior uN\nline 6: % Unknown command[30]: ip route add 10.0.0.1/32 10.0.0.52 Portchannel101 tag 1\nline 8: % Command incomplete[30]: segment-routing\n\nline 9: % Unknown command[30]: srv6\nline 10: % Unknown command[30]: static-sids\nline 11: % Unknown command[30]: sid fcbb:bbbb:1:2::/64 locator loc1 behavior uN\n[3577|bgpd] sending configuration\n[3571|zebra] Configuration file[/etc/frr/frr.conf] processing failure: 2\n[3570|mgmtd] Configuration file[/etc/frr/frr.conf] processing failure: 2\n[3587|staticd] sending configuration\nline 6: % Unknown command[30]: ip route add 10.0.0.1/32 10.0.0.52 Portchannel101 tag 1\nline 8: % Command incomplete[30]: segment-routing\n\nline 9: % Unknown command[30]: srv6\nline 10: % Unknown command[30]: static-sids\nline 11: % Unknown command[30]: sid fcbb:bbbb:1:2::/64 locator loc1 behavior uN\n[3587|staticd] Configuration file[/etc/frr/frr.conf] processing failure: 2\nline 6: % Unknown command[30]: ip route add 10.0.0.1/32 10.0.0.52 Portchannel101 tag 1\nline 8: % Command incomplete[30]: segment-routing\n\nline 9: % Unknown command[30]: srv6\nline 10: % Unknown command[30]: static-sids\nline 11: % Unknown command[30]: sid fcbb:bbbb:1:2::/64 locator loc1 behavior uN\n[3577|bgpd] Configuration file[/etc/frr/frr.conf] processing failure: 2\nroot@vlab-01:/# cat tmp/tmp1\nrouter bgp 65100\naddress-family ipv4 unicast\n  neighbor 10.0.0.57 allowas-in 1\nexit-address-family\n\nip route add 10.0.0.1/32 10.0.0.52 Portchannel101 tag 1\n\nsegment-routing\nsrv6\nstatic-sids\nsid fcbb:bbbb:1:2::/64 locator loc1 behavior uN\n\nroot@vlab-01:/# \n```\n\nAs we can see, even a simple static route command after the BGP commands will fail."
+    },
+    {
+      "author": "gechiang",
+      "createdAt": "2025-02-26T16:21:43Z",
+      "body": "@abdosi , should this be assigned to @BYGX-wcr ?"
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2025-02-28T18:25:37Z",
+      "body": "We decided to add necessary terminating commands at the end of BGP configuration command groups to fix the issue per routing WG's discussion."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 21889,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/21889",
+      "title": "[Bgpcfgd]Add correct terminating commands at the end of BGP config command groups",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-03-03T22:03:59Z",
+      "createdAt": "2025-02-28T18:21:10Z",
+      "author": "BYGX-wcr",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nPreviously, Bgpcfgd generated groups of BGP configuration commands that did not have proper terminating commands. As a consequence, non-BGP configuration commands following the BGP configuration command may be rejected by the FRR because of FRR's context was not properly switched. You check the details in Issue #21829.\r\n\r\nFix #21829 \r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\nAdd exit and exit-address-family command at the end of BGP configuration command groups.\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_advertise_rt.py",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_bbr.py",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_bgp.py",
+          "additions": 4,
+          "deletions": 4
+        },
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_static_rt.py",
+          "additions": 5,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_advertise_rt.py",
+          "additions": 53,
+          "deletions": 20
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_bbr.py",
+          "additions": 18,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_static_rt.py",
+          "additions": 129,
+          "deletions": 30
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-28T18:23:00Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-28T18:23:11Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-28T19:49:33Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-28T19:49:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "abdosi",
+          "createdAt": "2025-02-28T20:54:50Z",
+          "body": "we don't need to change template now ? "
+        },
+        {
+          "author": "BYGX-wcr",
+          "createdAt": "2025-02-28T21:40:42Z",
+          "body": "> we don't need to change template now ?\r\n\r\nNo, because that won't be sufficient."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-04T05:11:52Z",
+          "body": "Cherry-pick PR to msft-202412: https://github.com/Azure/sonic-buildimage-msft/pull/774"
+        }
+      ]
+    }
+  ]
+}

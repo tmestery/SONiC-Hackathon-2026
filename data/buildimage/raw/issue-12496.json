@@ -1,0 +1,74 @@
+{
+  "number": 12496,
+  "title": "[dhcp6relay] Segfault can be seen when updates are made to DHCP_RELAY table",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/12496",
+  "createdAt": "2022-10-25T22:45:51Z",
+  "closedAt": "2022-12-06T18:53:41Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Issue for 202012",
+    "MSFT"
+  ],
+  "assignees": [
+    "yxieca",
+    "kellyyeh",
+    "jcaiMR"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n**Non-Functional:** Updates made to DHCP_RELAY table after process start could potentially result in dhcp6relay crash\r\n\r\n**Technically, this isn't a functional issue because user is expected to restart dhcp_relay service after any config changes, so core generated wouldn't interrupt anything, but logs like this can appear**\r\n\r\n`Oct 24 06:39:42.190618 r-leopard-45 INFO kernel: [ 3835.911499] dhcp6relay[91002]: segfault at 0 ip 00007f71be460430 sp 00007fff2d552fb8 error 4 in libswsscommon.so.0.0.0[7f71be446000+5c000]\r\n`\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n\r\nNote: Not very easy to repro\r\n\r\nThis is seen during our internal testing, which removes dhcp_relay config, restarts the service and tests for msgs relayed. \r\n\r\n1. Have multiple dhcpv6 servers configured and restart the dhcp_relay container\r\n2. Remove one or a few servers \r\n3. Send one of these msg types https://github.com/sonic-net/sonic-dhcp-relay/blob/202012/src/relay.cpp#L754 from the client and expect to see a core dump.\r\n\r\n\r\n#### Triaging:\r\n\r\nAlthough there is a requirement on user to restart the service after any config changes, the existing dhcp6relay logic subscribes to DHCP_RELAY table and continuously monitors for any updates in a separate thread. \r\n\r\n```\r\n(gdb) thread 2\r\n(gdb) bt\r\n#0  0x00007f71bdfe538f in epoll_wait (epfd=6, events=events@entry=0x7f71b8000e80, maxevents=maxevents@entry=1, timeout=timeout@entry=1000) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30\r\n#1  0x00007f71be48934f in swss::Select::poll_descriptors (this=0x560b1825b3a0 <swssSelect>, c=0x7f71bde0ae90, timeout=1000) at select.cpp:98\r\n#2  0x00007f71be48957b in swss::Select::select (this=this@entry=0x560b1825b3a0 <swssSelect>, c=c@entry=0x7f71bde0ae90, timeout=timeout@entry=1000) at select.cpp:167\r\n#3  0x0000560b18245a2c in get_dhcp (vlans=vlans@entry=0x7fff2d553550) at ./src/configInterface.cpp:57\r\n#4  0x0000560b18245aa8 in handleSwssNotification (vlans=0x7fff2d553550) at ./src/configInterface.cpp:78\r\n#5  0x00007f71be405327 in ?? () from /usr/lib/x86_64-linux-gnu/libboost_thread.so.1.71.0\r\n#6  0x00007f71be0b3fa3 in start_thread (arg=<optimized out>) at pthread_create.c:486\r\n#7  0x00007f71bdfe506f in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:95\r\n```\r\n\r\nThe issue lies in the unsafe way both the threads operate on https://github.com/sonic-net/sonic-dhcp-relay/blob/202012/src/main.cpp#L26 the vlans array.\r\n\r\nThread 2 after receiving a notification appends to vlans array https://github.com/sonic-net/sonic-dhcp-relay/blob/202012/src/configInterface.cpp#L144. \r\n\r\nThread 1 would've already added libevent callbacks based on the the address of individual objects present in the vlans array i.e. `&vlans[i]` https://github.com/sonic-net/sonic-dhcp-relay/blob/202012/src/relay.cpp#L959 & https://github.com/sonic-net/sonic-dhcp-relay/blob/202012/src/relay.cpp#L987\r\n\r\nvector might reallocate the objects present in the existing array to a different location in memory and might deallocate existing objects i.e. the prev &vlan[i] is deallocated and is unsafe to use but the callbacks still use the stale reference and this might result in segfault.\r\n\r\n```\r\n(gdb) thread 1\r\n(gdb) bt\r\n#0  swss::RedisContext::getContext (this=this@entry=0x0) at dbconnector.cpp:464\r\n#1  0x00007f71be45868b in swss::RedisReply::RedisReply (this=0x7fff2d553180, ctx=0x0, command=...) at redisreply.cpp:35\r\n#2  0x00007f71be458d32 in swss::RedisReply::RedisReply (this=0x7fff2d553180, ctx=<optimized out>, command=..., expectedType=3) at redisreply.cpp:69\r\n#3  0x00007f71be4608f9 in swss::DBConnector::hset (this=this@entry=0x0, key=\"DHCPv6_COUNTER_TABLE|\", field=\"Information-Request\", value=\"1\") at dbconnector.cpp:660\r\n#4  0x0000560b1823a6ee in update_counter (state_db=..., counterVlan=\"DHCPv6_COUNTER_TABLE|\", msg_type=11 '\\v') at /usr/include/c++/8/bits/stl_tree.h:984\r\n#5  0x0000560b1823b707 in callback (fd=<optimized out>, event=<optimized out>, arg=0x560b19d44e00) at /usr/include/c++/8/ext/atomicity.h:96\r\n#6  0x00007f71be4f29ba in ?? () from /usr/lib/x86_64-linux-gnu/libevent-2.1.so.6\r\n#7  0x00007f71be4f3537 in event_base_loop () from /usr/lib/x86_64-linux-gnu/libevent-2.1.so.6\r\n#8  0x0000560b1823a274 in signal_start () at ./src/relay.cpp:893\r\n#9  0x0000560b1823d185 in loop_relay (vlans=vlans@entry=0x7fff2d553550) at /usr/include/c++/8/bits/char_traits.h:287\r\n#10 0x0000560b1823995b in main (argc=<optimized out>, argv=<optimized out>) at ./src/main.cpp:28\r\n\r\n(state of the vlan array, reflects the new allocation)\r\n(gdb) f 9\r\ngdb) p &vlans[0][1]\r\n$5 = (relay_config *) 0x7f71b80011f0\r\n(gdb) p &vlans[0][0]\r\n$6 = (relay_config *) 0x7f71b8001140\r\n(gdb) p &vlans[0][2]\r\n$7 = (relay_config *) 0x7f71b80012a0\r\n\r\n(stale reference passed to callback)\r\n(gdb) f 5       \r\n#5  0x0000560b1823b707 in callback (fd=<optimized out>, event=<optimized out>, arg=0x560b19d44e00) at /usr/include/c++/8/ext/atomicity.h:96\r\n(gdb) p config \r\n$8 = (relay_config *) 0x560b19d44e00\r\n\r\nAdditional info:\r\n(gdb) p *config\r\n$16 = {local_sock = 17, server_sock = 18, filter = 14, link_address = {sin6_family = 10, sin6_port = 0, sin6_flowinfo = 0, sin6_addr = {__in6_u = {\r\n        __u6_addr8 = \"i\\000\\000\\001\", '\\000' <repeats 11 times>, \"\\001\", __u6_addr16 = {105, 256, 0, 0, 0, 0, 0, 256}, __u6_addr32 = {16777321, 0, 0, 16777216}}}, sin6_scope_id = 0}, \r\n  state_db = std::shared_ptr<swss::DBConnector> (empty) = {get() = 0x0}, interface = \"\", mux_key = \"\", servers = std::vector of length 0, capacity 0, \r\n  servers_sock = std::vector of length 0, capacity 0, is_option_79 = true, is_interface_id = false}\r\n\r\n(gdb) p vlans[0][1]\r\n$17 = {local_sock = 17, server_sock = 18, filter = 14, link_address = {sin6_family = 10, sin6_port = 0, sin6_flowinfo = 0, sin6_addr = {__in6_u = {\r\n        __u6_addr8 = \"i\\000\\000\\001\", '\\000' <repeats 11 times>, \"\\001\", __u6_addr16 = {105, 256, 0, 0, 0, 0, 0, 256}, __u6_addr32 = {16777321, 0, 0, 16777216}}}, sin6_scope_id = 0}, \r\n  state_db = std::shared_ptr<swss::DBConnector> (use count 3, weak count 0) = {get() = 0x560b19d47430}, interface = \"Vlan690\", mux_key = \"VLAN_MEMBER|Vlan690|\", \r\n  servers = std::vector of length 1, capacity 1 = {\"6900::2\"}, servers_sock = std::vector of length 1, capacity 1 = {{sin6_family = 10, sin6_port = 8962, sin6_flowinfo = 0, sin6_addr = {\r\n        __in6_u = {__u6_addr8 = \"i\", '\\000' <repeats 14 times>, \"\\002\", __u6_addr16 = {105, 0, 0, 0, 0, 0, 0, 512}, __u6_addr32 = {105, 0, 0, 33554432}}}, sin6_scope_id = 0}}, \r\n  is_option_79 = true, is_interface_id = false}\r\n```\r\n\r\n#### Fix:\r\nEasiest fix would be not to subscribe DHCP_RELAY table and just read from it once. In general, the unsafe operations on vector must be avoided\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\n\r\n#### Output of `show version`:\r\n\r\nOriginally seen on 202012, but can be seen on other images as well.\r\n\r\n[sysdump_test_dhcp6_relay_remove_dhcp_server.tar.gz](https://github.com/sonic-net/sonic-buildimage/files/9864462/sysdump_test_dhcp6_relay_remove_dhcp_server.tar.gz)\r\n\r\n[debs.tar.gz](https://github.com/sonic-net/sonic-buildimage/files/9864497/debs.tar.gz) debs and their dbg symbols\r\n\r\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25,
+      "repository": "sonic-net/sonic-dhcp-relay",
+      "url": "https://github.com/sonic-net/sonic-dhcp-relay/pull/25",
+      "title": "disable relay configuration dynamic change",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-11-30T06:41:53Z",
+      "createdAt": "2022-11-28T08:53:05Z",
+      "author": "jcaiMR",
+      "body": "#### Why I did it\r\ndisable dhcp relay configuration dynamic change, since current code not ready for that.\r\n\r\nfix issue\r\nhttps://github.com/sonic-net/sonic-buildimage/issues/12496\r\n\r\n#### How I did it\r\n1. Instead of applying new configuration, we will give a warning message when configuration change detected after container bootup. User need manually restart container to take effect. \r\n2. still keep config monitor thread as in future we may reopen it after resolve dynamic config change issue \r\n\r\n#### How to verify it\r\nVerify by script for regression, and UT with check syslog after configuration change.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [x] 202205\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "src/configInterface.cpp",
+          "additions": 14,
+          "deletions": 7
+        },
+        {
+          "path": "src/configInterface.h",
+          "additions": 2,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "kellyyeh",
+          "createdAt": "2022-11-28T17:03:22Z",
+          "body": "@jcaiMR I thought the plan for future was to read from config db once. Are we still planning on keeping dynamic reading?"
+        },
+        {
+          "author": "jcaiMR",
+          "createdAt": "2022-11-29T01:25:40Z",
+          "body": "> @jcaiMR I thought the plan for future was to read from config db once. Are we still planning on keeping dynamic reading?\r\n\r\nIn last meeting we talked a little bit,  maybe part of configuration like option79 enable/disable may still needed, and keep the original monitor thread there can give a clear message when config changed, so I keep it there first. "
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2022-11-29T03:04:53Z",
+          "body": "Required for 202012"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2022-11-29T14:41:05Z",
+          "body": "@kellyyeh @yxieca can you please add the label? is it only for 202012?"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2023-01-13T00:06:11Z",
+          "body": "This commit could not be cleanly cherry-picked to 202012. Please submit another PR."
+        }
+      ]
+    }
+  ]
+}

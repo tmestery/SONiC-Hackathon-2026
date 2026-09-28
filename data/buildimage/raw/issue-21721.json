@@ -1,0 +1,168 @@
+{
+  "number": 21721,
+  "title": "TSC command doesn't work on the Smart Switch",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21721",
+  "createdAt": "2025-02-13T00:57:46Z",
+  "closedAt": "2025-05-14T04:01:31Z",
+  "author": "oleksandrivantsiv",
+  "labels": [
+    "Triaged",
+    "smartswitch"
+  ],
+  "assignees": [
+    "rameshraghupathy"
+  ],
+  "milestone": null,
+  "body": "**Steps to reproduce**\n\nCan be manually reproduced:\n\n```\nadmin@sonic:~$ sudo TSC\nThis commmand is only supported Chassis\n```\n\nPR https://github.com/sonic-net/sonic-buildimage/pull/19729 introduced an env variable SMARTSWITCH which is exported in by new script /usr/bin/platform_utils.\n\nOnly with the file existing and the SMARTSWITCH is true, the TSA/TSB/TSC can work on a smartswitch properly, otherwise it will be considered as a chassis with linecards:\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/dockers/docker-fpm-frr/base_image_files/TSC#L14\n\n```\n#!/bin/bash\n\n# Source the platform_utils script\nsource \"$(dirname \"$0\")/platform_utils\" > /dev/null 2>&1\n\n${SMARTSWITCH:=false}\n\n# Restrict command to sudo users\nif [ \"$EUID\" -ne 0 ] ; then\n  echo \"Root priveleges are needed for this operation\"\n  exit 1\nfi\n\nif [ -f /etc/sonic/chassisdb.conf ] && [ \"$SMARTSWITCH\" = false ] ; then\n  if [[ $1 == \"no-stats\" ]]; then\n    rexec all -c \"sudo TSC no-stats\"\n  else\n    rexec all -c \"sudo TSC\"\n  fi\n  exit 0\nfi\n\n/usr/bin/TS TSC\n[[ $1 != \"no-stats\" ]] && portstat -p 5\n\nif [[ \"$(sonic-cfggen -d -v DEVICE_METADATA.localhost.subtype | tr '[:upper:]' '[:lower:]')\" == *\"dualtor\"* ]]\nthen\n  echo\n  show mux status\nfi\n```\n\nBut the platform_utils is not there:\n\n```\nadmin@sonic:/$ ls /usr/bin/platform_utils\nls: cannot access '/usr/bin/platform_utils': No such file or directory\n\nadmin@sonic:/$ whereis platform_utils\nplatform_utils:\n```\n\n`sonic-buildimage/rules/docker-fpm-frr.mk` should be updated to include `/usr/bin/platform_utils`\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/rules/docker-fpm-frr.mk\n\n**Observed behavior**\n\nTest failed:\n\nFailed: TSC return unexpected state ERROR\n\n**Expected behavior**\n\nTest should pass on smart switch.\n\n",
+  "comments": [
+    {
+      "author": "oleksandrivantsiv",
+      "createdAt": "2025-02-13T00:58:46Z",
+      "body": "@prgeor, @kperumalbfn FYI"
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2025-02-25T00:49:47Z",
+      "body": "@rameshraghupathy is working on a fix"
+    },
+    {
+      "author": "rameshraghupathy",
+      "createdAt": "2025-04-19T16:15:49Z",
+      "body": "@prabhataravind  @vvolam Can you check if https://github.com/sonic-net/sonic-buildimage/pull/21709 is addressing the problem?  The code is already committed."
+    },
+    {
+      "author": "vvolam",
+      "createdAt": "2025-04-24T17:56:12Z",
+      "body": "@rameshraghupathy Issue is still observed on master\n\n```\nadmin@str3-msn4280-02:~$ show ver | head\n\nSONiC Software Version: SONiC.master.832053-f2671cd09\nSONiC OS Version: 12\nDistribution: Debian 12.9\nKernel: 6.1.0-22-2-amd64\nBuild commit: f2671cd09\nBuild date: Tue Apr 22 12:40:52 UTC 2025\nBuilt by: azureuser@510d38dbc000006\n\nPlatform: x86_64-nvidia_sn4280-r0\nadmin@str3-msn4280-02:~$ sudo TSC\nThis commmand is only supported Chassis\n```"
+    },
+    {
+      "author": "rameshraghupathy",
+      "createdAt": "2025-05-01T15:16:55Z",
+      "body": "@vvolam  \n\nThis is working on the devices I tested.  To investigate further, **can you get the platform.json content, especially DEVICE_METADATA and chassis / subtype? .  Also, get the switch_type** \n Shown below is the output of the command on systems I tested:\n\n**On the Switch:**\n\nroot@MtFuji:/home/cisco# sudo TSC\nSystem Mode: No external neighbors\nThe rates are calculated within 5 seconds period\n      IFACE    STATE    RX_OK      RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR    TX_OK     TX_BPS    TX_UTIL    TX_ERR    TX_DRP    TX_OVR\n-----------  -------  -------  ----------  ---------  --------  --------  --------  -------  ---------  ---------  --------  --------  --------\n  Ethernet0        U        6  163.10 B/s      0.00%         0         0         0        1  23.76 B/s      0.00%         0         0         0\n  Ethernet8        U        6  135.31 B/s      0.00%         0         0         0        1  23.74 B/s      0.00%         0         0         0\n \nroot@MtFuji:/home/cisco# ls /usr/bin/platform_utils\nls: cannot access '/usr/bin/platform_utils': No such file or directory\nroot@MtFuji:/home/cisco# whereis platform_utils\nplatform_utils:\n \n \n**On the DPU:**\n \nroot@sonic:/home/admin# sudo TSC\nSystem Mode: No external neighbors\nThe rates are calculated within 5 seconds period\n    IFACE    STATE    RX_OK    RX_BPS    RX_UTIL    RX_ERR    RX_DRP    RX_OVR    TX_OK    TX_BPS    TX_UTIL    TX_ERR    TX_DRP    TX_OVR\n---------  -------  -------  --------  ---------  --------  --------  --------  -------  --------  ---------  --------  --------  --------\nEthernet0        U        0  0.82 B/s      0.00%         0         0       N/A        0  0.00 B/s      0.00%         0         0       N/A\nroot@sonic:/home/admin# [134025.810053] system_tuning.s (3474478): drop_caches: 1\n[134055.892736] system_tuning.s (3476175): drop_caches: 1\n \nroot@sonic:/home/admin#\nroot@sonic:/home/admin# ls /usr/bin/platform_utils\nls: cannot access '/usr/bin/platform_utils': No such file or directory\nroot@sonic:/home/admin# whereis platform_utils\nplatform_utils:"
+    },
+    {
+      "author": "oleksandrivantsiv",
+      "createdAt": "2025-05-05T18:00:50Z",
+      "body": "@rameshraghupathy can you add `set -x` to the beginning of the /usr/bin/TSC script and show the output?\n\n```\n#!/bin/bash\nset -x\n\n# Source the platform_utils script\nsource \"$(dirname \"$0\")/platform_utils\" > /dev/null 2>&1\n\n${SMARTSWITCH:=false}\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22518,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/22518",
+      "title": "Including platform_utils in make and removing default initialization of $SMARTSWITCH in TSA, TSB, TSC",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-05-14T04:01:30Z",
+      "createdAt": "2025-05-02T01:11:58Z",
+      "author": "rameshraghupathy",
+      "body": "Including platform_utils in make and removing default initialization of $SMARTSWITCH in TSA, TSB, TSC\r\n\r\nFixes #21721 \r\n\r\n#### Why I did it\r\nForgot to add platform_utils into make when I made the commit. Due to this TSC command doesn't work on the Smart Switch\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nIncluded platform_utils in rules/docker-fpm-frr.mk\r\nRemoved default initialization of $SMARTSWITCH in TSA, TSB, TSC\r\n\r\n#### How to verify it\r\nRun \"sudo TSC\"  and it should output \r\nsudo TSC\r\nSystem Mode: No external neighbors\r\nThe rates are calculated within 5 seconds period\r\n#### \r\nThe command should not output\r\nadmin@sonic:~$ sudo TSC\r\nThis commmand is only supported Chassis\r\n\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n- [x] 202405\r\n- [x] 202411\r\n\r\n\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-fpm-frr/base_image_files/TSA",
+          "additions": 0,
+          "deletions": 2
+        },
+        {
+          "path": "dockers/docker-fpm-frr/base_image_files/TSB",
+          "additions": 0,
+          "deletions": 2
+        },
+        {
+          "path": "dockers/docker-fpm-frr/base_image_files/TSC",
+          "additions": 0,
+          "deletions": 2
+        },
+        {
+          "path": "rules/docker-fpm-frr.mk",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-02T01:12:05Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-02T01:12:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-05T19:59:15Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-05T19:59:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-06T03:02:50Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-06T03:03:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-06T03:03:31Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-06T03:03:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-07T14:56:46Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-07T14:57:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-07T17:17:22Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-07T17:17:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "liushilongbuaa",
+          "createdAt": "2025-05-08T06:57:22Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-10T02:26:54Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-10T02:27:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-07-08T20:04:53Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-buildimage/pull/23258"
+        }
+      ]
+    }
+  ]
+}

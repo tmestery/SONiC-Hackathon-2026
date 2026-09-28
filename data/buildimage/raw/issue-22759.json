@@ -1,0 +1,158 @@
+{
+  "number": 22759,
+  "title": "Bug: 'config interface ip add' adds entries for non-existent intefaces",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/22759",
+  "createdAt": "2025-05-29T03:55:09Z",
+  "closedAt": "2025-09-26T01:28:45Z",
+  "author": "anders-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [
+    "qiluo-msft"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`config interface ip add` does not check to see if the interface string that is passed to it corresponds to a valid interface. It will accept arbitrary interface names and will add misformed entries for these invalid interfaces to ConfigDB. These entries cannot be removed by `config interface ip delete` because that command checks the actual interface list, and these entries are never present there. Trying to run `config replace` fails because these bad entries do not pass yang validation.\n\n### Steps to Reproduce\n\nTrivial to reproduce.\n\nRun the command and pass an interface name which matches the basic pattern for a routed interface, but does not exist, for instance:\n\n`sudo config interface ip add EthernetNotARealInterface 1.2.3.4`\n\nThe command will complete and return success. An entry will be added to the VLAN_SUB_INTERFACE table, using the invalid interface name as the key. Running `sudo config replace /etc/sonic/config_db.json` at this point will fail, since the added entry will fail yang validation.\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\n\n```\nadmin@gold113-dut:~$ sudo config interface ip add EthernetNR 1.2.3.4\nadmin@gold113-dut:~$ sudo config interface ip add EthernetJustMadeUp 1.2.3.4\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet99999999 1.2.3.4\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet-totally-not-real 1.2.3.4\nadmin@gold113-dut:~$ sudo config interface ip remove EthernetNR 1.2.3.4\nCannot find device \"EthernetNR\"\nadmin@gold113-dut:~$ sudo config replace -d /etc/sonic/config_db.json\n** DRY RUN EXECUTION **\nConfig Replacer: Config replacement starting.\nConfig Replacer: Target config length: 50412.\nConfig Replacer: Getting current config db.\nConfig Replacer: Generating patch between target config and current config db.\nConfig Replacer: Applying patch using 'Patch Applier'.\nPatch Applier: localhost: Patch application starting.\nPatch Applier: localhost: Patch: [{\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp|1.2.3.4~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999|1.2.3.4~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real|1.2.3.4~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR|1.2.3.4~132\"}]\nPatch Applier: localhost getting current config db.\nPatch Applier: localhost: simulating the target full config after applying the patch.\nPatch Applier: localhost: validating all JsonPatch operations are permitted on the specified fields\nPatch Applier: localhost: validating target config does not have empty tables,\n                            since they do not show up in ConfigDb.\nPatch Applier: localhost: sorting patch updates.\nFailed to replace config\nUsage: config replace [OPTIONS] TARGET_FILE_PATH\nTry \"config replace -h\" for help.\n\nError: Data Loading Failed\nLeafref \"/sonic-port:sonic-port/sonic-port:PORT/sonic-port:PORT_LIST/sonic-port:name\" of value \"EthernetNR\" points to a non-existing leaf.\n```\n\nExpected Behavior:\n\nCommand is not accepted, no bad entries are added to ConfigDB\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSeems to be a day-1 issue, present in all versions which support this command.\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 3901,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/3901",
+      "title": "Issue #22759: Prevent CLI from adding invalid routed interfaces",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-09-26T01:28:44Z",
+      "createdAt": "2025-05-29T03:37:17Z",
+      "author": "anders-nexthop",
+      "body": "\r\n<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\n\r\nCurrently, config interface ip add will accept EthernetX interfaces which do not have an underlying port or portchannel associated with them. This violates the yang model, so if these entries are added to ConfigDB, 'config replace' and 'config reload' don't work properly. To make matters worse, the implementation of config interface ip remove does not detect these invalid entries, so once they are added they cannot be removed through the CLI. I modified the command to reject invalid cases.\r\n\r\nFixes: [#22759](https://github.com/sonic-net/sonic-buildimage/issues/22759)\r\n\r\n#### How I did it\r\n\r\nAdd a check for this case into the config interface ip add CLI command to avoid invalid cases of this form by checking to ensure that the interface which is passed is associated with a valid port or port channel if it is an Ethernet or PortChannel interface. There is already an existing check for vlan interfaces.\r\n\r\n#### How to verify it\r\n\r\nModify existing test cases to handle expected behavior, verify that they all pass.\r\n\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n```\r\nadmin@gold113-dut:~$ sudo config interface ip add EthernetNR 1.2.3.4\r\nadmin@gold113-dut:~$ sudo config interface ip add EthernetJustMadeUp 1.2.3.4\r\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet99999999 1.2.3.4\r\nadmin@gold113-dut:~$ sudo config interface ip add Ethernet-totally-not-real 1.2.3.4\r\nadmin@gold113-dut:~$ sudo config interface ip remove EthernetNR 1.2.3.4\r\nCannot find device \"EthernetNR\"\r\nadmin@gold113-dut:~$ sudo config replace -d /etc/sonic/config_db.json\r\n** DRY RUN EXECUTION **\r\nConfig Replacer: Config replacement starting.\r\nConfig Replacer: Target config length: 50412.\r\nConfig Replacer: Getting current config db.\r\nConfig Replacer: Generating patch between target config and current config db.\r\nConfig Replacer: Applying patch using 'Patch Applier'.\r\nPatch Applier: localhost: Patch application starting.\r\nPatch Applier: localhost: Patch: [{\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetJustMadeUp|1.2.3.4~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet99999999|1.2.3.4~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/Ethernet-totally-not-real|1.2.3.4~132\"}, {\"op\": \"remove\", \"path\": \"/INTERFACE/EthernetNR|1.2.3.4~132\"}]\r\nPatch Applier: localhost getting current config db.\r\nPatch Applier: localhost: simulating the target full config after applying the patch.\r\nPatch Applier: localhost: validating all JsonPatch operations are permitted on the specified fields\r\nPatch Applier: localhost: validating target config does not have empty tables,\r\n                            since they do not show up in ConfigDb.\r\nPatch Applier: localhost: sorting patch updates.\r\nFailed to replace config\r\nUsage: config replace [OPTIONS] TARGET_FILE_PATH\r\nTry \"config replace -h\" for help.\r\n\r\nError: Data Loading Failed\r\nLeafref \"/sonic-port:sonic-port/sonic-port:PORT/sonic-port:PORT_LIST/sonic-port:name\" of value \"EthernetNR\" points to a non-existing leaf.\r\n```\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n```\r\nadmin@gold113-dut:~$ sudo config interface ip add EthernetNR.10 1.2.3.4\r\nUsage: config interface ip add [OPTIONS] <interface_name> <ip_addr> <default\r\n                               gateway IP address>\r\nTry \"config interface ip add -h\" for help.\r\n\r\nError: Interface EthernetNR.10 does not exist\r\n```",
+      "files": [
+        {
+          "path": "config/main.py",
+          "additions": 59,
+          "deletions": 41
+        },
+        {
+          "path": "tests/ip_config_test.py",
+          "additions": 144,
+          "deletions": 0
+        },
+        {
+          "path": "tests/vlan_test.py",
+          "additions": 0,
+          "deletions": 1
+        },
+        {
+          "path": "tests/vrrp_test.py",
+          "additions": 168,
+          "deletions": 168
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-29T03:37:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-29T03:37:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-29T04:16:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-29T04:17:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-29T04:20:10Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-05-29T04:20:20Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-06-23T20:39:18Z",
+          "body": "@qiluo-msft it looks like you were assigned to take a look at this issue awhile back, please review it if you have time or assign another reviewer if not."
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2025-07-02T15:09:50Z",
+          "body": "@qiluo-msft Can you please review or find someone to review this change? Thanks"
+        },
+        {
+          "author": "qiluo-msft",
+          "createdAt": "2025-07-02T22:21:35Z",
+          "body": "> def remove(ctx, interface_name, ip_addr):\r\n\r\nIs there a bug in \"config interface ip remove\" implementation? should it \"detect these invalid entries\" ? #Closed\r\n\r\n---\r\nRefers to: config/main.py:5323 in c4e3812. [](commit_id = c4e3812644647b08834bb084276d8135a85a1aa3, deletion_comment = False)"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-07-03T02:11:44Z",
+          "body": "> > def remove(ctx, interface_name, ip_addr):\r\n> \r\n> Is there a bug in \"config interface ip remove\" implementation? should it \"detect these invalid entries\" ?\r\n> \r\n> Refers to: config/main.py:5323 in [c4e3812](https://github.com/sonic-net/sonic-utilities/commit/c4e3812644647b08834bb084276d8135a85a1aa3). [](commit_id = [c4e3812](https://github.com/sonic-net/sonic-utilities/commit/c4e3812644647b08834bb084276d8135a85a1aa3), deletion_comment = False)\r\n\r\nI thought about whether to address this in `remove()` but decided not to. These entries should never have been put into ConfigDB, and they break YANG validation. Adding code into `remove()` to handle invalid cases seems like the wrong way to address the problem, since it would cover up a real error. Even if all we do is detect these entries and warn about them, that's still a lot of defensive coding.\r\n\r\nThat was my thinking, but maybe there's a precedent for `config` functions handling invalid configuration data? Is the expectation that functions should try to do something smart in these cases? Even if that's just to try and detect bad config state and warn the user about it?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-07-07T16:39:33Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-07-07T16:39:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-07-07T17:57:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-07-07T17:58:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2025-07-14T20:11:32Z",
+          "body": "lgtm, please fix the PR checker failures. "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-08-14T20:36:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-08-14T20:36:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-08-14T23:03:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-08-14T23:03:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-08-14T23:17:14Z",
+          "body": "@manoharan-nexthop thanks for the review, I've made the change you requested. @prsunny @qiluo-msft can I please get another code owner to have a look? thanks!"
+        }
+      ]
+    }
+  ]
+}

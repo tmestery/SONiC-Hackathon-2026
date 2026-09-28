@@ -1,0 +1,148 @@
+{
+  "number": 25599,
+  "title": "Bug: Race condition in enabling monitoring during config reload",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25599",
+  "createdAt": "2026-02-20T04:20:22Z",
+  "closedAt": "2026-03-12T15:57:12Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "tirupatihemanth",
+    "StormLiangMS"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThere is a race condition in the implementation of config reload in sonic code.\u00a0\n\nDuring config reload -y -f we ask monit to unmonitor container_checker to avoid errors as containers go down. And during restarting as part of the reload we ask monit to monitor container_checker again. For this we using \"monit monitor container_checker\" command. Please see below\u00a0\n\n\nhttps://github.com/sonic-net/sonic-utilities/blob/cbb31f0d65c6768107f2089f6c75a617d8b519b4/config/main.py#L1058C1-L1068C55\n\n```\n    try:\n        subprocess.check_call(['sudo', 'monit', 'status'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n        click.echo(\"Enabling container and routeCheck monitoring ...\")\n        clicommon.run_command(['sudo', 'monit', 'monitor', 'routeCheck'])\n        clicommon.run_command(['sudo', 'monit', 'monitor', 'container_checker'])\n        time.sleep(1)\n    except subprocess.CalledProcessError as err:\n        pass\n    # Reload Monit configuration to pick up new hostname in case it changed\n    click.echo(\"Reloading Monit configuration ...\")\n    clicommon.run_command(['sudo', 'monit', 'reload'])\n```\n\nHowever, monit monitor is an asynchronous command and doesn't wait for the action to be done and returns immediately. usually the operation is finished within a second and that is the reason behind very\u00a0low probability reproduction. However config reload is a cpu intensive process and in our situation this action was not scheduled within the second.\u00a0\n\nHere is the failure case log sequence\n\u00a0\n```\nsyslog:4815:2026 Feb  8 12:46:20.088975 sonic INFO monit[312345]: 'routeCheck' monitor on user request\nsyslog:4818:2026 Feb  8 12:46:20.127129 sonic INFO monit[312345]: 'routeCheck' monitor action done\nsyslog:4822:2026 Feb  8 12:46:20.129079 sonic INFO monit[312345]: 'container_checker' monitor on user request\n\nsyslog:4937:2026 Feb  8 12:46:21.160832 sonic INFO monit[316880]: Reinitializing monit daemon\nsyslog:4939:2026 Feb  8 12:46:21.164852 sonic INFO monit[312345]: Reinitializing Monit -- control file '/etc/monit/monitrc'\nsyslog:4992:2026 Feb  8 12:46:22.131899 sonic INFO monit[312345]: 'sonic' Monit reloaded\n```\nHere is the healthy case log sequence\u00a0\n```\nsyslog.5:3408:2026 Feb  8 12:21:10.925215 sonic INFO monit[1196]: 'routeCheck' monitor on user request\nsyslog.5:3411:2026 Feb  8 12:21:10.951078 sonic INFO monit[1196]: 'routeCheck' monitor action done\nsyslog.5:3412:2026 Feb  8 12:21:10.965341 sonic INFO monit[1196]: 'container_checker' monitor on user request\nsyslog.5:3415:2026 Feb  8 12:21:11.007043 sonic INFO monit[1196]: 'container_checker' monitor action done\n\nsyslog.5:3557:2026 Feb  8 12:21:12.005919 sonic INFO monit[260153]: Reinitializing monit daemon\nsyslog.5:3558:2026 Feb  8 12:21:12.006214 sonic INFO monit[1196]: Reinitializing Monit -- control file '/etc/monit/monitrc'\nsyslog.5:3607:2026 Feb  8 12:21:12.972726 sonic INFO monit[1196]: 'sonic' Monit reloaded\n```\n\nDuring monit reload, monit saves and restores monitoring state and since container_checker was not enabled so it will forever remained unmonitored from this point onwards. \n\n\u200b\n\n### Steps to Reproduce\n\nExecute config reload -y -f  (low probability of reproduction)\n\n### Actual Behavior and Expected Behavior\n\nExpected behaviour: After config reload we should have container_checker monitor enabled.\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4295,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4295",
+      "title": "Wait for monit monitor <service> operation to complete during config reload",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-12T15:57:11Z",
+      "createdAt": "2026-02-20T20:00:02Z",
+      "author": "tirupatihemanth",
+      "body": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/25599\r\n\r\n<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\nWait for monit monitor <service> operation to complete before monit reload operation\r\n\r\n#### Why I did\r\nThere is a race condition in the implementation of config reload in sonic code.\u00a0\r\n\r\nDuring config reload -y -f we ask monit to unmonitor container_checker to avoid errors as containers go down. And during restarting as part of the reload we ask monit to monitor container_checker again. For this we using \"monit monitor container_checker\" command. This is an async operation. Please see below\u00a0\r\n\r\n\r\nhttps://github.com/sonic-net/sonic-utilities/blob/cbb31f0d65c6768107f2089f6c75a617d8b519b4/config/main.py#L1058C1-L1068C55\r\n\r\n```\r\n    try:\r\n        subprocess.check_call(['sudo', 'monit', 'status'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\r\n        click.echo(\"Enabling container and routeCheck monitoring ...\")\r\n        clicommon.run_command(['sudo', 'monit', 'monitor', 'routeCheck'])\r\n        clicommon.run_command(['sudo', 'monit', 'monitor', 'container_checker'])\r\n        time.sleep(1)\r\n    except subprocess.CalledProcessError as err:\r\n        pass\r\n    # Reload Monit configuration to pick up new hostname in case it changed\r\n    click.echo(\"Reloading Monit configuration ...\")\r\n    clicommon.run_command(['sudo', 'monit', 'reload'])\r\n```\r\n\r\nDuring monit reload, monit saves and restores monitoring state and since container_checker was not enabled so it will forever remained unmonitored from this point onwards.\r\n\r\n#### How to verify it\r\nmonit checkers will not be left in not monitored state after config reload",
+      "files": [
+        {
+          "path": "config/main.py",
+          "additions": 23,
+          "deletions": 1
+        },
+        {
+          "path": "tests/config_test.py",
+          "additions": 3,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-20T20:00:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-20T20:00:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-20T20:19:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-20T20:19:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-20T21:26:10Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-20T21:26:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2026-03-09T08:00:11Z",
+          "body": "@tirupatihemanth please handle conflict and restart checkers so i can merge it"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T00:35:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T00:35:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-03-10T01:55:41Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T01:55:44Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T01:55:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-03-10T18:10:42Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T18:10:45Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T18:10:58Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-03-10T21:26:03Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T21:26:07Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T21:26:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T23:48:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T23:48:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

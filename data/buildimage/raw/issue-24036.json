@@ -1,0 +1,187 @@
+{
+  "number": 24036,
+  "title": "Enhancement: Show options for `show ip route`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24036",
+  "createdAt": "2025-09-17T23:37:28Z",
+  "closedAt": "2026-06-23T15:07:20Z",
+  "author": "liamkearney-msft",
+  "labels": [
+    "Enhancement :heavy_plus_sign:"
+  ],
+  "assignees": [
+    "anders-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the enhancement\n\nthe command `show ip route` currently does not show any information on possible command options in its help text:\n`\nuser@sonic-host:~$ show ip route -h\nUsage: show ip route [OPTIONS] [IPADDRESS] [vrf <vrf_name>] [...]\n\n  Show IP (IPv4) routing table\n\nOptions:\n  -d, --display TEXT    all|frontend\n  -n, --namespace TEXT  Namespace name or all\n  --verbose             Enable verbose output\n  -?, -h, --help        Show this message and exit.\n`\n\nFor example, show ip route summary is an option but no info is in the help text\n\n### Current Behavior\n\ncurrent behaviour shows no info for subcommands\n\n### Proposed Behavior\n\ndisplay subcommands in help text",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2025-10-08T15:23:18Z",
+      "body": "@liamkearney-msft, can you add more details on what options are missing?"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2025-10-08T15:25:07Z",
+      "body": "@anders-nexthop to triage."
+    },
+    {
+      "author": "liamkearney-msft",
+      "createdAt": "2025-10-08T22:52:39Z",
+      "body": "im not sure as to all the options that are available (hence this issue..). Its not really that clear from reading the code either.\nI know that `show ip route summary` and `show ip route json` are available. The json option apparently puts a large load on the CPU which we should probably put a warning on in the command help.\n\nThe relevant code snippet / file is:\n\nsonic-utilities/show/main.py: \n```\n@ip.command()\n@click.argument('args', metavar='[IPADDRESS] [vrf <vrf_name>] [...]', nargs=-1, required=False)\n@click.option('--display', '-d', 'display', default=None, show_default=False, type=str, help='all|frontend')\n@click.option('--namespace', '-n', 'namespace', default=None, type=str, show_default=False, help='Namespace name or all')\n@click.option('--verbose', is_flag=True, help=\"Enable verbose output\")\ndef route(args, namespace, display, verbose):\n    \"\"\"Show IP (IPv4) routing table\"\"\"\n    # Call common handler to handle the show ip route cmd\n    bgp_common.show_routes(args, namespace, display, verbose, \"ip\")\n```\n\nwhere bgp_common.show_routes() is defined in  sonic-utilities/show/bgp_common.py"
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2025-10-10T17:15:25Z",
+      "body": "The underlying issue is that `show ip route` (along with many other show commands) calls into vtysh in order to run commands. This command passes `args` into `bgp_common.show_routes()` which builds a command string and passes it on to vtysh (for example, with args=\"summary\", the internal command will be something like \"sudo vtysh -c show ip route summary\"). The `click` module handles help menus internally, and it will only know about the top-level options. So not only does the help menu for `show ip route` not have subcommands, but `show ip route summary` doesn't even have a separate help command.\n\nThe best solution would probably be to add separate top-level CLI commands for each vtysh command, instead of using `show ip route` as an entry point. But there are lots of nested vtysh commands, so that would be a pretty large undertaking. Alternatively, we can implement a workaround where we intercept the --help argument and make manual call into vtysh to get the list of subcommands, and then print that along with the original help text. That way at least we can give the operator visibility into the available commands, even though the top-level text will not be much help. We can try this out for `show ip route` and if we find a reasonable solution we can use it for other vtysh-based CLI commands as needed.\n\nI've done some basic testing of this approach (handle --help manually by calling into vtysh to get the subcommand list) and it seems like it will work. I will put together a PR for this and submit it for comment. "
+    },
+    {
+      "author": "liamkearney-msft",
+      "createdAt": "2025-10-11T01:53:21Z",
+      "body": "thanks @anders-nexthop - capturing --help and sending it down to vtysh to get the command list sounds like a good approach to me.\nappreciate the effort, cheers"
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2026-06-24T22:44:28Z",
+      "body": "@liamkearney-msft this finally merged, please give the help and tab completions a try and see what you think."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4123,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4123",
+      "title": "Issue 24036: Add help for 'show ip route' subcommands",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-23T15:07:19Z",
+      "createdAt": "2025-11-10T22:07:14Z",
+      "author": "anders-nexthop",
+      "body": "#### What I did\n\nAdd a new `VtyshCommand` class that extends click CLI commands with vtysh help text and shell completions. The class calls into vtysh to get subcommand information and generates help text following the existing SONiC CLI format.\n\nCloses: [#24036](https://github.com/sonic-net/sonic-buildimage/issues/24036)\n\n#### How I did it\n\nCall into vtysh to extract subcommands and descriptions, and use that information to populate help text and completions. A `VtyshCommand` wrapper class handles everything so other commands can easily be extended.\n\n**Update from original submission:** Replaced the old `click._bashcomplete` monkey-patch (removed in Click 8) with Click 8's native shell completion API \u2014 a `VtyshParamType` class that implements `shell_complete()` using `CompletionItem`. This is cleaner and forward-compatible.\n\nAn important consideration is whether it's acceptable to call into vtysh to retrieve this information. The underlying issue is that the `show ip route` command tree is implemented in FRR, not SONiC. The current CLI is a thin shim. This approach is a general solution that works for any show command passing through to vtysh, and automatically supports new vtysh commands.\n\nNote: This PR does not handle description strings for user-defined arguments (IPADDRESS, vrf NAME, etc). That can be added in a follow-up.\n\n#### How to verify it\n\nManually verify that subcommand help works, existing help works, tab completions work, and existing commands still function.\n\nUnit tests:\n\n```\ntests/vtysh_help_test.py::TestVtyshHelpCommands::test_vtysh_help_basic_functionality PASSED\ntests/vtysh_help_test.py::TestVtyshHelpCommands::test_vtysh_help_with_subcommands PASSED\ntests/vtysh_help_test.py::TestVtyshHelpCommands::test_vtysh_help_without_subcommands PASSED\ntests/vtysh_help_test.py::TestVtyshHelpCommands::test_nested_command_help PASSED\ntests/vtysh_help_test.py::TestVtyshHelpCommands::test_basic_invalid_command_error_handling PASSED\ntests/vtysh_help_test.py::TestVtyshHelpCommands::test_nested_invalid_command_error_handling PASSED\ntests/vtysh_help_test.py::TestVtyshHelpCommands::test_vtysh_caching_functionality PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_basic_completion_functionality PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_nested_completion_functionality PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_completion_with_no_results PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_completion_with_vtysh_error PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_completion_with_whitespace_handling PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_nested_command_help_with_completion PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_nested_command_help_with_inline_completion PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_completion_false_uses_space_before_question_mark PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_completion_true_uses_no_space_before_question_mark PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_shell_complete_end_to_end PASSED\ntests/vtysh_help_test.py::TestVtyshCompletionCommands::test_shell_complete_end_to_end_no_filter PASSED\n```\n\n#### New command output\n\n```\nadmin@vlab-01:~$ show ip route -h\nUsage: show ip route [OPTIONS] COMMAND [ARGS]...\n\nShow IP (IPv4) routing table\n\nOptions:\n  -d, --display TEXT    all|frontend\n  -n, --namespace TEXT  Namespace name or all\n  --verbose             Enable verbose output\n  -?, -h, --help        Show this message and exit.\n\nCommands:\n  A.B.C.D         Network in the IP routing table to display\n  A.B.C.D/M       IP prefix <network>/<length>, e.g., 35.0.0.0/8\n  babel           Babel routing protocol (Babel)\n  bgp             Border Gateway Protocol (BGP)\n  connected       Connected routes (directly attached subnet or host)\n  ...\n  vrf             Specify the VRF\n```",
+      "files": [
+        {
+          "path": "doc/Command-Reference.md",
+          "additions": 15,
+          "deletions": 0
+        },
+        {
+          "path": "show/main.py",
+          "additions": 6,
+          "deletions": 5
+        },
+        {
+          "path": "show/vtysh_helper.py",
+          "additions": 303,
+          "deletions": 0
+        },
+        {
+          "path": "tests/vtysh_help_test.py",
+          "additions": 626,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-10T22:07:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-10T22:07:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-10T23:42:06Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-10T23:42:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-11-11T16:28:27Z",
+          "body": "@qiluo-msft @liamkearney-msft please take a look"
+        },
+        {
+          "author": "prgeor",
+          "createdAt": "2025-11-19T17:06:17Z",
+          "body": "@prsunny @StormLiangMS please take a look"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-03-18T06:55:26Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: anders-nexthop / name: Anders Linn  (b1ad89153136134e6ae0afb90e3c4ac6d2da6290)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-18T06:55:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-18T06:56:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-18T19:56:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-18T19:56:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T23:36:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T23:37:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-06-19T23:37:36Z",
+          "body": "Thanks for the review! Addressed all four items in the latest push:\n\n- **Namespace gap**: switched to `rvtysh -n <asic_id>` \u2014 namespace threaded from the Click `--namespace` option. See inline reply on `vtysh_helper.py`.\n- **Typo in `show/main.py`**: fixed.\n- **Tests**: added four new cases \u2014 chassis-supervisor, multi-ASIC namespace pass-through, single-ASIC namespace-ignored, and default-no-namespace.\n- **Docs**: updated `Command-Reference.md` under `Help For Show Commands`, `show ip route`, and `show ipv6 route` to note the dynamic FRR-sourced help and TAB completion.\n\nSingle push-back on restoring the static `[IPADDRESS] [vrf <vrf_name>] [...]` metavar \u2014 reasoning in the inline reply. Let me know what you think.\n\n*\u2014 anders-bot (AI-assisted, on behalf of @anders-nexthop)*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-20T00:32:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-20T00:32:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-06-20T03:43:57Z",
+          "body": "@deepak-singhal0408 I pushed one more commit to fix some test cases that had `vtysh` hardcoded instead of `rvtysh`. CI/CD is passing now but I need another approval."
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-06-23T15:08:19Z",
+          "body": "Thanks @deepak-singhal0408 , I have merged this. This change was for `show ip route` only, but the approach could be used with any vtysh command. Is there desire to extend this feature to other commands? If so I can take that effort up next."
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-06-23T22:56:34Z",
+          "body": "Thanks for the offer @anders-nexthop ! `show ip bgp` seems like another high-value target \u2014 the current SONiC CLI `show ip bgp summary` doesn't expose received route counts, and operators frequently need to discover subcommands like `community`, `regexp`, `neighbors <IP> received-routes` that aren't surfaced today.\r\n\r\nThat said, I'd suggest letting this `show ip route` change soak for a bit first \u2014 see how it gets consumed, whether any issues surface, and let feature asks come in organically before expanding scope. Over-exposing vtysh commands could have side effects (users relying on FRR-specific options that change across versions, or discovering commands that interact poorly with SONiC's state model).\r\n\r\ncc: @yxieca and @lguohan as well for viz"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-06-23T23:42:44Z",
+          "body": "> Thanks for the offer @anders-nexthop ! `show ip bgp` seems like another high-value target \u2014 the current SONiC CLI `show ip bgp summary` doesn't expose received route counts, and operators frequently need to discover subcommands like `community`, `regexp`, `neighbors <IP> received-routes` that aren't surfaced today.\r\n> \r\n> That said, I'd suggest letting this `show ip route` change soak for a bit first \u2014 see how it gets consumed, whether any issues surface, and let feature asks come in organically before expanding scope. Over-exposing vtysh commands could have side effects (users relying on FRR-specific options that change across versions, or discovering commands that interact poorly with SONiC's state model).\r\n> \r\n> cc: @yxieca and @lguohan as well for viz\r\n\r\nSure, makes sense. Thanks for the review!"
+        }
+      ]
+    }
+  ]
+}

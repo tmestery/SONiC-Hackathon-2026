@@ -1,0 +1,114 @@
+{
+  "number": 27908,
+  "title": "[chrony][BMC] System clock never converges after reboot/power-cycle on RTC-less BMC platforms (makestep is disabled)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27908",
+  "createdAt": "2026-06-15T22:07:49Z",
+  "closedAt": "2026-06-29T22:08:54Z",
+  "author": "william8545",
+  "labels": [
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "saiarcot895",
+    "judyjoseph"
+  ],
+  "milestone": null,
+  "body": "## Describe the bug\n\nOn SONiC BMC platforms without a battery-backed/persistent RTC (e.g. Aspeed AST2700-based BMC cards), the system clock comes up at a stale time after every boot and **never converges to the correct time**, even with NTP configured. `chronyc tracking` permanently reports `Leap status: Not synchronised`.\n\n## Steps to reproduce\n\n1. Deploy a SONiC BMC image on an Aspeed AST2700-based BMC (no persistent RTC).\n2. Reboot \u2014 and in particular **power-cycle** \u2014 the BMC.\n3. Log in and run `date` and `chronyc tracking`.\n\n## Expected behavior\n\nAfter boot (and once an NTP source is reachable), the system clock converges to the correct time within seconds.\n\n## Actual behavior\n\nThe clock comes up weeks/months in the past and never corrects:\n\n```\nReference ID    : 00000000 ()\nStratum         : 0\nRef time (UTC)  : Thu Jan 01 00:00:00 1970\nLeap status     : Not synchronised\n```\n\n## Root cause analysis\n\n**1. No persistent RTC on the BMC.** The on-SoC RTC is not battery-backed, so it resets on every power cycle. Kernel log at each boot:\n\n```\naspeed-rtc 12c0f000.rtc: setting system clock to 1970-01-01T01:04:44 UTC (3884)\n```\n\n`systemd` then only advances the clock as far as its build epoch, so userspace sees a time pinned near the **image build date** (the offset from real time grows with image age).\n\n**2. `makestep` is disabled in the shared chrony template** \u2014 `files/image_config/chrony/chrony.conf.j2`:\n\n```jinja\n# Disabled because we don't want chrony to do any clock steps; it should only slew\n#makestep 1 3\n```\n\nThis is intentional: the system clock is meant to only *slew* and never *step*, relying on a persistent RTC to provide correct time at boot. That is appropriate for switches but breaks on an RTC-less BMC \u2014 the boot-time offset is large, and chrony's default maximum slew rate (~8.3%, \u224883333 ppm) means correcting an offset of *N* seconds takes \u2248 12\u00b7*N* seconds, so a multi-week offset effectively never converges and each reboot resets it.\n\nBackground on why stepping is disabled (slew-only by design): see References.\n\n> Note: a reachable, trustworthy NTP source is also required \u2014 `chrony` can only step/slew to a time it actually receives. That part is deployment-specific and separate from this issue.\n\n## References\n\n- HLD \u2014 SONiC Migration to Chrony: https://github.com/sonic-net/SONiC/blob/master/doc/ntp/migration-to-chrony.md\n- HLD tracking issue: sonic-net/SONiC#1852\n- ntpd \u2192 chrony PR: #20497\n- Config template: `files/image_config/chrony/chrony.conf.j2`\n",
+  "comments": [
+    {
+      "author": "oleksandrivantsiv",
+      "createdAt": "2026-06-16T23:10:44Z",
+      "body": "@yxieca, @judyjoseph FYI"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28050,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28050",
+      "title": "Add a service to save the epoch frequently",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-29T22:08:53Z",
+      "createdAt": "2026-06-23T21:53:12Z",
+      "author": "saiarcot895",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nFor devices that may not have a reliable hardware clock (or don't have a hardware clock at all), systemd has a feature where it will update the system time with a more reasonable time if it sees that the time is wildly off or known to be incorrect. One of the sources of a reasonable time is an epoch file, at `/usr/lib/clock-epoch`. If the modification\r\ntime of the epoch file is greater than the system time, then it will update the system time to the modification time of the epoch file.\r\n\r\nFixes #27908\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\nTake advantage of this by writing an epoch file daily, so that if the device goes for a reboot (planned or unplanned), the system time is reasonably close. Also bind-mount that file from `/host` into `/usr/lib/clock-epoch`, so that it can be used across images.\r\n\r\n#### How to verify it\r\n\r\nCreate the epoch file, set the time back to far before the epoch timestamp, reboot, and verify that the time from the epoch file is used.\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202605\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 6,
+          "deletions": 0
+        },
+        {
+          "path": "files/image_config/systemd/set-epoch.service",
+          "additions": 12,
+          "deletions": 0
+        },
+        {
+          "path": "files/image_config/systemd/set-epoch.sh",
+          "additions": 10,
+          "deletions": 0
+        },
+        {
+          "path": "files/image_config/systemd/set-epoch.timer",
+          "additions": 9,
+          "deletions": 0
+        },
+        {
+          "path": "files/initramfs-tools/union-mount.j2",
+          "additions": 7,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-23T21:53:21Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-23T21:53:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-14T15:27:51Z",
+          "body": "Cherry-pick PR to msft-202608: https://github.com/Azure/sonic-buildimage-msft/pull/2669"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-18T07:40:14Z",
+          "body": "@saiarcot895 \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\n\n1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\n2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\n3. **Add the \"Tested for 202605 branch\" label** once testing is complete\n\nAlso, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\n\nThank you!\n\n*Review by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-18T12:14:28Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605,msft-202608, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "norimeher-arista",
+          "createdAt": "2026-09-24T14:50:24Z",
+          "body": "Hi @saiarcot895 , this fix only partially addresses the issue. It really depends on how long the device remains powered off, after a significant gap, chrony may take a long time to correct the clock by slewing.\r\n\r\nI\u2019m working on an HLD that would allow chrony to step the clock at most once during startup, then return to slew-only mode. I\u2019d appreciate your thoughts on this approach. Thanks!\r\n\r\ncc @vivekverma-arista @judyjoseph "
+        },
+        {
+          "author": "norimeher-arista",
+          "createdAt": "2026-09-24T15:03:57Z",
+          "body": "Correction: The offset also depends on the interval since the last daily epoch update, not just the powered-off duration."
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-09-24T16:32:08Z",
+          "body": "Hi @norimeher-arista, this change was never meant to completely fix the issue. It's meant to have it start from a slightly more correct time and thus take less time for it to get fully corrected/synchronized without (ideally) needing to resort to time jumps. This means instead of having it start from May 3, 2026 (the build time for systemd), it'll start from whenever the system was last powered off.\r\n\r\nAutomatic/uncontrolled time jumps (specifically the `makestep` command in the config) have been intentionally disabled due to issues seen in the past resulting in dataplane impact.\r\n\r\nTwo improvements I can see to reduce the diff:\r\n\r\n1. Change the timer to be hourly instead of daily. I think in terms of disk writes, this should still be fine, as this would be an inode update.\r\n2. Modify the sonic-mgmt add-topo step to do a makestep on the BMC. I know it's being done for DUT, but I'm not sure if that is being done for BMC as well."
+        },
+        {
+          "author": "norimeher-arista",
+          "createdAt": "2026-09-24T17:26:45Z",
+          "body": "Ack that @saiarcot895. Thanks for a prompt reply back!\r\n\r\n1.  Writing it hourly would certainly reduce the initial skew. However it doesn't fully mitigate the problem, does it?\r\n\r\n2.  Performing makestep from the sonic-mgmt add-topo flow would help the test environment, but it would not address issues with deployed systems right.\r\n\r\n \r\n I agree that we should not restore a general persistent `makestep 1 3` directive in chrony.conf. As BMC doesn't work in the dataplane, stepping it would not directly alter the DUT clock or dataplane forwarding (Not completely sure, want to know your comments)\r\n\r\nThe proposed design is narrower:\r\n- Enabled only on explicitly configured NetworkBmc platforms.\r\n- Disabled on switch platforms.\r\n- At most one explicit bootstrap-step attempt per BMC boot.\r\n- Chrony restarts do not reopen the opportunity.\r\n- No persistent makestep directive.\r\n\r\n\r\nAs a reference point, upstream OpenBMC enables systemd-timesyncd by default, and it immediately steps an accepted offset of 0.4 seconds or greater using ADJ_SETOFFSET: [configuration](https://github.com/openbmc/openbmc/blob/master/meta-phosphor/recipes-core/systemd/systemd_%25.bbappend#L2-L16) [timesyncd implementation](https://github.com/systemd/systemd/blob/v259.5/src/timesync/timesyncd-manager.c#L240-L293)\r\n"
+        }
+      ]
+    }
+  ]
+}

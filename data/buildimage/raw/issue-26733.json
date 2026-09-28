@@ -1,0 +1,161 @@
+{
+  "number": 26733,
+  "title": "Bug: Parallel RFS builds race on shared ./fsroot directory when multiple DEPENDENT_MACHINEs exist",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26733",
+  "createdAt": "2026-04-13T09:06:47Z",
+  "closedAt": "2026-04-23T02:48:52Z",
+  "author": "aajith-arista",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen an installer target has multiple `DEPENDENT_MACHINE` entries (e.g.`broadcom-dnx` and `broadcom-legacy`), the RFS squashfs targets for the dependent machines run in parallel but all use the same hardcoded `FILESYSTEM_ROOT=./fsroot` in `build_debian.sh`.\nOne build's `rm -rf ./fsroot` clobbers the other's in-progress debootstrap extraction, causing a tar failure.\n\nThis was introduced in #25192 (March 2026), which added `broadcom-legacy` as a second `DEPENDENT_MACHINE`. Previously only `broadcom-dnx` was a dependent, and since the main `broadcom` RFS target depends on it via `DEPENDENT_RFS`, they ran sequentially. With two independent dependents, make runs them in parallel, causing the problem.\n\n### Steps to Reproduce\n\n\n  1. `make configure PLATFORM=broadcom`\n  2. `make target/sonic-broadcom.bin SONIC_BUILD_JOBS=16`\n\n\n\n### Actual Behavior and Expected Behavior\n\n**Actual:**\nBoth `sonic-broadcom.bin__broadcom-dnx__rfs.squashfs` and `sonic-broadcom.bin__broadcom-legacy__rfs.squashfs` launch concurrently and call `build_debian.sh`, which does:\n\n```\n  FILESYSTEM_ROOT=./fsroot        # build_debian.sh:42, hardcoded\n  # ...\n  sudo rm -rf $FILESYSTEM_ROOT    # line 86\n  mkdir -p $FILESYSTEM_ROOT       # line 88\n  # debootstrap into $FILESYSTEM_ROOT ...\n```\nBoth RFS builds clobber each other's `./fsroot`. debootstrap fails during package extraction.\n\n**Expected:**\n Each RFS target should use its own filesystem root directory so parallel builds don't interfere\n\n**Suggested fix:**\nNote that `onie-image.conf` already has `${FILESYSTEM_ROOT:=./fsroot-${TARGET_MACHINE}}` as a default, and the ARM configs (`onie-image-armhf.conf`, `onie-image-arm64.conf`) already use `./fsroot-${TARGET_MACHINE}`. The hardcoded assignment in `build_debian.sh` overrides\n   this before `onie-image.conf` is sourced.\n\nThe hardcoded assignment can be removed.\n\n### Relevant log output\n\n```shell\n[ 01 ] [ target/sonic-broadcom.bin__broadcom-dnx__rfs.squashfs ]\n  [ 02 ] [ target/sonic-broadcom.bin__broadcom-legacy__rfs.squashfs ]\n\n  [ FAIL LOG START ] [ target/sonic-broadcom.bin__broadcom-legacy__rfs.squashfs ]\n  Build start time: Sun Apr 12 19:52:19 UTC 2026\n  + FILESYSTEM_ROOT=./fsroot\n  + scripts/build_debian_base_system.sh amd64 trixie ./fsroot\n  I: Valid Release signature (key id 41587F7DB8C774BCCF131416762F67A0B2C39DE4)\n  I: Chosen extractor for .deb packages: dpkg-deb\n  I: Extracting bsdutils...\n  E: Tried to extract package, but tar failed. Exit...\n  [  FAIL LOG END  ] [ target/sonic-broadcom.bin__broadcom-legacy__rfs.squashfs ]\n  make: *** [slave.mk:1411: target/sonic-broadcom.bin__broadcom-legacy__rfs.squashfs] Error 1\n\n  [ FAIL LOG START ] [ target/sonic-broadcom.bin__broadcom-dnx__rfs.squashfs ]\n  Build start time: Sun Apr 12 19:52:18 UTC 2026\n  + FILESYSTEM_ROOT=./fsroot\n  I: Extracting bsdutils...\n  E: Tried to extract package, but tar failed. Exit...\n  [  FAIL LOG END  ] [ target/sonic-broadcom.bin__broadcom-dnx__rfs.squashfs ]\n  make: *** [slave.mk:1411: target/sonic-broadcom.bin__broadcom-dnx__rfs.squashfs] Error 1\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-04-13T16:38:49Z",
+      "body": "Hmm, I believe currently in `build_debian.sh` we are running `onie-image.conf` after defining `FILESYSTEM_ROOT`, and before removing / creating the directory:\nhttps://github.com/sonic-net/sonic-buildimage/blob/a11c997b50c257569e96b76aa8bf220bb4eb3fd4/build_debian.sh#L38-L48\n\nHowever, `onie-image.conf` defines the filesystem root properly and overwrites the definition for `FILESYSTEM_ROOT`.\nhttps://github.com/sonic-net/sonic-buildimage/blob/a11c997b50c257569e96b76aa8bf220bb4eb3fd4/onie-image.conf#L16\n\n@aajith-arista would you mind sharing the commit or branch you are building from? If it is from the current master, the root cause may be something different.\n\nThat said, the current hardcoded `FILESYSTEM_ROOT=./fsroot` in `build_debian.sh` is dead code and should probably be removed. Happy to file a PR for this."
+    },
+    {
+      "author": "aajith-arista",
+      "createdAt": "2026-04-15T05:44:09Z",
+      "body": "> Hmm, I believe currently in `build_debian.sh` we are running `onie-image.conf` after defining `FILESYSTEM_ROOT`, and before removing / creating the directory:\n> \n> [sonic-buildimage/build_debian.sh](https://github.com/sonic-net/sonic-buildimage/blob/a11c997b50c257569e96b76aa8bf220bb4eb3fd4/build_debian.sh#L38-L48)\n> \n> Lines 38 to 48 in [a11c997](/sonic-net/sonic-buildimage/commit/a11c997b50c257569e96b76aa8bf220bb4eb3fd4)\n> \n>  ## Working directory to prepare the file system \n>  FILESYSTEM_ROOT=./fsroot \n>  PLATFORM_DIR=platform \n>  ## Hostname for the linux image \n>  HOSTNAME=sonic \n>  DEFAULT_USERINFO=\"Default admin user,,,\" \n>  BUILD_TOOL_PATH=src/sonic-build-hooks/buildinfo \n>  TRUSTED_GPG_DIR=$BUILD_TOOL_PATH/trusted.gpg.d \n>   \n>  ## Read ONIE image related config file \n>  . ./onie-image.conf \n> However, `onie-image.conf` defines the filesystem root properly and overwrites the definition for `FILESYSTEM_ROOT`.\n> \n> [sonic-buildimage/onie-image.conf](https://github.com/sonic-net/sonic-buildimage/blob/a11c997b50c257569e96b76aa8bf220bb4eb3fd4/onie-image.conf#L16)\n> \n> Line 16 in [a11c997](/sonic-net/sonic-buildimage/commit/a11c997b50c257569e96b76aa8bf220bb4eb3fd4)\n> \n>  FILESYSTEM_ROOT=./fsroot-${TARGET_MACHINE} \n> [@aajith-arista](https://github.com/aajith-arista) would you mind sharing the commit or branch you are building from? If it is from the current master, the root cause may be something different.\n> \n> That said, the current hardcoded `FILESYSTEM_ROOT=./fsroot` in `build_debian.sh` is dead code and should probably be removed. Happy to file a PR for this.\n\nMy bad.\nI was building off the branch for this PR: https://github.com/sonic-net/sonic-buildimage/pull/25172\nI didn't notice there was a change in the relevant onie-image.conf there wrt master.\nThere in onie-image.conf: https://github.com/jasonbridges/sonic-buildimage/blob/sonie/onie-image.conf#L17\n```\n: ${FILESYSTEM_ROOT:=./fsroot-${TARGET_MACHINE}}\n```\nBasically it doesn't override it if already set.\nI'll leave a comment in the PR.\nStill, it'd be great if we remove the dead code.\n"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-04-22T15:34:57Z",
+      "body": "@aajith-arista, is this issue resolved now?"
+    },
+    {
+      "author": "aajith-arista",
+      "createdAt": "2026-04-23T02:48:47Z",
+      "body": "> [@aajith-arista](https://github.com/aajith-arista), is this issue resolved now?\n\nYes, this can be closed.\nThanks"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26759,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26759",
+      "title": "[build] Fix parallel RFS build race condition on shared fsroot",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-04-14T16:29:45Z",
+      "author": "rustiqly",
+      "body": "Fixes #26733. Removed dead code in build_debian.sh that hardcoded FILESYSTEM_ROOT=./fsroot, which caused parallel dependent RFS builds to clobber each other's directories.",
+      "files": [
+        {
+          "path": "build_debian.sh",
+          "additions": 0,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-14T16:29:54Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-14T16:30:11Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-14T17:25:03Z",
+          "body": "Thanks for the review, @copilot-pull-request-reviewer. The PR description accurately reflects the intent: `onie-image.conf` uses `FILESYSTEM_ROOT=./fsroot-${TARGET_MACHINE}` which is correct, and we want to stop `build_debian.sh` from incorrectly resetting it back to the hardcoded `./fsroot`."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-17T08:33:11Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T08:33:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-17T23:46:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-17T23:46:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T13:17:03Z",
+          "body": "Rechecked https://github.com/sonic-net/sonic-buildimage/pull/26759. GitHub is still showing stale Azure failures from build `1091926`, but that Azure build is no longer retrievable through the public Azure API.\n\nRe-running Azure now to get fresh CI results against the current PR branch."
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T13:17:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T13:17:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-11T14:06:34Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T14:06:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T15:36:33Z",
+          "body": "Rechecked https://github.com/sonic-net/sonic-buildimage/pull/26759 CI. The latest required Azure failure in BuildVS `vs` appears to be infra/checkout-related, not from the RFS race fix: the failed job hit `Git submodule update failed with exit code: 1`, then the publish step failed because `target/*` did not exist.\n\nRequesting a rerun.\n\n/azp run Azure.sonic-buildimage\n"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T15:37:13Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T15:37:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T18:42:58Z",
+          "body": "Rechecked CI for https://github.com/sonic-net/sonic-buildimage/pull/26759.\n\nThe current required completed failure is `Azure.sonic-buildimage (Test Trivy vulnerability scan (docker-ptf))` from Azure build `1110942` / GitHub run https://github.com/sonic-net/sonic-buildimage/runs/75418916380. This looks unrelated to the RFS `fsroot` race fix in this PR:\n\n- `docker-ptf` Trivy scan reports pre-existing Debian 12.13 package CVEs and Go stdlib CVEs\n- Trivy also reports private-key files inside the `docker-ptf` image contents\n- this PR only removes the shared `./fsroot` path from the RFS build command and does not change `docker-ptf`\n- the visible `Build broadcom` / `Build aspeed_arm64` failures are canceled checks from superseded Azure build `1110888`; several jobs from rerun `1110942` passed and some Elastictest jobs are still pending\n\nRequesting a fresh Azure run so the required checks are not blocked by this unrelated scan/canceled-run state.\n"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T18:42:59Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T18:43:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-12T01:43:33Z",
+          "body": "CI update for https://github.com/sonic-net/sonic-buildimage/pull/26759: the latest required Azure failure is still isolated to `Azure.sonic-buildimage (Test Trivy vulnerability scan (docker-ptf))` in build `1111046`.\n\nI checked the log: `docker-ptf` is a cached/base image scan failure, not a failure caused by this RFS race-condition change. The scan reports Debian/Go package CVEs in existing image contents (`liblcms2-2`, `wireshark*`, `linux-libc-dev`, Go `stdlib`) and the known generated/default private-key findings under `/etc/ssh/ssh_host_*_key` and `/etc/ssl/private/ssl-cert-snakeoil.key`.\n\nAll other required Azure build and Elastictest checks are green in the current report.\n"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-12T02:42:19Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "number": 26789,
+  "title": "Bug: teamsyncd crashes with SIGABRT when creating large number of PortChannels (fd >= FD_SETSIZE)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26789",
+  "createdAt": "2026-04-15T05:13:19Z",
+  "closedAt": "2026-05-05T23:30:09Z",
+  "author": "ganglyu",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "saiarcot895"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nteamsyncd crashes with SIGABRT when creating a large number of PortChannels. The crash is triggered by libteamdctl internally calling select(), which hits the glibc FORTIFY_SOURCE check when a socket file descriptor reaches or exceeds FD_SETSIZE (1024).\n\nRoot Cause\nPR [#3984](https://github.com/sonic-net/sonic-swss/pull/3984) added teamdctl_connect() in the TeamPortSync constructor to verify teamd is alive before updating STATE_DB. For each new PortChannel, a new Unix socket is opened to connect to teamd. As PortChannels are created, open file descriptors accumulate and eventually a socket fd \u2265 1024 is assigned.\nInside libteamdctl.so, teamdctl_state_item_value_set() uses select() internally. When called with fd \u2265 1024, glibc's __fdelt_chk() aborts the process:\n\n*** bit out of range 0 - FD_SETSIZE on fd_set ***\nAborted (core dumped)\n\n### Steps to Reproduce\n\nOn a SONiC device with sufficient LAG capacity, after merging PR #[3984](https://github.com/sonic-net/sonic-swss/pull/3984):\n\nfor i in $(seq 1 200); do\n    sudo config portchannel add PortChannel$i\ndone\n\n\n### Actual Behavior and Expected Behavior\n\nteamsyncd will crash with SIGABRT partway through. The exact threshold depends on how many file descriptors are already open when teamsyncd starts.\n\nTo confirm:\nsudo systemctl status swss\nsudo grep -i \"teamsyncd\\|aborted\\|core\" /var/log/syslog\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-04-22T15:49:03Z",
+      "body": "@saiarcot895, can you please help take a look at this issue"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27123,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27123",
+      "title": "Replace FD_SET/select() with poll() to avoid FD_SETSIZE abort",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-05-05T23:30:08Z",
+      "createdAt": "2026-05-02T01:27:54Z",
+      "author": "spandan-nexthop",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nfixes https://github.com/sonic-net/sonic-buildimage/issues/26789\r\n\r\nEach `TeamPortSync` instance keeps five long-lived file descriptors alive: four `libnl` sockets and one `epoll` `fd` opened by `team_alloc()` and `team_init()`. Once the `fd` table grows past `FD_SETSIZE` (1024 in `glibc`), the next unix socket that `teamdctl_connect()` opens inside the constructor - for the per-LAG liveness check - is assigned a fd \u2265 1024. The follow-up `teamdctl_config_get_raw_direct()` call hands that fd to `FD_SET()` inside `cli_usock_wait_recv()`. Under glibc's `_FORTIFY_SOURCE=2`, `FD_SET` expands to `__fdelt_chk()`, which aborts the process with `*** bit out of range 0 - FD_SETSIZE` on `fd_set`. `teamsyncd` dies via `SIGABRT`, and eventually `systemd` cascades the failure into a `teamd` restart.\r\n\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nAdded a patch to replace both `FD_SET`/`select()` call sites with `poll()`, which takes raw `fd` numbers and has no `FD_SETSIZE` ceiling. Behavior is preserved end to end: each site waits for read-readiness on a single `fd` with the original timeout (5000 ms in `cli_usock_wait_recv`, non-blocking in `team_check_events`).\r\n\r\n#### How to verify it\r\nTest that were failing with high scale portchannels have been passing on DUTs with the changes.\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "src/libteam/patch/0018-Replace-FD_SET-select-with-poll-to-avoid-FD_SETSIZE-abort.patch",
+          "additions": 115,
+          "deletions": 0
+        },
+        {
+          "path": "src/libteam/patch/series",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-02T01:28:02Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-02T01:28:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "spandan-nexthop",
+          "createdAt": "2026-05-02T01:29:25Z",
+          "body": "@kalash-nexthop @venkit-nexthop \r\n@saiarcot895 "
+        },
+        {
+          "author": "kalash-nexthop",
+          "createdAt": "2026-05-04T17:58:01Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-04T17:58:40Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-04T17:58:42Z",
+          "body": "Retrying failed(or canceled) stages in build 1103504:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t0-sonic by Elastictest: retried.\n- Job impacted-area-kvmtest-t0 by Elastictest: retried."
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2026-05-04T21:59:18Z",
+          "body": "@arlakshm "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-05T02:04:47Z",
+          "body": "This PR has backport request for branches: 202511.<br>Adding label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-07T18:12:40Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/27242"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-14T22:42:49Z",
+          "body": "Cherry-pick PR to msft-202512: https://github.com/Azure/sonic-buildimage-msft/pull/2294"
+        }
+      ]
+    }
+  ]
+}

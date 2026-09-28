@@ -1,0 +1,138 @@
+{
+  "number": 24543,
+  "title": "Bug: [Trixie] dash-ha@dpu<n>.service is started even when the feature is not enabled",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24543",
+  "createdAt": "2025-11-18T01:06:44Z",
+  "closedAt": "2026-02-23T22:46:56Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Bug :bug:",
+    "Trixie"
+  ],
+  "assignees": [
+    "zjswhhh"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWe see from the unit file below that dash-ha@dpu<n>.sevice is started with ExecCondition when it is either npu or dpu (with is-npu-or-dpu.sh). But we shouldn't start this service unless the dash-ha feature is enabled. We need to update the logic for when these services are started. \n\n```\nroot@sonic:/var/log# systemctl cat dash-ha@dpu0\n# /usr/lib/systemd/system/dash-ha@.service\n[Unit]\nDescription=DASH HA container\nRequires=database@%i.service config-setup.service swss.service\nAfter=database@%i.service swss.service interfaces-config.service\nBindsTo=sonic.target\nAfter=sonic.target\nBefore=ntp-config.service\nStartLimitIntervalSec=1200\nStartLimitBurst=3\n\n[Service]\nUser=admin\nExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh\nExecStartPre=/usr/local/bin/dash-ha.sh start %i\nExecStart=/usr/local/bin/dash-ha.sh wait %i\nExecStop=/usr/local/bin/dash-ha.sh stop %i\nRestartSec=30\n\n[Install]\nWantedBy=sonic.target\n\n# /run/systemd/generator/dash-ha@.service.d/environment.conf\n[Service]\nEnvironment=\"NUM_DPU=4\"\nEnvironment=\"IS_DPU_DEVICE=false\"\n\n```\n\nThis is cause the following failures\n\n```\nroot@sonic:/var/log# systemctl status dash-ha@dpu0\n\u00d7 dash-ha@dpu0.service - DASH HA container\n     Loaded: loaded (/usr/lib/systemd/system/dash-ha@.service; enabled-runtime; preset: enabled)\n    Drop-In: /run/systemd/generator/dash-ha@.service.d\n             environment.conf\n     Active: failed (Result: exit-code) since Mon 2025-11-17 17:30:48 UTC; 7h ago\n   Duration: 373ms\n Invocation: 0ffc41a7b1c74b14881fa2eb7134a920\n   Main PID: 25039 (code=exited, status=255/EXCEPTION)\n   Mem peak: 30.3M\n        CPU: 566ms\n\nNov 17 17:30:48 sonic systemd[1]: Started dash-ha@dpu0.service - DASH HA container.\nNov 17 17:30:48 sonic container[25060]: container_wait: BEGIN\nNov 17 17:30:48 sonic container[25060]: read_data: config:True feature:dash-hadpu0 fields:[('set_owner', 'local'), ('no_fallback_to_local', False), ('state', 'disabled')] val:['local', False, 'disabled']\nNov 17 17:30:48 sonic container[25060]: read_data: config:False feature:dash-hadpu0 fields:[('current_owner', 'none'), ('remote_state', 'none'), ('container_id', '')] val:['none', 'none', '']\nNov 17 17:30:48 sonic container[25060]: docker get image version for dash-hadpu0 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu0/json: Not Found (\"No such container: dash-hadpu0\")\nNov 17 17:30:48 sonic container[25060]: container_wait: dash-hadpu0: set_owner:local ct_owner:none state:none id:dash-hadpu0 pend=0\nNov 17 17:30:48 sonic container[25060]: container_wait: END -- transitioning to docker wait\nNov 17 17:30:48 sonic docker-rs[25060]: Unable to wait on container: Docker error\nNov 17 17:30:48 sonic systemd[1]: dash-ha@dpu0.service: Main process exited, code=exited, status=255/EXCEPTION\nNov 17 17:30:48 sonic systemd[1]: dash-ha@dpu0.service: Failed with result 'exit-code'.\n\n```\n\n\n### Steps to Reproduce\n\nReboot the device to find the following error in syslog on a Smartswitch\n```\nERR container: docker get image version for dash-hadpu3 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu3/json: Not Found (\"No such container: dash-hadpu3\")\n2025 Nov  7 08:26:00.686475 sonic ERR container: docker get image version for dash-hadpu3 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu3/json: Not Found (\"No such container: dash-hadpu3\")\n2025 Nov  7 08:26:00.686745 sonic ERR container: docker get image version for dash-hadpu1 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu1/json: Not Found (\"No such container: dash-hadpu1\")\n2025 Nov  7 08:26:00.687632 sonic ERR container: docker get image version for dash-hadpu2 failed with 404 Client Error for http+docker://localhost/v1.50/containers/dash-hadpu2/json: Not Found (\"No such container: dash-hadpu2\")\n```\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior: dash-hadpu@dpu<n>.service is started on every smartswitch npu/dpu. It must only start on the npu of a smartswitch which has dash ha feature enabled\n\n\n### UPDATE: DPU SIDE\n--The issue with the same-root cause is also observed on the DPU--\nSimilarly on the dpu side we have dash-ha.service which is using the same ExecCondition (is-npu-or-dpu.sh) and always starting on dpu whether dash-ha feature is enabled or not causing the following failure. The dpu side needs to be updated as well.\n\n```\nsyslog.1:3546:2025 Nov 20 14:00:44.180770 sonic ERR resolv-config: [update-containers:update_container_resolv] Failed to start container dash-ha (23ada928ec34)\nyslog.1:3502:2025 Nov 20 14:00:43.351405 sonic INFO systemd[1]: Started dash-ha.service - DASH HA container.\nsyslog.1:3568:2025 Nov 20 14:00:44.531933 sonic NOTICE systemd[1]: dash-ha.service: Main process exited, code=exited, status=255/EXCEPTION\nsyslog.1:3569:2025 Nov 20 14:00:44.532120 sonic WARNING systemd[1]: dash-ha.service: Failed with result 'exit-code'.\n```\n",
+  "comments": [
+    {
+      "author": "tjchadaga",
+      "createdAt": "2025-12-03T16:50:21Z",
+      "body": "@zjswhhh - could you please help take a look?"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-01-08T18:43:25Z",
+      "body": "In `show feature status`, is `dash-ha` explicitly disabled? Or is there no entry for `dash-ha` there?"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-01-16T19:42:31Z",
+      "body": "@saiarcot895 In the show feature status there is no entry for dash-ha at all\n\n```\n\nroot@sonic:/var/log# systemctl status dash-ha\n_ dash-ha.service - DASH HA container\n     Loaded: loaded (/usr/lib/systemd/system/dash-ha.service; disabled; preset: enabled)\n     Active: inactive (dead)\n```"
+    },
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2026-02-03T17:42:04Z",
+      "body": "@zjswhhh @BYGX-wcr  Can you please help to prioritize this issue?"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-02-03T18:54:19Z",
+      "body": "I'll take a look at this this week."
+    },
+    {
+      "author": "vivekkarri",
+      "createdAt": "2026-02-07T00:44:32Z",
+      "body": "@saiarcot895 / @zjswhhh \n\nFixing this on DPU should be straightforward IMO\n\n```\n-ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh\n+ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh -n\n\nis-npu-or-dpu.sh script already has logic to check if the platform is NPU or DPU. We can leverage that here and only enable on NPU.\n```\n\nHowever, on NPU. \n\nsystemd-sonic-generator masks dash-ha.service but doesn't mask dash-ha@dpux service. Need to put some thought there on how to fix that"
+    },
+    {
+      "author": "zjswhhh",
+      "createdAt": "2026-02-09T22:24:46Z",
+      "body": "Hi @vivekrnv - it could be from this change below: \nhttps://github.com/sonic-net/sonic-buildimage/pull/23340/changes/058bae6b133bc300302c1bf69341b112c43b7982#diff-de8f7efba4d850c7f401a42ccfc64ada7a9209ee6fcab0d86ef7dbdebe059721\n\nTalked to @saiarcot895 offline last week already, we should have a fix soon. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25390,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25390",
+      "title": "Disable dash-ha service by default",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-23T22:46:54Z",
+      "createdAt": "2026-02-08T19:56:35Z",
+      "author": "saiarcot895",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\n Fixes #24543\r\n\r\nDespite reworking systemd-sonic-generator in 78edc2e572419e55ee4e4ff4155aacd6623982ff, the dash-ha service files (and the dpu\\* instances) still need to be masked for proper functionality. This is because the container needs to be in a disabled state by default; however, SONiC configs that might be loaded might not say anything about the dash-ha feature.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\nWhen building the image, bring back the change that was done in #21621 to symlink the dash-ha instances to `/dev/null` by default.\r\n\r\n#### How to verify it\r\n\r\nTested on a smartswitch platform and verified that the dash-ha service did not start up.\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/per_namespace/dash-ha.service.j2",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 4,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-08T19:56:43Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-08T19:56:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-02-11T18:48:08Z",
+          "body": "@vivekrnv @tirupatihemanth can you verify that this change works for the case where dash-ha is supposed to be running? I tested on a device where dash-ha feature is not configured, and verified that it did not attempt to start it."
+        },
+        {
+          "author": "vivekkarri",
+          "createdAt": "2026-02-17T20:08:07Z",
+          "body": "@saiarcot895 , \r\n\r\ncan you also do this change, so that HA won't start on DPU.\r\n\r\n```\r\n-ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh\r\n+ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh -n\r\n\r\nis-npu-or-dpu.sh script already has logic to check if the platform is NPU or DPU. We can leverage that here and only enable on NPU.\r\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T02:56:57Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T02:57:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-02-19T23:33:50Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "zjswhhh",
+          "createdAt": "2026-02-23T22:39:28Z",
+          "body": "Hi @kperumalbfn - can you please help merge? Thanks. "
+        },
+        {
+          "author": "kperumalbfn",
+          "createdAt": "2026-02-23T22:47:14Z",
+          "body": "@zjswhhh Do we need this in other branches or just 202511?"
+        },
+        {
+          "author": "kperumalbfn",
+          "createdAt": "2026-02-23T22:47:39Z",
+          "body": "@vmittal-msft please merge to 202511"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-09T18:28:14Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25981"
+        }
+      ]
+    }
+  ]
+}

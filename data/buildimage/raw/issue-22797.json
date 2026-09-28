@@ -1,0 +1,99 @@
+{
+  "number": 22797,
+  "title": "Regression: Tunnel pipe mode being used on IPinIP on Broadcom systems",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/22797",
+  "createdAt": "2025-05-30T22:52:40Z",
+  "closedAt": "2025-06-05T05:17:15Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "regression"
+  ],
+  "assignees": [
+    "developfast"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nCritical\n\n### Previous Working Version\n\nPrior to https://github.com/sonic-net/sonic-buildimage/pull/21868 merging\n\n### Steps to Reproduce\n\nStartup any Broadcom device and we see it crashing with:\n```\nNOTICE swss#orchagent: :- addDecapTunnel: Create overlay loopback router interface oid:6000000000ce1\nERR syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_create_tunnel:1537 Unknown/unsupported tunnel attribute 27 passed\nERR syncd#syncd: [none] SAI_API_TUNNEL:brcm_sai_create_tunnel:1542 Error processing tunnel attribute failed with error -196614.\nERR syncd#syncd: :- sendApiResponse: api SAI_COMMON_API_CREATE failed in syncd mode: SAI_STATUS_ATTR_NOT_IMPLEMENTED_6\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_TYPE: SAI_TUNNEL_TYPE_IPINIP\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_OVERLAY_INTERFACE: oid:0x6000000000ce1\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_UNDERLAY_INTERFACE: oid:0x6000000000c85\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_ECN_MODE: SAI_TUNNEL_DECAP_ECN_MODE_COPY_FROM_OUTER\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_TTL_MODE: SAI_TUNNEL_TTL_MODE_PIPE_MODEL\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_DSCP_MODE: SAI_TUNNEL_DSCP_MODE_PIPE_MODEL\nERR syncd#syncd: :- processQuadEvent: attr: SAI_TUNNEL_ATTR_DECAP_QOS_DSCP_TO_TC_MAP: oid:0x14000000000cda\nERR swss#orchagent: :- create: create status: SAI_STATUS_ATTR_NOT_IMPLEMENTED_6\nERR swss#orchagent: :- addDecapTunnel: Failed to create tunnel\nERR swss#orchagent: :- handleSaiCreateStatus: Encountered failure in create operation, exiting orchagent, SAI API: SAI_API_TUNNEL, status: SAI_STATUS_ATTR_NOT_IMPLEMENTED_6\nNOTICE swss#orchagent: :- notifySyncd: sending syncd: SYNCD_INVOKE_DUMP\nNOTICE syncd#syncd: :- processNotifySyncd: Invoking SAI failure dump\nNOTICE swss#orchagent: :- sai_redis_notify_syncd: invoked DUMP succeeded\n```\n\nThis appears to be because the condition added by https://github.com/sonic-net/sonic-buildimage/pull/21868 to skip using Tunnel pipe mode on broadcom devices isn't working:\n```\n        \"TUNNEL_DECAP_TABLE:IPINIP_TUNNEL\" : {\n            \"tunnel_type\":\"IPINIP\",\n{% if \"broadcom\" in asic_type %}\n            \"dscp_mode\":\"uniform\",\n{% else %}\n            \"dscp_mode\":\"pipe\",\n            \"decap_dscp_to_tc_map\":\"AZURE\",\n{% endif %}\n```\n\nBut I see the generated file is using pipe:\n```\n# sonic-db-cli APPL_DB hgetall \"TUNNEL_DECAP_TABLE:IPINIP_TUNNEL\"\n{'decap_dscp_to_tc_map': 'AZURE', 'dscp_mode': 'pipe', 'ecn_mode': 'copy_from_outer', 'ttl_mode': 'pipe', 'tunnel_type': 'IPINIP'}\n```\n\nI had trouble tracing the rendering of this tempalte but I believe likely the issue is that `asic_type` is not defined before rendering the template so `{% if \"broadcom\" in asic_type %}` will never return true.\n\n### Impact of this regression\n\nBroadcom devices have Orchagent crashing on `master`\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2025-05-30T23:14:48Z",
+      "body": "It looks like `ipinip.json.j2` is rendered using `-y /etc/sonic/constants.yml` here:\nhttps://github.com/sonic-net/sonic-buildimage/blob/3d3e3a800a14173c4b6bdf9f5a73d772748327fb/dockers/docker-orchagent/docker-init.j2#L17\n\nI can see there is no reference to `asic_type` in `/etc/sonic/constants.yml`:\n```\n> grep \"asic_type\" /etc/sonic/constants.yml\n\n```\n\nWhich is why we won't render the template correctly:\n```\n> sonic-cfggen -d -y /etc/sonic/constants.yml -t ipinip.json.j2 | grep \"dscp_mode\"\n            \"dscp_mode\":\"pipe\",\n            \"dscp_mode\":\"pipe\",\n```\n\nIf I change the source file to one that does include `asic_type` like `/etc/sonic/sonic_version.yml` I see it render as expected (no pipe mode):\n```\n> grep \"asic_type\" /etc/sonic/sonic_version.yml\nasic_type: broadcom\n\n> sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t ipinip.json.j2 | grep \"dscp_mode\"\n            \"dscp_mode\":\"uniform\",\n            \"dscp_mode\":\"uniform\",\n```"
+    },
+    {
+      "author": "developfast",
+      "createdAt": "2025-06-03T15:32:07Z",
+      "body": "A more robust fix is on the way @arista-nwolfe - give me like 2 hours"
+    },
+    {
+      "author": "developfast",
+      "createdAt": "2025-06-03T16:43:43Z",
+      "body": "@arista-nwolfe fix is in #22832 "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22832,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/22832",
+      "title": "[QoS] Make broadcom asic detection more robust in ipinip json template",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-06-05T05:17:14Z",
+      "createdAt": "2025-06-03T16:42:10Z",
+      "author": "developfast",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFixes #22797 \r\nMake broadcom asic detection more robust in ipinip json template\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nCheck if device is in the list of specified hwskus\r\n\r\n#### How to verify it\r\nTested on switch:\r\n\r\n```\r\n{\r\n        \"TUNNEL_DECAP_TABLE:IPINIP_TUNNEL\" : {\r\n            \"tunnel_type\":\"IPINIP\",\r\n            \"dscp_mode\":\"uniform\",\r\n            \"ecn_mode\":\"copy_from_outer\",\r\n            \"ttl_mode\":\"pipe\"\r\n        },\r\n        \"OP\": \"SET\"\r\n    },\r\n...\r\n```\r\n\r\nThe `ASIC_VENDOR` env var is used which is defined inside the swss container [here](https://github.com/sonic-net/sonic-buildimage/blob/80d660de2f04335ccdd26c3f19b3083528793a92/files/build_templates/docker_image_ctl.j2#L710).\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [X] 202505\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n[QoS] Make broadcom asic detection more robust in ipinip json template\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "dockers/docker-orchagent/docker-init.j2",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "dockers/docker-orchagent/ipinip.json.j2",
+          "additions": 12,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "developfast",
+          "createdAt": "2025-06-04T17:11:34Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-04T17:11:36Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-06-04T17:11:48Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-06-04T22:45:09Z",
+          "body": "Tested on Arista (broadcom) and confirmed this change fixed the regression described in https://github.com/sonic-net/sonic-buildimage/issues/22797\r\n```\r\n{\r\n    \"TUNNEL_DECAP_TABLE:IPINIP_TUNNEL\" : {\r\n        \"tunnel_type\":\"IPINIP\",\r\n        \"dscp_mode\":\"uniform\",\r\n        \"ecn_mode\":\"copy_from_outer\",\r\n        \"ttl_mode\":\"pipe\"\r\n    },\r\n    \"OP\": \"SET\"\r\n},\r\n```"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2025-06-05T05:07:51Z",
+          "body": "@developfast your previous PR was merged into 202505 https://github.com/sonic-net/sonic-buildimage/pull/22715.\r\nI think we need to backport this PR into 202505 as well."
+        },
+        {
+          "author": "developfast",
+          "createdAt": "2025-06-05T05:10:47Z",
+          "body": "@arista-nwolfe could you pls signoff as well? Thx! "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-05T09:03:03Z",
+          "body": "Cherry-pick PR to 202505: https://github.com/sonic-net/sonic-buildimage/pull/22854"
+        }
+      ]
+    }
+  ]
+}

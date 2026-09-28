@@ -1,0 +1,140 @@
+{
+  "number": 26400,
+  "title": "[cfggen] dict.keys()[0] raises TypeError in Python 3 (minigraph PEER_SWITCH warning)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26400",
+  "createdAt": "2026-03-25T21:46:39Z",
+  "closedAt": "2026-04-10T15:31:29Z",
+  "author": "rustiqly",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Description\n\n`minigraph.py:2191` uses `results['PEER_SWITCH'].keys()[0]` which is invalid in Python 3. `dict.keys()` returns a view object, not a list, so indexing with `[0]` raises `TypeError`.\n\n### Current code\n```python\nprint(\"Warning: more than one peer switch was found. Only the first will be parsed: {}\".format(\n    results['PEER_SWITCH'].keys()[0]))  # TypeError in Python 3\n```\n\nNote that 2 lines below, the code correctly uses `list(results['PEER_SWITCH'].keys())[0]`.\n\n### Fix\n```python\nnext(iter(results['PEER_SWITCH']))\n```\n\n### Impact\nCrashes `sonic-cfggen` when parsing a minigraph with more than one peer switch (DualToR configurations).",
+  "comments": [
+    {
+      "author": "gechiang",
+      "createdAt": "2026-04-08T15:29:32Z",
+      "body": "@prsunny , can someone from your team help review the PR?\nThanks!"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26405,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26405",
+      "title": "[agent][cfggen] Fix dict.keys()[0] TypeError in Python 3 for PEER_SWITCH warning",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-10T15:31:28Z",
+      "createdAt": "2026-03-25T21:55:45Z",
+      "author": "rustiqly",
+      "body": "#### What I did\nFix `results['PEER_SWITCH'].keys()[0]` which raises `TypeError` in Python 3 since `dict.keys()` returns a view, not a list.\n\n#### How I did it\nReplaced `results['PEER_SWITCH'].keys()[0]` with `next(iter(results['PEER_SWITCH']))`.\n\nNote: the very next line (2193) already uses the correct `list(results['PEER_SWITCH'].keys())[0]` pattern.\n\n#### How to verify it\nParse a minigraph with more than one peer switch (DualToR config).\n\n#### Which release branch to backport\nmaster\n\n#### Description for the changelog\nFix Python 3 TypeError in minigraph PEER_SWITCH warning message.\n\nFixes: #26400",
+      "files": [
+        {
+          "path": "src/sonic-config-engine/minigraph.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-config-engine/tests/test_minigraph_case.py",
+          "additions": 22,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-25T21:56:26Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-25T21:56:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-27T03:45:43Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-27T03:45:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-27T14:10:21Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-27T14:10:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-04T17:38:06Z",
+          "body": "Pushed incremental commit c82b51646: changed `print()` to `print(..., file=sys.stderr)` for the PEER_SWITCH warning, consistent with all other warnings in minigraph.py. Good catch by the Copilot review."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-04T17:38:07Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-04T17:38:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-04T17:50:49Z",
+          "body": "Regarding the Copilot suggestion to add a multi-peer-switch regression test: good idea. The existing test fixtures only cover 0 or 1 peer switch. I'll look into adding a minigraph fixture with >1 peer switch to verify `sonic-cfggen` completes without TypeError and picks the first one consistently. Will push in a follow-up commit."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-04T17:56:59Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-04T17:57:00Z",
+          "body": "Pushed regression test in 19e0947f3: `test_multi_peer_switch_no_crash` directly calls `get_peer_switch_info()` with 2 different peer switches and verifies:\n1. Both entries are in the peer_switch_table\n2. `next(iter())` works without crash (the `dict.keys()[0]` TypeError this PR fixes)\n\nVerified locally that the old code (`dict.keys()[0]`) raises `TypeError` while the fix (`next(iter())`) works correctly."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-04T17:57:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-04-06T23:24:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-06T23:24:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-04-08T23:22:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T23:22:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca-admin",
+          "createdAt": "2026-04-10T15:29:53Z",
+          "body": "Override protection to merge syntax change without functional difference."
+        }
+      ]
+    }
+  ]
+}

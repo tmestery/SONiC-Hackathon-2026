@@ -1,0 +1,106 @@
+{
+  "number": 4793,
+  "title": "fast-reboot fails when LAG has VLAN membership",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/4793",
+  "createdAt": "2020-06-17T19:21:19Z",
+  "closedAt": "2021-04-02T18:24:01Z",
+  "author": "nazariig",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\nIf you are reporting a new issue, make sure that we do not have any duplicates\r\nalready open. You can ensure this by searching the issue list for this\r\nrepository. If there is a duplicate, please close your issue and add a comment\r\nto the existing issue instead.\r\n\r\nIf you suspect your issue is a bug, please edit your issue description to\r\ninclude the BUG REPORT INFORMATION shown below. If you fail to provide this\r\ninformation within 7 days, we cannot debug your issue and will close it. We\r\nwill, however, reopen it if you later provide the information.\r\n\r\nFor more information about reporting issues, see\r\nhttps://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n---------------------------------------------------\r\nGENERAL SUPPORT INFORMATION\r\n---------------------------------------------------\r\n\r\nThe GitHub issue tracker is for bug reports and feature requests.\r\nGeneral support can be found at the following locations:\r\n\r\n- SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n---------------------------------------------------\r\nBUG REPORT INFORMATION\r\n---------------------------------------------------\r\nUse the commands below to provide key information from your environment:\r\nYou do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n**Description**\r\n<!--\r\nBriefly describe the problem you are having in a few paragraphs.\r\n-->\r\nfast-reboot fails while calling `/usr/bin/fast-reboot-dump.py`:\r\n```bash\r\nJun 17 18:48:23.632648 sonic ERR fast-reboot-dump: Got an exception '24:8a:07:7e:41:80': Traceback: Traceback (most recent call last):#012  File \"/usr/bin/fast-reboot-dump.py\", line 301, in <module>#012    res = main()#012  File \"/usr/bin/fast-reboot-dump.py\", line 294, in main#012    garp_send(arp_entries, map_mac_ip_per_vlan)#012  File \"/usr/bin/fast-reboot-dump.py\", line 229, in garp_send#012    src_ifs = {map_mac_ip_per_vlan[vlan_name][dst_mac] for vlan_name, dst_mac, _ in arp_entries}#012  File \"/usr/bin/fast-reboot-dump.py\", line 229, in <setcomp>#012    src_ifs = {map_mac_ip_per_vlan[vlan_name][dst_mac] for vlan_name, dst_mac, _ in arp_entries}#012KeyError: '24:8a:07:7e:41:80'\r\n```\r\n\r\nThe issue happens when `/usr/bin/fast-reboot-dump.py` tries to process VLAN LAG members:\r\n```bash\r\ndef get_fdb(db, vlan_name, vlan_id, bridge_id_2_iface):\r\n    fdb_types = {\r\n      'SAI_FDB_ENTRY_TYPE_DYNAMIC': 'dynamic',\r\n      'SAI_FDB_ENTRY_TYPE_STATIC' : 'static'\r\n    }\r\n\r\n    bvid = get_vlan_oid_by_vlan_id(db, vlan_id)\r\n    available_macs = set()\r\n    map_mac_ip = {}\r\n    fdb_entries = []\r\n    keys = db.keys(db.ASIC_DB, 'ASIC_STATE:SAI_OBJECT_TYPE_FDB_ENTRY:{*\\\"bvid\\\":\\\"%s\\\"*}' % bvid)\r\n    keys = [] if keys is None else keys\r\n    for key in keys:\r\n        key_obj = json.loads(key.replace('ASIC_STATE:SAI_OBJECT_TYPE_FDB_ENTRY:', ''))\r\n        mac = str(key_obj['mac'])\r\n        if not is_mac_unicast(mac):\r\n            continue\r\n        available_macs.add((vlan_name, mac.lower()))\r\n        fdb_mac = mac.replace(':', '-')\r\n        # get attributes\r\n        value = db.get_all(db.ASIC_DB, key)\r\n        fdb_type = fdb_types[value['SAI_FDB_ENTRY_ATTR_TYPE']]\r\n        if value['SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID'] not in bridge_id_2_iface:\r\n            continue\r\n        fdb_port = bridge_id_2_iface[value['SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID']]\r\n\r\n        obj = {\r\n          'FDB_TABLE:Vlan%d:%s' % (vlan_id, fdb_mac) : {\r\n            'type': fdb_type,\r\n            'port': fdb_port,\r\n          },\r\n          'OP': 'SET'\r\n        }\r\n\r\n        fdb_entries.append(obj)\r\n        map_mac_ip[mac.lower()] = fdb_port\r\n\r\n    return fdb_entries, available_macs, map_mac_ip\r\n\r\nvlan_id:\r\n10\r\n\r\nkey_obj:\r\n{u'mac': u'24:8A:07:7E:41:80', u'bvid': u'oid:0x260000000005bb', u'switch_id': u'oid:0x21000000000000'}\r\n\r\nvalue:\r\n{'SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID': 'oid:0x3a0000000005bd', 'SAI_FDB_ENTRY_ATTR_PACKET_ACTION': 'SAI_PACKET_ACTION_FORWARD', 'SAI_FDB_ENTRY_ATTR_TYPE': 'SAI_FDB_ENTRY_TYPE_DYNAMIC'}\r\n\r\nbridge_id_2_iface:\r\n{'oid:0x3a00000000064c': 'Ethernet56'}\r\n\r\nvalue['SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID']:\r\n0x3a0000000005bd\r\n```\r\n\r\n```bash\r\ndef garp_send(arp_entries, map_mac_ip_per_vlan):\r\n    ETH_P_ALL = 0x03\r\n\r\n    # generate source ip addresses for arp packets\r\n    src_ip_addrs = {vlan_name:get_iface_ip_addr(vlan_name) for vlan_name,_,_ in arp_entries}\r\n\r\n    # generate source mac addresses for arp packets\r\n    src_ifs = {map_mac_ip_per_vlan[vlan_name][dst_mac] for vlan_name, dst_mac, _ in arp_entries}\r\n\r\narp_entries:\r\n[('Vlan10', '24:8a:07:7e:41:80', '10.0.1.1'), ('Vlan10', '24:8a:07:7e:41:80', '2000')]\r\n\r\nmap_mac_ip_per_vlan:\r\n{'Vlan23': {}, 'Vlan10': {}}\r\n```\r\nSONiC DB info:\r\n```bash\r\nroot@sonic:/home/admin# redis-cli -n 1 KEYS '*' | grep '0x3a0000000005bd'\r\nASIC_STATE:SAI_OBJECT_TYPE_BRIDGE_PORT:oid:0x3a0000000005bd\r\n\r\nroot@sonic:/home/admin# redis-cli -n 1 HGETALL 'ASIC_STATE:SAI_OBJECT_TYPE_BRIDGE_PORT:oid:0x3a0000000005bd'\r\n1) \"SAI_BRIDGE_PORT_ATTR_TYPE\"\r\n2) \"SAI_BRIDGE_PORT_TYPE_PORT\"\r\n3) \"SAI_BRIDGE_PORT_ATTR_PORT_ID\"\r\n4) \"oid:0x20000000005b5\"\r\n5) \"SAI_BRIDGE_PORT_ATTR_ADMIN_STATE\"\r\n6) \"true\"\r\n7) \"SAI_BRIDGE_PORT_ATTR_FDB_LEARNING_MODE\"\r\n8) \"SAI_BRIDGE_PORT_FDB_LEARNING_MODE_HW\"\r\n\r\nroot@sonic:/home/admin# redis-cli -n 1 KEYS '*' | grep '0x20000000005b5'\r\nASIC_STATE:SAI_OBJECT_TYPE_LAG:oid:0x20000000005b5\r\n```\r\n\r\nThe result of operation is invalid since `bridge_id_2_iface` doesn't have mapping for LAG bridge interfaces.\r\n\r\n**Steps to reproduce the issue:**\r\n1. Connect two DUT with LAG\r\n2. Add LAG to VLAN RIF as tagged member\r\n3. Setup BGP session over VLAN RIF\r\n\r\n**Describe the results you received:**\r\nfast-reboot fails\r\n```bash\r\nJun 17 18:48:23.632648 sonic ERR fast-reboot-dump: Got an exception '24:8a:07:7e:41:80': Traceback: Traceback (most recent call last):#012  File \"/usr/bin/fast-reboot-dump.py\", line 301, in <module>#012    res = main()#012  File \"/usr/bin/fast-reboot-dump.py\", line 294, in main#012    garp_send(arp_entries, map_mac_ip_per_vlan)#012  File \"/usr/bin/fast-reboot-dump.py\", line 229, in garp_send#012    src_ifs = {map_mac_ip_per_vlan[vlan_name][dst_mac] for vlan_name, dst_mac, _ in arp_entries}#012  File \"/usr/bin/fast-reboot-dump.py\", line 229, in <setcomp>#012    src_ifs = {map_mac_ip_per_vlan[vlan_name][dst_mac] for vlan_name, dst_mac, _ in arp_entries}#012KeyError: '24:8a:07:7e:41:80'\r\n```\r\n\r\n**Describe the results you expected:**\r\nfast-reboot shouldn't fail\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\n\r\n**Output of `show version`:**\r\n```\r\nSONiC Software Version: SONiC.201911.113-093d7731\r\nDistribution: Debian 9.12\r\nKernel: 4.9.0-11-2-amd64\r\nBuild commit: 093d7731\r\nBuild date: Sun Jun 14 03:45:40 UTC 2020\r\nBuilt by: johnar@jenkins-worker-8\r\n\r\nPlatform: x86_64-mlnx_msn2100-r0\r\nHwSKU: ACS-MSN2100\r\nASIC: mellanox\r\nUptime: 19:13:15 up 10:56,  3 users,  load average: 0.19, 0.32, 0.48\r\n\r\nDocker images:\r\nREPOSITORY                    TAG                   IMAGE ID            SIZE\r\ndocker-syncd-mlnx             201911.113-093d7731   d11fa0617162        386MB\r\ndocker-syncd-mlnx             latest                d11fa0617162        386MB\r\ndocker-router-advertiser      201911.113-093d7731   da9d108cabc9        285MB\r\ndocker-router-advertiser      latest                da9d108cabc9        285MB\r\ndocker-sonic-mgmt-framework   201911.113-093d7731   deba713cbabb        425MB\r\ndocker-sonic-mgmt-framework   latest                deba713cbabb        425MB\r\ndocker-platform-monitor       201911.113-093d7731   cedcaec571f9        647MB\r\ndocker-platform-monitor       latest                cedcaec571f9        647MB\r\ndocker-fpm-frr                201911.113-093d7731   578bdd07c4c0        330MB\r\ndocker-fpm-frr                latest                578bdd07c4c0        330MB\r\ndocker-sflow                  201911.113-093d7731   3c8863e5a96a        310MB\r\ndocker-sflow                  latest                3c8863e5a96a        310MB\r\ndocker-lldp-sv2               201911.113-093d7731   15d73e30c0e9        307MB\r\ndocker-lldp-sv2               latest                15d73e30c0e9        307MB\r\ndocker-dhcp-relay             201911.113-093d7731   65346705abce        295MB\r\ndocker-dhcp-relay             latest                65346705abce        295MB\r\ndocker-database               201911.113-093d7731   b98668b03299        285MB\r\ndocker-database               latest                b98668b03299        285MB\r\ndocker-teamd                  201911.113-093d7731   d983d6a99831        310MB\r\ndocker-teamd                  latest                d983d6a99831        310MB\r\ndocker-snmp-sv2               201911.113-093d7731   0c821c3e62ce        343MB\r\ndocker-snmp-sv2               latest                0c821c3e62ce        343MB\r\ndocker-orchagent              201911.113-093d7731   ea84da2dedc9        328MB\r\ndocker-orchagent              latest                ea84da2dedc9        328MB\r\ndocker-nat                    201911.113-093d7731   0ade55a3c7a3        311MB\r\ndocker-nat                    latest                0ade55a3c7a3        311MB\r\ndocker-sonic-telemetry        201911.113-093d7731   9f3fe08edde6        349MB\r\ndocker-sonic-telemetry        latest                9f3fe08edde6        349MB\r\n```\r\n\r\n**Attach debug file `sudo generate_dump`:**\r\n```\r\nroot@sonic:/home/admin# show int status\r\n      Interface        Lanes    Speed    MTU    Alias             Vlan    Oper    Admin             Type    Asym PFC\r\n---------------  -----------  -------  -----  -------  ---------------  ------  -------  ---------------  ----------\r\n      Ethernet0            0      25G   9100     etp1           routed    down     down  QSFP28 or later         N/A\r\n      Ethernet4            4      25G   9100     etp2           routed    down     down   SFP/SFP+/SFP28         N/A\r\n      Ethernet8            8      25G   9100     etp3           routed    down     down   SFP/SFP+/SFP28         N/A\r\n     Ethernet12           12      25G   9100     etp4           routed    down     down   SFP/SFP+/SFP28         N/A\r\n     Ethernet16           16      25G   9100     etp5           routed    down     down   SFP/SFP+/SFP28         N/A\r\n     Ethernet20           20      25G   9100     etp6           routed    down     down   SFP/SFP+/SFP28         N/A\r\n     Ethernet24           24      25G   9100     etp7           routed    down     down   SFP/SFP+/SFP28         N/A\r\n     Ethernet28           28      25G   9100     etp8           routed    down     down   SFP/SFP+/SFP28         N/A\r\n     Ethernet32           32      25G   9100     etp9  PortChannel0001      up       up   SFP/SFP+/SFP28         N/A\r\n     Ethernet36           36      25G   9100    etp10  PortChannel0001      up       up   SFP/SFP+/SFP28         N/A\r\n     Ethernet40           40      25G   9100   etp11a  PortChannel0002    down     down  QSFP28 or later         N/A\r\n     Ethernet41           41      25G   9100   etp11b  PortChannel0002    down     down  QSFP28 or later         N/A\r\n     Ethernet42           42      25G   9100   etp11c           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet43           43      25G   9100   etp11d           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet44           44      25G   9100   etp12a           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet45           45      25G   9100   etp12b           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet46           46      25G   9100   etp12c           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet47           47      25G   9100   etp12d           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet48  48,49,50,51     100G   9100    etp13           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet52  52,53,54,55     100G   9100    etp14           routed    down     down  QSFP28 or later         N/A\r\n     Ethernet56  56,57,58,59     100G   9100    etp15            trunk    down     down  QSFP28 or later         N/A\r\n     Ethernet60  60,61,62,63     100G   9100    etp16           routed    down     down  QSFP28 or later         N/A\r\nPortChannel0001          N/A      50G   9100      N/A           routed      up       up              N/A         N/A\r\nPortChannel0002          N/A      50G   9100      N/A           routed    down       up              N/A         N/A\r\n\r\nroot@sonic:/home/admin# show int po\r\nFlags: A - active, I - inactive, Up - up, Dw - Down, N/A - not available,\r\n       S - selected, D - deselected, * - not synced\r\n  No.  Team Dev         Protocol     Ports\r\n-----  ---------------  -----------  ---------------------------\r\n 0001  PortChannel0001  LACP(A)(Up)  Ethernet32(S) Ethernet36(S)\r\n 0002  PortChannel0002  LACP(A)(Dw)  Ethernet41(D) Ethernet40(D)\r\n\r\nroot@sonic:/home/admin# show vlan brief\r\n+-----------+----------------+-----------------+----------------+-----------------------+\r\n|   VLAN ID | IP Address     | Ports           | Port Tagging   | DHCP Helper Address   |\r\n+===========+================+=================+================+=======================+\r\n|        10 | 10.0.1.2/24    | PortChannel0001 | tagged         |                       |\r\n|           | 2000:1::2/64   |                 |                |                       |\r\n+-----------+----------------+-----------------+----------------+-----------------------+\r\n|        23 | 100.2.3.1/24   | Ethernet56      | tagged         |                       |\r\n|           | 2000:2:3::1/64 |                 |                |                       |\r\n+-----------+----------------+-----------------+----------------+-----------------------+\r\n\r\nroot@sonic:/home/admin# show ip int\r\nInterface        Master    IPv4 address/mask    Admin/Oper    BGP Neighbor    Neighbor IP\r\n---------------  --------  -------------------  ------------  --------------  -------------\r\nEthernet60                 100.2.4.1/24         down/down     IXIA2.4         100.2.4.2\r\nLoopback0                  1.1.1.2/32           up/up         N/A             N/A\r\nPortChannel0002            10.0.2.2/24          up/down       Aux             10.0.2.1\r\nVlan10                     10.0.1.2/24          up/up         Aux             10.0.1.1\r\nVlan23                     100.2.3.1/24         up/up         IXIA2.3         100.2.3.2\r\ndocker0                    240.127.1.1/24       up/down       N/A             N/A\r\neth0                       10.210.25.44/22      up/up         N/A             N/A\r\nlo                         127.0.0.1/8          up/up         N/A             N/A\r\n\r\nroot@sonic:/home/admin# show ip bgp su\r\n\r\nIPv4 Unicast Summary:\r\nBGP router identifier 1.1.1.2, local AS number 65200 vrf-id 0\r\nBGP table version 9\r\nRIB entries 9, using 1656 bytes of memory\r\nPeers 4, using 82 KiB of memory\r\nPeer groups 4, using 256 bytes of memory\r\n\r\nNeighbor        V         AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   NeighborName\r\n10.0.1.1        4      65100    9725    9726        0    0    0 02:42:00            3   Aux\r\n10.0.2.1        4      65100    2513    2516        0    0    0 02:41:34       Active   Aux\r\n100.2.3.2       4      65023       0       0        0    0    0    never       Active   IXIA2.3\r\n100.2.4.2       4      65024       0       0        0    0    0    never       Active   IXIA2.4\r\n\r\nTotal number of neighbors 4\r\n```",
+  "comments": [
+    {
+      "author": "liat-grozovik",
+      "createdAt": "2021-02-21T07:34:08Z",
+      "body": "@anshuv-mfst for some unknown reason i cannot assign the issue to @shlomibitton  and he cannot self assign it. Could you please help?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1393,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/1393",
+      "title": "[fast-reboot] Fix dump script to support PortChannels in a VLAN group",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-04-02T18:24:01Z",
+      "createdAt": "2021-01-31T07:47:02Z",
+      "author": "shlomibitton",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n\"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\nissue when the PR is merged.\r\n\r\nIf you are adding/modifying/removing any command or utility script, please also\r\nmake sure to add/modify/remove any unit tests from the tests\r\ndirectory as appropriate.\r\n\r\nIf you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\nsubcommand, or you are adding a new subcommand, please make sure you also\r\nupdate the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\nyour changes.\r\n\r\nPlease provide the following information:\r\n-->\r\n\r\n**- What I did**\r\nAdd PortChannels to the list of interfaces (port_id_2_iface) to support FDB dump for PortChannel in a VLAN group.\r\nFixes https://github.com/Azure/sonic-buildimage/issues/4793\r\n\r\n**- How I did it**\r\n* Get LAG ID from the DB.\r\n* Find the LAG name from APP DB.\r\n* Add it to the list of 'port_id_2_iface' to be used.\r\n\r\n**- How to verify it**\r\nReproduce the issue mentioned on this PR and try to run fast-reboot with this fix.\r\n\r\n**- Previous command output (if the output of a command-line utility has changed)**\r\nTraceback:\r\nsrc_ifs = {map_mac_ip_per_vlan[vlan_name][dst_mac] for vlan_name, dst_mac, _ in arp_entries}\r\nKeyError: 'b8:59:9f:a8:e2:00'\r\n\r\n**- New command output (if the output of a command-line utility has changed)**\r\nSuccess .\r\n",
+      "files": [
+        {
+          "path": "scripts/fast-reboot-dump.py",
+          "additions": 64,
+          "deletions": 24
+        },
+        {
+          "path": "setup.py",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/fast_reboot_dump_dbs/APPL_DB.json",
+          "additions": 10,
+          "deletions": 0
+        },
+        {
+          "path": "tests/fast_reboot_dump_dbs/ASIC_DB.json",
+          "additions": 62,
+          "deletions": 0
+        },
+        {
+          "path": "tests/fast_reboot_dump_test.py",
+          "additions": 50,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "shlomibitton",
+          "createdAt": "2021-02-09T07:41:22Z",
+          "body": "> this is a new feature. please add unit test support.\r\n\r\n@lguohan there is no unit-test for fast-reboot or the fast-reboot-dump, I will add a test for it"
+        },
+        {
+          "author": "shlomibitton",
+          "createdAt": "2021-02-17T15:16:41Z",
+          "body": "@lguohan added a unit-test, please review\r\nthanks"
+        },
+        {
+          "author": "shlomibitton",
+          "createdAt": "2021-02-28T11:36:03Z",
+          "body": "retest this please"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2021-02-28T16:16:24Z",
+          "body": "@tahmed-dev  @stepanblyschak  can you please review?"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2021-03-02T13:37:58Z",
+          "body": "@tahmed-dev could u please review?\r\n@lguohan any further comments or we can move forward and merge?"
+        },
+        {
+          "author": "tahmed-dev",
+          "createdAt": "2021-03-02T17:23:13Z",
+          "body": "> @tahmed-dev could u please review?\r\n> @lguohan any further comments or we can move forward and merge?\r\n\r\n@lguohan , @liat-grozovik ACK."
+        },
+        {
+          "author": "dprital",
+          "createdAt": "2021-03-10T09:43:45Z",
+          "body": "@tahmed-dev  - It done in order to fix the following issue: \r\nhttps://github.com/Azure/sonic-buildimage/issues/4793\r\nAnd it is mentioned on \"Why I did it\" above.\r\nCan you please approve and merge (also to 202012) ?"
+        },
+        {
+          "author": "liat-grozovik",
+          "createdAt": "2021-03-16T14:50:26Z",
+          "body": "@tahmed-dev comments were addressed, can you please review?"
+        }
+      ]
+    }
+  ]
+}

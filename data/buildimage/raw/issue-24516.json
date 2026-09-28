@@ -1,0 +1,126 @@
+{
+  "number": 24516,
+  "title": "Bug: arm(hf/64) docker-slave containers are using old nodejs versions via a deprecated install script",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24516",
+  "createdAt": "2025-11-12T16:28:17Z",
+  "closedAt": "2026-01-28T03:07:57Z",
+  "author": "nate-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nIn the Dockerfiles for the sonic-slave containers (stretch - bookworm, removed in trixie) nodejs is installed (or attempted to be installed for Bookworm) by a third party APT repo, configured by a curl | bash script. This only is used for non-AMD64 builds, but I don't know why.\n```\n{% if CONFIGURED_ARCH != \"amd64\" -%}\n# Install node.js for azure pipeline\nRUN curl -sL https://deb.nodesource.com/setup_10.x | bash -\nRUN apt-get install -y nodejs\n\n# Tell azure pipeline to use node.js in the docker\nLABEL \"com.azure.dev.pipelines.agent.handler.node.path\"=\"/usr/bin/node\"\n{% endif -%}\n```\nOriginally added here:\nhttps://github.com/sonic-net/sonic-buildimage/commit/0b0da8776628b5eab29c6cde3ce116afc9b9706f\n\nFor bookworm, the script version was updated to NodeJS 14, however, even that is deprecated. Bookworm also has nodeJS 18 already in its repos, so we don't need to try to install an older version.\n`RUN curl -sL https://deb.nodesource.com/setup_14.x | bash -`\n\nThis script has been deprecated by its maintainer, which results in showing these warnings and delaying the container build by 20 + 60 seconds:\n\n```===============================================================================\n================================================================================\n\n                              DEPRECATION WARNING\n\n  Node.js 14.x is no longer actively supported!\n\n  You will not receive security or critical stability updates for this version.\n\n  You should migrate to a supported version of Node.js as soon as possible.\n  Use the installation script that corresponds to the version of Node.js you\n  wish to install. e.g.\n\n   * https://deb.nodesource.com/setup_16.x \u2014 Node.js 16 \"Gallium\"\n   * https://deb.nodesource.com/setup_18.x \u2014 Node.js 18 LTS \"Hydrogen\" (recommended)\n   * https://deb.nodesource.com/setup_19.x \u2014 Node.js 19 \"Nineteen\"\n   * https://deb.nodesource.com/setup_20.x \u2014 Node.js 20 \"Iron\" (current)\n\n  Please see https://github.com/nodejs/Release for details about which\n  version may be appropriate for you.\n\n  The NodeSource Node.js distributions repository contains\n  information both about supported versions of Node.js and supported Linux\n  distributions. To learn more about usage, see the repository:\n    https://github.com/nodesource/distributions\n\n================================================================================\n================================================================================\n\nContinuing in 20 seconds ...\n\n\n================================================================================\n\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\n================================================================================\n\n                           SCRIPT DEPRECATION WARNING\n\n\n  This script, located at https://deb.nodesource.com/setup_X, used to\n  install Node.js is deprecated now and will eventually be made inactive.\n\n  Please visit the NodeSource distributions Github and follow the\n  instructions to migrate your repo.\n  https://github.com/nodesource/distributions\n\n  The NodeSource Node.js Linux distributions GitHub repository contains\n  information about which versions of Node.js and which Linux distributions\n  are supported and how to install it.\n  https://github.com/nodesource/distributions\n\n\n                          SCRIPT DEPRECATION WARNING\n\n================================================================================\n\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\n================================================================================\nTO AVOID THIS WAIT MIGRATE THE SCRIPT\nContinuing in 60 seconds (press Ctrl-C to abort) ...\n```\n\nNote that even after we use this script on Bookworm, it only provides older package versions than the Debian repos, so we end up with the same version we would have had without this script.\n\n### Steps to Reproduce\n\nmake configure PLATFORM=<arm platform> PLATFORM_ARCH=arm64\n\n### Actual Behavior and Expected Behavior\n\nWe shouldn't be attempting to use node 14, it's been eol for 5 years, since April 2020.\n\nWe probably also shouldn't be using a random third party script to curl | bash install 3rd party repos for node, there's a software supply chain issue, plus the fact that this build step completely breaks reproducible builds.\n\nWe should just install node from the debian sources available for modern releases, or remove this installation completely.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 24517,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/24517",
+      "title": "[build] Remove deprecated nodesource.com nodejs source from Bookworm slave container Dockerfile",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-01-28T03:07:56Z",
+      "createdAt": "2025-11-12T17:21:07Z",
+      "author": "nate-nexthop",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nWe are attempting to install nodejs 14 from nodesource.com using this line in the Dockerfile:\r\n```\r\n-RUN curl -sL https://deb.nodesource.com/setup_14.x | bash -\r\n```\r\nHowever, this script is deprecated and because of this the script inserts artificial pauses so the user can heed their warning:\r\n```\r\n================================================================================\r\n\r\n                              DEPRECATION WARNING\r\n\r\n  Node.js 14.x is no longer actively supported!\r\n  <snip>\r\nContinuing in 20 seconds ...\r\n\r\n\r\n================================================================================\r\n\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\r\n================================================================================\r\n\r\n                           SCRIPT DEPRECATION WARNING\r\n\r\n\r\n  This script, located at https://deb.nodesource.com/setup_X, used to\r\n  install Node.js is deprecated now and will eventually be made inactive.\r\n<snip>\r\nTO AVOID THIS WAIT MIGRATE THE SCRIPT\r\nContinuing in 60 seconds (press Ctrl-C to abort) ...\r\n```\r\n\r\nWe need to stop using this script before it goes away as that will break builds. As it it, it wastes time.\r\n\r\nAdditionally, Bookworm has a Debian maintained nodejs, v18, which ends up being installed anyway because the sources added from nodesource.com are older.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n\r\nfixes #24516 \r\n\r\n#### How I did it\r\n\r\nJust remove the line to add the nodesource.com APT sources.\r\n\r\n#### How to verify it\r\nEnter the sonic-slave-bash container before and after this change, and verify that the nodejs installed is v18:\r\nBefore:\r\n```\r\nChecking sonic-slave-user image: sonic-slave-bookworm-admin:fde86dbe366\r\nadmin@3ee74e91ba03:/sonic$ node -v\r\nv18.20.4\r\n```\r\nAfter:\r\n```\r\nChecking sonic-slave-user image: sonic-slave-bookworm-admin:2d1524f8df4\r\nadmin@23cef98ccbd2:/sonic$ node -v\r\nv18.20.4\r\n```\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n#### Tested branch (Please provide the tested image version)\r\nmaster\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "sonic-slave-bookworm/Dockerfile.j2",
+          "additions": 0,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-12T17:21:15Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-12T17:21:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-14T12:23:19Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-14T12:23:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "nate-nexthop",
+          "createdAt": "2025-11-17T15:02:54Z",
+          "body": "@saiarcot895 Does this look reasonable to you? I noticed this recently when building an ARM Bookworm container. I see it was removed in Trixie by @pavannaregundi "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-03T12:50:01Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-03T12:50:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-03T15:24:05Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-03T15:24:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-03T15:24:27Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-03T15:24:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tjchadaga",
+          "createdAt": "2025-12-03T16:28:24Z",
+          "body": "@yxieca - could you please help merge this?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-05T13:30:38Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-05T13:30:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-13T21:24:52Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-13T21:25:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-10T22:27:39Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25426"
+        }
+      ]
+    }
+  ]
+}

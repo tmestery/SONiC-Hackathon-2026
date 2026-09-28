@@ -1,0 +1,165 @@
+{
+  "number": 28030,
+  "title": "[Issue] docker-netfilter-ready.sh check insufficient - Docker fails on first boot due to missing xt_addrtype module",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28030",
+  "createdAt": "2026-06-23T01:31:44Z",
+  "closedAt": "2026-06-29T18:31:17Z",
+  "author": "prabhataravind",
+  "labels": [],
+  "assignees": [
+    "rameshraghupathy"
+  ],
+  "milestone": null,
+  "body": "## Description\r\n\r\nAfter the netfilter readiness fix (PR #27341, backported as PR #27477 and PR #27675), Docker still fails on first boot after sonic-to-sonic upgrade on SmartSwitch platforms (Cisco 8102-28FH-DPU). The `docker-netfilter-ready.sh` `ExecStartPre` script declares ip6tables ready, but Docker fails because the `xt_addrtype` kernel module is not yet loaded.\r\n\r\nThe result is the same as the original issue: `interfaces-config.service` permanently fails, management IP is never applied to eth0, and the device is unreachable.\r\n\r\n## Steps to reproduce the issue\r\n\r\n1. Perform a sonic-to-sonic upgrade on a Cisco 8102-28FH-DPU (SmartSwitch platform)\r\n2. Reboot the device (first boot after upgrade)\r\n3. Observe that `interfaces-config.service` remains `inactive (dead)` and management IP is not applied\r\n\r\n## Describe the results you received\r\n\r\nDocker fails on its first start attempt because `xt_addrtype` kernel module is not loaded when `docker-netfilter-ready.sh` declares readiness:\r\n\r\n```\r\nJun 10 03:56:03 sonic dockerd[1981]: time=\"2026-06-10T03:56:03.765518931Z\" level=warning\r\n  msg=\"ip6tables is enabled, but cannot set up ip6tables chains\"\r\n  error=\"failed to add jump rules to ipv6 NAT table: failed to append jump rules to\r\n  nat-PREROUTING: (iptables failed: ip6tables --wait -t nat -A PREROUTING -m addrtype\r\n  --dst-type LOCAL -j DOCKER: Warning: Extension addrtype is not supported, missing\r\n  kernel module?\\nip6tables v1.8.11 (nf_tables): Couldn't load match `addrtype':\r\n  No such file or directory\\n (exit status 2))\"\r\n```\r\n\r\nService states after boot:\r\n```\r\ndocker.service          - active (running) since 03:57:08 (recovered on retry)\r\ninterfaces-config.service - inactive (dead) since 03:56:09 (NEVER recovered)\r\n```\r\n\r\nConfig is correct in DB but not applied to eth0:\r\n```\r\nshow runningconfiguration all | grep -A5 \"MGMT_INTERFACE\"\r\n    \"MGMT_INTERFACE\": {\r\n        \"eth0|10.3.146.224/24\": { ... }\r\n\r\nsudo ifconfig eth0 -> no IPv4 address\r\n```\r\n\r\n## Describe the results you expected\r\n\r\nDocker should start successfully on first attempt. `interfaces-config.service` should activate and apply management IP to eth0.\r\n\r\n## Additional information you deem important\r\n\r\n### Root Cause\r\n\r\nThe current `docker-netfilter-ready.sh` only checks:\r\n```bash\r\nip6tables -w 1 -n -t filter -L\r\nip6tables -w 1 -n -t nat -L\r\n```\r\n\r\nThese `-L` (list) commands pass without the `xt_addrtype` module. However, Docker creates rules using the `addrtype` match extension:\r\n```\r\nip6tables -t nat -A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER\r\n```\r\n\r\nThis requires `xt_addrtype` to be loaded. The readiness check passes, Docker starts, and then fails because the module isn't available yet.\r\n\r\nAdditionally, the script exits 0 on failure (after 30 attempts), so Docker would start even if ip6tables never became ready.\r\n\r\n### Boot Timeline\r\n\r\n```\r\n03:55:56  docker-netfilter-ready.sh checks ip6tables -L -> passes (xt_addrtype not tested)\r\n03:56:01  Docker starts, tries ip6tables -m addrtype -> FAILS (xt_addrtype not loaded)\r\n03:56:04  Docker exits status=1\r\n03:56:09  interfaces-config.service -> \"Dependency failed\" (cascade)\r\n03:56:14  Docker retry #2\r\n03:57:07  Docker eventually succeeds (xt_addrtype now loaded by other activity)\r\n          interfaces-config.service remains inactive (dead) - NEVER recovers\r\n```\r\n\r\n### Proposed Fix\r\n\r\n1. Pre-load `xt_addrtype` module before checking readiness\r\n2. Add `addrtype` match to the readiness check to exercise the same code path Docker uses\r\n\r\n```bash\r\n#!/bin/sh\r\nuptime_seconds=$(awk '{printf \"%d\", $1}' /proc/uptime)\r\nif [ \"$uptime_seconds\" -gt 120 ] 2>/dev/null; then\r\n    exit 0\r\nfi\r\n\r\n# Pre-load the xt_addrtype module - Docker needs the addrtype match\r\n# for its IPv6 NAT PREROUTING rules on the docker0 bridge.\r\nmodprobe xt_addrtype 2>/dev/null || true\r\n\r\nMAX_ATTEMPTS=30\r\nCALL_TIMEOUT=5\r\n\r\nfor i in $(seq 1 $MAX_ATTEMPTS); do\r\n    if timeout $CALL_TIMEOUT ip6tables -w 1 -n -t filter -L >/dev/null 2>&1 && \\\r\n       timeout $CALL_TIMEOUT ip6tables -w 1 -n -t nat -L >/dev/null 2>&1 && \\\r\n       timeout $CALL_TIMEOUT ip6tables -w 1 -t nat -C PREROUTING -m addrtype --dst-type LOCAL -j RETURN >/dev/null 2>&1; then\r\n        logger \"docker-netfilter-ready: ip6tables ready after ${i} attempt(s)\"\r\n        exit 0\r\n    fi\r\n    sleep 1\r\ndone\r\n\r\nlogger \"docker-netfilter-ready: ip6tables not ready after $MAX_ATTEMPTS attempts\"\r\necho \"Docker netfilter/ip6tables path is not ready\" >&2\r\nexit 0\r\n```\r\n\r\nKey changes:\r\n- `modprobe xt_addrtype` to ensure the kernel module is loaded before Docker starts\r\n- Added `-m addrtype --dst-type LOCAL` check to verify the actual match extension Docker needs is functional\r\n- Kept `exit 0` on failure so Docker still attempts to start rather than being blocked entirely\r\n\r\n### Impact\r\n\r\nWithout this fix, every first boot after sonic-to-sonic upgrade on affected platforms loses management IP. Manual recovery required:\r\n```bash\r\nsudo systemctl start interfaces-config\r\n```\r\n\r\n### Platform\r\n\r\n- Cisco 8102-28FH-DPU (SmartSwitch)\r\n- SONiC version with PR #27341 / #27675 applied\r\n\r\n## Related Issues/PRs\r\n\r\n- #25398 - Changed `-H unix://` to `-H fd://` enabling socket activation (original regression)\r\n- #27341 - Added `docker-netfilter-ready.sh` ExecStartPre (insufficient check)\r\n- #27675 - 202511 backport of #27654\r\n- #25383 - Original socket activation bug\r\n- #26152 - sonic-installer failure due to `-H fd://`\r\n",
+  "comments": [
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-06-23T01:32:47Z",
+      "body": "@rameshraghupathy @vvolam for viz."
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2026-06-26T21:42:59Z",
+      "body": "@rameshraghupathy , i'm re-opening this since the linked fix to disable ip6tables is a WA and we dont fully understand the actual rootcause of the platform issue. Request you to please provide and RCA as to why only cisco SS is affected by the ip6tables. Why not regular 8101?\n\n@prabhataravind , @vvolam , @vaibhavhd , for viz"
+    },
+    {
+      "author": "rameshraghupathy",
+      "createdAt": "2026-06-29T18:31:17Z",
+      "body": "> [@rameshraghupathy](https://github.com/rameshraghupathy) , i'm re-opening this since the linked fix to disable ip6tables is a WA and we dont fully understand the actual rootcause of the platform issue. Request you to please provide and RCA as to why only cisco SS is affected by the ip6tables. Why not regular 8101?\n> \n> [@prabhataravind](https://github.com/prabhataravind) , [@vvolam](https://github.com/vvolam) , [@vaibhavhd](https://github.com/vaibhavhd) , for viz\n\n**Problem:**\nOn certain SmartSwitch platforms, Docker fails during first boot after sonic-installer install, causing cascading failures across SONiC services dependent on Docker/database initialization.\nThe issue is timing-sensitive and reproduces only on some machines depending on boot timing, platform package installation duration, etc.\n**Root Cause:**\nThe failure is caused by an early-boot timing race between Docker IPv6 netfilter initialization and kernel module availability.\n \n**Trigger:**\nDocker 28 enables IPv6 iptables/nftables handling by default. During early first boot, Docker starts in parallel with rc.local platform package installation and attempts to initialize IPv6 netfilter functionality before all required kernel modules are ready. [Docker Engine version 27 release notes](https://docs.docker.com/engine/release-notes/27/#ipv6)\n \n**Why the Issue Appears Machine-Dependent**\nThe issue depends on boot-time race conditions and platform timing differences, including:\nfirst-boot package installation duration\nSmartSwitch platform initialization timing\nkernel module autoload timing\nDocker startup timing relative to rc.local\nBecause of these timing differences, some systems load required netfilter modules before Docker initialization, while others do not.\nOn slower or timing-sensitive systems, these modules are not yet available when Docker initializes networking. (Contributors in Smartswitch: 9600 baud, additional PCI enumeration for 8 DPUs,  on some systems HW instability taking some additonal cycles)\n \n**Why was this not caught immediately at Cisco:**\nMost of the cisco development systems use 115200 baud rate, whereas Microsoft used 9600 Baud on all systems. \nNot every single smartswitch with 9600 baud will hit this issue.  It is a timing race. Subtle variations in the HW, DPU states, parts used cause minor variations in time and depending on that you may hit or miss the window.  We will update you when we get additional data from the HW team."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27863,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27863",
+      "title": "Docker: Prevent first-boot platform startup failures by disabling IPv6 iptables management",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-24T18:36:19Z",
+      "createdAt": "2026-06-13T00:03:40Z",
+      "author": "rameshraghupathy",
+      "body": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/28030\r\n\r\nThe Trixie image uses Docker 28.5.2, while the previous Bookworm environment used Docker 24.0.2. Docker 27+ changed IPv6 bridge/iptables behavior. As a result, dockerd now attempts IPv6 iptables programming during startup. On SmartSwitch first boot this can happen before the kernel netfilter path is fully ready, causing docker.service failure and cascading config/interface failures.\r\n\r\nAdd --ip6tables=false to restore the pre-upgrade behavior where Docker does not program IPv6 iptables rules.\r\n\r\n#### Why I did it\r\nDocker 28 (introduced during the Trixie upgrade) enables additional IPv6 iptables programming during daemon startup. On SmartSwitch first boot this can race with early platform/kernel initialization and cause docker.service startup failure.\r\n\r\n#### How I did it\r\nAdded:\r\n\r\n--ip6tables=false\r\n\r\nto Docker daemon startup options in:\r\n\r\n/etc/systemd/system/docker.service.d/docker.service.conf\r\n\r\nThis disables Docker IPv6 iptables rule programming during daemon startup.\r\n\r\n#### How to verify it\r\nDo sonic-to-sonic upgrade using sonic-installer install (.34 image)\r\nreboot\r\n\r\nBefore change:\r\n\r\ndocker.service failed during first boot,\r\ninterfaces-config.service failed\r\neth0 management IP missing.\r\n\r\nAfter change:\r\n\r\ndocker.service started successfully,\r\ninterfaces-config.service completed successfully,\r\nmanagement eth0 configuration applied correctly.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n- [x] 202605\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n202511\r\n\r\n#### Description of change\r\nAdd --ip6tables=false to Docker daemon startup options to restore the pre-upgrade behavior where Docker does not program IPv6 iptables rules during startup.",
+      "files": [
+        {
+          "path": "build_debian.sh",
+          "additions": 0,
+          "deletions": 2
+        },
+        {
+          "path": "files/docker/docker-netfilter-ready.sh",
+          "additions": 0,
+          "deletions": 30
+        },
+        {
+          "path": "files/docker/docker.service.conf",
+          "additions": 1,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-13T00:03:49Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-13T00:04:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rameshraghupathy",
+          "createdAt": "2026-06-13T00:04:22Z",
+          "body": "@vvolam @prabhataravind  @yue-fred-gao "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-13T11:12:32Z",
+          "body": "This PR has backport request for branch(es): 202511,202605.<br>Added label(s) for branch(es) 202511,202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "vvolam",
+          "createdAt": "2026-06-15T17:08:04Z",
+          "body": "@rameshraghupathy , do the PR https://github.com/sonic-net/sonic-buildimage/pull/27477 needs a revert of changes with this PR?"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-06-15T17:27:34Z",
+          "body": "I thought #27341 resolved the startup issue. Why is this PR needed now?"
+        },
+        {
+          "author": "rameshraghupathy",
+          "createdAt": "2026-06-15T18:20:48Z",
+          "body": "> @rameshraghupathy , do the PR #27477 needs a revert of changes with this PR?\r\n\r\n@vvolam No, this PR does not require reverting #27477/#27341.\r\n\r\n#27341 added docker-netfilter-ready.sh to wait for basic IPv6 iptables readiness before dockerd starts. That was the right first fix and should remain.\r\n\r\nThis PR addresses a different gap found in further testing. With Docker 28, dockerd also programs IPv6 iptables/conntrack rules during bridge initialization. We reproduced cases where the readiness script passed, but dockerd still failed later while programming IPv6 rules. So this PR restores the pre-Trixie/pre-Docker-28 behavior by explicitly disabling Docker IPv6 iptables programming with --ip6tables=false.\r\n\r\nSo the two changes are complementary:\r\n- #27341: avoid starting Docker before basic netfilter readiness\r\n- this PR: avoid Docker 28 IPv6 iptables programming path during startup\r\n\r\n@vvolam Removed it."
+        },
+        {
+          "author": "rameshraghupathy",
+          "createdAt": "2026-06-15T18:21:56Z",
+          "body": "> I thought #27341 resolved the startup issue. Why is this PR needed now?\r\n\r\n@saiarcot895     #27341 fixed the initial readiness gap, but further testing showed it is not sufficient for this failure.\r\n\r\nIn the failing case, docker-netfilter-ready.sh reports success, but dockerd still fails later during bridge/network initialization while programming IPv6 iptables/conntrack rules. That means the basic readiness checks from #27341 pass, but Docker 28 still exercises additional IPv6 iptables paths that were not used in the previous Docker 24 behavior.\r\n\r\nThis PR is needed to restore the pre-upgrade behavior explicitly:\r\n--ip6tables=false\r\n\r\nThat prevents Docker from programming IPv6 iptables rules during startup, which avoids the first-boot race and prevents the cascade into database/config-setup/interfaces-config failures."
+        },
+        {
+          "author": "yue-fred-gao",
+          "createdAt": "2026-06-15T18:45:43Z",
+          "body": "See dockerd release notes about add iptables=false to restore the behavior before docker 27: https://docs.docker.com/engine/release-notes/27/#ipv6"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-06-15T22:10:15Z",
+          "body": "If `--ip6tables=false` is added, is #27341 still actually needed since it shouldn't be writing anything to iptables now?\r\n\r\n@saiarcot895 removing it."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-16T00:46:17Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-16T00:46:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rameshraghupathy",
+          "createdAt": "2026-06-16T00:51:41Z",
+          "body": "> I thought #27341 resolved the startup issue. Why is this PR needed now?\r\n\r\n@saiarcot895 Smartswitch at 9600 console speed needs more boot time to be stable.  It works when 115200 baud is used."
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-06-16T14:36:15Z",
+          "body": "@rameshraghupathy please also fix the PR description and title to reflect the latest changes."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-17T02:28:46Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-17T02:28:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-06-20T01:21:12Z",
+          "body": "@yxieca , @lguohan , please help with merge. @rameshraghupathy , please raise a PR to 202605 due to conflict. "
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-06-22T20:50:11Z",
+          "body": "> @yxieca , @lguohan , please help with merge. @rameshraghupathy , please raise a PR to 202605 due to conflict.\r\n\r\n@yxieca @lguohan gentle ping on this."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-24T19:14:26Z",
+          "body": "The change is not in 202605 yet. @rameshraghupathy, please manually create the cherry pick PR for branch 202605.<br>You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-24T21:20:57Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/28076"
+        }
+      ]
+    }
+  ]
+}

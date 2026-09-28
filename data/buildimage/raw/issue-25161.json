@@ -1,0 +1,151 @@
+{
+  "number": 25161,
+  "title": "Bug: `gnoi-shutdown` service `exec-condition` skip is causing SYSTEM_READY to be not set",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25161",
+  "createdAt": "2026-01-22T18:37:46Z",
+  "closedAt": "2026-02-13T16:13:06Z",
+  "author": "gpunathilell",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "Cisco",
+    "smartswitch",
+    "Issues for 202511"
+  ],
+  "assignees": [
+    "rameshraghupathy"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThe `exec-condition` which checks for platforms in :\nhttps://github.com/sonic-net/sonic-host-services/blob/abb627d5fc73eca882996efc855ecc1e306ff3af/data/debian/sonic-host-services-data.gnoi-shutdown.service#L9\nIs skipped on non-smartswitch NPU platforms. but because of this exec-condition skip this causes SYSTEM_READY to be set to down because this is a `simple` daemon service which is being monitored\n\nIt would only work if the service is masked,\n\n### Steps to Reproduce\n\nInstall image with `gnoi-shutdown` PR and check whether SYSTEM_READY is set. We can check the state using\n`show system-health sysready-status` output:\n```\nroot@sonic:/home/admin# show system-health sysready-status\nSystem is not ready - one or more services are not up\n \nService-Name                       Service-Status    App-Ready-Status    Down-Reason\n---------------------------------  ----------------  ------------------  --------------\ngnoi-shutdown                      Down              Down                exec-condition\n```\nThis prevents control plane state to be down in case of generic implementation because we subscribe for `SYSTEM_READY` to be set\n\n### Actual Behavior and Expected Behavior\n\nActual Behaviour:\n```\nroot@sonic:/home/admin# show system-health sysready-status\nSystem is not ready - one or more services are not up\n \nService-Name                       Service-Status    App-Ready-Status    Down-Reason\n---------------------------------  ----------------  ------------------  --------------\ngnoi-shutdown                      Down              Down                exec-condition\n```\n\nExpected Behavior:\n```\nroot@sonic:/home/admin# show system-health sysready-status\nSystem ready \n \nService-Name                       Service-Status    App-Ready-Status    Down-Reason\n---------------------------------  ----------------  ------------------  --------------\ngnoi-shutdown                      Up              Up                \n```\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "rameshraghupathy",
+      "createdAt": "2026-01-27T19:51:20Z",
+      "body": "@vvolam  gnoi-shutdown is skipped due to ExecCondition on non-SmartSwitch platforms, but system-health treats that as \u201cDown (exec-condition)\u201d, which keeps SYSTEM_READY false.   The PR:#343  approach seems to be the right for this issue."
+    },
+    {
+      "author": "gpunathilell",
+      "createdAt": "2026-01-27T20:03:57Z",
+      "body": "> [@vvolam](https://github.com/vvolam) gnoi-shutdown is skipped due to ExecCondition on non-SmartSwitch platforms, but system-health treats that as \u201cDown (exec-condition)\u201d, which keeps SYSTEM_READY false. The PR:[#343](https://github.com/sonic-net/sonic-buildimage/pull/343) approach seems to be the right for this issue.\n\n@rameshraghupathy the PR https://github.com/sonic-net/sonic-host-services/pull/343 does not solve the issue, as once the service exits, the issue is still seen (as the service is set to down), the only way to fix it is by masking the service"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25217,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25217",
+      "title": "Fix for issue #25161 Bug:  service  skip is causing SYSTEM_READY to be not set",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-13T16:13:04Z",
+      "createdAt": "2026-01-28T00:47:50Z",
+      "author": "rameshraghupathy",
+      "body": "Description:\r\n\r\nFix for issue #25161 Bug:  service  skip is causing SYSTEM_READY to be not set\r\nfixes #25161 \r\n\r\n#### Why I did it\r\nsystem-health was treating systemd \u201cskipped due to ExecCondition\u201d (Result=exec-condition) as a failure, so gnoi-shutdown showed Down (exec-condition) on non-SmartSwitch and incorrectly kept SYSTEM_READY DOWN.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nIn sysmonitor.py:get_unit_status(), I added a small check so that when ActiveState=inactive and Result=exec-condition, the service is marked OK/OK (not applicable) instead of Down, preventing it from blocking system readiness.\r\n\r\n#### How to verify it\r\nRestart system-health.service and confirm systemctl status gnoi-shutdown still shows Result=exec-condition but show system-health sysready-status / sysreadyshow now report gnoi-shutdown OK/OK and SYSTEM_READY becomes UP (assuming no other real failures).\r\n\r\nTested on:\r\nSmartswitch: Platform: x86_64-8102_28fh_dpu_o-r0   HwSKU: Cisco-8102-28FH-DPU-O\r\nNon-Smartswitch: Platform: x86_64-8122_64eh_o-r0  HwSKU: Cisco-8122-O128S2   \r\n[Issue-#25161-ut-log.rtf](https://github.com/user-attachments/files/24897480/Issue-.25161-ut-log.rtf)\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n- [x] 202506\r\n- [x] 202511\r\n\r\n#### Tested branch \r\nmaster                                                                                                                                  \r\nroot@sonic:/home/admin# show ver | grep Ver                                                                                                                    \r\nSONiC Software Version: SONiC.master.33345-dirty-20251214.205827                                                                                               \r\nSONiC OS Version: 12          \r\n\r\n#### Description for the changelog\r\nTreat systemd units skipped due to ExecCondition (Result=exec-condition) as non-failures in system-ready monitoring so they don\u2019t block SYSTEM_READY on unsupported platforms.\r\n",
+      "files": [
+        {
+          "path": "src/system-health/health_checker/sysmonitor.py",
+          "additions": 4,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-28T00:47:58Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-28T00:48:11Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-29T15:39:08Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-29T15:39:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-29T15:41:04Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-29T15:41:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-29T15:49:16Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-29T15:49:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-29T15:50:33Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-29T15:50:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-01-30T06:37:19Z",
+          "body": "@saiarcot895 @vvolam @gpunathilell please review"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-02T20:55:40Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-02T20:55:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vvolam",
+          "createdAt": "2026-02-11T19:50:22Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T19:50:25Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T19:50:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-02-13T05:58:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-13T05:58:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-13T16:13:38Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25492"
+        }
+      ]
+    }
+  ]
+}

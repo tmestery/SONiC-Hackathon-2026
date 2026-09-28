@@ -1,0 +1,73 @@
+{
+  "number": 8310,
+  "title": "sonic-cfggen L2 config_db.json missing information causing SNMP test failure",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/8310",
+  "createdAt": "2021-08-02T15:13:05Z",
+  "closedAt": "2021-08-18T06:20:50Z",
+  "author": "slutati1536",
+  "labels": [
+    "Triaged",
+    "Issue for 202012"
+  ],
+  "assignees": [
+    "qiluo-msft"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nseveral SNMP tests are failing on setups with Microsoft HWsku and L2 configuration(i.e, Mellanox-SN2700-D48C8)\r\nAfter deploying the L2 configuration with sonic-cfggen the config_db.json doesn't include \"description\" for ports  this is causing several tests to fail. \r\n\r\n#### Steps to reproduce the issue:\r\n##### deploy t0 topo\r\n##### deploy L2 on the switch with Microsoft HWSKU\r\nsudo sonic-cfggen -H -k <HWSKU> -p --preset l2 > /tmp/config_db.json\r\nsudo cp /tmp/config_db.json /etc/sonic/config_db.json\r\nsudo config reload -y\r\n\r\n##### run the snmp \"test_snmp_interfaces.py\"\r\n\r\n#### Describe the results you received:\r\n\r\non setup with L2 config_db.json :      \r\n\r\n\"Ethernet0\": {\r\n\r\n            \"lanes\": \"0,1\",\r\n\r\n            \"alias\": \"etp1a\",\r\n\r\n            \"index\": \"1\",\r\n\r\n            \"speed\": \"50000\",\r\n\r\n            \"admin_status\": \"up\"\r\n\r\n        }\r\n\r\non other setups  config_db.json:\r\n\r\n        \"Ethernet180\": {\r\n\r\n            \"alias\": \"Ethernet180\",\r\n\r\n            \"description\": \"Ethernet180\",\r\n\r\n            \"index\": \"46\",\r\n\r\n            \"lanes\": \"180\",\r\n\r\n            \"mtu\": \"9100\",\r\n\r\n            \"pfc_asym\": \"off\",\r\n\r\n            \"speed\": \"25000\"\r\n\r\n        },\r\n      \r\n\r\nthis is causing the issues of KeyError: 'description',\r\n\r\n```\r\nsnmp/test_snmp_interfaces.py:199: \r\n\r\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \r\n\r\n \r\n\r\nduthost = <MultiAsicSonicHost> arc-switch1025 \r\n\r\nports_list = ['Ethernet8', 'Ethernet2', 'Ethernet0', 'Ethernet6', 'Ethernet4', 'Ethernet46', ...] \r\n\r\nnamespace = None \r\n\r\n \r\n\r\n    def collect_all_facts(duthost, ports_list, namespace=None): \r\n\r\n        \"\"\" \r\n\r\n        Collect all data needed for test per each port from DUT \r\n\r\n        :param duthost: DUT host object \r\n\r\n        :return: dict with data collected from DUT per each port \r\n\r\n        \"\"\" \r\n\r\n        result = {} \r\n\r\n        setup = duthost.interface_facts(namespace=namespace)['ansible_facts']['ansible_interface_facts'] \r\n\r\n        config_facts = duthost.config_facts(host=duthost.hostname, source=\"running\", namespace=namespace)['ansible_facts'] \r\n\r\n \r\n\r\n        if not namespace: \r\n\r\n            sonic_db_cmd = \"sonic-db-cli\" \r\n\r\n        else: \r\n\r\n            sonic_db_cmd = \"sonic-db-cli -n {}\".format(namespace) \r\n\r\n \r\n\r\n        for name in ports_list: \r\n\r\n            key = name \r\n\r\n            # 6 stands for ethernet-csmacd and 161 stands for ieee8023adLag \r\n\r\n            if_type = '161' if name.startswith(\"PortChannel\") else '6' \r\n\r\n            if name.startswith(\"Eth\"): \r\n\r\n                portname = config_facts['port_name_to_alias_map'][name] \r\n\r\n                result.setdefault(portname, {}) \r\n\r\n                result[portname].update({'speed': int(config_facts.get('PORT', {})[name]['speed'])}) \r\n\r\n                result[portname].update({'mtu': str(setup[key]['mtu'])}) \r\n\r\n                result[portname].update({'type': if_type}) \r\n\r\n                # Workaround, some ports have missing key admin_status in config \r\n\r\n                try: \r\n\r\n                    admin = config_facts.get('PORT', {})[name]['admin_status'] \r\n\r\n                except KeyError: \r\n\r\n                    admin = duthost.shell('{} APPL_DB HGET \"PORT_TABLE:{}\" \"admin_status\"'.format(sonic_db_cmd, name), module_ignore_errors=False)['stdout'] \r\n\r\n                result[portname].update({'adminstatus': admin}) \r\n\r\n                oper = duthost.shell('{} APPL_DB HGET \"PORT_TABLE:{}\" \"oper_status\"'.format(sonic_db_cmd, name), module_ignore_errors=False)['stdout'] \r\n\r\n                result[portname].update({'operstatus': oper}) \r\n\r\n>               result[portname].update({'description': config_facts.get('PORT', {})[name]['description']}) \r\n\r\nE               KeyError: 'description' \r\n'''\r\n```\r\n \r\n\r\n\r\n#### Describe the results you expected:\r\nAll test_snmp_interfaces.py tests should pass on  a setup with L2 configuration\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nSONiC-OS-202012.131-01efb5454_Internal\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n[sonic_dump_arc-switch1025_20210721_130839.tar.gz](https://github.com/Azure/sonic-buildimage/files/6917820/sonic_dump_arc-switch1025_20210721_130839.tar.gz)\r\n\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2021-08-17T04:17:32Z",
+      "body": "@AndriiLozovyi Could you please check?\r\nThe port description should be optional field."
+    },
+    {
+      "author": "AndriiLozovyi",
+      "createdAt": "2021-08-17T15:29:36Z",
+      "body": "@qiluo-msft, \r\nI looked up to this, the issue was as you mentioned above. \r\nMade PR that should fix this - [PR](https://github.com/Azure/sonic-mgmt/pull/4058)"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4058,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/4058",
+      "title": "[snmp] test_snmp_interfaces_mibs fix KEY_ERROR issue on L2 config",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-08-18T06:20:49Z",
+      "createdAt": "2021-08-17T15:28:01Z",
+      "author": "AndriiLozovyi",
+      "body": "Signed-off-by: Andrii-Yosafat Lozovyi <andrii-yosafatx.lozovyi@intel.com>\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary: Changed the way value was extracted from dict by using **get('description', '')** function, in order to fix test case fail with L2 config deployed on DUT.  \r\nFix https://github.com/Azure/sonic-buildimage/issues/8310\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 201911\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nFix test fail with L2 configuration deployed on DUT. \r\n#### How did you do it?\r\nChanged the way value was extracted from dict. \r\n#### How did you verify/test it?\r\nRun test case with L2 config deployed on DUT: \r\nsnmp/test_snmp_interfaces.py::test_snmp_interfaces_mibs PASSED\r\n#### Any platform specific information?\r\n```\r\nSONiC Software Version: SONiC.202012.28274-0162cee66\r\nDistribution: Debian 10.10\r\nKernel: 4.19.0-12-2-amd64\r\nBuild commit: 0162cee66\r\nBuild date: Tue Aug 10 14:00:00 UTC 2021\r\nBuilt by: AzDevOps@sonic-build-workers-000KZF\r\nPlatform: x86_64-arista_7170_64c\r\nHwSKU: Arista-7170-64C\r\n```\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/snmp/test_snmp_interfaces.py",
+          "additions": 2,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2021-08-18T06:20:23Z",
+          "body": "thanks for contributing, the correct syntax for Fix is this\r\n\r\n```\r\nFix https://github.com/Azure/sonic-buildimage/issues/8310\r\n```"
+        },
+        {
+          "author": "roy-sror",
+          "createdAt": "2021-08-18T12:09:16Z",
+          "body": "@AndriiLozovyi  - could you please backport this fix to 202012?"
+        },
+        {
+          "author": "AndriiLozovyi",
+          "createdAt": "2021-08-18T13:00:38Z",
+          "body": "@roysr-nv, \r\nI'm not sure that there is 202012 branch in sonic-mgmt repo, at least I couldn't find one."
+        },
+        {
+          "author": "roy-sror",
+          "createdAt": "2021-08-18T13:08:39Z",
+          "body": "> @roysr-nv,\r\n> I'm not sure that there is 202012 branch in sonic-mgmt repo, at least I couldn't find one.\r\n\r\n@AndriiLozovyi - you're right, for some reason I was sure that the fix is in sonic-build(since there original bug is there)"
+        }
+      ]
+    }
+  ]
+}

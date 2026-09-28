@@ -1,0 +1,137 @@
+{
+  "number": 21984,
+  "title": "Build failure: All branches are failing due to latest PyGObject 3.52.1 now requiring gitrepository-2.0",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21984",
+  "createdAt": "2025-03-10T18:16:16Z",
+  "closedAt": "2025-03-26T15:30:17Z",
+  "author": "aaronpayment",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "cpackham-atlnz"
+  ],
+  "milestone": null,
+  "body": "The build fails as sonic-host-services setup.py just pulls in an unversioned 'PyGObject' and on March 9, 2025 PyGObject v3.52.1 was released that now requires gitrepository-2.0 which is not present.\n\nOne option is to change sonic-host-servics to pin to a prior working 'PyGObject==3.50.0' in setup.py or we change the bookworm sonic-buildimage to include a gitrepository-2.0",
+  "comments": [
+    {
+      "author": "jemston-CLS",
+      "createdAt": "2025-03-11T03:53:33Z",
+      "body": "The below patch should work.\n\nPath from `sonic-buildimage` is `src/sonic-host-services/setup.py`\n\n```\ndiff --git a/setup.py b/setup.py\nindex 9cb0ff3..e296b75 100644\n--- a/setup.py\n+++ b/setup.py\n@@ -47,7 +47,7 @@ setup(\n         'dbus-python',\n         'systemd-python',\n         'Jinja2>=2.10',\n-        'PyGObject',\n+        'PyGObject==3.50.0',\n         'pycairo==1.26.1',\n         'psutil'\n     ] + sonic_dependencies,\n```\n\nIn case any of you facing the above issue and want to proceed with the same clone, then after applying the patch you may need to clean compile the following targets,\n\n- sonic_host_services-1.0-py3-none-any.whl\n- sonic-host-services-data_1.0-1_all.deb\n- sonic-\\<platform\\>.bin                   <-- _platform/arch specific_"
+    },
+    {
+      "author": "aparkhomenko-xsight",
+      "createdAt": "2025-03-11T17:22:42Z",
+      "body": "patch for 202305 and 202311 branches\n\n> diff --git a/files/build_templates/sonic_debian_extension.j2 b/files/build_templates/sonic_debian_extension.j2\n> index 0402c86db..1e00be88e 100644\n> --- a/files/build_templates/sonic_debian_extension.j2\n> +++ b/files/build_templates/sonic_debian_extension.j2\n> @@ -264,7 +264,9 @@ sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install system\n>  SONIC_HOST_SERVICES_PY3_WHEEL_NAME=$(basename {{sonic_host_services_py3_wheel_path}})\n>  sudo cp {{sonic_host_services_py3_wheel_path}} $FILESYSTEM_ROOT/$SONIC_HOST_SERVICES_PY3_WHEEL_NAME\n>  sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install pycairo==1.26.0\n> -sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install --no-build-isolation pygobject\n> +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install meson-python\n> +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install ninja\n> +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install --no-build-isolation \"pygobject<3.51.0\"\n>  sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install $SONIC_HOST_SERVICES_PY3_WHEEL_NAME\n>  sudo rm -rf $FILESYSTEM_ROOT/$SONIC_HOST_SERVICES_PY3_WHEEL_NAME"
+    },
+    {
+      "author": "cpackham-atlnz",
+      "createdAt": "2025-03-11T20:08:44Z",
+      "body": "I hit the same issue on 202411 and fixed it with\n\n```\ndiff --git a/files/build_templates/sonic_debian_extension.j2 b/files/build_templates/sonic_debian_extension.j2\nindex d92cb54c4..267024706 100644\n--- a/files/build_templates/sonic_debian_extension.j2\n+++ b/files/build_templates/sonic_debian_extension.j2\n@@ -263,6 +263,7 @@ if [[ $CONFIGURED_ARCH == armhf ]]; then\n fi\n \n # Install SONiC host services package\n+sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install \"pygobject==3.50.0\"\n SONIC_HOST_SERVICES_PY3_WHEEL_NAME=$(basename {{sonic_host_services_py3_wheel_path}})\n sudo cp {{sonic_host_services_py3_wheel_path}} $FILESYSTEM_ROOT/$SONIC_HOST_SERVICES_PY3_WHEEL_NAME\n sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install $SONIC_HOST_SERVICES_PY3_WHEEL_NAME\n```\n\nAlthough it looks like the fix suggested by @jemifdo would have also worked. Is anyone looking at submitting a PR for this?"
+    },
+    {
+      "author": "Ginkgoty",
+      "createdAt": "2025-03-16T02:23:43Z",
+      "body": "> patch for 202305 and 202311 branches202305 \u548c 202311 \u5206\u652f\u7684\u8865\u4e01\n> \n> > diff --git a/files/build_templates/sonic_debian_extension.j2 b/files/build_templates/sonic_debian_extension.j2\n> > index 0402c86db..1e00be88e 100644\n> > --- a/files/build_templates/sonic_debian_extension.j2\n> > +++ b/files/build_templates/sonic_debian_extension.j2\n> > @@ -264,7 +264,9 @@ sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install system\n> > SONIC_HOST_SERVICES_PY3_WHEEL_NAME=$(basename {{sonic_host_services_py3_wheel_path}})\n> > sudo cp {{sonic_host_services_py3_wheel_path}} $FILESYSTEM_ROOT/$SONIC_HOST_SERVICES_PY3_WHEEL_NAME\n> > sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install pycairo==1.26.0\n> > -sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install --no-build-isolation pygobject\n> > +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install meson-python\n> > +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install ninja\n> > +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install --no-build-isolation \"pygobject<3.51.0\" +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install --no-build-isolation \\\"pygobject<3.51.0\\\"\n> > sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install $SONIC_HOST_SERVICES_PY3_WHEEL_NAME\n> > sudo rm -rf $FILESYSTEM_ROOT/$SONIC_HOST_SERVICES_PY3_WHEEL_NAME\n\n@aparkhomenko-xsight  Thank you! This help me a lot!\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 228,
+      "repository": "sonic-net/sonic-host-services",
+      "url": "https://github.com/sonic-net/sonic-host-services/pull/228",
+      "title": "Pin PyGObject to 3.50.0",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-03-26T15:30:16Z",
+      "createdAt": "2025-03-11T21:15:29Z",
+      "author": "cpackham-atlnz",
+      "body": "Newer versions of PyGObject depend on libgirepository-2.0-dev which isn't packaged for Debian. This leads to build failures like\r\n\r\n  Collecting PyGObject\r\n  Downloading pygobject-3.52.1.tar.gz (1.2 MB)\r\n  ...\r\n\r\n  \u00d7 Preparing metadata (pyproject.toml) did not run successfully.\r\n  \u2502 exit code: 1\r\n  \u2570\u2500> [24 lines of output]\r\n      ...\r\n\r\n      ../meson.build:31:9: ERROR: Dependency 'girepository-2.0' is required but not found.\r\n\r\nPin the version of PyGObject to 3.50.0 which is the latest version known to work.\r\n\r\nFixes sonic-net/sonic-buildimage#21984\r\n\r\nThis needs to be cherry-picked onto the 202411branch. Probably 202405 and 202311 too. I don't think it'll apply cleanly to 202305 so that'd need a branch specific change.",
+      "files": [
+        {
+          "path": "setup.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-11T21:15:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2025-03-11T21:15:32Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: cpackham-atlnz  (6aa9c13be5f9f66ab2d2d231053b25901987c3b5)</li></ul><!-- Date Modified: 2025-03-13 20:00:32.715146 -->"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-11T21:15:37Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "cpackham-atlnz",
+          "createdAt": "2025-03-11T21:20:41Z",
+          "body": "Would this get merged through to master or should I submit another PR for that branch?"
+        },
+        {
+          "author": "bradh352",
+          "createdAt": "2025-03-13T19:45:54Z",
+          "body": "I'd think this should target master then list as cherry-pick for 202411"
+        },
+        {
+          "author": "cpackham-atlnz",
+          "createdAt": "2025-03-13T19:49:20Z",
+          "body": "@bradh352 yep OK. I was going to do one for master as well. Should I leave this open or will someone cherry-pick the change from the master PR?"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2025-03-13T19:56:21Z",
+          "body": "Just click edit at the top of this PR and change the target branch from 202411 to master.  Then in the description put to cherry pick to 202411 ... at least that's how it works in other subrepositories ... you don't create a PR against a specific branch yourself unless it is branch-specific."
+        },
+        {
+          "author": "cpackham-atlnz",
+          "createdAt": "2025-03-13T19:58:38Z",
+          "body": "OK cool. I'll need to rebase against master anyway"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-13T20:00:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-03-13T20:00:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2025-03-28T04:17:38Z",
+          "body": "@kperumalbfn  Can you please help to cherry-pick for 202411? @r12f  We would need this in 202412 as well."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-03-28T15:21:02Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-host-services/pull/233"
+        },
+        {
+          "author": "kperumalbfn",
+          "createdAt": "2025-03-28T15:21:36Z",
+          "body": "@bingwang-ms We might need this in 202405 as well, pls check."
+        },
+        {
+          "author": "mjonkers1989",
+          "createdAt": "2025-04-28T13:10:27Z",
+          "body": "Is it possible to backport this fix also for the branche 202405?\r\nBecause cisco is still using that branche for sonic."
+        },
+        {
+          "author": "liushilongbuaa",
+          "createdAt": "2025-08-28T02:58:16Z",
+          "body": "This PR breaks build for 202412 armhf build and blocks 202411 submodule update.\r\nLet's pin it to 3.42.2 in 202411 and msft-202412 branch."
+        }
+      ]
+    }
+  ]
+}

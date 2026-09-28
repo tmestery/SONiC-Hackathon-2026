@@ -1,0 +1,66 @@
+{
+  "number": 27779,
+  "title": "Bug: fpm_enqueue_l3vni_table() passes incorrect callback context to fpm_enqueue_rmac_table()",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27779",
+  "createdAt": "2026-06-09T09:30:41Z",
+  "closedAt": "2026-07-17T00:13:36Z",
+  "author": "micasyang",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWhile investigating a crash in the FPM RMAC synchronization path, I noticed a potential callback argument mismatch in the following code.\n\nfpm_enqueue_rmac_table() expects its callback argument to be a\nstruct fpm_rmac_arg *:\n\n    static void fpm_enqueue_rmac_table(struct hash_bucket *bucket,\n                                       void *arg)\n    {\n        struct fpm_rmac_arg *fra = arg;\n        ...\n    }\n\nHowever, fpm_enqueue_l3vni_table() invokes hash_iterate() with\nzl3vni as the callback argument:\n\n    fra->zl3vni = zl3vni;\n\n    hash_iterate(zl3vni->rmac_table,\n                 fpm_enqueue_rmac_table,\n                 zl3vni);\n\nAs a result, fpm_enqueue_rmac_table() interprets a\nstruct zebra_l3vni * as struct fpm_rmac_arg * and subsequently\naccesses members such as:\n\n    fra->complete\n    fra->ctx\n    fra->fnc\n    fra->zl3vni\n\nThis appears to be a logic error and may lead to undefined behavior\nwhen the callback is executed.\n\nThe third argument passed to hash_iterate() seems intended to be\n'fra' rather than 'zl3vni'.\n\n### Steps to Reproduce\n\n1. Observe that fpm_enqueue_rmac_table() casts the callback argument to struct fpm_rmac_arg *.\n2. Observe that fpm_enqueue_l3vni_table() passes a struct zebra_l3vni * as the callback argument to hash_iterate().\n\nThe issue can be identified through code inspection without requiring a specific runtime configuration.\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\nA struct zebra_l3vni * is passed to fpm_enqueue_rmac_table(), which\nexpects a struct fpm_rmac_arg *. The callback then dereferences the\nargument as a struct fpm_rmac_arg *, resulting in a type mismatch and\npotential undefined behavior.\n\nExpected Behavior:\nfpm_enqueue_rmac_table() should receive a valid struct fpm_rmac_arg *\ninstance. The hash_iterate() invocation should likely pass 'fra'\ninstead of 'zl3vni' as the callback argument.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "judyjoseph",
+      "createdAt": "2026-06-17T15:40:28Z",
+      "body": "Is this seen in latest master ? tagging @deepak-singhal0408  for taking a look if this is an issue "
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-07-10T21:56:11Z",
+      "body": "Hi, I was looking into this issue and found some additional context. Seems like this is a known bug that was fixed upstream in FRR via [FRRouting/frr@a3877e444](https://github.com/FRRouting/frr/commit/a3877e444) (Oct 4, 2024). However, the fix was never ported to SONiC's fork. Created PR to port the change."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28371,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28371",
+      "title": "[dplane_fpm_sonic]: Fix incorrect callback argument in fpm_enqueue_l3vni_table",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-17T00:13:35Z",
+      "createdAt": "2026-07-10T21:49:11Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/27779\r\n\r\nThis is a port of upstream FRR fix [`a3877e444`](https://github.com/FRRouting/frr/commit/a3877e444) (\"zebra: Fix crash during reconnect\" by Igor Zhukov, Oct 4 2024) to SONiC's `dplane_fpm_sonic` module. The fix is still there in the upstream [FRR head](https://github.com/FRRouting/frr/blob/b055aead2f21cac182442d1f140e6f2098c77a6d/zebra/dplane_fpm_nl.c#L1401) as of July 10th, 2026.\r\n\r\n`fpm_enqueue_l3vni_table()` passes `zl3vni` (a `struct zebra_l3vni *`) as the callback argument to `hash_iterate()`, but the callback `fpm_enqueue_rmac_table()` casts it to `struct fpm_rmac_arg *` and dereferences fields like `fra->ctx`, `fra->fnc`, `fra->zl3vni`, and `fra->complete`. This type mismatch causes a **SIGSEGV** when zebra reconnects to fpmsyncd and triggers a full RMAC table walk.\r\n\r\nThe bug was introduced when SONiC forked `dplane_fpm_nl.c` into `dplane_fpm_sonic.c`. FRR fixed the bug later, but the fix was never ported to SONiC.\r\n\r\n**Impact:** Any deployment using EVPN symmetric IRB with L3VNI + remote RMACs will crash on fpmsyncd restart or FPM TCP reconnect. The bug is latent because this specific code path requires all three conditions simultaneously.\r\n\r\n#### How I did it\r\n\r\n* Pass `fra` instead of `zl3vni` as the third argument to `hash_iterate()` in `fpm_enqueue_l3vni_table()`\r\n\r\n#### How to verify it\r\n\r\n1. Confirm `fpm_enqueue_rmac_table()` casts `arg` to `struct fpm_rmac_arg *` and accesses `fra->zl3vni`, `fra->ctx`, `fra->fnc`, `fra->complete`, and only `fra` provides the correct layout\r\n  - [fpm_rmac_arg](https://github.com/sonic-net/sonic-buildimage/blob/d3a7f642187828cdfc454f4a6d5fe5b14835ad53/src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c#L3146-L3151) starts with a 8 bytes pointer.\r\n  - [zebra_l3vni](https://github.com/sonic-net/sonic-frr/blob/de0e358b877ac9b595e7fb387a302c960a4c02d1/zebra/zebra_vxlan_private.h#L42-L62) starts with a 4 byte uint32.\r\n2. Reading a pointer from offset 0 of `zebra_l3vni` produces a garbage address that segfaults immediately\r\n\r\n#### References\r\n\r\n- Upstream FRR fix: [`FRRouting/frr@a3877e444`](https://github.com/FRRouting/frr/commit/a3877e444)\r\n- Upstream FRR PR that introduced the bug: [FRRouting/frr#16220](https://github.com/FRRouting/frr/pull/16220)\r\n- SONiC PR that forked the buggy code: [sonic-net/sonic-buildimage#18715](https://github.com/sonic-net/sonic-buildimage/pull/18715)\r\n\r\n#### Description for the changelog\r\n\r\nFix crash (SIGSEGV) in dplane_fpm_sonic RMAC sync path during FPM reconnect, port of upstream FRR fix FRRouting/frr@a3877e444",
+      "files": [
+        {
+          "path": "src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-10T21:49:19Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-10T21:49:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-07-10T22:11:32Z",
+          "body": "While auditing all `hash_iterate` call sites in this file, I noticed a similar pattern at another place:\r\n\r\nhttps://github.com/sonic-net/sonic-buildimage/blob/d3a7f642187828cdfc454f4a6d5fe5b14835ad53/src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c#L3294\r\n\r\nHere `zl3vni` is passed as the callback argument, but [`fpm_unset_rmac_table()`](https://github.com/sonic-net/sonic-buildimage/blob/d3a7f642187828cdfc454f4a6d5fe5b14835ad53/src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c#L3283-L3288) never uses it, so it doesn't cause any errors. However, passing `NULL` would better communicate intent.\r\n\r\nThe same pattern exists in upstream FRR at [`dplane_fpm_nl.c` L1502](https://github.com/FRRouting/frr/blob/15e3f2f71a1108b575ee12955c719e68675572d1/zebra/dplane_fpm_nl.c#L1502) and has been there since 2019. Not addressing that in this PR since it's purely cosmetic and has no functional impact.\r\n"
+        }
+      ]
+    }
+  ]
+}

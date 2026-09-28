@@ -1,0 +1,187 @@
+{
+  "number": 6622,
+  "title": "syncd crash on master RPC image",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/6622",
+  "createdAt": "2021-02-01T02:21:42Z",
+  "closedAt": "2021-02-10T10:26:32Z",
+  "author": "Junchao-Mellanox",
+  "labels": [
+    "Master Branch Quality"
+  ],
+  "assignees": [
+    "tahmed-dev"
+  ],
+  "milestone": null,
+  "body": "<!--\r\nIf you are reporting a new issue, make sure that we do not have any duplicates\r\nalready open. You can ensure this by searching the issue list for this\r\nrepository. If there is a duplicate, please close your issue and add a comment\r\nto the existing issue instead.\r\n\r\nIf you suspect your issue is a bug, please edit your issue description to\r\ninclude the BUG REPORT INFORMATION shown below. If you fail to provide this\r\ninformation within 7 days, we cannot debug your issue and will close it. We\r\nwill, however, reopen it if you later provide the information.\r\n\r\nFor more information about reporting issues, see\r\nhttps://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n---------------------------------------------------\r\nGENERAL SUPPORT INFORMATION\r\n---------------------------------------------------\r\n\r\nThe GitHub issue tracker is for bug reports and feature requests.\r\nGeneral support can be found at the following locations:\r\n\r\n- SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n---------------------------------------------------\r\nBUG REPORT INFORMATION\r\n---------------------------------------------------\r\nUse the commands below to provide key information from your environment:\r\nYou do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n**Description**\r\n\r\nsyncd crash on master RPC image, error log:\r\n\r\n```\r\nJan 28 03:50:38.688445 r-anaconda-10 INFO syncd#/supervisord: syncd /usr/bin/syncd: symbol lookup error: /usr/bin/syncd: undefined symbol: _ZN6apache6thrift6server13TSimpleServerC1ERKN5boost10shared_ptrINS0_10TProcessorEEERKNS4_INS0_9transport16TServerTransportEEERKNS4_INS9_17TTransportFactoryEEERKNS4_INS0_8protocol16TProtocolFactoryEEE\r\n\r\n```\r\n\r\nThe issue is found beween hash 25e4d77 and hash 46b3bd5. I went over all changes between two hash, here is a suspicious commit: https://github.com/Azure/sonic-buildimage/commit/8ce1e3ed92ed0e141bd74d99f76af61e34b96ffd\r\n\r\nIn this commit, it removes libboost-all-dev and upgrade it to libboost1.71-dev.\r\n\r\n**Steps to reproduce the issue:**\r\nLoad master RPC image\r\n\r\n**Describe the results you received:**\r\n\r\nsyncd crash and not all dockers up\r\n\r\n**Describe the results you expected:**\r\n\r\nsyncd should be able to up correctly\r\n\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\n\r\nFound at hash 46b3bd5\r\n",
+  "comments": [
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-01T02:59:16Z",
+      "body": "can you provide the suspicious commit id?"
+    },
+    {
+      "author": "Junchao-Mellanox",
+      "createdAt": "2021-02-01T03:01:48Z",
+      "body": "https://github.com/Azure/sonic-buildimage/commit/8ce1e3ed92ed0e141bd74d99f76af61e34b96ffd"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-01T03:48:00Z",
+      "body": "@tahmed-dev , can you take a look?"
+    },
+    {
+      "author": "tahmed-dev",
+      "createdAt": "2021-02-01T17:29:18Z",
+      "body": "> @tahmed-dev , can you take a look?\r\n\r\nLooking."
+    },
+    {
+      "author": "tahmed-dev",
+      "createdAt": "2021-02-01T17:32:46Z",
+      "body": "The unmangled symbols is:\r\n```apache::thrift::server::TSimpleServer::TSimpleServer(boost::shared_ptr<apache::thrift::TProcessor> const&, boost::shared_ptr<apache::thrift::transport::TServerTransport> const&, boost::shared_ptr<apache::thrift::transport::TTransportFactory> const&, boost::shared_ptr<apache::thrift::protocol::TProtocolFactory> const&)```\r\n\r\nLooks like recent [TSimpleServer](https://github.com/apache/thrift/blob/master/lib/cpp/src/thrift/server/TSimpleServer.h#L42) is using `std::shared_ptr` instead of `boost::shared_ptr`\r\n\r\n"
+    },
+    {
+      "author": "tahmed-dev",
+      "createdAt": "2021-02-01T18:48:35Z",
+      "body": "@lguohan to solve this issue we can\r\n1. install thrift server v0.13.0 that moved away from boost smat ptr, or\r\n2. change our build to use std smart ptr [here](https://github.com/Azure/sonic-buildimage/blob/master/src/thrift/Makefile#L29)\r\n\r\nI also made change ([PR:784](https://github.com/Azure/sonic-sairedis/pull/784)) to azure pipeline to pull matching boost lib to what we have in buildimage."
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-01T19:04:47Z",
+      "body": "for the second proposal, it is using CXXFLAGS=\"-DFORCE_BOOST_SMART_PTR\" , I do not quite understand the proposal here."
+    },
+    {
+      "author": "tahmed-dev",
+      "createdAt": "2021-02-01T19:10:22Z",
+      "body": "The second proposal to remove the macro definition such that it will use `std::shared_ptr`. It's been adopted in c++11.\r\n\r\nOn another note and for first proposal above, there is no 0.13.0 in Debian packaging and it was not back-ported to buster."
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-01T19:47:46Z",
+      "body": "do you know why it is added, and who?"
+    },
+    {
+      "author": "tahmed-dev",
+      "createdAt": "2021-02-01T20:19:59Z",
+      "body": "@stepanblyschak the boost flag was introduced via [PR:2640](https://github.com/Azure/sonic-buildimage/pull/2640/files#diff-58b852f06fd683d54ef700d479d367e58d099be7809ef6b3dcc9e0f20cc4bd7fR24) Wonder why it was forced to use boost variant?"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-02-02T23:51:33Z",
+      "body": "@liat-grozovik , can you take a look at the question?"
+    },
+    {
+      "author": "stepanblyschak",
+      "createdAt": "2021-02-03T08:53:15Z",
+      "body": "@tahmed-dev @lguohan\r\nInitially thrift 0.9.3 used boost pointers by default. With upgrade to 0.11.0 ```-DFORCE_BOOST_SMART_PTR``` forces thrift to be backward compatible. Please see the boost usage in saithrift code: https://github.com/opencomputeproject/SAI/blob/master/test/saithrift/src/switch_sai_rpc_server.cpp#L77 which does not compile with 0.11.0 without  ```-DFORCE_BOOST_SMART_PTR```\r\nIf we want to remove ```-DFORCE_BOOST_SMART_PTR``` we need to change this line to std::shared_ptr https://github.com/opencomputeproject/SAI/blob/master/test/saithrift/src/switch_sai_rpc_server.cpp#L77 and that will break SAI thrift compatibility with 0.9.3.\r\nWonder if thrfit provides an alias smth like apache::thrift::shared_ptr that can preserve backwards compatibility and let us use c++ 11 variants."
+    },
+    {
+      "author": "tahmed-dev",
+      "createdAt": "2021-02-03T17:14:58Z",
+      "body": "thanks @stepanblyschak! Indeed [thrift 0.11.0](https://github.com/apache/thrift/blob/0.11.0/lib/cpp/src/thrift/server/TSimpleServer.h#L43) is using `stdcxx` name that could be either `boost` or `std` and is not hard coded. In v0.13.0, `boost` use for smart pointers was removed since it was adopted in C++ standard.\r\n\r\nLet me dig further why the mangled name differed when upgraded to boost v1.71. I am under the impression that this compile time dependency would not affect mangled names. I might be wrong. I'll wait to see the recent build of syncd rpc."
+    },
+    {
+      "author": "tahmed-dev",
+      "createdAt": "2021-02-04T18:45:01Z",
+      "body": "@Junchao-Mellanox, @daall was the issue seen with RPC syncd built after [PR:6649](https://github.com/Azure/sonic-buildimage/pull/6649) got merged and syncd compiled with that PR?"
+    },
+    {
+      "author": "Junchao-Mellanox",
+      "createdAt": "2021-02-05T01:14:30Z",
+      "body": "I verified with hash aae9664, the issue is still there.\r\n\r\n```\r\nFeb  5 01:09:02.854833 r-tigris-13 INFO syncd#/supervisord: syncd /usr/bin/syncd: symbol lookup error: /usr/bin/syncd: undefined symbol: _ZN6apache6thrift6server13TSimpleServerC1ERKN5boost10shared_ptrINS0_10TProcessorEEERKNS4_INS0_9transport16TServerTransportEEERKNS4_INS9_17TTransportFactoryEEERKNS4_INS0_8protocol16TProtocolFactoryEEE\r\nFeb  5 01:09:02.857073 r-tigris-13 INFO syncd#supervisord 2021-02-05 01:09:02,856 INFO exited: syncd (exit status 127; not expected)\r\n\r\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 6689,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/6689",
+      "title": "[syncd-rpc] Install Libboost Atomic 1.71, Libqtcore And Libqtnetwork",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-02-10T10:26:32Z",
+      "createdAt": "2021-02-05T04:19:25Z",
+      "author": "tahmed-dev",
+      "body": "When Building syncd-rpc, libthrift has dependency on libboost-atomic1.71.0, libqt5core5a, \r\nand libqt5network5 however debian packager fails to resolve the dependencies. It instead\r\ninstalls libthrift from debian along with its dependencies which result in symbols not found.\r\n\r\nsigned-off-by: Tamer Ahmed <tamer.ahmed@microsoft.com>\r\n\r\ncloses #6622 \r\nresolves #6622\r\n\r\nPlease provide the following information:\r\n-->\r\n\r\n**- Why I did it**\r\nresolve issue loading sync-rpc\r\n\r\n**- How I did it**\r\nensured dependecies are installed before installing libthrift\r\n\r\n**- How to verify it**\r\nload docker sync-rpc on target and there should not be errors find symbol thrift server symbol\r\n\r\n```\r\nPreparing to unpack .../libthrift-0.11.0_0.11.0-4_amd64.deb ...\r\nUnpacking libthrift-0.11.0 (0.11.0-4) ...\r\n^[[91mdpkg: dependency problems prevent configuration of libthrift-0.11.0:\r\n libthrift-0.11.0 depends on libboost-atomic1.71.0; however:\r\n  Package libboost-atomic1.71.0 is not installed.\r\n libthrift-0.11.0 depends on libqt5core5a (>= 5.11.0~rc1); however:\r\n  Package libqt5core5a is not installed.\r\n libthrift-0.11.0 depends on libqt5network5 (>= 5.0.2); however:\r\n  Package libqt5network5 is not installed.\r\n\r\ndpkg: error processing package libthrift-0.11.0 (--install):\r\n dependency problems - leaving unconfigured\r\n^[[0mProcessing triggers for libc-bin (2.28-10) ...\r\n^[[91mErrors were encountered while processing:\r\n libthrift-0.11.0\r\n^[[0mReading package lists...\r\nBuilding dependency tree...\r\nReading state information...\r\nCorrecting dependencies... Done\r\nThe following additional packages will be installed:\r\n  libboost-atomic1.67.0 libdouble-conversion1 libglib2.0-0 libicu63\r\n  libpcre2-16-0 libqt5core5a libqt5dbus5 libqt5network5 libthrift-0.11.0\r\n```\r\n**- Which release branch to backport (provide reason below if selected)**\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [x] 202012\r\n\r\n**- Description for the changelog**\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n",
+      "files": [
+        {
+          "path": "platform/barefoot/docker-syncd-bfn-rpc/Dockerfile.j2",
+          "additions": 11,
+          "deletions": 8
+        },
+        {
+          "path": "platform/broadcom/docker-syncd-brcm-rpc/Dockerfile.j2",
+          "additions": 10,
+          "deletions": 6
+        },
+        {
+          "path": "platform/cavium/docker-syncd-cavm-rpc/Dockerfile.j2",
+          "additions": 10,
+          "deletions": 6
+        },
+        {
+          "path": "platform/centec-arm64/docker-syncd-centec-rpc/Dockerfile.j2",
+          "additions": 11,
+          "deletions": 7
+        },
+        {
+          "path": "platform/centec/docker-syncd-centec-rpc/Dockerfile.j2",
+          "additions": 11,
+          "deletions": 7
+        },
+        {
+          "path": "platform/innovium/docker-syncd-invm-rpc/Dockerfile.j2",
+          "additions": 10,
+          "deletions": 6
+        },
+        {
+          "path": "platform/marvell-arm64/docker-syncd-mrvl-rpc/Dockerfile.j2",
+          "additions": 10,
+          "deletions": 6
+        },
+        {
+          "path": "platform/marvell-armhf/docker-syncd-mrvl-rpc/Dockerfile.j2",
+          "additions": 10,
+          "deletions": 6
+        },
+        {
+          "path": "platform/marvell/docker-syncd-mrvl-rpc/Dockerfile.j2",
+          "additions": 10,
+          "deletions": 6
+        },
+        {
+          "path": "platform/mellanox/docker-syncd-mlnx-rpc/Dockerfile.j2",
+          "additions": 16,
+          "deletions": 7
+        },
+        {
+          "path": "platform/nephos/docker-syncd-nephos-rpc/Dockerfile.j2",
+          "additions": 10,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2021-02-05T04:28:48Z",
+          "body": "can you install this libraray on all syncd-rpc docker based on buster?"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2021-02-05T04:29:11Z",
+          "body": "also can you link this pr with the issue to resolve?"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2021-02-10T02:54:21Z",
+          "body": "any update on this?"
+        },
+        {
+          "author": "tahmed-dev",
+          "createdAt": "2021-02-10T03:32:39Z",
+          "body": "> any update on this?\r\n\r\nverified the fix on target."
+        }
+      ]
+    }
+  ]
+}

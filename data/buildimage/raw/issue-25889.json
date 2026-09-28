@@ -1,0 +1,83 @@
+{
+  "number": 25889,
+  "title": "Bug:[Smartswitch] Error log from gnoi-shutdown-daemon after setting admin state to down on a DPU which is powered off",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25889",
+  "createdAt": "2026-03-04T17:56:20Z",
+  "closedAt": "2026-03-24T17:43:26Z",
+  "author": "gpunathilell",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "smartswitch"
+  ],
+  "assignees": [
+    "vvolam"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nIf DPU is currently powered off (with admin state set to down in configuration on config reload/ reboot commands will call the command `set_admin_state_gracefully` on an already powered off DPU. which will in-turn lead to gnoi-shutdown-daemon execution we get the error:\n```\n2026 Mar  4 16:57:47.694279 sonic ERR gnoi-shutdown-daemon[12171]: DPU0: Reboot command failed\n2026 Mar  4 16:57:47.694376 sonic ERR gnoi-shutdown-daemon[12171]: DPU0: Failed to send Reboot command\n```\n\n### Steps to Reproduce\n\nHave the configuration to power off the DPUs:\n```\n    \"CHASSIS_MODULE\": {\n        \"DPU0\": {\n            \"admin_status\": \"down\"\n        },\n        \"DPU1\": {\n            \"admin_status\": \"down\"\n        },\n        \"DPU2\": {\n            \"admin_status\": \"down\"\n        },\n        \"DPU3\": {\n            \"admin_status\": \"down\"\n        }\n    },\n```\nEnsure DPUs are powered off\nand then execute config reload / reboot:\nThe error logs are seen in the logs\n\n```\n2026 Mar  4 16:57:47.694279 sonic ERR gnoi-shutdown-daemon[12171]: DPU0: Reboot command failed\n2026 Mar  4 16:57:47.694376 sonic ERR gnoi-shutdown-daemon[12171]: DPU0: Failed to send Reboot command\n```\n\n\n### Actual Behavior and Expected Behavior\n\nNo error logs should be seen on execution\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n202511_RC latest hash\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 352,
+      "repository": "sonic-net/sonic-host-services",
+      "url": "https://github.com/sonic-net/sonic-host-services/pull/352",
+      "title": "[gnoi-shutdown-daemon] Skip gNOI shutdown for already powered-off DPUs",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-24T17:43:24Z",
+      "createdAt": "2026-03-06T21:25:23Z",
+      "author": "vvolam",
+      "body": "**What I did**\n\nAdded an operational status check in `gnoi_shutdown_daemon.py` `_handle_transition()` to skip the gNOI Reboot HALT sequence when the DPU is already not Online (e.g. Offline, PoweredDown).\n\n**Why I did it**\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/25889\n\nWhen DPUs are configured with `admin_status: \"down\"` and are already powered off, a config reload or reboot repopulates CONFIG_DB, which triggers `gnoi-shutdown-daemon` to attempt a gNOI Reboot HALT command on DPUs that are already offline \u2014 producing error logs:\n\n```\nERR gnoi-shutdown-daemon[12171]: DPU0: Reboot command failed\nERR gnoi-shutdown-daemon[12171]: DPU0: Failed to send Reboot command\n```\n\n**How I verified it**\n\n- Added unit tests for the new behavior:\n  - `test_handle_transition_dpu_already_offline` \u2014 verifies skip when DPU is in `Offline` state\n  - `test_handle_transition_dpu_powered_down` \u2014 verifies skip when DPU is in `PoweredDown` state\n  - `test_handle_transition_oper_status_check_exception` \u2014 verifies graceful fallback when the oper status check raises an exception\n- Updated existing tests to mock `get_oper_status()` returning `Online` so they continue testing the normal gNOI shutdown flow\n- Manually verified the logic with mock tests\n\n**Details if related**\n\nThe fix queries `get_oper_status()` via the platform chassis API at the start of `_handle_transition()`. If the DPU is not `Online`, the method logs a notice, clears the halt flag, and returns success \u2014 avoiding any gNOI RPC calls to unreachable DPUs. The check is wrapped in try/except so that if the platform API fails, the daemon falls back to the existing behavior.",
+      "files": [
+        {
+          "path": "scripts/gnoi_shutdown_daemon.py",
+          "additions": 50,
+          "deletions": 2
+        },
+        {
+          "path": "tests/gnoi_shutdown_daemon_test.py",
+          "additions": 187,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-06T21:25:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-06T21:25:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-19T04:33:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-19T04:33:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-23T17:52:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-23T17:52:18Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-24T17:43:43Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-host-services/pull/364"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "number": 28754,
+  "title": "Bug: SRv6 MySID entries are not reconciled during warmboot",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28754",
+  "createdAt": "2026-07-31T16:33:05Z",
+  "closedAt": "2026-08-19T16:38:38Z",
+  "author": "nazariig",
+  "labels": [
+    "Bug :bug:",
+    "warmboot :boot:",
+    "Triaged"
+  ],
+  "assignees": [
+    "nazariig"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nDuring warmboot, syncd fails to reconcile SRv6 MySID entries (`SAI_OBJECT_TYPE_MY_SID_ENTRY`).  \nExisting MySID objects programmed before the reboot are not matched between the temporary  \nand current ASIC views, so warmboot tears them down / recreates them (or hits unsupported  \nobject-type paths) instead of preserving them via best-candidate matching.\n\n### Investigation and suspected root cause\n\nDuring warmboot, syncd builds two ASIC views and reconciles them:\n\n* **current view** \u2014 objects present in the ASIC after reboot (from ASIC dump)\n* **temporary view** \u2014 objects expected by orchagent (from Redis)\n\nFor non-object-id entry types (route, NAT, inseg, \u2026), matching is not a simple OID compare.  \nThe entry key itself embeds other VIDs (e.g. virtual router). Those VIDs differ between the  \ntemporary and current views, so syncd must translate them via the RID map before it can  \nlook the entry up.\n\n`SAI_OBJECT_TYPE_MY_SID_ENTRY` was never wired into that path.\n\n#### Why MySID needs the same treatment as inseg / route / NAT\n\nA MySID entry key contains `switch_id` and `vr_id` VIDs plus the SID and locator lengths:\n\n```text\nSAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id, vr_id, sid, locator_*, function_len, args_len}\n```\n\nAfter warmboot, the temporary view may have `vr_id = 0x3000000000002` while the current  \nview has the same VR as `vr_id = 0x3000000000001`, both mapping to the same RID.  \nDictionary lookup on the temporary serialized key will miss unless `vr_id` is rewritten  \nto the current VID first \u2014 exactly the pattern already used for inseg / route / NAT.\n\n#### Missing wiring in syncd warmboot comparison logic\n\n```cpp\n// syncd/AsicView.h \u2014 no dedicated map for MySID\nStrObjectIdToSaiObjectHash m_soRoutes;\nStrObjectIdToSaiObjectHash m_soNatEntries;\nStrObjectIdToSaiObjectHash m_soInsegs;\n// m_soMySidEntries missing\nStrObjectIdToSaiObjectHash m_soOids;\n```\n\nAs a result:\n\n* `AsicView::fromDump` / `asicCreateObject` / `asicRemoveObject` had no  \n  `m_soMySidEntries` map \u2014 MySID fell into the unsupported / default branches\n* `BestCandidateFinder` had no MySID matcher, so warmboot could not reconcile  \n  existing MySID entries after VID translation\n* `ComparisonLogic` did not re-serialize the MySID object id after exchanging  \n  struct VIDs\n\nWarmboot with SRv6 MySID entries programmed therefore fails to match and preserve  \nthose objects (create / remove / throw paths instead of a clean best-candidate match).\n\n#### Correct approach (same as inseg)\n\nTeach the warmboot comparison path about `SAI_OBJECT_TYPE_MY_SID_ENTRY`:\n\n1. **`AsicView`** \u2014 add `m_soMySidEntries`; deserialize into it in `fromDump`;  \n   maintain it in `asicCreateObject` / `asicRemoveObject`\n2. **`BestCandidateFinder::findCurrentBestMatchForMySidEntry`** \u2014 copy the temporary  \n   meta key, `exchangeTemporaryVidToCurrentVid`, serialize, then dictionary-lookup  \n   in `m_soMySidEntries`\n3. **`ComparisonLogic`** \u2014 re-serialize `m_str_object_id` with  \n   `sai_serialize_my_sid_entry` after VID exchange when creating from a temporary object\n\n```cpp\n// BestCandidateFinder \u2014 match after VID exchange\nsai_object_meta_key_t mk = temporaryObj->m_meta_key;\n\nif (!exchangeTemporaryVidToCurrentVid(mk))\n{\n    return nullptr;\n}\n\nstd::string str_my_sid_entry =\n    sai_serialize_my_sid_entry(mk.objectkey.key.my_sid_entry);\n\nauto currentMySidIt =\n    m_currentView.m_soMySidEntries.find(str_my_sid_entry);\n```\n\n### Steps to Reproduce\n\n1. Program SRv6 MySID entries on a DUT (via orchagent / APPL_DB) so that  \n   `SAI_OBJECT_TYPE_MY_SID_ENTRY` objects exist in ASIC_DB / ASIC\n2. Confirm MySID entries are present before reboot\n3. Perform warm-reboot\n4. After warmboot completes, inspect MySID entries and syncd warmboot comparison logs\n5. Observe that MySID entries are not best-candidate matched (recreate / remove /  \n   unsupported-type behavior instead of a clean preserve)\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior:\nDuring warmboot reconciliation, `SAI_OBJECT_TYPE_MY_SID_ENTRY` is not tracked in a  \ndedicated ASIC-view map and has no VID-aware best-candidate matcher. Existing MySID  \nentries are not matched across temporary vs current views and are not preserved cleanly.\n\n### Expected Behavior:\nWarmboot reconciles MySID entries the same way as inseg / route / NAT: translate  \nembedded VIDs via the RID map, dictionary-lookup in `m_soMySidEntries`, and keep  \nmatching entries without unnecessary tear-down / recreate.\n\n### Relevant log output\n\n```shell\n# During warmboot comparison (illustrative) \u2014 MySID not matched / unsupported\n# syncd may take create/remove paths for SAI_OBJECT_TYPE_MY_SID_ENTRY\n# instead of best-candidate match after vr_id VID exchange\n\n# Temporary view key (example):\n# SAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id=oid:0x2100..., vr_id=oid:0x3000000000002, sid=3000:1:1::, ...}\n\n# Current view key (same RID-backed VR, different VID):\n# SAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id=oid:0x2100..., vr_id=oid:0x3000000000001, sid=3000:1:1::, ...}\n\n# Without VID exchange \u2192 dictionary lookup miss \u2192 no best match\n```\n\n### Output of `show version`, `show techsupport`\n\n* N/A\n\n### Attach files (if any)\n\n* N/A",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 2012,
+      "repository": "sonic-net/sonic-sairedis",
+      "url": "https://github.com/sonic-net/sonic-sairedis/pull/2012",
+      "title": "[warmboot]: Add SRv6 MySID warmboot support",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-19T16:38:37Z",
+      "createdAt": "2026-07-31T16:23:14Z",
+      "author": "nazariig",
+      "body": "Signed-off-by: Nazarii Hnydyn <nazariig@nvidia.com>\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n\r\n### Description of PR\r\n\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\n## The bug\r\n\r\nDuring warmboot, syncd builds two ASIC views and reconciles them:\r\n\r\n* **current view** \u2014 objects present in the ASIC after reboot (from ASIC dump)\r\n* **temporary view** \u2014 objects expected by orchagent (from Redis)\r\n\r\nFor non-object-id entry types (route, NAT, inseg, \u2026), matching is not a simple OID compare.  \r\nThe entry key itself embeds other VIDs (e.g. virtual router).  \r\nThose VIDs differ between the temporary and current views,  \r\nso syncd must translate them via the RID map before it can look the entry up.\r\n\r\n`SAI_OBJECT_TYPE_MY_SID_ENTRY` (SRv6 MySID) was never wired into that path. As a result:\r\n\r\n* `AsicView::fromDump` / `asicCreateObject` / `asicRemoveObject` had no  \r\n  `m_soMySidEntries` map \u2014 MySID fell into the unsupported/default branches\r\n* `BestCandidateFinder` had no MySID matcher, so warmboot could not reconcile  \r\n  existing MySID entries after VID translation\r\n* `ComparisonLogic` did not re-serialize the MySID object id after exchanging  \r\n  struct VIDs\r\n\r\nWarmboot with SRv6 MySID entries programmed therefore fails to match and preserve  \r\nthose objects (create/remove/throw paths instead of a clean best-candidate match).\r\n\r\n## Why MySID needs the same treatment as inseg/route\r\n\r\nA MySID entry key contains `switch_id` and `vr_id` VIDs plus the SID and locator lengths:\r\n\r\n```text\r\nSAI_OBJECT_TYPE_MY_SID_ENTRY:{switch_id, vr_id, sid, locator_*, function_len, args_len}\r\n```\r\n\r\nAfter warmboot, the temporary view may have `vr_id = 0x3000000000002` while the  \r\ncurrent view has the same VR as `vr_id = 0x3000000000001`, both mapping to the same RID.  \r\nDictionary lookup on the temporary serialized key will miss unless `vr_id` is rewritten  \r\nto the current VID first \u2014 exactly the pattern already used for inseg / route / NAT.\r\n\r\n## The fix\r\n\r\nTeach the warmboot comparison path about `SAI_OBJECT_TYPE_MY_SID_ENTRY`,  \r\nmirroring the existing inseg-entry handling:\r\n\r\n1. **`AsicView`** \u2014 add `m_soMySidEntries`; deserialize into it in `fromDump`;  \r\n   maintain it in `asicCreateObject` / `asicRemoveObject`\r\n2. **`BestCandidateFinder::findCurrentBestMatchForMySidEntry`** \u2014 copy the temporary  \r\n   meta key, `exchangeTemporaryVidToCurrentVid`, serialize, then dictionary-lookup  \r\n   in `m_soMySidEntries`\r\n3. **`ComparisonLogic`** \u2014 re-serialize `m_str_object_id` with  \r\n   `sai_serialize_my_sid_entry` after VID exchange when creating from a temporary object\r\n4. **Unit tests** \u2014 cover dump/create/remove, successful match after VID exchange,  \r\n   missing mapping, missing entry, and already-processed throw\r\n\r\n```cpp\r\n// BestCandidateFinder \u2014 match after VID exchange\r\nsai_object_meta_key_t mk = temporaryObj->m_meta_key;\r\n\r\nif (!exchangeTemporaryVidToCurrentVid(mk))\r\n{\r\n    return nullptr;\r\n}\r\n\r\nstd::string str_my_sid_entry =\r\n    sai_serialize_my_sid_entry(mk.objectkey.key.my_sid_entry);\r\n\r\nauto currentMySidIt =\r\n    m_currentView.m_soMySidEntries.find(str_my_sid_entry);\r\n```\r\n\r\nWith that, warmboot can keep existing MySID entries instead of tearing them down  \r\nand recreating them (or failing).\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [x] Test improvement\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nSRv6 MySID entries must survive warmboot.  \r\nWithout ASIC-view tracking and VID-aware best-candidate matching,  \r\nsyncd cannot reconcile `SAI_OBJECT_TYPE_MY_SID_ENTRY` between the temporary  \r\nand current views.\r\n\r\n#### Work item tracking\r\n* N/A\r\n\r\n#### How did you do it?\r\n\r\n* Added `m_soMySidEntries` and MySID handling in `AsicView`  \r\n  (`fromDump`, `asicCreateObject`, `asicRemoveObject`)\r\n* Implemented `findCurrentBestMatchForMySidEntry`  \r\n  (VID exchange \u2192 serialize \u2192 dictionary lookup), same approach as inseg\r\n* Wired `SAI_OBJECT_TYPE_MY_SID_ENTRY` into  \r\n  `BestCandidateFinder::findCurrentBestMatch` and  \r\n  `ComparisonLogic::createNewObjectFromTemporaryObject`\r\n* Added `unittest/syncd/TestMySidWarmboot.cpp` covering dump lifecycle  \r\n  and best-candidate match / miss / already-processed paths\r\n\r\n#### How did you verify/test it?\r\n\r\n1. Run syncd unit tests:\r\n```\r\nmake -C unittest/syncd check\r\n```\r\n2. Confirm `TestMySidWarmboot` cases pass:\r\n   * `asicView_fromDump_deserializes_my_sid_entry`\r\n   * `asicView_create_and_remove_my_sid_entry`\r\n   * `my_sid_entry_serializes_with_exchanged_vr_vid`\r\n   * `bestCandidateFinder_matches_my_sid_entry_after_vid_exchange`\r\n   * `bestCandidateFinder_returns_null_when_vid_mapping_missing`\r\n   * `bestCandidateFinder_returns_null_when_entry_missing_in_current_view`\r\n   * `bestCandidateFinder_throws_when_entry_already_processed`\r\n3. On a DUT with SRv6 MySID programmed: warm-reboot and confirm MySID entries  \r\n   remain in ASIC/APPL_DB without recreate storms in syncd logs\r\n\r\n#### Any platform specific information?\r\n\r\n* N/A\r\n\r\n### Documentation\r\n\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n\r\n* N/A\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n```\r\n      .---.        .-----------\r\n     /     \\  __  /    ------\r\n    / /     \\(  )/    -----\r\n   //////   ' \\/ `   ---\r\n  //// / // :    : ---\r\n // /   /  /`    '--\r\n//          //..\\\\\r\n       ====UU====UU====\r\n           '//||\\\\`\r\n             ''``\r\n```",
+      "files": [
+        {
+          "path": "syncd/AsicView.cpp",
+          "additions": 13,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/AsicView.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/BestCandidateFinder.cpp",
+          "additions": 80,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/BestCandidateFinder.h",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "syncd/ComparisonLogic.cpp",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "tests/aspell.en.pws",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "unittest/syncd/Makefile.am",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "unittest/syncd/TestMySidWarmboot.cpp",
+          "additions": 244,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T16:23:23Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T16:23:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T16:23:41Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T18:22:43Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-01T17:00:16Z",
+          "body": "Hi \u2014 this PR is flagged for cherry-pick to the **202605 branch**, but it appears to be a new feature/enhancement rather than a bug fix. The 202605 branch is in stabilization, so we're limiting cherry-picks to bug fixes and critical platform support.\n\nCould you please retarget this to the next release branch? If there's a specific customer requirement driving this for 202605, please comment with the justification and we can reconsider.\n\n*Comment by @vaibhavhd via automated tooling*"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T09:42:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-04T09:42:23Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T02:19:44Z",
+          "body": "The change is not in 202605 yet. @nazariig, please manually create the cherry pick PR for branch 202605.<br>You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

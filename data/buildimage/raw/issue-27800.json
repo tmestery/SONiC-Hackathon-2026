@@ -1,0 +1,163 @@
+{
+  "number": 27800,
+  "title": "Bug:bgpcfgd throws errors during handling of interface associated with VRF",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27800",
+  "createdAt": "2026-06-10T00:55:01Z",
+  "closedAt": "2026-07-07T18:48:10Z",
+  "author": "dgsudharsan",
+  "labels": [
+    "Bug :bug:",
+    "routing"
+  ],
+  "assignees": [
+    "Bojun-Feng"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nBgpcfgd lacks support for handling interfaces that are part of VRF. It throws error because the 'directory' datastructure where it handles the interface just uses ip address as key\n\nhttps://github.com/sonic-net/sonic-buildimage/blob/90f84741c388fef110a83f5a6e582228ae52883d/src/sonic-bgpcfgd/bgpcfgd/managers_intf.py#L38\n\nWith VRF, two different interfaces in different VRFs can have same IP. Hence during delete we may end up seeing errors like below\n\n2026 Jun  9 17:29:15.916471 sonic DEBUG bgp#bgpcfgd: Received message : '('Vlan1002|2000:1:2::1/64', 'DEL', ())'\n2026 Jun  9 17:29:15.920850 sonic DEBUG bgp#bgpcfgd: Received message : '('Vlan1002|2000:1:2::1/64', 'DEL', ())'\n2026 Jun  9 17:29:15.920850 sonic WARNING bgp#bgpcfgd: Delete key 'Vlan1002|2000:1:2::1/64' is not supported for 'zebra set src' templates\n2026 Jun  9 17:29:25.386032 sonic DEBUG bgp#bgpcfgd: Received message : '('Vlan1003|1.1.2.1/24', 'DEL', ())'\n**2026 Jun  9 17:29:25.386166 sonic ERR bgp#bgpcfgd: Directory: Can't remove key '1.1.2.1' from slot 'LOCAL__local_addresses'. The key doesn't exist**\n\n### Steps to Reproduce\n\nCreate two VLANs and bind them to two different VRFs.\nAssign same ip address on them\nRemove the IP addresses\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior:**\nError logs are seen\n\n**Expected behavior:**\nNo error logs seen\n\n### Relevant log output\n\n```shell\n2026-06-09.17:27:18.689741|INTF_TABLE:Vlan1003:1.1.2.1/24|SET|scope:global|family:IPv4\n2026-06-09.17:27:18.689755|INTF_TABLE:Vlan1003|SET|vrf_name:Vrf_0003|mac_addr:00:00:00:00:00:00\n2026-06-09.17:27:18.689863|INTF_TABLE:Vlan1002:1.1.2.1/24|SET|scope:global|family:IPv4\n2026-06-09.17:27:18.689876|INTF_TABLE:Vlan1002|SET|vrf_name:Vrf_0002|mac_addr:00:00:00:00:00:00\n2026-06-09.17:29:13.148064|INTF_TABLE:Vlan1002:1.1.2.1/24|DEL\n2026-06-09.17:29:25.390118|INTF_TABLE:Vlan1003:1.1.2.1/24|DEL\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nWill be seen on all versions. Day 1 issue.\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-06-19T00:47:36Z",
+      "body": "I looked into the issue, seems like we are using bare IP as the directory key for local addresses, which means two interfaces in different VRFs with the same IP overwrite each other. On delete, the first removal succeeds but the second fails because the key is gone.\n\nAddition / Deletion is based on IP only:\nhttps://github.com/sonic-net/sonic-buildimage/blob/e7e2569b487323be00016ad0c981966e203df409/src/sonic-bgpcfgd/bgpcfgd/managers_intf.py#L38\nhttps://github.com/sonic-net/sonic-buildimage/blob/e7e2569b487323be00016ad0c981966e203df409/src/sonic-bgpcfgd/bgpcfgd/managers_intf.py#L54\n\nI have drafted a PR that changes local_addresses to use a composite key (`interface_name|ip`) so each entry is unique regardless of VRF overlap. The consumer is updated to iterate and match by IP suffix instead of direct lookup.\n\nThis introduces an O(n) scan where there was previously O(1), but `get_local_interface` is only called during `add_peer`, which is a config-time event, not dataplane. Also n is bounded by the number of IP-bearing interfaces on the switch, so I believe the cost is negligible relative to the overall convergence time."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27981,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27981",
+      "title": "[bgpcfgd]: Use composite key for local_addresses to support VRF overlapping IPs",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-07T18:48:09Z",
+      "createdAt": "2026-06-19T00:35:06Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/27800\r\n\r\nbgpcfgd uses bare IP address as the key in its internal `local_addresses` directory slot. When two interfaces in different VRFs are assigned the same IP address, the second entry overwrites the first. On deletion, the first interface removes the key successfully, but the second deletion fails with \"Can't remove key ... The key doesn't exist\" because the entry was already gone. This is a Day 1 bug that affects any deployment using overlapping IPs across VRFs.\r\n\r\n#### How I did it\r\n* Use composite key `interface_name|ip` in `local_addresses` directory slot to ensure uniqueness across VRF-bound interfaces\r\n* Update `get_local_interface` in managers_bgp.py to search entries by IP suffix in the composite key\r\n\r\n#### How to verify it\r\n1. Create two VLANs bound to different VRFs with the same IP (e.g., `Vlan1002` in `Vrf_0002` and `Vlan1003` in `Vrf_0003`, both with `1.1.2.1/24`)\r\n2. Remove the IP addresses from both interfaces\r\n3. Verify no \"Can't remove key\" errors appear in bgpcfgd logs\r\n\r\n#### Description for the changelog\r\nFixed bgpcfgd key collision when the same IP address exists on different interfaces across VRFs",
+      "files": [
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_bgp.py",
+          "additions": 23,
+          "deletions": 12
+        },
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_intf.py",
+          "additions": 5,
+          "deletions": 3
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_bgp.py",
+          "additions": 73,
+          "deletions": 7
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_intf.py",
+          "additions": 31,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T00:35:13Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-19T00:35:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-26T00:56:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-26T00:56:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-06-26T18:56:36Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-06-26T18:59:51Z",
+          "body": "@StormLiangMS  and @liushilongbuaa  please address internal MS Conflict with this PR"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-27T00:34:44Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-27T00:34:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-06-27T11:48:01Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-06-27T11:48:56Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-27T11:48:59Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-27T11:49:02Z",
+          "body": "Retrying failed(or canceled) stages in build 1150036:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t0 by Elastictest: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-27T15:57:08Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-27T15:57:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-06-29T17:31:03Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "tirupatihemanth",
+          "createdAt": "2026-06-29T18:34:44Z",
+          "body": "@deepak-singhal0408  @StormLiangMS  can you please help with ms_conflict review/merge?"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-07-02T02:17:47Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-07-02T02:29:35Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-07-02T03:42:54Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-03T01:21:52Z",
+          "body": "Auto cherry pick don't support submodule update. Please manually cherry pick!"
+        }
+      ]
+    }
+  ]
+}

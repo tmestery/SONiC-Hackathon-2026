@@ -1,0 +1,42 @@
+{
+  "number": 5841,
+  "title": "[fast-reboot] arp table will be cleared after swssconfig restores it",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/5841",
+  "createdAt": "2020-11-06T06:54:47Z",
+  "closedAt": "2020-11-18T03:29:12Z",
+  "author": "dennis0113",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\nIf you are reporting a new issue, make sure that we do not have any duplicates\r\nalready open. You can ensure this by searching the issue list for this\r\nrepository. If there is a duplicate, please close your issue and add a comment\r\nto the existing issue instead.\r\n\r\nIf you suspect your issue is a bug, please edit your issue description to\r\ninclude the BUG REPORT INFORMATION shown below. If you fail to provide this\r\ninformation within 7 days, we cannot debug your issue and will close it. We\r\nwill, however, reopen it if you later provide the information.\r\n\r\nFor more information about reporting issues, see\r\nhttps://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n---------------------------------------------------\r\nGENERAL SUPPORT INFORMATION\r\n---------------------------------------------------\r\n\r\nThe GitHub issue tracker is for bug reports and feature requests.\r\nGeneral support can be found at the following locations:\r\n\r\n- SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n---------------------------------------------------\r\nBUG REPORT INFORMATION\r\n---------------------------------------------------\r\nUse the commands below to provide key information from your environment:\r\nYou do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n**Description**\r\n\r\n<!--\r\nBriefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n**Steps to reproduce the issue:**\r\n1.Run fast-reboot command\r\n2.Compare the arp.json with ARP entry in db.\r\n\r\n**Describe the results you received:**\r\n=> Any ARP entries in arp.json do not appear in db.\r\n\r\n**Describe the results you expected:**\r\n=> All ARP entries which backup in arp.json are restored to db.\r\n\r\n**Additional information you deem important (e.g. issue happens only occasionally):**\r\n\r\n    **Root Cause:**\r\n    ```  \r\n    swssconfig and neighsyncd have race condition when write/clear producer state table(APP_NEIGH_TABLE_NAME)\r\n    \r\n    1.When swssconfig restores arp.json, data with key \"_NEIGH_TABLE\" will be set to redis.\r\n       And it expected orch to process it and rewrite the data with key \"NEIGH_TABLE\" back to redis.\r\n    \r\n    2.However, during the initialization of neighsyncd, \"m_AppRestartAssist->registerAppTable\" will be called\r\n       and it will clear the data in redis.\r\n\r\n    3.Now, neighsyncd is executed after swssconfig.\r\n       [program:neighsyncd]\r\n       command=/usr/bin/neighsyncd\r\n       priority=7\r\n       autostart=false\r\n       autorestart=false\r\n       stdout_logfile=syslog\r\n       stderr_logfile=syslog\r\n       dependent_startup=true\r\n       dependent_startup_wait_for=swssconfig:exited\r\n    \r\n       So, if orch does not handle the data before the neighsyncd init, this issue will appear.\r\n    \r\n    4.Is there any possibilities that other demons which also call 'm_AppRestartAssist->registerAppTable' \r\n       during initialization will have the race condition?\r\n    ```",
+  "comments": [
+    {
+      "author": "dennis0113",
+      "createdAt": "2020-11-06T07:04:26Z",
+      "body": "[fast-reboot] Fix arp entries will be cleared after swssconfig restores #5842\r\n\r\nI had done a modification which resolved the race condition issue.\r\nCan someone review the change and check if there is any side effect or more suitable solution?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1498,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/1498",
+      "title": "[fast-reboot] Add a check for warmstart before cleaning up neigh table",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-11-18T03:29:12Z",
+      "createdAt": "2020-11-10T09:35:28Z",
+      "author": "bingwang-ms",
+      "body": "\r\n\r\n<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nFix https://github.com/Azure/sonic-buildimage/issues/5841 and https://github.com/Azure/sonic-buildimage/issues/5580\r\n\r\nWe found that neighbor table loaded by ```swssconfig``` from ```arp.json``` after ```fast-reboot``` is cleared by ```neighsyncd``` mistakenly at the initial stage. This PR adds a check for ```WarmStart``` before cleaning up, and only do that if ```WarmStart``` is enable.\r\n\r\n**Why I did it**\r\nThis PR is to fix the issue that arp table is not recovered after fast-reboot.\r\n\r\n**How I verified it**\r\nVerified on Arista-7260, running 201911 image.\r\n1. Run some test to populate ARP entries on DUT, such as ```test_fast_reboot```\r\n2. Issue a fast-reboot\r\n3. Verify the ```arp.json``` backed up by ```fast-reboot-dump.py``` is loaded and NEIGH_TABLE is restored.\r\n```\r\nadmin@str-7260cx3-acs-2:~$ redis-cli -n 0 keys '*NEIGH_TABLE*'\r\n  1) \"NEIGH_TABLE:Vlan1000:192.168.0.231\"\r\n  2) \"NEIGH_TABLE:Vlan1000:192.168.0.106\"\r\n  3) \"NEIGH_TABLE:Vlan1000:192.168.1.102\"\r\n  ....\r\n509) \"NEIGH_TABLE:Vlan1000:192.168.0.47\"\r\n510) \"NEIGH_TABLE:Vlan1000:192.168.1.92\"\r\n```\r\n\r\n```\r\npy.test --inventory ../ansible/str,../ansible/veos --host-pattern str-7260cx3-acs-2 --module-path ../ansible --testbed vms7-t0-7260-2 --testbed_file ../ansible/testbed.csv --junit-xml=tr.xml --log-cli-level info --collect_techsupport=False --topology=t0,any,util platform_tests/test_advanced_reboot.py::test_fast_reboot\r\n========================================================================================= test session starts =========================================================================================                                                                                                                        \r\nplatform_tests/test_advanced_reboot.py::test_fast_reboot \r\n------------------------------------------------------------------------------------------- live log setup --------------------------------------------------------------------------------------------\r\nPASSED                                                                                                                                                                                          [100%]\r\n------------------------------------------------------------------------------------------ live log teardown ------------------------------------------------------------------------------------------\r\n===================================================================================== 1 passed in 404.24 seconds ======================================================================================\r\n```\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "warmrestart/warmRestartAssist.cpp",
+          "additions": 5,
+          "deletions": 2
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

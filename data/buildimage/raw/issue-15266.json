@@ -1,0 +1,105 @@
+{
+  "number": 15266,
+  "title": "[VOQ] system neigh was not installed in kernel",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/15266",
+  "createdAt": "2023-05-30T22:55:37Z",
+  "closedAt": "2023-07-18T20:24:02Z",
+  "author": "ysmanman",
+  "labels": [
+    "Chassis :robot:",
+    "Triaged",
+    "MSFT",
+    "chassis-voq"
+  ],
+  "assignees": [
+    "arlakshm"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\nWe observed that a system neigh was not installed in kernel on some remote LC when triaging voq test failure in T2 testing. This was seen with internal build of 202205 image.\r\n\r\nOur chassis for T2 testing has 3 LCs: `cmp227-4`, `cmp227-5`, `cmp227-6`. The neigh in question is `10.0.0.157`, which was bgp peer of PortChannel1058 on cmp227-6.  \r\n```\r\nadmin@cmp227-6:~$ show ip interfaces | grep 10.0.0.157\r\nPortChannel1058            10.0.0.156/31        up/up         ARISTA50T1      10.0.0.157\r\nadmin@cmp227-6:~$\r\n```\r\nThe neighbor was added in chassis_db:\r\n```\r\nadmin@cmp227-6:~$ sonic-db-cli CHASSIS_APP_DB hgetall \"SYSTEM_NEIGH|cmp227-6|Asic0|PortChannel1058|10.0.0.157\"\r\n{'encap_index': '1074790409', 'neigh': '12:50:48:6a:41:16'}\r\nadmin@cmp227-6:~$\r\n```\r\nThe neighbor was installed in kernel on `cmp227-4`:\r\n```\r\nadmin@cmp227-4:~$ sudo ip netns exec asic0 ip neigh show 10.0.0.157  \r\n10.0.0.157 dev Ethernet-IB0 lladdr 94:8e:d3:5e:85:04 PERMANENT\r\nadmin@cmp227-4:~$ sudo ip netns exec asic0 ip route show 10.0.0.157/32    \r\n10.0.0.157 dev Ethernet-IB0 scope link \r\nadmin@cmp227-4:~$ \r\n```\r\nBut it was not installed on `cmp227-5`:\r\n```\r\nadmin@cmp227-5:~$ ip neigh show 10.0.0.157\r\n10.0.0.157 dev Ethernet-IB0  FAILED\r\nadmin@cmp227-5:~$ ip route show 10.0.0.157/32\r\nadmin@cmp227-5:~$ \r\n```\r\n\r\n\r\n#### Steps to reproduce the issue:\r\n1.\r\n2.\r\n3.\r\n\r\n#### Describe the results you received:\r\n\r\n\r\n#### Describe the results you expected:\r\n\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\n(paste your output here)\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "ysmanman",
+      "createdAt": "2023-05-30T23:47:13Z",
+      "body": "According to swss rec,  the latest updates  on the system neigh from chassis_db were: \r\n```\r\nadmin@cmp227-5:~$ sudo grep -a 10.0.0.157 /var/log/swss/swss.rec* | grep SYSTEM_NEIGH\r\n/var/log/swss/swss.rec.1:2023-05-30.19:34:16.878385|SYSTEM_NEIGH|cmp227-6|Asic0|PortChannel1058|10.0.0.157|SET|encap_index:1074790425|neigh:12:50:48:6a:41:16\r\n/var/log/swss/swss.rec.1:2023-05-30.19:38:28.652424|SYSTEM_NEIGH|cmp227-6|Asic0|PortChannel1058|10.0.0.157|DEL\r\n/var/log/swss/swss.rec.1:2023-05-30.19:38:28.652439|SYSTEM_NEIGH|cmp227-6|Asic0|PortChannel1058|10.0.0.157|SET|encap_index:1074790409|neigh:12:50:48:6a:41:16\r\nadmin@cmp227-5:~$\r\n```\r\nThe last update on the neighbor was `SET`. However, according to syslog, the last even  was to delete the neighbor from kernel, which was for `DEL` update sent before `SET`. \r\n```\r\nadmin@cmp227-5:~$ sudo grep -a 10.0.0.157 /var/log/syslog | grep Kernel\r\nMay 30 19:34:17.246507 cmp227-5 NOTICE swss#nbrmgrd: :- addKernelNeigh: IPv4 Nbr Add cmd: /sbin/ip neigh add 10.0.0.157 lladdr d4:af:f7:2e:c4:c6 dev Ethernet-IB0\r\nMay 30 19:34:17.250436 cmp227-5 NOTICE swss#nbrmgrd: :- addKernelRoute: IPv4 Route Add cmd: /sbin/ip route add 10.0.0.157/32 dev Ethernet-IB0\r\nMay 30 19:38:29.831266 cmp227-5 NOTICE swss#nbrmgrd: :- delKernelRoute: IPv4 Route Del cmd: /sbin/ip route del 10.0.0.157/32\r\nMay 30 19:38:29.832703 cmp227-5 NOTICE swss#nbrmgrd: :- delKernelNeigh: IPv4 Nbr Del cmd: /sbin/ip neigh del 10.0.0.157 dev Ethernet-IB0\r\nadmin@cmp227-5:~$\r\n``` "
+    },
+    {
+      "author": "ysmanman",
+      "createdAt": "2023-05-31T00:38:19Z",
+      "body": "I had a theory of the issue. The problematic sequence of system neighbor update is `SET`->`DEL`->`SET`.  So if the `DEL` & the 2nd `SET` update come in very close, it's possible that the `DEL` and the 2nd `SET` update can be *reordered*  due to race condition.\r\n\r\nDetailedly, so cmp227-5 sees the following neighbor updates from chassis_db: \r\n```\r\n/var/log/swss/swss.rec.1:2023-05-30.19:34:16.878385|SYSTEM_NEIGH|cmp227-6|Asic0|PortChannel1058|10.0.0.157|SET|encap_index:1074790425|neigh:12:50:48:6a:41:16\r\n/var/log/swss/swss.rec.1:2023-05-30.19:38:28.652424|SYSTEM_NEIGH|cmp227-6|Asic0|PortChannel1058|10.0.0.157|DEL\r\n/var/log/swss/swss.rec.1:2023-05-30.19:38:28.652439|SYSTEM_NEIGH|cmp227-6|Asic0|PortChannel1058|10.0.0.157|SET|encap_index:1074790409|neigh:12:50:48:6a:41:16\r\n```\r\nThe first `SET` update was processed successfully.  In the process of the subsequent `DEL` update,  `removeNeghbor` can return `false` if the nexthop is still used by routes:\r\n\r\nhttps://github.com/sonic-net/sonic-swss/blob/4d9fb93c00e6e2d8ec590928da78f90931c6a85d/orchagent/neighorch.cpp#L1066-L1071\r\n\r\nIf `removeNeighbor` returns `false`, orchagent will retry `DEL` later. So if the `DEL` and the 2nd `SET` update come in very close, the retry could result in updates like `DEL (failed)` -> `SET` -> `DEL(retry and succeed)`, which mistakenly deletes neigh from kernel.\r\n \r\nAs an evidence of the above theory,  we observed the following log that indicates that the above two `SET` updates were processed consecutively, just like the change of encapIndex, because of retry of `DEL` update: \r\n```\r\nMay 30 19:38:28.681287 cmp227-5 NOTICE swss#orchagent: :- updateVoqNeighborEncapIndex: Updated voq encap index for neighbor 10.0.0.157 on cmp227-6|Asic0|PortChannel1058\r\nMay 30 19:38:28.681287 cmp227-5 NOTICE swss#orchagent: :- doVoqSystemNeighTask: VOQ encap index updated for neighbor cmp227-6|Asic0|PortChannel1058|10.0.0.157\r\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2853,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2853",
+      "title": "Remove system neigh DEL operation if SET operation succeeds",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-07-18T20:24:01Z",
+      "createdAt": "2023-07-09T05:27:42Z",
+      "author": "ysmanman",
+      "body": "\r\n\r\n\r\n\r\n<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\nRemove system neighbor DEL operation in m_toSync if SET operation for the same neighbor succeeds. This is to avoid mistakenly removing the system neighbor.\r\n\r\n**Why I did it**\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/15266\r\n\r\n**How I verified it**\r\nhttps://github.com/sonic-net/sonic-buildimage/issues/15266 was uncovered by https://github.com/sonic-net/sonic-mgmt/blob/master/tests/voq/test_voq_disrupts.py.  The issue was not seen in the test anymore with the fix.\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/neighorch.cpp",
+          "additions": 23,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "ysmanman",
+          "createdAt": "2023-07-09T05:30:09Z",
+          "body": "Add @arlakshm @kenneth-arista for visibility."
+        },
+        {
+          "author": "kenneth-arista",
+          "createdAt": "2023-07-11T22:51:03Z",
+          "body": "This fix will likely also address https://github.com/sonic-net/sonic-mgmt/issues/8588"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2023-07-12T00:16:54Z",
+          "body": "@ysmanman, can you rebase the branch?"
+        },
+        {
+          "author": "ysmanman",
+          "createdAt": "2023-07-12T00:39:20Z",
+          "body": "> @ysmanman, can you rebase the branch?\r\n\r\nHi @arlakshm rebased just now."
+        },
+        {
+          "author": "ysmanman",
+          "createdAt": "2023-07-16T04:27:24Z",
+          "body": "/Azpw run Azure.sonic-swss "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-07-16T04:27:25Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-07-16T04:27:30Z",
+          "body": "No commit pushedDate could be found for PR 2853 in repo sonic-net/sonic-swss"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2023-07-19T08:46:34Z",
+          "body": "@prsunny  could we have an ADO to track this? "
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2023-07-19T21:53:10Z",
+          "body": "> @prsunny could we have an ADO to track this?\r\n\r\n@arlakshm, do you have one?"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2023-07-19T23:00:04Z",
+          "body": "> > @prsunny could we have an ADO to track this?\r\n> \r\n> @arlakshm, do you have one?\r\n\r\n@StormLiangMS @prsunny  this is the ADO# 24596307"
+        }
+      ]
+    }
+  ]
+}

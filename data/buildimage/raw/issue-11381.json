@@ -1,0 +1,102 @@
+{
+  "number": 11381,
+  "title": "[VS] ARP packets are being dropped on the VS Image When used as a L2 device",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/11381",
+  "createdAt": "2022-07-07T18:11:57Z",
+  "closedAt": "2022-08-04T16:18:01Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Help Wanted :sos:"
+  ],
+  "assignees": [
+    "prsunny"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Topology: HA <-> Eth0, HB <-> Eth4\r\n2. config vlan add 10\r\n3. config vlan member add 10 Ethernet0 -u\r\n4. config vlan member add 10 Ethernet4 -u\r\n5. Assign IP addresses in the same network to HA & HB\r\n6. Ping HB from HA\r\n\r\n#### Describe the results you received:\r\n- ARP request is being dropped by the VS\r\n- This is because of the ebtable rules configured.\r\n\r\nThese rules might be required on the real HW but these shouldn't be there for VS\r\n```\r\n-A FORWARD -p ARP -j DROP\r\n-A FORWARD -p 802_1Q --vlan-encap ARP -j DROP\r\n```\r\n\r\n#### Describe the results you expected:\r\nARP shouldn't be dropped\r\n\r\n#### Work-Around:\r\n\r\nTo allow ARP frames forwarded via the switch, please, remove corresponding ebtables entries:\r\n```\r\nsudo ebtables -D FORWARD -p 802_1Q --vlan-encap ARP -j DROP\r\nsudo ebtables -D FORWARD -p ARP -j DROP\r\n```",
+  "comments": [
+    {
+      "author": "prsunny",
+      "createdAt": "2022-07-26T00:08:13Z",
+      "body": "This can be fixed by bypassing for the KVM image. Can be checked for platform in [build_debian.sh](https://github.com/Azure/sonic-buildimage/blob/master/build_debian.sh#L561) or [docker_image_ctl.j2](https://github.com/Azure/sonic-buildimage/blob/master/files/build_templates/docker_image_ctl.j2#L193). Request help from community. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 11585,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/11585",
+      "title": "[KVM]Preventing ebtables cfg to be applied on KVM",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-08-04T16:18:00Z",
+      "createdAt": "2022-07-29T17:40:43Z",
+      "author": "dgsudharsan",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nTo fix https://github.com/Azure/sonic-buildimage/issues/11381\r\n\r\nPreventing ebtables rules to be applied on KVM image. The ebtables rules in  SONiC are added to prevent ARP as well as L2 forwarding to be blocked in linux kernel since the hardware will take care of the actual L2 forward. However this is not the case with KVM where linux needs to forward even L2 packets\r\n\r\n#### How I did it\r\nAdded check in docker_image_ctl.j2 to apply the ebtables rules only when platform is not vs which is set for KVM\r\n\r\n#### How to verify it\r\nLoaded KVM image built with the changes and verified ebtables are not present\r\n\r\nBefore\r\n```\r\nroot@sonic:~# ebtables -L\r\nBridge table: filter\r\n\r\nBridge chain: INPUT, entries: 0, policy: ACCEPT\r\n\r\nBridge chain: FORWARD, entries: 3, policy: ACCEPT\r\n-d BGA -j DROP\r\n-p ARP -j DROP\r\n-p 802_1Q --vlan-encap ARP -j DROP\r\n\r\nBridge chain: OUTPUT, entries: 0, policy: ACCEPT\r\nroot@sonic:~#\r\n```\r\n\r\nAfter\r\n```\r\nebtables -L\r\nBridge table: filter\r\n\r\nBridge chain: INPUT, entries: 0, policy: ACCEPT\r\n\r\nBridge chain: FORWARD, entries: 0, policy: ACCEPT\r\n\r\nBridge chain: OUTPUT, entries: 0, policy: ACCEPT\r\n```\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/docker_image_ctl.j2",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "prsunny",
+          "createdAt": "2022-08-01T17:05:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-08-01T17:05:05Z",
+          "body": "<samp>\nYou have several pipelines (over 10) configured to build pull requests in this repository. Specify which pipelines you would like to run by using /azp run [pipelines] command. You can specify multiple pipelines using a comma separated list.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2022-08-01T17:05:28Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-08-01T17:05:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2022-08-01T17:55:31Z",
+          "body": "@prsunny To resolve the sonic-mgmt failure we require this PR https://github.com/sonic-net/sonic-mgmt/pull/6073"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2022-08-03T17:45:31Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-08-03T17:45:33Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-08-03T17:45:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2022-08-04T00:45:49Z",
+          "body": "/azpw run Azure.sonic-buildimage"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-08-04T00:45:51Z",
+          "body": "/AzurePipelines run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-08-04T00:46:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

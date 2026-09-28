@@ -1,0 +1,105 @@
+{
+  "number": 28692,
+  "title": "Bug: SONiC Build uses `sudo rm -rf` as build user",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28692",
+  "createdAt": "2026-07-29T20:46:06Z",
+  "closedAt": "2026-08-02T23:42:17Z",
+  "author": "gregoryboudreau",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nDuring the SONiC build process, part of the build is doing a `sudo rm -rf` of a directory which is both dangerous to do and not a given that users will be able to do: https://github.com/sonic-net/sonic-buildimage/blob/master/Makefile.work#L305. @jusherma left a comment on the PR to this effect: https://github.com/sonic-net/sonic-buildimage/pull/27574#discussion_r3517821383\n\n### Steps to Reproduce\n\nRun any SONiC build target and it will attempt sudo access. If your user doesn't have passwordless sudo access it will sit _forever_ until user intervention to either enter password or enter incorrect 3 times (and this will happen on multiple versions so for example will happen on BOTH stages for bookworm and trixie).\n\n### Actual Behavior and Expected Behavior\n\nSONiC should not assume sudo access for builds both from a security/safety perspective and as Justin mentioned a build repro view, rather, in a case where root level permissions are \"required\" to delete (like is needed for fsroot) it should be done through docker to remove this dependency. \n\n### Relevant log output\n\n```shell\ngrboudre@<server>:sonic-buildimage$ time make TRUSTED_GPG_URLS='' SMARTSWITCH=1 INCLUDE_DHCP_SERVER=y all\n+++ --- Making all --- +++\n./scripts/run_with_retry make EXTRA_DOCKER_TARGETS=all BLDENV=bookworm -f Makefile.work bookworm\nmake[1]: Entering directory '/nobackup/grboudre/202605-cpn/sonic-buildimage'\nWARNING: bridge-nf-call-iptables is disabled\nWARNING: bridge-nf-call-ip6tables is disabled\nThis is your AD password:\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "anamehra",
+      "createdAt": "2026-07-30T01:00:20Z",
+      "body": "Hi @liushilongbuaa , @yijingyan2 , for you viz. Thanks"
+    },
+    {
+      "author": "vaibhavhd",
+      "createdAt": "2026-09-03T06:06:23Z",
+      "body": "There seems to be a testgap here that led to a late (and community's) discovery if the issue https://github.com/sonic-net/sonic-buildimage/issues/28692\n\nIs there a plan to address that?"
+    },
+    {
+      "author": "jusherma",
+      "createdAt": "2026-09-03T07:21:43Z",
+      "body": "> There seems to be a testgap here that led to a late (and community's) discovery if the issue [#28692](https://github.com/sonic-net/sonic-buildimage/issues/28692)\n> \n> Is there a plan to address that?\n\nI'm not aware of any plans, but I think\u2014at a minimum\u2014the VMs running Azure Pipelines should not grant sudo to the user building sonic. That would have caught this issue"
+    },
+    {
+      "author": "gregoryboudreau",
+      "createdAt": "2026-09-03T08:13:55Z",
+      "body": "> > There seems to be a testgap here that led to a late (and community's) discovery if the issue [#28692](https://github.com/sonic-net/sonic-buildimage/issues/28692)\n> > Is there a plan to address that?\n> \n> I'm not aware of any plans, but I think\u2014at a minimum\u2014the VMs running Azure Pipelines should not grant sudo to the user building sonic. That would have caught this issue\n\nAgreed, best way to catch issues user will face w/ build related infra is to have build related pipelines have the same permissions as users would be expected to have. As a dockerized build, SONiC shouldn't have any expectation of root/sudo level permissions so the pipeline shouldn't allow for stray sudos to happen."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28706,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28706",
+      "title": "[build]: Avoid host sudo for Docker root cleanup",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-02T23:42:16Z",
+      "createdAt": "2026-07-30T03:18:18Z",
+      "author": "yijingyan2",
+      "body": "\r\nThis reverts the change of `Makefile.work` from commit 8d9637d2fa4638f76e86267026c43c57525cfb54.\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nFix https://github.com/sonic-net/sonic-buildimage/issues/28692\r\nThe host-side `sudo rm -rf` cleanup requires passwordless sudo and can block a build waiting for a password. Root-owned Docker data should instead be removed through Docker without requiring elevated privileges on the build host.\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nReverted the change of `Makefile.work` from commit 8d9637d2fa4638f76e86267026c43c57525cfb54. Replaced the host-side `sudo rm -rf` command with a short-lived `debian:bookworm` container that mounts `$(DOCKER_ROOT)` and removes its contents from inside the container.\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n#### Tested branch\r\n\r\n<!--\r\n- Select each branch where the change was tested.\r\n- If you request a backport/cherry-pick, select the base branch and the tested\r\n  target release branch(es).\r\n-->\r\n\r\n- [ ] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\n202605: `202605` at `b00fc01db1954a3e50a2d4bf720e3e6d4acd22d4`, with PR merge commit cherry-picked as `c82f229bf`: targeted local Bookworm and Trixie cleanup tests passed. Root-owned files were removed with host `sudo` unavailable. This was a targeted build-system test; no installer image was produced.\r\n<!--\r\n- Provide the tested image version and test evidence for each selected branch.\r\n- e.g.\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n",
+      "files": [
+        {
+          "path": "Makefile.work",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T03:18:25Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T03:18:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T03:18:39Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T01:49:31Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T01:49:46Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "gregoryboudreau",
+          "createdAt": "2026-09-02T08:08:45Z",
+          "body": "@yijingyan2 can this be brought into 202605 as well, same issue is present there.\r\n"
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2026-09-03T06:06:42Z",
+          "body": "There seems to be a testgap here that led to a late (and community's) discovery if the issue https://github.com/sonic-net/sonic-buildimage/issues/28692\r\n\r\nIs there a plan to address that?"
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2026-09-03T06:07:10Z",
+          "body": "@saiarcot895 FYI"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-03T06:07:35Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-buildimage/pull/29329"
+        }
+      ]
+    }
+  ]
+}

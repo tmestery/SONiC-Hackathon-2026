@@ -1,0 +1,119 @@
+{
+  "number": 25091,
+  "title": "Bug: Cosmetic systemd [DEPEND] Dependency failed messages on warm-reboot",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25091",
+  "createdAt": "2026-01-15T17:08:16Z",
+  "closedAt": "2026-02-04T21:15:20Z",
+  "author": "yanmarkman",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "MSFT"
+  ],
+  "assignees": [
+    "saiarcot895"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nAfter a successful SONiC warm-reboot, the serial console prints repeated [DEPEND] Dependency failed for systemd-networkd-persistent-storage.service messages (~10 times).\n\nOnly visible on serial console.\n\nThe network stack, orchagent, and SONiC services start correctly.\n\nThis does not occur on cold reboot.\n\nImpact: Cosmetic only \u2014 does not affect functionality.\n\nSuggested action: \nMask or suppress systemd-networkd-persistent-storage.service during warm-reboot\n\n\n\n### Steps to Reproduce\n\nRun AMD64 until SONiC fully up\nUse SHELL in the SERIAL-CONSOLE\napply:   warm-reboot \nAfter successful reboot wait for some minutes for the prints (see log below).\n\n### Actual Behavior and Expected Behavior\n\n-\n\n### Relevant log output\n\n```shell\nSep 03 19:12:42 sonic systemd[1]: systemd-networkd-persistent-storage.service: Job systemd-networkd-persistent-storage.service/st\nSep 03 19:32:00 sonic systemd[1]: systemd-networkd-persistent-storage.service: Bound to unit systemd-networkd.service, but unit i \nSep 03 19:32:00 sonic systemd[1]: Dependency failed for systemd-networkd-persistent-storage.service - Enable Persistent Storage i \nSep 03 19:32:00 sonic systemd[1]: systemd-networkd-persistent-storage.service: Job systemd-networkd-persistent-storage.service/st \nSep 03 20:20:58 sonic systemd[1]: systemd-networkd-persistent-storage.service: Bound to unit systemd-networkd.service, but unit i \nSep 03 20:20:58 sonic systemd[1]: Dependency failed for systemd-networkd-persistent-storage.service - Enable Persistent Storage i \nSep 03 20:20:58 sonic systemd[1]: systemd-networkd-persistent-storage.service: Job systemd-networkd-persistent-storage.service/st\n...............\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n-\n```\n\n### Attach files (if any)\n\n-",
+  "comments": [
+    {
+      "author": "cpackham-atlnz",
+      "createdAt": "2026-01-19T03:41:37Z",
+      "body": "I'm seeing the same thing now with the Trixie update on 202511.\n\nI think it's due to code in https://github.com/sonic-net/sonic-buildimage/blob/master/files/image_config/midplane-network/systemd-networkd.override.conf which runs `bash /usr/local/bin/is-npu-or-dpu.sh` which will return non-zero for platforms without a DPU or NPU . I assume the logic is to let systemd-network manage the network for the DPU/NPU but stay out of the way for a regular switch.\n\nAs you say the impact is cosmetic but it is a bit jarring for anyone looking at the startup output."
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-01-24T06:57:32Z",
+      "body": "I also encountered the same issue.\n\nAs @cpackham-atlnz mentioned, `systemd-networkd` is skipped on non-DPU/NPU hardware, but `systemd-networkd-persistent-storage` is still trying to bind to it.\n\nI imagine this can be fixed by adding the same `ExecCondition=/bin/bash /usr/local/bin/is-npu-or-dpu.sh` override to persistent\u2011storage, so they both get skipped on non\u2011DPU/NPU platforms."
+    },
+    {
+      "author": "cpackham-atlnz",
+      "createdAt": "2026-01-26T03:50:44Z",
+      "body": "@Bojun-Feng I gave adding the same `ExecCondition` in an override for `systemd-networkd-persistent-storage.service` but I still got the same behaviour."
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-01-26T18:58:26Z",
+      "body": "> [@Bojun-Feng](https://github.com/Bojun-Feng) I gave adding the same `ExecCondition` in an override for `systemd-networkd-persistent-storage.service` but I still got the same behaviour.\n\nHmm seems like the dependency check happens (and fails) before we ever check `ExecCondition`. Maybe we can dynamically mask `systemd-networkd-persistent-storage.service` in systemd generators? Making a pull request to see if it works.\n\nTheoretically the cleanest approach would be to resolve it at build time: `sonic_debian_extension.j2` already uses Jinja2 conditionals for platform-specific configuration. Unfortunately the Mellanox platform image might boot on either a standard switch or a smart switch, so we don't have sufficient information just from looking at the platform...\n\n---\n\n**Update:** Masking `systemd-networkd-persistent-storage` did work, but other dependent services (for example `systemd-networkd-wait-online`) still triggered similar errors.\n\nRather than masking each dependent service individually, it makes more sense to mask `systemd-networkd` itself. That addresses the root cause: once the main service is properly masked and skipped, its dependents won\u2019t be started or checked at all.\n\nOpened a new PR (https://github.com/sonic-net/sonic-buildimage/pull/25223) to mask `systemd-networkd` directly instead of masking the dependent services one by one.\n\nUsing a generator to mask the unit files earlier could be a reusable pattern for other components that need to be strictly disabled on specific platforms. Generators are late enough to have runtime information, but also early enough to ensure the masked components are completely ignored by the dependency tree."
+    },
+    {
+      "author": "judyjoseph",
+      "createdAt": "2026-01-28T16:14:10Z",
+      "body": "@saiarcot895 can you check solution shared by @Bojun-Feng to prevent this logs"
+    },
+    {
+      "author": "yanmarkman",
+      "createdAt": "2026-01-28T19:16:38Z",
+      "body": "I\u2019m OOO till 08-Feb. Will try after return.\r\nBest regards\r\nYan\r\n\r\nFrom: judyjoseph ***@***.***>\r\nSent: Wednesday, January 28, 2026 6:15 PM\r\nTo: sonic-net/sonic-buildimage ***@***.***>\r\nCc: Yan Markman ***@***.***>; Author ***@***.***>\r\nSubject: [EXTERNAL] Re: [sonic-net/sonic-buildimage] Bug: Cosmetic systemd [DEPEND] Dependency failed messages on warm-reboot (Issue #25091)\r\n\r\njudyjoseph left a comment (sonic-net/sonic-buildimage#25091) @saiarcot895 can you check solution shared by @Bojun-Feng to prevent this logs \u2014 Reply to this email directly, view it on GitHub, or unsubscribe. You are receiving this because\r\nZjQcmQRYFpfptBannerStart\r\nPrioritize security for external emails:\r\nConfirm sender and content safety before clicking links or opening attachments\r\n    Report Suspicious  <https://us-phishalarm-ewt.proofpoint.com/EWT/v1/CRVmXkqW!t83R_hSfiBZxPqc_UbaxpWjfeBIQGBPLkcKJfGw70q8mZTuXew8bq7cFGeq11HBpmqZIH5aRfCp3Kfk0ZQMf5jogXDUOWCH5861e-sLZzPh5dKqPjXlFYw$>   \u200c\r\nZjQcmQRYFpfptBannerEnd\r\n[https://avatars.githubusercontent.com/u/53951155?s=20&v=4]judyjoseph left a comment (sonic-net/sonic-buildimage#25091)<https://urldefense.proofpoint.com/v2/url?u=https-3A__github.com_sonic-2Dnet_sonic-2Dbuildimage_issues_25091-23issuecomment-2D3812239837&d=DwMFaQ&c=nKjWec2b6R0mOyPaz7xtfQ&r=afmaEQNyRnAAm7Dt6PdvHUE04B_lTRIu00Y_4b92SBU&m=wAJGLUgebUu7GF19ObOGOveFZ-EuytsKu1uXN9Wh2B48xcFT91uhyt0yjcDi4EIZ&s=LgztR-Fc7p1wAVqBJbKAJFCb_o7Rvk5nghU9XzK4bZc&e=>\r\n\r\n@saiarcot895<https://urldefense.proofpoint.com/v2/url?u=https-3A__github.com_saiarcot895&d=DwMFaQ&c=nKjWec2b6R0mOyPaz7xtfQ&r=afmaEQNyRnAAm7Dt6PdvHUE04B_lTRIu00Y_4b92SBU&m=wAJGLUgebUu7GF19ObOGOveFZ-EuytsKu1uXN9Wh2B48xcFT91uhyt0yjcDi4EIZ&s=3ajrR1nLDL1jovn5PFji2s_Q3FhHUwZAFMyFjM0YAL0&e=> can you check solution shared by @Bojun-Feng<https://urldefense.proofpoint.com/v2/url?u=https-3A__github.com_Bojun-2DFeng&d=DwMFaQ&c=nKjWec2b6R0mOyPaz7xtfQ&r=afmaEQNyRnAAm7Dt6PdvHUE04B_lTRIu00Y_4b92SBU&m=wAJGLUgebUu7GF19ObOGOveFZ-EuytsKu1uXN9Wh2B48xcFT91uhyt0yjcDi4EIZ&s=oMfJIj7EPjjRPe3LYu0xF92CtDLrMt1-41vL4vh6DTg&e=> to prevent this logs\r\n\r\n\u2014\r\nReply to this email directly, view it on GitHub<https://urldefense.proofpoint.com/v2/url?u=https-3A__github.com_sonic-2Dnet_sonic-2Dbuildimage_issues_25091-23issuecomment-2D3812239837&d=DwMFaQ&c=nKjWec2b6R0mOyPaz7xtfQ&r=afmaEQNyRnAAm7Dt6PdvHUE04B_lTRIu00Y_4b92SBU&m=wAJGLUgebUu7GF19ObOGOveFZ-EuytsKu1uXN9Wh2B48xcFT91uhyt0yjcDi4EIZ&s=LgztR-Fc7p1wAVqBJbKAJFCb_o7Rvk5nghU9XzK4bZc&e=>, or unsubscribe<https://urldefense.proofpoint.com/v2/url?u=https-3A__github.com_notifications_unsubscribe-2Dauth_AHWE6LKZHEF3VSKW7DIG3A34JDN6TAVCNFSM6AAAAACR2FK2GOVHI2DSMVQWIX3LMV43OSLTON2WKQ3PNVWWK3TUHMZTQMJSGIZTSOBTG4&d=DwMFaQ&c=nKjWec2b6R0mOyPaz7xtfQ&r=afmaEQNyRnAAm7Dt6PdvHUE04B_lTRIu00Y_4b92SBU&m=wAJGLUgebUu7GF19ObOGOveFZ-EuytsKu1uXN9Wh2B48xcFT91uhyt0yjcDi4EIZ&s=WqnuEC0_7OT9o7CMSA_WxQrkNcEjjYfTV1rQtblWkhQ&e=>.\r\nYou are receiving this because you authored the thread.Message ID: ***@***.******@***.***>>\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25223,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25223",
+      "title": "[systemd]: Mask systemd-networkd on non-smart-switch platforms",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-04T21:15:18Z",
+      "createdAt": "2026-01-28T06:46:40Z",
+      "author": "Bojun-Feng",
+      "body": "#### Why I did it\r\n\r\nFix #25091\r\nFix #24523\r\n\r\nAfter a successful SONiC warm-reboot, the serial console prints repeated `[DEPEND] Dependency failed for systemd-networkd-persistent-storage.service` and similar messages on non-smart-switch platforms. This is a cosmetic issue that does not affect functionality but is jarring for anyone monitoring startup output.\r\n\r\nThe root cause is that `systemd-networkd.service` uses an `ExecCondition` to skip execution on non-smart-switch platforms. However, its dependent services (`systemd-networkd-persistent-storage.service`, `systemd-networkd-wait-online.service`) still attempt to start and fail with dependency errors.\r\n\r\n#### How I did it\r\n\r\n* Added `mask_networkd_for_non_smart_switch()` function to systemd-sonic-generator that creates a symlink to `/dev/null` for `systemd-networkd.service` when not on smart-switch platforms (DPU/NPU)\r\n* The masking occurs at early boot during generator execution, before systemd loads unit files\r\n* Masking systemd-networkd directly causes all dependent services to be automatically skipped by systemd's dependency resolution\r\n* Added `validate_masked_services()` test to verify correct masking behavior across all platform configurations\r\n\r\n#### How to verify it\r\n\r\n1. Build a SONiC image with this change\r\n2. Boot on a non-smart-switch platform (no DPU/DPUS in platform.json)\r\n3. Perform a warm-reboot: `warm-reboot`\r\n4. Monitor serial console output\r\n5. Verify no \"Dependency failed for systemd-networkd-persistent-storage.service\" or similar messages appear\r\n\r\n#### Description for the changelog\r\n\r\nMask systemd-networkd.service on non-smart-switch platforms to prevent dependency failure",
+      "files": [
+        {
+          "path": "src/systemd-sonic-generator/ssg-test.cc",
+          "additions": 21,
+          "deletions": 0
+        },
+        {
+          "path": "src/systemd-sonic-generator/systemd-sonic-generator.cpp",
+          "additions": 25,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-28T06:46:49Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-28T06:47:02Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-01-28T16:26:23Z",
+          "body": "Hi @cpackham-atlnz, can you check if this PR solves your issues? If we mask `systemd-networkd` this should skip all its dependencies and there should be no more error messages from any `networkd` related dependencies."
+        },
+        {
+          "author": "cpackham-atlnz",
+          "createdAt": "2026-01-29T01:43:22Z",
+          "body": "@Bojun-Feng yes that seems to do the trick"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-01-29T01:51:31Z",
+          "body": "Great! Opening this up for review"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-02-03T18:28:35Z",
+          "body": "@vmittal-msft , @tjchadaga , I think we need this in 202511 branch as well"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-04T21:15:51Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25359"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-14T00:15:14Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

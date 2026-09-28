@@ -1,0 +1,92 @@
+{
+  "number": 6943,
+  "title": "frr-mgmt-framework syntax for PREFIX_SET is impossible to use in a route-map",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/6943",
+  "createdAt": "2021-03-02T22:57:03Z",
+  "closedAt": "2021-08-13T06:34:27Z",
+  "author": "jhujhiti",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "#### Description\r\n\r\nThe templates that write FRR configuration for route-maps and prefix-lists assume opposite and incompatible things about the `mode` field of each `PREFIX_SET`.\r\n\r\n`bgpd.conf.db.pref_list.j2` requires uppercase (eg., `IPv4`) to match: https://github.com/Azure/sonic-buildimage/blob/a171e6c5e4e51a360a70190903e09decb44ec7e3/src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.pref_list.j2#L5\r\n`bgpd.conf.db.route_map.j2` requires lowercase (eg., `ipv4`) to match: https://github.com/Azure/sonic-buildimage/blob/a171e6c5e4e51a360a70190903e09decb44ec7e3/src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.route_map.j2#L28\r\n\r\nThis makes it impossible to define a prefix-list and use it in a route-map.\r\n\r\nThe latest documentation in https://github.com/Azure/SONiC/pull/544 (not sure why this isn't merged) is also wrong. The document says that the database keys are `IP_PREFIX_SET` and `IP_PREFIX`, but the templates actually match `PREFIX_SET` and `PREFIX`.\r\n\r\n#### Steps to reproduce the issue:\r\nSnippet of `/etc/sonic/config_db.json` necessary to reproduce:\r\n```json\r\n{\r\n    \"DEVICE_METADATA\": {\r\n        \"localhost\": {\r\n            \"frr_mgmt_framework_config\": \"true\"\r\n        }\r\n    },\r\n    \"ROUTE_MAP\": {\r\n        \"LOOPBACK|10\": {\r\n            \"route_operation\": \"permit\",\r\n            \"match_prefix_set\": \"slash32\",\r\n            \"set_origin\": \"igp\"\r\n        }\r\n    },\r\n    \"PREFIX_SET\": {\r\n            \"slash32\": {\r\n                    \"mode\": \"ipv4\"\r\n            }\r\n    },\r\n    \"PREFIX\": {\r\n            \"slash32|0.0.0.0/0|32..32\": {\r\n                    \"action\": \"permit\"\r\n            }\r\n    }\r\n}\r\n```\r\n\r\n#### Describe the results you received:\r\n\r\nThe snippet above produces the FRR configuration\r\n```\r\nroute-map LOOPBACK permit 10\r\n match ip address prefix-list slash32\r\n set origin igp\r\n!\r\nroute-map LOOPBACK deny 10000\r\n```\r\nwith no prefix-list defined. Changing the `mode` to `IPV4` instead results in\r\n```\r\nip prefix-list slash32 seq 5 permit 0.0.0.0/0 ge 32 le 32\r\n!\r\nroute-map LOOPBACK permit 10\r\n set origin igp\r\n!\r\nroute-map LOOPBACK deny 10000\r\n```\r\nwith no match conditions at all.\r\n\r\n#### Describe the results you expected:\r\n\r\nOther parts of the template are case-insensitive, so I'd expect either upper- or lower- case modes to result in\r\n```\r\nip prefix-list slash32 seq 5 permit 0.0.0.0/0 ge 32 le 32\r\n!\r\nroute-map LOOPBACK permit 10\r\n match ip address prefix-list slash32\r\n set origin igp\r\n!\r\nroute-map LOOPBACK deny 10000\r\n```\r\n\r\n#### Output of `show version`:\r\n\r\nBuilt from master a few days ago: c6178259fcafc1ab5cdf3cd77c9ebd3ea594065a. Confirmed that the bug still exists on master now.\r\n\r\n```\r\nSONiC Software Version: SONiC.master.0-dirty-20210225.203231\r\nDistribution: Debian 10.8\r\nKernel: 4.19.0-12-2-amd64\r\nBuild commit: c6178259\r\nBuild date: Thu Feb 25 22:08:55 UTC 2021\r\nBuilt by: admin@sonic-builder\r\n\r\nPlatform: x86_64-<irrelevant>\r\nHwSKU: <irrelevant>\r\nASIC: broadcom\r\nASIC Count: 1\r\nSerial Number: <irrelevant>\r\nUptime: 23:09:49 up 23:58,  1 user,  load average: 1.48, 1.22, 1.07\r\n\r\nDocker images:\r\nREPOSITORY                    TAG                              IMAGE ID            SIZE\r\ndocker-syncd-brcm             latest                           1d03dbb9a55c        680MB\r\ndocker-syncd-brcm             master.0-dirty-20210225.203231   1d03dbb9a55c        680MB\r\ndocker-snmp                   latest                           508289a491d3        438MB\r\ndocker-snmp                   master.0-dirty-20210225.203231   508289a491d3        438MB\r\ndocker-teamd                  latest                           dd92523b5fcb        408MB\r\ndocker-teamd                  master.0-dirty-20210225.203231   dd92523b5fcb        408MB\r\ndocker-nat                    latest                           74f76f1f04b7        411MB\r\ndocker-nat                    master.0-dirty-20210225.203231   74f76f1f04b7        411MB\r\ndocker-router-advertiser      latest                           eebab6662190        398MB\r\ndocker-router-advertiser      master.0-dirty-20210225.203231   eebab6662190        398MB\r\ndocker-platform-monitor       latest                           66c7a5e1c931        605MB\r\ndocker-platform-monitor       master.0-dirty-20210225.203231   66c7a5e1c931        605MB\r\ndocker-macsec                 latest                           0f67d436bbfb        411MB\r\ndocker-macsec                 master.0-dirty-20210225.203231   0f67d436bbfb        411MB\r\ndocker-lldp                   latest                           c1b744a26c8c        438MB\r\ndocker-lldp                   master.0-dirty-20210225.203231   c1b744a26c8c        438MB\r\ndocker-database               latest                           5bccc7b5c3b9        397MB\r\ndocker-database               master.0-dirty-20210225.203231   5bccc7b5c3b9        397MB\r\ndocker-orchagent              latest                           704bb0e1843e        427MB\r\ndocker-orchagent              master.0-dirty-20210225.203231   704bb0e1843e        427MB\r\ndocker-dhcp-relay             latest                           7033e89cb01f        404MB\r\ndocker-dhcp-relay             master.0-dirty-20210225.203231   7033e89cb01f        404MB\r\ndocker-sonic-telemetry        latest                           04f550b9a1f1        487MB\r\ndocker-sonic-telemetry        master.0-dirty-20210225.203231   04f550b9a1f1        487MB\r\ndocker-sonic-mgmt-framework   latest                           66a24bffabf4        616MB\r\ndocker-sonic-mgmt-framework   master.0-dirty-20210225.203231   66a24bffabf4        616MB\r\ndocker-fpm-frr                latest                           d71c5fa70100        426MB\r\ndocker-fpm-frr                master.0-dirty-20210225.203231   d71c5fa70100        426MB\r\ndocker-sflow                  latest                           359186926960        409MB\r\ndocker-sflow                  master.0-dirty-20210225.203231   359186926960        409MB\r\n```\r\n",
+  "comments": [
+    {
+      "author": "anshuv-mfst",
+      "createdAt": "2021-03-03T16:12:55Z",
+      "body": "@venkatmahalingam - could you please look into the issue, thanks. \r\n"
+    },
+    {
+      "author": "venkatmahalingam",
+      "createdAt": "2021-03-03T17:03:03Z",
+      "body": "@jhujhiti HLD is pending to merge because of the BGP/route-map schema dependent YANG models are in review, will fix the table names.\r\n\r\nWe should use IPv4 & IPv6 values, will create the PR with the fixes, meanwhile, please use the following fixes.\r\n\r\n**Please change ipv4 -> IPv4 and ipv6 -> IPv6** \r\n\r\nsonic-buildimage/src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.route_map.j2\r\nLine 28 in a171e6c\r\n {% set ip_str = {'ipv4':'ip', 'ipv6':'ipv6' } %} \r\n\r\n**Also, use mode as \"IPv4\" instead of \"ipv4\"**\r\n\r\n127.0.0.1:6379[4]> hgetall PREFIX_SET|slash32\r\n1) \"mode\"\r\n2) \"IPv4\"\r\n\r\n"
+    },
+    {
+      "author": "jhujhiti",
+      "createdAt": "2021-03-03T17:33:57Z",
+      "body": "Since the HLD is still in a PR, the roadmap link ought to at least be updated. https://github.com/Azure/SONiC/wiki/Sonic-Roadmap-Planning links to an outdated document which, among other things, doesn't mention the need to enable the entire feature with the `frr_mgmt_framework_config` flag."
+    },
+    {
+      "author": "venkatmahalingam",
+      "createdAt": "2021-03-03T20:47:08Z",
+      "body": "HLD is expected to be merged before the next release, will update the HLD soon."
+    },
+    {
+      "author": "venkatmahalingam",
+      "createdAt": "2021-04-21T22:31:49Z",
+      "body": "The HLD has merged already, @jhujhiti hope you got a chance to verify this issue with the suggested change, please confirm."
+    },
+    {
+      "author": "jhujhiti",
+      "createdAt": "2021-04-22T22:10:56Z",
+      "body": "Oh -- yes the template change works. I'd already applied that when I opened the issue.\r\n\r\nI see that the HLD is on master, but https://github.com/Azure/SONiC/wiki/Sonic-Roadmap-Planning still links to an outdated version of the HLD."
+    },
+    {
+      "author": "venkatmahalingam",
+      "createdAt": "2021-04-22T22:38:10Z",
+      "body": "> Oh -- yes the template change works. I'd already applied that when I opened the issue.\r\n> \r\n> I see that the HLD is on master, but https://github.com/Azure/SONiC/wiki/Sonic-Roadmap-Planning still links to an outdated version of the HLD.\r\n\r\nSure, we will fix to point to https://github.com/Azure/SONiC/blob/master/doc/mgmt/SONiC_Design_Doc_Unified_FRR_Mgmt_Interface.md instead of a specific commit."
+    },
+    {
+      "author": "bluecmd",
+      "createdAt": "2021-08-12T21:13:50Z",
+      "body": "+1. I hit this issue with 202012 today. I was trying to understand how the templates were created to allow me to reverse engineer how to write the `PREFIX_SET` with a `ROUTE_MAP` - glad I found this issue before spending too much time on it.\r\n\r\nDo you have an estimate when this can be fixed and backported to 202012?\r\n\r\nI created https://github.com/Azure/sonic-buildimage/pull/8454 to try to help along."
+    },
+    {
+      "author": "bluecmd",
+      "createdAt": "2021-08-13T23:15:57Z",
+      "body": "I have verified the fix with the following configuration snippet:\r\n\r\n```json\r\n{\r\n\t\"ROUTE_MAP\": {\r\n\t\t\"ALLOW-OUT|1\": {\r\n\t\t\t\"route_operation\": \"permit\",\r\n\t\t\t\"match_prefix_set\": \"LOCAL-NETS\"\r\n\t\t}\r\n\t},\r\n\t\"PREFIX_SET\": {\r\n\t\t\"LOCAL-NETS\": {\r\n\t\t\t\"mode\": \"IPv6\"\r\n\t\t}\r\n\t},\r\n\t\"PREFIX\": {\r\n\t\t\"LOCAL-NETS|2a10:11c0::/64|exact\": {}\r\n\t}\r\n}\r\n```\r\n\r\nIt does not seem to work with online configuration through frrcfgd but running `systemctl restart bgp` causes the objects to show up, which is good enough for me for now.\r\n\r\nThe only part that did show up during \"online\" apply was this:\r\n```\r\nroute-map ALLOW-OUT permit 1\r\n match ipv6 address prefix-list LOCAL-NETS\r\n```"
+    },
+    {
+      "author": "venkatmahalingam",
+      "createdAt": "2021-08-13T23:20:31Z",
+      "body": "It does not seem to work with online configuration through frrcfgd\r\n\r\n>> Did you use \"config load with above configs\" or what method did you use for loading the config? please share the steps."
+    },
+    {
+      "author": "bluecmd",
+      "createdAt": "2021-08-13T23:23:36Z",
+      "body": "Yep! I used `config load bgp.json` where `bgp.json` contained the snippet I shared."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 8454,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/8454",
+      "title": "Fix constant casing for prefix-list mode",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-08-13T06:34:27Z",
+      "createdAt": "2021-08-12T21:19:05Z",
+      "author": "bluecmd",
+      "body": "This change makes the template match PREFIX_SET and the documentation.\r\n\r\nFix #6943.\r\n\r\nSigned-off-by: Christian Svensson <blue@cmd.nu>\r\n\r\n#### Why I did it\r\n\r\nSee #6943.\r\n\r\n#### How I did it\r\n\r\nI updated the cases in the template as suggested in https://github.com/Azure/sonic-buildimage/issues/6943#issuecomment-789884878.\r\n\r\n#### How to verify it\r\n\r\nApply the patch and follow the repro in #6943.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [x] 202012\r\n- [x] 202106\r\n\r\nWhy: This is a breaking issue for a quite critical feature in BGP outside datacenter use.\r\n\r\n#### Description for the changelog\r\n\r\nfrr: Fix mode case for prefix lists.\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n![image](https://user-images.githubusercontent.com/149442/129271409-b9dc6344-96d0-4134-bfc3-224c4ef7969b.png)\r\n",
+      "files": [
+        {
+          "path": "src/sonic-frr-mgmt-framework/templates/bgpd/bgpd.conf.db.route_map.j2",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": []
+    }
+  ]
+}

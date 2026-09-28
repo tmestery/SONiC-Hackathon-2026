@@ -1,0 +1,61 @@
+{
+  "number": 25528,
+  "title": "docker-restapi-sidecar.gz rebuilt on every build due to .PHONY dependency",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25528",
+  "createdAt": "2026-02-16T07:19:00Z",
+  "closedAt": "2026-02-24T16:57:40Z",
+  "author": "securely1g",
+  "labels": [],
+  "assignees": [
+    "lihuay",
+    "qiluo-msft",
+    "Copilot"
+  ],
+  "milestone": null,
+  "body": "## Description\n`docker-restapi-sidecar.gz` is rebuilt on every `make all` invocation even when no source files have changed. This wastes build time and resources.\n\n## Root Cause\nIn `rules/docker-restapi-sidecar.mk` line 50:\n```makefile\n.PHONY: docker-restapi-sidecar-ut\ndocker-restapi-sidecar-ut: $(PYTHON_WHEELS_PATH)/sonic_py_common-1.0-py3-none-any.whl-install\n\t@echo \"Running unit tests for systemd_stub.py...\"\n\t@PYTHONPATH=dockers/docker-restapi-sidecar \\\n\t\tpython3 -m pytest -q dockers/docker-restapi-sidecar/cli-plugin-tests\n\ntarget/docker-restapi-sidecar.gz: docker-restapi-sidecar-ut\n```\n\nThe `.PHONY: docker-restapi-sidecar-ut` declaration means the target has no actual file artifact. Make treats phony targets as always out-of-date, so `docker-restapi-sidecar.gz` always rebuilds as a side effect.\n\n## Impact\n- Docker image rebuilds unnecessarily on every `make all` call\n- Wastes 1-2 minutes per build cycle\n- Affects all stages (bookworm, trixie, etc.)\n\n## Solution Options\n1. **Create a stamp file:** Generate `target/.docker-restapi-sidecar-ut.done` when tests pass, use that as dependency instead of .PHONY target\n2. **Conditional rebuild:** Only rebuild if source files in `dockers/docker-restapi-sidecar/` changed\n3. **Separate test target:** Make unit tests a separate target, not a build prerequisite\n\n## Environment\n- Platform: VS\n- All BLDENV stages (bookworm, trixie, etc.)\n- Arch: amd64\n\n## Reproduction\n```bash\nmake SONIC_BUILD_JOBS=4 all\n# Observe docker-restapi-sidecar.gz rebuilds\nmake SONIC_BUILD_JOBS=4 all\n# It rebuilds again even though nothing changed\n```\n",
+  "comments": [
+    {
+      "author": "lguohan",
+      "createdAt": "2026-02-16T07:19:54Z",
+      "body": "@qiluo-msft , can you check why?"
+    },
+    {
+      "author": "nate-nexthop",
+      "createdAt": "2026-02-16T10:57:55Z",
+      "body": "This is fixed by https://github.com/sonic-net/sonic-buildimage/pull/25417 , already approved."
+    },
+    {
+      "author": "rustiqly",
+      "createdAt": "2026-02-24T16:57:39Z",
+      "body": "Fixed by #25417 (merged)."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25647,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25647",
+      "title": "Fix: Remove .PHONY dependency from docker-restapi-sidecar.mk to prevent unconditional rebuilds",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-02-24T16:56:03Z",
+      "author": "copilot-swe-agent",
+      "body": "`docker-restapi-sidecar.gz` was rebuilding on every `make all` because `target/docker-restapi-sidecar.gz` depended on a `.PHONY` target \u2014 Make always treats phony targets as stale, triggering unconditional downstream rebuilds.\n\n#### Why I did it\n\nRemoved the `.PHONY: docker-restapi-sidecar-ut` target and its dependency on `target/docker-restapi-sidecar.gz`. The unit tests in `cli-plugin-tests/` are already run automatically by the existing docker UT schema in `slave.mk`:\n\n```makefile\n# slave.mk line 1239 - runs automatically for any docker with cli-plugin-tests/\nif [ -d $($*.gz_PATH)/cli-plugin-tests/ ] && [ ! \"$(BUILD_SKIP_TEST)\" = \"y\" ]; then\n    pushd $($*.gz_PATH)/cli-plugin-tests\n    PYTHONPATH=$(shell realpath $($*.gz_PATH)):${PYTHONPATH} pytest-3 -v\n    popd\nfi\n```\n\nNo test coverage is lost \u2014 tests run during the docker build when the image is actually rebuilt.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nRemoved the following from `rules/docker-restapi-sidecar.mk`:\n- `.PHONY: docker-restapi-sidecar-ut` declaration\n- `docker-restapi-sidecar-ut` recipe\n- `target/docker-restapi-sidecar.gz: docker-restapi-sidecar-ut` dependency\n\n#### How to verify it\n\n```bash\nmake SONIC_BUILD_JOBS=4 target/docker-restapi-sidecar.gz\n# First build completes normally\n\nmake SONIC_BUILD_JOBS=4 target/docker-restapi-sidecar.gz\n# Second invocation skips rebuild (nothing changed)\n```\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n#### Tested branch (Please provide the tested image version)\n\n- [ ] <!-- image version 1 -->\n- [ ] <!-- image version 2 -->\n\n#### Description for the changelog\n\nFix unconditional rebuild of docker-restapi-sidecar.gz caused by .PHONY dependency; tests now run via slave.mk docker UT schema.\n\n#### Link to config_db schema for YANG module changes\n\nN/A\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n<!-- START COPILOT ORIGINAL PROMPT -->\n\n\n\n<details>\n\n<summary>Original prompt</summary>\n\n> \n> ----\n> \n> *This section details on the original issue you should resolve*\n> \n> <issue_title>docker-restapi-sidecar.gz rebuilt on every build due to .PHONY dependency</issue_title>\n> <issue_description>## Description\n> `docker-restapi-sidecar.gz` is rebuilt on every `make all` invocation even when no source files have changed. This wastes build time and resources.\n> \n> ## Root Cause\n> In `rules/docker-restapi-sidecar.mk` line 50:\n> ```makefile\n> .PHONY: docker-restapi-sidecar-ut\n> docker-restapi-sidecar-ut: $(PYTHON_WHEELS_PATH)/sonic_py_common-1.0-py3-none-any.whl-install\n> \t@echo \"Running unit tests for systemd_stub.py...\"\n> \t@PYTHONPATH=dockers/docker-restapi-sidecar \\\n> \t\tpython3 -m pytest -q dockers/docker-restapi-sidecar/cli-plugin-tests\n> \n> target/docker-restapi-sidecar.gz: docker-restapi-sidecar-ut\n> ```\n> \n> The `.PHONY: docker-restapi-sidecar-ut` declaration means the target has no actual file artifact. Make treats phony targets as always out-of-date, so `docker-restapi-sidecar.gz` always rebuilds as a side effect.\n> \n> ## Impact\n> - Docker image rebuilds unnecessarily on every `make all` call\n> - Wastes 1-2 minutes per build cycle\n> - Affects all stages (bookworm, trixie, etc.)\n> \n> ## Solution Options\n> 1. **Create a stamp file:** Generate `target/.docker-restapi-sidecar-ut.done` when tests pass, use that as dependency instead of .PHONY target\n> 2. **Conditional rebuild:** Only rebuild if source files in `dockers/docker-restapi-sidecar/` changed\n> 3. **Separate test target:** Make unit tests a separate target, not a build prerequisite\n> \n> ## Environment\n> - Platform: VS\n> - All BLDENV stages (bookworm, trixie, etc.)\n> - Arch: amd64\n> \n> ## Reproduction\n> ```bash\n> make SONIC_BUILD_JOBS=4 all\n> # Observe docker-restapi-sidecar.gz rebuilds\n> make SONIC_BUILD_JOBS=4 all\n> # It rebuilds again even though nothing changed\n> ```\n> </issue_description>\n> \n> ## Comments on the Issue (you are @copilot in this section)\n> \n> <comments>\n> <comment_new><author>@lguohan</author><body>\n> @qiluo-msft , can you check why?</body></comment_new>\n> </comments>\n> \n\n\n</details>\n\n\n\n<!-- START COPILOT CODING AGENT SUFFIX -->\n\n- Fixes sonic-net/sonic-buildimage#25528\n\n<!-- START COPILOT CODING AGENT TIPS -->\n---\n\n\u2728 Let Copilot coding agent [set things up for you](https://github.com/sonic-net/sonic-buildimage/issues/new?title=\u2728+Set+up+Copilot+instructions&body=Configure%20instructions%20for%20this%20repository%20as%20documented%20in%20%5BBest%20practices%20for%20Copilot%20coding%20agent%20in%20your%20repository%5D%28https://gh.io/copilot-coding-agent-tips%29%2E%0A%0A%3COnboard%20this%20repo%3E&assignees=copilot) \u2014 coding agent works faster and does higher quality work when set up for your repo.\n",
+      "files": [],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-24T16:56:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-24T16:56:19Z",
+          "body": "<samp>\nAzure Pipelines could not run because the pipeline triggers exclude this branch/path.<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

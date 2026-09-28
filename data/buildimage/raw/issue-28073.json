@@ -1,0 +1,74 @@
+{
+  "number": 28073,
+  "title": "Bug: [Err Log] [SmartSwitch] [HA] ERR swss#orchagent: :- addHaScopeEntry: HA Set entry does not exist for haset0_0",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28073",
+  "createdAt": "2026-06-24T15:55:37Z",
+  "closedAt": "2026-07-28T22:05:00Z",
+  "author": "vivekkarri",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "smartswitch"
+  ],
+  "assignees": [
+    "BYGX-wcr"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nDuring `test_ha_dpu_failure[Standby DPU Fail-Standby Traffic]`, after standby DPU reboot/restart, `orchagent` receives `DASH_HA_SCOPE_TABLE|haset0_0` entries without a preceding `DASH_HA_SET_TABLE|haset0_0` entry. Since the HA set is not present in `DashHaOrch::m_ha_set_entries`, `addHaScopeEntry()` logs repeated errors.\n\n### Steps to Reproduce\n\nRun:\n\npython3 -m pytest ha/test_ha_dpu_power_down.py \n\nRelevant test case:\n\ntest_ha_dpu_failure[Standby DPU Fail-Standby Traffic]\n\n### Actual Behavior and Expected Behavior\n\nActual: after standby DPU restart, `swss.rec` shows `DASH_HA_SCOPE_TABLE|haset0_0` issued from HaMgrD without `DASH_HA_SET_TABLE|haset0_0`, causing repeated `orchagent` errors.\n\nExpected: HA set config should be given before HA scope config\n\n### Relevant log output\n\n```\n2026 Jun 23 15:17:56 smartswitch-dpu-0 ERR swss#orchagent: :- addHaScopeEntry: HA Set entry does not exist for haset0_0\n2026 Jun 23 15:18:46 smartswitch-dpu-0 WARNING swss#orchagent: :- convertKfvToHaScopePb: Unknown field ha_term in HA Scope entry\n2026 Jun 23 15:18:46 smartswitch-dpu-0 ERR swss#orchagent: :- addHaScopeEntry: HA Set entry does not exist for haset0_0\n```\n\nswss.rec evidence:\n\n```\n2026-06-23.15:17:47.077819|recording started\n2026-06-23.15:17:56.404692|DASH_HA_SCOPE_TABLE|haset0_0|SET|version:1|ha_set_id:haset0_0|ha_role:standalone|ha_term:3\n2026-06-23.15:17:56.404723|DASH_HA_SCOPE_TABLE|haset0_0|SET|ha_role:dead|version:1|ha_term:3|ha_set_id:haset0_0\n```\n\nNo post-reboot `DASH_HA_SET_TABLE|haset0_0|SET` appears before these scope entries.\n\n### Output of `show version`, `show techsupport`\n\nVersion: master, 202605\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "vivekkarri",
+      "createdAt": "2026-06-24T15:59:47Z",
+      "body": "@zjswhhh, @BYGX-wcr  Please take a look"
+    },
+    {
+      "author": "BYGX-wcr",
+      "createdAt": "2026-06-26T20:20:54Z",
+      "body": "After the DPU is power down, it lost all HA entries in DPU_APPL_DB. However, hamgrd is unaware of this (because of the limitations of current monitoring system). When hamgrd tried to shut down the HA scope at the end of the test, it only programs a HA scope entry instead of reprogramming the HA set entry."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 210,
+      "repository": "sonic-net/sonic-dash-ha",
+      "url": "https://github.com/sonic-net/sonic-dash-ha/pull/210",
+      "title": "swss-common-bridge: replay unchanged producer updates",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-28T22:04:59Z",
+      "createdAt": "2026-07-27T21:26:36Z",
+      "author": "BYGX-wcr",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nThe producer bridge cached the last update and skipped identical requests. That cache can outlive a DPU control-plane reset, so an HA_SET entry removed from the destination DB was not restored when hamgrd replayed unchanged data. Always apply valid producer requests so replay can recover externally lost DB state. Consumer-side caching remains unchanged.\r\n\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/28073\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] New feature\r\n- [ ] Refactor / cleanup\r\n- [ ] Documentation update\r\n- [x] Test improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nA DPU control-plane reset can clear DASH_HA_SET_TABLE while swss-common-bridge remains running. Replaying the same HA_SET data previously returned \"No change in data\" without writing it, leaving the destination DB entry missing.\r\n\r\n#### How did you do it?\r\n\r\n- Removed producer-side TableCache deduplication.\r\n- Apply every valid Set or Del request to the ProducerTable.\r\n- Kept TableCache for consumer-side incremental merge and duplicate-notification filtering.\r\n- Updated duplicate and ZMQ consumer-recreation tests to require identical updates to be replayed.\r\n\r\n#### How did you verify/test it?\r\n\r\n- `cargo fmt --check --all`\r\n- `cargo build --workspace --all-features`\r\n- `cargo test -p swss-common-bridge` (9 passed)\r\n- Built the Debian runtime and debug-symbol packages.\r\n- Installed and verified the packages in dash-hadpu0 through dash-hadpu3 on two SmartSwitches.\r\n- Completed config reload on both switches and verified all eight hamgrd processes were running.\r\n\r\n#### Any platform specific information?\r\n\r\nValidated on SONiC SmartSwitch DPU containers using both Redis ProducerStateTable and ZmqProducerStateTable paths.\r\n\r\n### Documentation\r\n\r\nNo documentation change is required; this restores producer replay correctness without changing the public interface.",
+      "files": [
+        {
+          "path": "crates/swss-common-bridge/src/lib.rs",
+          "additions": 2,
+          "deletions": 24
+        },
+        {
+          "path": "crates/swss-common-bridge/src/producer.rs",
+          "additions": 27,
+          "deletions": 26
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-27T21:26:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-27T21:26:45Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-27T21:26:54Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

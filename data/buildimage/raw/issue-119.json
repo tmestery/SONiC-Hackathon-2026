@@ -1,0 +1,294 @@
+{
+  "number": 119,
+  "title": "dpkg-query: error: failed to open package info file `/var/lib/dpkg/updates/0001' for reading: No such file or directory",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/119",
+  "createdAt": "2016-12-14T17:14:03Z",
+  "closedAt": "2022-01-19T16:07:32Z",
+  "author": "lguohan",
+  "labels": [
+    "Bug :bug:",
+    "Build",
+    "Triaged"
+  ],
+  "assignees": [
+    "yxieca"
+  ],
+  "milestone": null,
+  "body": "dh_perl -plibnl-3-200-udeb \r\ndh_shlibdeps -plibnl-3-200-udeb    \r\ndpkg-query: error: failed to open package info file `/var/lib/dpkg/updates/0001' for reading: No such file or directory\r\ndpkg-shlibdeps: error: dpkg-query --control-path libc6:amd64 shlibs gave error exit status 2\r\ndh_shlibdeps: dpkg-shlibdeps -Tdebian/libnl-3-200-udeb.substvars -tudeb debian/libnl-3-200-udeb/lib/libnl-3.so.200.22.0 returned exit code 2\r\n/usr/share/cdbs/1/rules/debhelper.mk:277: recipe for target 'binary-predeb-IMPL/libnl-3-200-udeb' failed\r\nmake[2]: *** [binary-predeb-IMPL/libnl-3-200-udeb] Error 2\r\nmake[2]: Leaving directory '/var/build/workspace/mellanox/buildimage-mlnx-all-pr/src/libnl3/libnl3'",
+  "comments": [
+    {
+      "author": "lguohan",
+      "createdAt": "2017-03-07T01:31:23Z",
+      "body": "https://sonic-jenkins.westus.cloudapp.azure.com/job/cavium/job/buildimage-cavm-all-pr/333/console"
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2019-03-19T21:38:48Z",
+      "body": "I wasn't able to repeat this issue. I have been always building with multiple jobs. Will take a look at the make file to see if there is anything obvious."
+    },
+    {
+      "author": "TencentSwitchGroup",
+      "createdAt": "2019-07-18T02:02:36Z",
+      "body": "I got the same issue when building iproute2 from source.\r\nWhat's the reason of this issue? Why `[build]: set build jobs to 1 by default #383` can fix it?\r\n\r\n```\r\n1119    dh_strip\r\n1120    dh_makeshlibs\r\n1121    debian/rules override_dh_shlibdeps\r\n1122 make[3]: Entering directory '/sonic/src/iproute2/iproute2-4.9.0'\r\n1123 dh_shlibdeps -a -Xq_atm.so -Xm_xt.so -Xm_ipt.so\r\n1124 dpkg-query: error: failed to open package info file `/var/lib/dpkg/updates/0001' for reading: No such file or directory\r\n1125 dpkg-shlibdeps: error: dpkg-query --control-path libelf1:amd64 symbols gave error exit status 2\r\n1126 dh_shlibdeps: dpkg-shlibdeps -Tdebian/iproute2.substvars debian/iproute2/usr/bin/nstat debian/iproute2/usr/bin/lnstat debian/iproute2/usr/sbin/arpd debian/iproute2/usr/sbin/genl debian/iproute2/bin/ss debian/iproute2/bin/i     p debian/iproute2/sbin/tc debian/iproute2/sbin/rtacct debian/iproute2/sbin/bridge debian/iproute2/sbin/rtmon debian/iproute2/sbin/devlink debian/iproute2/sbin/tipc returned exit code 2\r\n1127 debian/rules:23: recipe for target 'override_dh_shlibdeps' failed\r\n1128 make[3]: *** [override_dh_shlibdeps] Error 2\r\n1129 make[3]: Leaving directory '/sonic/src/iproute2/iproute2-4.9.0'\r\n1130 debian/rules:15: recipe for target 'binary' failed\r\n1131 make[2]: *** [binary] Error 2\r\n1132 make[2]: Leaving directory '/sonic/src/iproute2/iproute2-4.9.0'\r\n1133 dpkg-buildpackage: error: fakeroot debian/rules binary gave error exit status 2\r\n1134 Makefile:11: recipe for target '/sonic/target/debs/iproute2_4.9.0-1_amd64.deb' failed\r\n1135 make[1]: *** [/sonic/target/debs/iproute2_4.9.0-1_amd64.deb] Error 2\r\n1136 make[1]: Leaving directory '/sonic/src/iproute2'                            \r\n```"
+    },
+    {
+      "author": "gpaussabrcm",
+      "createdAt": "2019-07-29T14:48:23Z",
+      "body": "We've also been seeing the same issue when building the broadcom and vs platforms. In our case, we're using:\r\nSONIC_CONFIG_BUILD_JOBS = 8\r\nSONIC_CONFIG_MAKE_JOBS = 8\r\n\r\nThe error is intermittent and occurs for different .deb packages, but is occurring more frequently as the overall build times have decreased. This seems to be a race condition within the dpkg tools, and while the name of the reported package info file varies (/var/lib/dpkg/update/0000, 0001, 0005, etc.), the subsequent dpkg-query error message for us is always the same (libc6:amd64 symbols):\r\n\r\n`dpkg-shlibdeps: error: dpkg-query --control-path libc6:amd64 symbols gave error exit status 2`\r\n\r\nAt first, we thought this had something to do with the slave.mk dpkg_lock possibly not working in the SONIC_INSTALL_TARGETS rule, but the .deb packages where this is occurring are being built in the SONIC_MAKE_DEBS or SONIC_DPKG_DEBS rules where there is no external locking being used. Also, while we do share build servers among many developers and Jenkins jobs, we have seen this failure occur with a single SONiC build being run on a server, so the problem appears to be caused by building multiple .deb targets within a SONiC build (i.e. within a user's build container), rather than from multiple users building on the same server.\r\n\r\nA web search turned up this Debian bug from 2016 [#848555](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=848555) that seems like the same thing we're seeing. The status messages indicate it was combined (\"merged\") into an older existing bug [#423866](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=423866) that was discovered in 2007 in the dpkg utility, but has never been fixed in Debian (Severity: wishlist). Within the SONiC build container, the dpkg version is 1.18.25 (amd64).\r\n\r\nReverting to non-parallel builds is not an option for us, since we're trying to drive down SONiC build times to enable a workable CI process internally. Whereas this error used to occur once in a great while, it's now happening several times per day and has reached the point where it can no longer be waved off as just a fluke."
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2019-09-17T01:15:09Z",
+      "body": "Looks like there are 2 proposed ways to fix this issue: https://ubuntuforums.org/showthread.php?t=872210"
+    },
+    {
+      "author": "gpaussabrcm",
+      "createdAt": "2019-09-17T12:36:08Z",
+      "body": "> \r\n> \r\n> Looks like there are 2 proposed ways to fix this issue: https://ubuntuforums.org/showthread.php?t=872210\r\n\r\nLooks like that's for a different issue related to /var/lib/dpkg/available, not /var/lib/dpkg/updates/nnnn. Also, the issue seen during a SONiC build occurs during the creation of any of the .deb files (i.e. executing debian/rules), therefore modifying the dpkg installation on a shared build host during the build is not the solution for this case.\r\n\r\nWe're still seeing this particular error too often for comfort and do not know of a way to fix it short of serializing the .deb builds, which is not an option for us. We've added some external tooling to automatically retry (one time) a SONiC build that fails, in hopes that if this dpkg error occurred, it won't occur the second time around. Far from ideal, but it helps make our CI process a little more resilient to these transient errors.\r\n\r\nWe've considered upgrading the dpkg version on our Ubuntu 16.04 build servers, but without a known fix identified by the dpkg maintainers, there's no guarantee this will help."
+    },
+    {
+      "author": "jleveque",
+      "createdAt": "2019-09-17T18:54:42Z",
+      "body": "@gpaussabrcm: We have occasionally seen both `/var/lib/dpkg/available/nnnn` and `/var/lib/dpkg/updates/nnnn` error messages. We believe they may both be symptoms of the same issue."
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-01-23T00:29:44Z",
+      "body": "still seeing https://dev.azure.com/sonicswitch/be1b070f-be15-4154-aade-b1d3bfb17054/_apis/build/builds/1790/logs/33\r\n\r\nhowever, it seems admindir is not changed, not sure if it is dpkg-buildpackage specific."
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-01-26T10:15:39Z",
+      "body": "https://dev.azure.com/sonicswitch/be1b070f-be15-4154-aade-b1d3bfb17054/_apis/build/builds/1964/logs/12"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2021-01-26T11:16:36Z",
+      "body": "looks like dpkg-buildpackage is calling dpkg-shlibdeps, and the admindir is not proprogated to the sub-process."
+    },
+    {
+      "author": "zhangyanzhao",
+      "createdAt": "2022-01-19T16:06:13Z",
+      "body": "Is this issue fixed? @lguohan "
+    },
+    {
+      "author": "ixodie",
+      "createdAt": "2022-04-29T00:36:18Z",
+      "body": "Getting this when building vs:\r\nslave.mk:217: platform/vc/rules.mk: No such file or directory\r\n\r\nAny ideas?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 6408,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/6408",
+      "title": "[build]: fix dpkg admindir corruption issue in parallel build",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-01-12T14:03:12Z",
+      "createdAt": "2021-01-09T23:00:26Z",
+      "author": "lguohan",
+      "body": "\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n\"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\nPlease provide the following information:\r\n-->\r\n\r\n**- Why I did it**\r\nFix #119\r\n\r\nwhen parallel build is enable, multiple dpkg-buildpackage\r\ninstances are running at the same. /var/lib/dpkg is shared\r\nby all instances and the /var/lib/dpkg/updates could be corrupted\r\nand cause the build failure.\r\n\r\n**- How I did it**\r\nthe fix is to use overlay fs to mount separate /var/lib/dpkg\r\nfor each dpkg-buildpackage instance so that they are not affecting\r\neach other.\r\n\r\n**- How to verify it**\r\ncheck the build\r\n\r\n**- Which release branch to backport (provide reason below if selected)**\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [x] 202012\r\n\r\n**- Description for the changelog**\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n",
+      "files": [
+        {
+          "path": "platform/broadcom/sonic-platform-modules-brcm-xlr-gts/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "rules/functions",
+          "additions": 12,
+          "deletions": 0
+        },
+        {
+          "path": "slave.mk",
+          "additions": 6,
+          "deletions": 2
+        },
+        {
+          "path": "src/bash/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/hiredis/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/ifupdown2/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/initramfs-tools/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/iproute2/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/iptables/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/isc-dhcp/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/kdump-tools/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/libnl3/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/libteam/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/libyang1/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/lldpd/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/lm-sensors/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/monit/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/mpdecimal/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/ntp/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/openssh/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/python3/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/redis/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sflow/hsflowd/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sflow/psample/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sflow/sflowtool/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/smartmontools/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/snmpd/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/socat/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-device-data/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-frr/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-host-service/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/swig/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/systemd-sonic-generator/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/tacacs/nss/Makefile",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/tacacs/pam/Makefile",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "src/thrift/Makefile",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/wpasupplicant/Makefile",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2021-01-09T23:56:52Z",
+          "body": "what do you mean? the pr is doing this"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2021-01-10T18:21:39Z",
+          "body": "kvmtest passed for azure pipeline."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,164 @@
+{
+  "number": 24527,
+  "title": "Bug: [Trixie] pyangbind==0.8.2 incompatibility with Debian 13 python 3.13",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24527",
+  "createdAt": "2025-11-14T19:22:38Z",
+  "closedAt": "2026-03-02T07:05:22Z",
+  "author": "tirupatihemanth",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [
+    "bhouse-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWe install pyangbind==0.8.2 which has incompatibility with Debian 13 python 3.13 and needs to be updated. \n\nhttps://github.com/sonic-net/sonic-buildimage/blob/5844ab7e2ba0dff6d9a85c3f35d13c0e1b0ea9fd/files/build_templates/sonic_debian_extension.j2#L205\n\n```\n# For sonic-config-engine Python 3 package\n# Install pyangbind here, outside sonic-config-engine dependencies, as pyangbind causes enum34 to be installed.\n# Then immediately uninstall enum34, as enum34 should not be installed for Python >= 3.4, as it causes a\n# conflict with the new 'enum' module in the standard library\n# https://github.com/robshakir/pyangbind/issues/232\nsudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install pyangbind==0.8.2\nsudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 uninstall -y enum34\n\n```\nPlease see the warnings below. This can be fixed by converting these strings to raw python strings r\"\". We need an appropriate pyangbind version that has this.\n\n\n\n### Steps to Reproduce\n\n`show acl table` will produce\n\n```\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:185: SyntaxWarning: invalid escape sequence '\\g'\n  current_restricted_class_type = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", six.text_type(base_type))\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:227: SyntaxWarning: invalid escape sequence '\\-'\n  range_regex = regex.compile(\"(?P<low>\\-?[0-9\\.]+|min)([ ]+)?\\.\\.([ ]+)?\" + \"(?P<high>(\\-?[0-9\\.]+|max))\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:227: SyntaxWarning: invalid escape sequence '\\-'\n  range_regex = regex.compile(\"(?P<low>\\-?[0-9\\.]+|min)([ ]+)?\\.\\.([ ]+)?\" + \"(?P<high>(\\-?[0-9\\.]+|max))\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:228: SyntaxWarning: invalid escape sequence '\\-'\n  range_single_value_regex = regex.compile(\"(?P<value>\\-?[0-9\\.]+)\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:241: SyntaxWarning: invalid escape sequence '\\$'\n  tmp_pattern = tmp_pattern.replace(\"$\", \"\\$\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:255: SyntaxWarning: invalid escape sequence '\\g'\n  low, high = range_regex.sub(\"\\g<low>,\\g<high>\", range_spec).split(\",\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:264: SyntaxWarning: invalid escape sequence '\\g'\n  eqval = range_single_value_regex.sub(\"\\g<value>\", range_spec)\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:1030: SyntaxWarning: invalid escape sequence '\\g'\n  _pybind_base_class = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", str(base_type))\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:1296: SyntaxWarning: invalid escape sequence '\\g'\n  self._type = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", str(get_method()._base_type))\nName                   Type    Binding      Description            Stage    Status\n---------------------  ------  -----------  ---------------------  -------  --------\nDATA_EGRESS_L3TEST     L3      Ethernet124  DATA_EGRESS_L3TEST     egress   Active\nDATA_EGRESS_L3V6TEST   L3V6    Ethernet124  DATA_EGRESS_L3V6TEST   egress   Active\nDATA_INGRESS_L3TEST    L3      Ethernet124  DATA_INGRESS_L3TEST    ingress  Active\nDATA_INGRESS_L3V6TEST  L3V6    Ethernet124  DATA_INGRESS_L3V6TEST  ingress  Active\n\n```\n\nBefore this be sure to configure acl with\n\n```\n   15  sudo config acl add table DATA_INGRESS_L3TEST L3 --description= --stage=ingress --ports=Ethernet124\n   17  sudo config acl add table DATA_EGRESS_L3TEST L3 --description= --stage=egress --ports=Ethernet124\n   19  sudo config acl add table DATA_INGRESS_L3V6TEST L3V6 --description= --stage=ingress --ports=Ethernet124\n   21  sudo config acl add table DATA_EGRESS_L3V6TEST L3V6 --description= --stage=egress --ports=Ethernet124\nsonic-cfggen -j acl_rules_DATA_EGRESS_L3V6TEST.json --write-to-db\n```\n\nthe line 185 in /usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py is\n\n```\n current_restricted_class_type = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", six.text_type(base_type))\n```\nThis needs to be \n```\n current_restricted_class_type = regex.sub(r\"<(type|class) '(?P<class>.*)'>\", r\"\\g<class>\", six.text_type(base_type))\n```\n\n### Actual Behavior and Expected Behavior\n\nExpected behavior: No warnings should be seen.\nActual behavior: We see python3.13 warnings\n",
+  "comments": [
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-01-07T16:52:27Z",
+      "body": "Same as #24772"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-01-27T19:12:29Z",
+      "body": "The same issue can also be seen during the output of show mirror_session\n```\nroot@sonic:/home/admin# show mirror_session\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:185: SyntaxWarning: invalid escape sequence '\\g'\n  current_restricted_class_type = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", six.text_type(base_type))\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:227: SyntaxWarning: invalid escape sequence '\\-'\n  range_regex = regex.compile(\"(?P<low>\\-?[0-9\\.]+|min)([ ]+)?\\.\\.([ ]+)?\" + \"(?P<high>(\\-?[0-9\\.]+|max))\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:227: SyntaxWarning: invalid escape sequence '\\-'\n  range_regex = regex.compile(\"(?P<low>\\-?[0-9\\.]+|min)([ ]+)?\\.\\.([ ]+)?\" + \"(?P<high>(\\-?[0-9\\.]+|max))\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:228: SyntaxWarning: invalid escape sequence '\\-'\n  range_single_value_regex = regex.compile(\"(?P<value>\\-?[0-9\\.]+)\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:241: SyntaxWarning: invalid escape sequence '\\$'\n  tmp_pattern = tmp_pattern.replace(\"$\", \"\\$\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:255: SyntaxWarning: invalid escape sequence '\\g'\n  low, high = range_regex.sub(\"\\g<low>,\\g<high>\", range_spec).split(\",\")\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:264: SyntaxWarning: invalid escape sequence '\\g'\n  eqval = range_single_value_regex.sub(\"\\g<value>\", range_spec)\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:1030: SyntaxWarning: invalid escape sequence '\\g'\n  _pybind_base_class = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", str(base_type))\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:1296: SyntaxWarning: invalid escape sequence '\\g'\n  self._type = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", str(get_method()._base_type))\nERSPAN Sessions\nName    Status    SRC IP    DST IP    GRE    DSCP    TTL    Queue    Policer    Monitor Port    SRC Port    Direction\n------  --------  --------  --------  -----  ------  -----  -------  ---------  --------------  ----------  -----------\n\nSPAN Sessions\nName    Status    DST Port    SRC Port    Direction    Queue    Policer\n------  --------  ----------  ----------  -----------  -------  ---------\n```"
+    },
+    {
+      "author": "tirupatihemanth",
+      "createdAt": "2026-02-05T01:10:23Z",
+      "body": "Verified fixed with https://github.com/sonic-net/sonic-buildimage/pull/25324\nNo warnings were seen and verified that pyangbind is upgraded\n\n```\nroot@sonic:/home/admin# pip3 list | grep enum\nenum34                     1.1.10\nroot@sonic:/home/admin# pip3 list | grep pyangbind\npyangbind                  0.8.7\nroot@sonic:/home/admin# show acl rule\nsTable    Rule    Priority    Action    Match    Status\n-------  ------  ----------  --------  -------  --------\nroot@sonic:/home/admin# show mirror_session\nERSPAN Sessions\nName    Status    SRC IP    DST IP    GRE    DSCP    TTL    Queue    Policer    Monitor Port    SRC Port    Direction\n------  --------  --------  --------  -----  ------  -----  -------  ---------  --------------  ----------  -----------\n\nSPAN Sessions\nName    Status    DST Port    SRC Port    Direction    Queue    Policer\n------  --------  ----------  ----------  -----------  -------  ---------\nroot@mtvr-moose-04:/home/admin#\n\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25324,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25324",
+      "title": "Upgrade pyangbind to avoid SyntaxWarning",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-02T07:05:21Z",
+      "createdAt": "2026-02-03T06:58:46Z",
+      "author": "ZhaohuiS",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nfixes https://github.com/sonic-net/sonic-buildimage/issues/24527 and https://github.com/sonic-net/sonic-buildimage/issues/24772\r\nPython was upgraded to 3.13 on sonic, current `pyangbind` 0.8.2 version has `SyntaxWarning` issue with python3.13.\r\n\r\n```\r\nadmin@bjw2-can-7260-11:~$ show acl rule\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:185: SyntaxWarning: invalid escape sequence '\\g'\r\n  current_restricted_class_type = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", six.text_type(base_type))\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:227: SyntaxWarning: invalid escape sequence '\\-'\r\n  range_regex = regex.compile(\"(?P<low>\\-?[0-9\\.]+|min)([ ]+)?\\.\\.([ ]+)?\" + \"(?P<high>(\\-?[0-9\\.]+|max))\")\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:227: SyntaxWarning: invalid escape sequence '\\-'\r\n  range_regex = regex.compile(\"(?P<low>\\-?[0-9\\.]+|min)([ ]+)?\\.\\.([ ]+)?\" + \"(?P<high>(\\-?[0-9\\.]+|max))\")\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:228: SyntaxWarning: invalid escape sequence '\\-'\r\n  range_single_value_regex = regex.compile(\"(?P<value>\\-?[0-9\\.]+)\")\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:241: SyntaxWarning: invalid escape sequence '\\$'\r\n  tmp_pattern = tmp_pattern.replace(\"$\", \"\\$\")\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:255: SyntaxWarning: invalid escape sequence '\\g'\r\n  low, high = range_regex.sub(\"\\g<low>,\\g<high>\", range_spec).split(\",\")\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:264: SyntaxWarning: invalid escape sequence '\\g'\r\n  eqval = range_single_value_regex.sub(\"\\g<value>\", range_spec)\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:1030: SyntaxWarning: invalid escape sequence '\\g'\r\n  _pybind_base_class = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", str(base_type))\r\n/usr/local/lib/python3.13/dist-packages/pyangbind/lib/yangtypes.py:1296: SyntaxWarning: invalid escape sequence '\\g'\r\n  self._type = regex.sub(\"<(type|class) '(?P<class>.*)'>\", \"\\g<class>\", str(get_method()._base_type))\r\nTable    Rule    Priority    Action    Match    Status\r\n-------  ------  ----------  --------  -------  --------\r\nadmin@bjw2-can-7260-11:~$ show version\r\n\r\nSONiC Software Version: SONiC.20251110.05\r\nSONiC OS Version: 13\r\nDistribution: Debian 13.3\r\nKernel: 6.12.41+deb13-sonic-amd64\r\nBuild commit: 9a47682d2a\r\nBuild date: Sat Jan 31 01:46:23 UTC 2026\r\nBuilt by: azureuser@1fb3cba1c000003\r\nadmin@bjw2-can-7260-11:~$ pip3 list | grep pyang\r\npyang                      2.7.1\r\npyangbind                  0.8.2\r\n```\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **36625666**:\r\n\r\n#### How I did it\r\nAfter the upgrade of pyangbind, it works, the SyntaxWarning is gone.\r\nAnd the issue https://github.com/robshakir/pyangbind/issues/232 was fixed, we don't have to remove enum34.\r\n\r\nLatest versions of pyangbind are able to work with enum34 and Python >= 3.7\r\n\r\n$ pip show enum34\r\nName: enum34\r\nVersion: 1.1.10\r\nSummary: Python 3.4 Enum backported to 3.3, 3.2, 3.1, 2.7, 2.6, 2.5, and 2.4\r\nHome-page: https://bitbucket.org/stoneleaf/enum34\r\nAuthor: Ethan Furman\r\nAuthor-email: [ethan@stoneleaf.us](mailto:ethan@stoneleaf.us)\r\nLicense: BSD License\r\nRequired-by: pyangbin\r\n\r\n\r\n```\r\nadmin@bjw2-can-7260-11:~$ pip3 install --upgrade pyangbind\r\nDefaulting to user installation because normal site-packages is not writeable\r\nRequirement already satisfied: pyangbind in /usr/local/lib/python3.13/dist-packages (0.8.2)\r\nCollecting pyangbind\r\n  Downloading pyangbind-0.8.7-py3-none-any.whl.metadata (4.2 kB)\r\nRequirement already satisfied: pyang in /usr/local/lib/python3.13/dist-packages (from pyangbind) (2.7.1)\r\nRequirement already satisfied: lxml in /usr/lib/python3/dist-packages (from pyangbind) (5.4.0)\r\nRequirement already satisfied: regex in /usr/lib/python3/dist-packages (from pyangbind) (2024.11.6)\r\nCollecting enum34 (from pyangbind)\r\n  Downloading enum34-1.1.10-py3-none-any.whl.metadata (1.6 kB)\r\nDownloading pyangbind-0.8.7-py3-none-any.whl (52 kB)\r\nDownloading enum34-1.1.10-py3-none-any.whl (11 kB)\r\nInstalling collected packages: enum34, pyangbind\r\nSuccessfully installed enum34-1.1.10 pyangbind-0.8.7\r\nadmin@bjw2-can-7260-11:~$ show acl rule\r\nTable    Rule    Priority    Action    Match    Status\r\n-------  ------  ----------  --------  -------  --------\r\n```\r\n\r\n\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n```\r\nadmin@bjw2-can-7260-11:~$ pip3 install pyangbind==0.8.7\r\nDefaulting to user installation because normal site-packages is not writeable\r\nCollecting pyangbind==0.8.7\r\n  Using cached pyangbind-0.8.7-py3-none-any.whl.metadata (4.2 kB)\r\nRequirement already satisfied: pyang in /usr/local/lib/python3.13/dist-packages (from pyangbind==0.8.7) (2.7.1)\r\nRequirement already satisfied: lxml in /usr/lib/python3/dist-packages (from pyangbind==0.8.7) (5.4.0)\r\nRequirement already satisfied: regex in /usr/lib/python3/dist-packages (from pyangbind==0.8.7) (2024.11.6)\r\nCollecting enum34 (from pyangbind==0.8.7)\r\n  Using cached enum34-1.1.10-py3-none-any.whl.metadata (1.6 kB)\r\nUsing cached pyangbind-0.8.7-py3-none-any.whl (52 kB)\r\nUsing cached enum34-1.1.10-py3-none-any.whl (11 kB)\r\nInstalling collected packages: enum34, pyangbind\r\nSuccessfully installed enum34-1.1.10 pyangbind-0.8.7\r\nadmin@bjw2-can-7260-11:~$ pip3 list | grep enum\r\nenum34                     1.1.10\r\nadmin@bjw2-can-7260-11:~$ pip3 list | grep pyangbind\r\npyangbind                  0.8.7\r\nadmin@bjw2-can-7260-11:~$ show acl rule\r\nTable    Rule    Priority    Action    Match    Status\r\n-------  ------  ----------  --------  -------  --------\r\n```\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/build_templates/sonic_debian_extension.j2",
+          "additions": 2,
+          "deletions": 7
+        },
+        {
+          "path": "sonic-slave-trixie/Dockerfile.j2",
+          "additions": 3,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-03T06:58:55Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-03T06:59:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-02-03T06:59:33Z",
+          "body": "@saiarcot895  @bingwang-ms  could you please help review?"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-02-03T07:25:34Z",
+          "body": "Can you modify the description to say that this fixes #24527 and #24772?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-04T03:23:11Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-04T03:23:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-05T03:33:06Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-05T03:33:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-05T10:56:22Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-05T10:56:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-06T02:23:42Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-06T02:23:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2026-02-06T06:24:04Z",
+          "body": "@saiarcot895 I just noticed that 202511 is using trixie, do we need to update the pyangbind for bookworm? Is it better not touch bookworm?\r\n\r\n```\r\nadmin@bjw2-can-7260-2:~$ show version\r\n\r\nSONiC Software Version: SONiC.20251110.06\r\nSONiC OS Version: 13\r\nDistribution: Debian 13.3\r\nKernel: 6.12.41+deb13-sonic-amd64\r\n\r\nadmin@bjw2-can-7260-2:~$ cat /etc/os-release\r\nPRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\r\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-10T08:26:14Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-10T08:26:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T02:38:18Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T02:38:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-12T05:39:45Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-12T05:40:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-12T05:48:11Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        }
+      ]
+    }
+  ]
+}

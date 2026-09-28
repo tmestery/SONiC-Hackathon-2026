@@ -1,0 +1,158 @@
+{
+  "number": 21423,
+  "title": "[Static route] When a static route present in config_db.json is removed and config reload is done, the route still exists due to presence of kernel entry",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21423",
+  "createdAt": "2025-01-14T01:12:29Z",
+  "closedAt": "2025-06-11T23:24:49Z",
+  "author": "dgsudharsan",
+  "labels": [
+    "Triaged",
+    "Issue for 202405"
+  ],
+  "assignees": [
+    "prsunny"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nWhen the below static route present in config_db.json is removed and config reload is performed, the route still exists in system. This is because there is no flow that removes the static route from kernel. When the route is initially added, frr adds it to kernel but when config is removed and config reload is performed, no daemon clears it. \r\n\r\n```\r\n    \"STATIC_ROUTE\": {\r\n        \"default|1000::/120\": {\r\n            \"blackhole\": \"true\",\r\n            \"distance\": \"0\",\r\n            \"ifname\": \"\",\r\n            \"nexthop\": \"blackhole\",\r\n            \"nexthop-vrf\": \"\"\r\n        }\r\n    },\r\n\r\n```\r\n\r\n```\r\nshow ipv6 route\r\nCodes: K - kernel route, C - connected, S - static, R - RIP,\r\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\r\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\r\n       F - PBR, f - OpenFabric,\r\n       > - selected route, * - FIB route, q - queued route, r - rejected route\r\n\r\nS>*1000::/120 [1/0] (blackhole) 00:01:52\r\n\r\nvtysh -c \"show run\"\r\nBuilding configuration...\r\n\r\nCurrent configuration:\r\n!\r\nfrr version 8.5.4\r\nfrr defaults traditional\r\nhostname r-lionfish-07\r\nlog syslog informational\r\nlog facility local4\r\nfpm address 127.0.0.1\r\nno fpm use-next-hop-groups\r\nagentx\r\nno service integrated-vtysh-config\r\n!\r\npassword zebra\r\nenable password zebra\r\n!\r\nip nht resolve-via-default\r\n!\r\nipv6 nht resolve-via-default\r\n!\r\nend\r\n```\r\n```\r\nip -6 route show\r\nblackhole 1000::/120 dev lo proto 196 metric 20 pref medium\r\n```\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Have a configuration with static route\r\n2. Remove the route and perform config reload\r\n3. Check show ip route command\r\n\r\n#### Describe the results you received:\r\nRoute exists in the show command\r\n\r\n#### Describe the results you expected:\r\nRoute shouldn't exist\r\n\r\n#### Output of `show version`:\r\n\r\n```\r\nPresent in 202405 but appears to be a day 1 behavior\r\n```\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "kalash-nexthop",
+      "createdAt": "2025-02-04T00:19:32Z",
+      "body": "@dgsudharsan It's not clear if the route is not just removed from kernel, or if the route is still in rib (and appl_db). Can you please clarify what exact behavior are you seeing? Please also attach `show ipv6 route` (on sonic and vtysh) output after the config reload is performed and stale route is seen in kernel.\n\nI tried this on my setup, and I indeed see this random behavior. Sometimes the route is deleted from appl_db, and then also from kernel, but at times I see the stale route in appl_db and also in kernel:\n\n```\nrtr1(bash)$ sudo sonic-db-cli CONFIG_DB HGETALL \"STATIC_ROUTE|default\"\n{}\n\n\nrtr1(bash)$ sonic-db-cli APPL_DB KEYS \"ROUTE_TABLE:1000::/120\"\nROUTE_TABLE:1000::/120\nrtr1(bash)$ sonic-db-cli APPL_DB HGETALL \"ROUTE_TABLE:1000::/120\"\n{'blackhole': 'true'}\n```\n\n```\nrtr1(bash)$ show ipv6 route\nCodes: K - kernel route, C - connected, S - static, R - RIP,\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\n       F - PBR, f - OpenFabric,\n       > - selected route, * - FIB route, q - queued route, r - rejected route\n\nS>*1000::/120 [1/0] (blackhole) 01:00:03\n```\nIf you are also seeing this, then this seems to be a `staticd` issue. I restarted `staticd` at this point, and the stale route got removed from appl_db as well as from kernel. I'm trying to debug this myself.\n\nIf you are seeing this stale route only in kernel, then this should be a `zebra` specific issue."
+    },
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2025-02-12T04:05:16Z",
+      "body": "@kalash-nexthop  Not sure why it is not 100% reproducible from your end but its a missing flow in sonic as i pointed out. There is an easier way to repro.\nAdd this to a json file\n\n```\ncat sr.json\n{\n    \"STATIC_ROUTE\": {\n        \"default|1000::/120\": {\n            \"blackhole\": \"true\",\n            \"distance\": \"0\",\n            \"ifname\": \"\",\n            \"nexthop\": \"blackhole\",\n            \"nexthop-vrf\": \"\"\n        }\n    }\n}\n```\n\nPerform config load sr.json -y\n\nOnce you see the route is populated in APPL_DB, kernel and FRR, please perform config reload without saving. This means the configuration that is reloaded will not have static route.\n\nAfter that you can still see the static route\n\n```\nip -6 route show\nblackhole 1000::/120 dev lo proto 196 metric 20 pref medium\n```\n\n```\nshow ipv6 route\nCodes: K - kernel route, C - connected, S - static, R - RIP,\n       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, D - SHARP,\n       F - PBR, f - OpenFabric,\n       > - selected route, * - FIB route, q - queued route, r - rejected route\n\nS>*1000::/120 [1/0] (blackhole) 00:01:15\n```\n\n```\nvtysh -c \"show ipv6 route\"\nCodes: K - kernel route, C - connected, L - local, S - static,\n       R - RIPng, O - OSPFv3, I - IS-IS, B - BGP, N - NHRP,\n       T - Table, v - VNC, V - VNC-Direct, A - Babel, F - PBR,\n       f - OpenFabric, t - Table-Direct,\n       > - selected route, * - FIB route, q - queued, r - rejected, b - backup\n       t - trapped, o - offload failure\n\nS>* 1000::/120 [1/0] unreachable (blackhole), 00:01:23\n```\n\nThis is because during config reload, there is no flow to clear the route from the kernel. Hence FRR will it restarts, reads the route from the kernel and populates back.\n\n```\nredis-cli -n 0 keys *ROUTE*\n1) \"ROUTE_TABLE:1000::/120\"\n```"
+    },
+    {
+      "author": "gord1306",
+      "createdAt": "2025-06-20T09:38:29Z",
+      "body": "@dgsudharsan I had created a PR that might be related to this issue. Could you check https://github.com/sonic-net/sonic-buildimage/pull/21917"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 21694,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/21694",
+      "title": "Add static route check in warm reboot",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-01-13T21:04:42Z",
+      "createdAt": "2025-12-15T00:32:16Z",
+      "author": "xincunli-sonic",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\n## Summary\r\nAdds comprehensive tests to validate static route persistence and traffic forwarding during warmboot and config reload scenarios.\r\n\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/21423\r\n\r\n### Type of change\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [x] New Test case\r\n    - [x] Skipped for non-supported platforms\r\n\r\n\r\n### Back port request\r\n- [x] 202205\r\n- [x] 202305\r\n- [x] 202311\r\n- [x] 202405\r\n- [x] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nStatic routes were not being validated during warmboot and config reload operations, leading to issues where routes could be lost or traffic forwarding could fail after these critical operations. Issue #21423 reported that static routes were not persisting correctly through warmboot, causing network connectivity problems.\r\n\r\n#### How did you do it?\r\n\r\nAdded 4 new comprehensive test functions to `tests/route/test_static_route.py`:\r\n\r\n1. **`test_static_route_warmboot`** - Tests IPv4 static route persistence through warmboot\r\n   - Validates route configuration before warmboot\r\n   - Performs warmboot with finalizer wait\r\n   - Verifies routes persist and traffic forwarding works after warmboot\r\n   - Confirms BGP route advertisements are maintained\r\n\r\n2. **`test_static_route_ecmp_warmboot`** - Tests IPv4 ECMP static routes with multiple nexthops through warmboot\r\n   - Validates all ECMP paths are configured correctly\r\n   - Verifies load-balancing across nexthops before warmboot\r\n   - Confirms all paths persist through warmboot\r\n   - Validates traffic continues across all paths post-warmboot\r\n\r\n3. **`test_static_route_ipv6_warmboot`** - Tests IPv6 static route persistence through warmboot\r\n   - Full IPv6 static route lifecycle validation\r\n   - NDP entry management during warmboot\r\n   - IPv6 traffic forwarding verification\r\n\r\n4. **`test_static_route_config_reload_with_traffic`** - Tests static route persistence through config reload\r\n   - Comprehensive traffic validation before and after reload\r\n   - Handles dual-TOR mux state changes\r\n   - Validates BGP convergence post-reload\r\n\r\nEach test follows a complete lifecycle:\r\n- Setup: Configure routes and traffic responders\r\n- Pre-operation validation: Verify routes in kernel, test traffic, check BGP advertisements\r\n- Operation: Perform warmboot or config reload\r\n- Post-operation validation: Verify route persistence, BGP convergence, traffic forwarding\r\n- Cleanup: Remove routes and verify cleanup\r\n\r\n#### How did you verify/test it?\r\nIn Lab:\r\n\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\n  /opt/venv/lib/python3.12/site-packages/pytest_ansible/host_manager/v213.py:13: DeprecationWarning: Host management is deprecated and will be removed in a future release\r\n    class HostManagerV213(BaseHostManager):\r\n\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\n  /opt/venv/lib/python3.12/site-packages/ansible/plugins/loader.py:1485: UserWarning: AnsibleCollectionFinder has already been configured\r\n    warnings.warn('AnsibleCollectionFinder has already been configured')\r\n\r\ntests/route/test_static_route.py: 186 warnings\r\n  /usr/lib/python3.12/multiprocessing/popen_fork.py:66: DeprecationWarning: This process (pid=79633) is multi-threaded, use of fork() may lead to deadlocks in the child.\r\n    self.pid = os.fork()\r\n\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\n  /var/src/sonic-mgmt-int/tests/conftest.py:1363: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\r\n    record_testsuite_property(\"timestamp\", datetime.utcnow())\r\n\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\n  /var/src/sonic-mgmt-int/tests/common/dualtor/mux_simulator_control.py:705: DeprecationWarning: Deprecated toggle fixture, please use setup_dualtor_mux_ports (docs/tests/setup.dualtor.mux.ports.md).\r\n    warnings.warn(\"Deprecated toggle fixture, please use setup_dualtor_mux_ports \"\r\n\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\ntests/route/test_static_route.py::test_static_route_warmboot[str2-7260cx3-acs-11]\r\n  /opt/venv/lib/python3.12/site-packages/ptf/mask.py:69: DeprecationWarning: \"set_do_not_care_scapy\" is going to be deprecated, please switch to the new one: \"set_do_not_care_packet\"\r\n    warnings.warn(\r\n\r\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\r\n---------------------------------------------------------------------- generated xml file: /var/src/sonic-mgmt-int/tests/logs/route/test_static_route.py::test_static_route_warmboot.xml -----------------------------------------------------------------------\r\n\r\nResults (716.58s (0:11:56)):\r\n       **1 passed**\r\nDEBUG:tests.conftest:[log_custom_msg] item: <Function test_static_route_warmboot[str2-7260cx3-acs-11]>\r\nINFO:root:Can not get Allure report URL. Please check logs\r\n\r\nyanmo@sonic-mgmt-yanmo:/var/src/sonic-mgmt-int/tests$ cat /var/src/sonic-mgmt-int/tests/logs/route/test_static_route.py::test_static_route_warmboot.xml\r\n```xml\r\n<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<testsuites name=\"pytest tests\">\r\n    <testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"1\" time=\"716.565\"\r\n        timestamp=\"2026-01-13T20:00:55.209590+00:00\" hostname=\"sonic-mgmt-yanmo\">\r\n        <properties>\r\n            <property name=\"topology\" value=\"dualtor-120\" />\r\n            <property name=\"testbed\" value=\"vms26-dual-t0-7260\" />\r\n            <property name=\"timestamp\" value=\"2026-01-13 20:05:00.589302\" />\r\n            <property name=\"host\" value=\"str2-7260cx3-acs-10\" />\r\n            <property name=\"asic\" value=\"broadcom\" />\r\n            <property name=\"platform\" value=\"x86_64-arista_7260cx3_64\" />\r\n            <property name=\"hwsku\" value=\"Arista-7260CX3-D108C8\" />\r\n            <property name=\"os_version\" value=\"20251110.01\" />\r\n        </properties>\r\n        <testcase classname=\"tests.route.test_static_route\"\r\n            name=\"test_static_route_warmboot[str2-7260cx3-acs-11]\" time=\"530.665\">\r\n            <properties>\r\n                <property name=\"start\" value=\"2026-01-13 20:04:01.034842\" />\r\n                <property name=\"end\" value=\"2026-01-13 20:12:51.705748\" />\r\n            </properties>\r\n        </testcase>\r\n    </testsuite>\r\n</testsuites>\r\n```\r\n\r\n\r\n#### Any platform specific information?\r\n\r\n- Tests are marked with `pytest.mark.device_type('vs')` for virtual switch support\r\n- Platform-specific wait times are handled (e.g., x86_64-cel_e1031-r0 requires longer wait)\r\n- Dual-TOR specific logic included for mux state management\r\n- Tests use existing infrastructure and should work across all supported platforms\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n- **t0** - Primary topology\r\n- **m0** - Supported\r\n- **mx** - Supported\r\n- **dualtor** - Fully supported with specific handling for mux cable states\r\n\r\nTests are compatible with both single-TOR and dual-TOR configurations.\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/route/test_static_route.py",
+          "additions": 260,
+          "deletions": 14
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T00:32:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T00:32:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T00:34:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T00:34:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T01:22:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T01:23:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-12-15T01:27:06Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-12-15T01:27:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-08T20:47:19Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-08T20:47:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-08T20:48:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-08T20:48:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-09T00:02:16Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-09T00:02:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-09T00:02:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-09T00:02:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-09T00:47:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-09T00:47:09Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-09T00:47:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-09T00:47:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

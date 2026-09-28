@@ -1,0 +1,90 @@
+{
+  "number": 15949,
+  "title": "Unable to set custom ONIE disk partition size for OS",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/15949",
+  "createdAt": "2023-07-24T19:26:56Z",
+  "closedAt": "2023-09-29T16:29:56Z",
+  "author": "pbudds",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\nWhen building the SONiC image, I'm unable to set the partition size to a custom value that is based on the HW configuration.\r\nI was able to do it using some make file changes, but not sure if that is the way or if there is a already supported method to\r\ncustomize the Disk partition size. If not supported yet, would be happy to do a pull request with my changes.\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Try to set the ONIE build parameter ONIE_IMAGE_PART_SIZE to a custom value below.  \r\n2. make USERNAME=test PASSWORD=test123 ONIE_IMAGE_PART_SIZE=130048 all\r\n3. Check partition size on the final image built using \"lsblk\"\r\n\r\n#### Describe the results you received:\r\nAfter booting the image and checking the OS partition size, It is still 32G\r\n\r\nNAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINT\r\nloop0    7:0    0 419.4M  0 loop \r\nloop1    7:1    0     4G  0 loop /var/log\r\nsda      8:0    0 119.2G  0 disk \r\n->sda1   8:1    0   256M  0 part \r\n->sda2   8:2    0   128M  0 part \r\n->sda3   8:3    0    32G  0 part /host\r\n\r\n#### Describe the results you expected:\r\nExpect the  the disk partition size to be 118.8G for sda3\r\n\r\n#### Output of `show version`:\r\nThis was tried on a 202205 branch, commit hash a66d4699f2ad75442ad146f9237717c01bfc45f3\r\n",
+  "comments": [
+    {
+      "author": "neethajohn",
+      "createdAt": "2023-08-02T15:13:33Z",
+      "body": "@pbudds, please take a look at installer.sh file for options to resize"
+    },
+    {
+      "author": "pbudds",
+      "createdAt": "2023-08-11T00:11:48Z",
+      "body": "@neethajohn - Thank you for taking time to triage this.\r\n\r\nI did not find installer.sh, Were you referring to \"installer/install.sh\"? And a platform specific file for example - device/broadcom/x86_64-bcm_xlr-r0/installer.conf\r\nThis had some ONIE params to customize for a platform and I added \"ONIE_IMAGE_PART_SIZE=130048\" to installer.conf and rebuilt. It seems like that should work, but unfortunately it did not. Not sure if I'm missing something. The value got ignored.\r\n\r\nTurns out, during build time, the installer.conf isn't being read and build_image.sh calls onie-mk-demo.sh with value read from onie-image.conf which is the default value.\r\n\r\nhttps://github.com/sonic-net/sonic-buildimage/blob/a86eb95005fafd7dabea02849cb4989205d5767f/build_image.sh#L87\r\n\r\nonie-mk-demo.sh does a string replace of ONIE_IMAGE_PART_SIZE with the value passed in during build time and modifies install.sh file. During install time, even though install.sh was reading the value, the new value of ONIE_IMAGE_PART_SIZE gets ignored as the string was already replaced. \r\n\r\nhttps://github.com/sonic-net/sonic-buildimage/blob/a86eb95005fafd7dabea02849cb4989205d5767f/onie-mk-demo.sh#L101\r\n\r\nA small change to not do string replace and let install.sh use value read from platform specific installer.conf during install time worked for me. Thoughts appreciated.\r\n"
+    },
+    {
+      "author": "pbudds",
+      "createdAt": "2023-08-24T21:39:12Z",
+      "body": "Does anyone have any suggestions? Should \"ONIE_IMAGE_PART_SIZE=130048\" in platform specific installer.conf is the right way to do it and is supposed to work?"
+    },
+    {
+      "author": "prgeor",
+      "createdAt": "2023-09-13T15:52:10Z",
+      "body": "@saiarcot895 do you have a suggestion? @pbudds can you share the PR?"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2023-09-25T18:26:50Z",
+      "body": "@pbudds When building an ONIE image, AFAIK, we don't read any platform-specific information, because we don't necessarily know at build time what platform we're building for (besides the ASIC type (broadcom, mellanox, etc.) and architecture). The current code looks at the architecture-specific `onie-image.conf` file (this is either `onie-image.conf`, `onie-image-arm64.conf`, or `onie-image-armhf.conf`). This could, in theory, be extended to look for a ASIC-specific file as well, but I don't think that would be very useful, since devices have vastly different disk sizes.\r\n\r\nCan you try building an ONIE image with `ONIE_IMAGE_PART_SIZE=130048 make USERNAME=test PASSWORD=test123 all`? If that works, then it's an issue of the variable not being propagated to the `build_image.sh` script. In that case, in `slave.mk`, where `build_image.sh` gets called, `ONIE_IMAGE_PART_SIZE` needs to be passed down as well."
+    },
+    {
+      "author": "pbudds",
+      "createdAt": "2023-09-26T01:23:09Z",
+      "body": "@saiarcot895 - Appreciate you taking time to take a look. \r\n\r\nTried \"ONIE_IMAGE_PART_SIZE=130048 make USERNAME=test PASSWORD=test123 all\" that and it did not work.  \r\n\r\nThe fix to make above work is in below PRT  and also includes a small change to make platform specific customization  to work. That happens during install time when \"installer.conf\" file gets read by \"install.sh\" file and gives a chance of customizing it. Details in below PR.\r\n\r\nhttps://github.com/sonic-net/sonic-buildimage/pull/16691\r\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16691,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/16691",
+      "title": "fix ONIE partition size customization and add platform specific set ability",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-09-29T16:29:54Z",
+      "createdAt": "2023-09-26T01:19:08Z",
+      "author": "pbudds",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\nfixes #15949\r\nProblem 1: Setting ONIE_IMAGE_PART_SIZE using env variable or using \"make ONIE_IMAGE_PART_SIZE=65536 USERNAME=test PASSWORD=test all\" did not work.\r\n\r\nProblem 2: The platform specific file for example \"device/x86_64-8201_32fh_o-r0/installer.conf\" cannot override it by setting value of ONIE_IMAGE_PART_SIZE in the file. change 2 adds support to do that. \r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nChange 1: when ONIE_IMAGE_PART_SIZE, the files Makefile.work and slave.mk should pass that setting along all the way to build_image.sh. Please see commit 1.\r\n\r\nChange 2: In installer/install.sh, save the value set during build time string replace into a value and then let this value be overridden later when installer.conf get read which is platform specific. If platform does not override it, the original value will continue to work. Please see commit 2.\r\n\r\n#### How to verify it\r\n1: The below command works now\r\nmake ONIE_IMAGE_PART_SIZE=65536 USERNAME=test PASSWORD=test all\"\r\n\r\nThe image properly was installed using ONIE and the partition size reflects what was passed in the above build command.\r\nIf the above value is not set, the default from \"onie-image.conf\" takes effect and still works.\r\n\r\n\r\n2: Set ONIE_IMAGE_PART_SIZE in platform specific file like below example\r\n--------------Diff----\r\ndevice/x86_64-8201_32fh_o-r0/installer.conf\r\n@@ -1 +1,2 @@\r\n ONIE_PLATFORM_EXTRA_CMDLINE_LINUX=\" intel_iommu=off\"\r\n+ONIE_IMAGE_PART_SIZE=128000\r\n\r\nand built the image using \"make USERNAME=test PASSWORD=test all\" and verified that the final installation properly partitioned the disk to the requested value from installer.conf file.\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [ ] 202205\r\n- [ ] 202211\r\n- [ ] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\nmaster and 202205 branches\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "Makefile.work",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "installer/install.sh",
+          "additions": 9,
+          "deletions": 3
+        },
+        {
+          "path": "slave.mk",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2023-09-26T01:19:17Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: pbudds / name: Prashanth Buddhala  (e8c94bb44338aaf1270ac958191b308af08de07e, 327183c1ecaf57d9269ad45014f2000f0e09eff0)</li></ul>"
+        },
+        {
+          "author": "pbudds",
+          "createdAt": "2023-12-12T21:38:16Z",
+          "body": "@lguohan - We are looking to have this fix as part of branch 202305.  Should I do a separate request for it? Could you please advise? Thank you. "
+        }
+      ]
+    }
+  ]
+}

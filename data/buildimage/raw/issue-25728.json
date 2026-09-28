@@ -1,0 +1,143 @@
+{
+  "number": 25728,
+  "title": "Bug: chrony not coming up correctly after reload when running in mgmt VRF",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/25728",
+  "createdAt": "2026-02-27T09:45:01Z",
+  "closedAt": "2026-03-12T04:52:00Z",
+  "author": "anders-nexthop",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "nexthop-ai"
+  ],
+  "assignees": [
+    "anders-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen chrony is configured to start in the mgmt vrf, it needs to be ordered after interfaces-config.service, since that's the service that sets up the mgmt vrf. Since no such ordering dependency exists today, a race condition exists; if chrony starts before the mgmt vrf is set up, it fails to set up valid connections and therefore fails to ever sync. You can restart chrony to get bring it back online as a workaround.\n\nNote that this issue assumes https://github.com/sonic-net/sonic-buildimage/issues/25726 has been resolved (otherwise chrony will fail when configured in the mgmt VRF unconditionally).\n\n### Steps to Reproduce\n\nStart with NTP configured for the mgmt VRF, and the mgmt VRF enabled:\n```\n$ show mgmt-vrf | head -2\n\nManagementVRF : Enabled\n\n$ show ntp --verbose\nCommand: sudo ip vrf exec mgmt chronyc -n tracking\nReference ID    : 0AFA36FE (10.250.54.254)\nStratum         : 5\nRef time (UTC)  : Fri Feb 27 09:33:26 2026\nSystem time     : 0.000001452 seconds slow of NTP time\nLast offset     : -0.000003191 seconds\nRMS offset      : 0.000003191 seconds\nFrequency       : 11.260 ppm fast\nResidual freq   : +0.085 ppm\nSkew            : 0.204 ppm\nRoot delay      : 0.006934130 seconds\nRoot dispersion : 0.001427774 seconds\nUpdate interval : 2.0 seconds\nLeap status     : Normal\nCommand: sudo ip vrf exec mgmt chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^* 10.250.54.254                 4   6    17     2  -1662ns[-4853ns] +/- 4887us\n```\nReload the device:\n```\n$ sudo config reload -y\nAcquired lock on /etc/sonic/reload.lock\nDisabling container and routeCheck monitoring ...\nStopping SONiC target ...\nRunning command: /usr/local/bin/sonic-cfggen -j /etc/sonic/init_cfg.json -j /etc/sonic/config_db.json --write-to-db\nRunning command: /usr/local/bin/db_migrator.py -o migrate\nRunning command: /usr/local/bin/sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t /usr/share/sonic/templates/sonic-environment.j2,/etc/sonic/sonic-environment\nRestarting SONiC target ...\n```\nWait a bit to make sure NTP is up and then check that it's syncing:\n```\n$ sleep 5\n$ show ntp --verbose\nCommand: sudo ip vrf exec mgmt chronyc -n tracking\nReference ID    : 00000000 ()\nStratum         : 0\nRef time (UTC)  : Thu Jan 01 00:00:00 1970\nSystem time     : 0.000000001 seconds fast of NTP time\nLast offset     : +0.000000000 seconds\nRMS offset      : 0.000000000 seconds\nFrequency       : 11.260 ppm fast\nResidual freq   : +0.000 ppm\nSkew            : 0.000 ppm\nRoot delay      : 1.000000000 seconds\nRoot dispersion : 1.000000000 seconds\nUpdate interval : 0.0 seconds\nLeap status     : Not synchronised\nCommand: sudo ip vrf exec mgmt chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^? 10.250.54.254                 0   6     0     -     +0ns[   +0ns] +/-    0ns\n```\nRestart chrony and observer that it comes up correctly:\n```\n$ sudo systemctl restart chrony\n$ sleep 5\n$ show ntp --verbose\nCommand: sudo ip vrf exec mgmt chronyc -n tracking\nReference ID    : 0AFA36FE (10.250.54.254)\nStratum         : 5\nRef time (UTC)  : Fri Feb 27 09:35:57 2026\nSystem time     : 0.000000633 seconds fast of NTP time\nLast offset     : +0.000003306 seconds\nRMS offset      : 0.000003306 seconds\nFrequency       : 11.260 ppm fast\nResidual freq   : -0.428 ppm\nSkew            : 0.210 ppm\nRoot delay      : 0.006950619 seconds\nRoot dispersion : 0.001525881 seconds\nUpdate interval : 2.0 seconds\nLeap status     : Normal\nCommand: sudo ip vrf exec mgmt chronyc -n sources\nMS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^* 10.250.54.254                 4   6    17     5    +13us[  +16us] +/- 4986us\n```\n\n### Actual Behavior and Expected Behavior\n\nExpected:\nchrony should run smoothly after reload when configured for the mgmt VRF.\n\nActual:\nchrony occasionally fails to come up after reload when configured for the mgmt VRF.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25729,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25729",
+      "title": "Issue 25728: Add vrf ordering dependency to chrony config",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-12T04:51:57Z",
+      "createdAt": "2026-02-27T09:51:38Z",
+      "author": "anders-nexthop",
+      "body": "When chrony is configured to start in the mgmt vrf, it needs to be ordered after interfaces-config.service, since that's the service that sets up the mgmt vrf.\r\n\r\nCloses #25728\r\n\r\nWhy I did it\r\nNTP/chrony service is not coming up correctly after reboot/reload when configured to start in the mgmt vrf.\r\n\r\nHow I did it\r\nWhen being run in the mgmt vrf, chrony needs to wait to start up until the mgmt vrf is created, so add an After dependency in the chrony config override file that waits for the appropriate service to finish (interfaces-config.service).\r\n\r\nHow to verify it\r\nManually verified. Configure the device to enable the mgmt vrf and to have ntp configured to use the mgmt vrf. Then issue a reboot or 'config reload'. Without these changes, chrony will come up incorrectly and require a restart to function (this is a race condition, so the exact failure can be different, and it can even work occasionally, but fails pretty consistently). With these changes, reboot/reload work as expected.\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "files/image_config/chrony/override.conf",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-27T09:51:45Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-27T09:51:58Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-02-27T09:54:04Z",
+          "body": "@saiarcot895 this one is a follow up to the [chrony bind issue](https://github.com/sonic-net/sonic-buildimage/pull/25727), apologies if you aren't the right person to bug about this!"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-01T20:14:33Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-01T20:14:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-03T20:50:05Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-03T20:50:08Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-03T20:50:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-05T20:21:52Z",
+          "body": "/azpw run\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-05T20:21:55Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-05T20:22:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-06T19:53:47Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-06T19:53:50Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-06T19:54:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-06T20:12:47Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-06T20:13:00Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-10T23:57:14Z",
+          "body": "/azpw run\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T23:57:17Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T23:57:23Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-03-11T15:16:16Z",
+          "body": "/azpw run"
+        }
+      ]
+    }
+  ]
+}

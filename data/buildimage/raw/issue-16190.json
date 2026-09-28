@@ -1,0 +1,107 @@
+{
+  "number": 16190,
+  "title": "[Yang] Incorrect definition of `IN_PORTS` and `OUT_PORTS` in sonic-acl.yang",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/16190",
+  "createdAt": "2023-08-17T13:33:06Z",
+  "closedAt": "2023-08-22T18:26:06Z",
+  "author": "lizhijianrd",
+  "labels": [
+    "Bug :bug:",
+    "Issue for 202205",
+    "Issue for 202305"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n\r\nThe type of `IN_PORTS` and `OUT_PORTS` at [sonic-acl.yang.j2#L131](https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-yang-models/yang-templates/sonic-acl.yang.j2#L131) is incorrect.\r\n\r\nAccording to [Everflow-test-plan](https://github.com/sonic-net/SONiC/blob/master/doc/acl/Everflow-test-plan.md?plain=1#L1013), it should be a string, not `uint16`. The string format should be a list of SONiC interface name separated by comma, like `\"Ethernet3,Ethernet4\".\r\n\r\nAccording to [Sonic-mclag-hld](https://github.com/sonic-net/SONiC/blob/master/doc/mclag/Sonic-mclag-hld.md?plain=1#L447), `OUT_PORTS` should be a string of the same format.\r\n\r\nThis bug causes GCU cannot add/update data-plane ACL rules with `IN_PORTS` and `OUT_PORTS`.\r\n\r\n<!--\r\n     Briefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n#### Steps to reproduce the issue:\r\n1. Setup custom ACL table type on DUT.\r\n    a. Write below content to file `acl_table_types.json` on DUT:\r\n    ```json\r\n    {\r\n        \"ACL_TABLE_TYPE\": {\r\n            \"BMCDATAV6\": {\r\n                \"MATCHES\": \"SRC_IPV6,DST_IPV6,ETHER_TYPE,IP_TYPE,IP_PROTOCOL,IN_PORTS,L4_SRC_PORT,L4_DST_PORT,L4_SRC_PORT_RANGE,L4_DST_PORT_RANGE\",\r\n                \"ACTIONS\": \"PACKET_ACTION,COUNTER\",\r\n                \"BIND_POINTS\": \"PORT\"\r\n            }\r\n        }\r\n    }\r\n    ```\r\n    b. Add custom ACL table type to config_db: `sonic-cfggen -j acl_table_types.json -w`\r\n2. Create ACL table on DUT: `sudo config acl add table SAMPLE_ACL_TABLE BMCDATAV6 -p Ethernet1,Ethernet2 -s ingress`.\r\n3. Add first ACL rule to config_db via `acl-loader`:\r\n    a. Write below content to file `acl_rules.json` on DUT:\r\n    ```json\r\n    {\r\n        \"acl\": {\r\n            \"acl-sets\": {\r\n                \"acl-set\": {\r\n                    \"SAMPLE_ACL_TABLE\": {\r\n                        \"acl-entries\": {\r\n                            \"acl-entry\": {\r\n                                \"RULE_1\": {\r\n                                    \"actions\": {\r\n                                        \"config\": {\r\n                                            \"forwarding-action\": \"DROP\"\r\n                                        }\r\n                                    },\r\n                                    \"config\": {\r\n                                        \"sequence-id\": 1\r\n                                    },\r\n                                    \"input_interface\": {\r\n                                        \"interface_ref\": {\r\n                                            \"config\": {\r\n                                                \"interface\": \"Ethernet1\"\r\n                                            }\r\n                                        }\r\n                                    }\r\n                                }\r\n                            }\r\n                        }\r\n                    }\r\n                }\r\n            }\r\n        }\r\n    }\r\n    ```\r\n    b. Use `acl-loader` to load above ACL rule: `acl-loader update full --table_name SAMPLE_ACL_TABLE acl_rules.json`.\r\n4. Add second ACL rule to config_db via GCU:\r\n    a. Write below content to file `patch.json` on DUT:\r\n    ```json\r\n    [\r\n        {\r\n            \"op\": \"add\",\r\n            \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\",\r\n            \"value\": {\r\n                \"PACKET_ACTION\": \"FORWARD\",\r\n                \"PRIORITY\": \"7000\",\r\n                \"IN_PORTS\": \"Ethernet2\"\r\n            }\r\n        }\r\n    ]\r\n    ```\r\n    b. Use GCU to apply above patch: `sudo config apply-patch patch.json`\r\n\r\n\r\n#### Describe the results you received:\r\n\r\nAt step 4.b, I got below error on DUT:\r\n\r\n```\r\n$ sudo config apply-patch patch.json\r\nPatch Applier: Patch application starting.\r\nPatch Applier: Patch: [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\r\nPatch Applier: Getting current config db.\r\nPatch Applier: Simulating the target full config after applying the patch.\r\nPatch Applier: Validating all JsonPatch operations are permitted on the specified fields\r\nPatch Applier: Validating target config does not have empty tables, since they do not show up in ConfigDb.\r\nPatch Applier: Sorting patch updates.\r\nFailed to apply patch\r\nUsage: config apply-patch [OPTIONS] PATCH_FILE_PATH\r\nTry \"config apply-patch -h\" for help.\r\n\r\nError: Given patch will produce invalid config. Error: Data Loading Failed\r\nAll Keys are not parsed in ACL_RULE\r\ndict_keys(['SAMPLE_ACL_TABLE|RULE_1', 'SAMPLE_ACL_TABLE|RULE_3000'])\r\nexceptionList:[\"invalid literal for int() with base 10: 'E'\", \"invalid literal for int() with base 10: 'E'\"]\r\n```\r\n\r\nFrom the error message we can see both the first ACL rule (already exist in config_db) and the second ACL rule (in GCU patch) cannot pass Yang validation. They failed on key `IN_PORTS`, which should be a string, but incorrectly defined as `uint16` in Yang model.\r\n\r\n#### Describe the results you expected:\r\n\r\nExpect step 4.b can apply the second ACL rule on DUT successfully.\r\n\r\n#### Output of `show version`:\r\n\r\nCan repro this issue on 202205.\r\n\r\n#### Output of `show techsupport`:\r\n\r\n```\r\n(paste your output here or download and attach the file here )\r\n```\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\n\r\n<!--\r\n     Also attach debug file produced by `sudo generate_dump`\r\n-->\r\n",
+  "comments": [
+    {
+      "author": "bingwang-ms",
+      "createdAt": "2023-08-22T15:53:41Z",
+      "body": "So we can load ACL rules with \"IN_PORTS\" with `acl-loader`, but it's not accepted when using `config apply-patch`, right?"
+    },
+    {
+      "author": "lizhijianrd",
+      "createdAt": "2023-08-23T04:32:14Z",
+      "body": "> So we can load ACL rules with \"IN_PORTS\" with `acl-loader`, but it's not accepted when using `config apply-patch`, right?\r\n\r\nYes, you are right."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16220,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/16220",
+      "title": "[YANG SONIC-ACL] Fix Yang definition of IN_PORTS and OUT_PORTS",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-08-22T18:26:05Z",
+      "createdAt": "2023-08-21T09:32:14Z",
+      "author": "lizhijianrd",
+      "body": "<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nFix #16190 .\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: 24905710\r\n\r\n#### How I did it\r\n\r\nUpdate Yang definition of `IN_PORTS` and `OUT_PORTS` to string.\r\nSince we cannot split the string with comma (`,`) and validate each substring is a valid SONiC port name. The only restriction for them is must be a `string`.\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n1. Verified by building `sonic_yang_models-1.0-py3-none-any.whl`. While building the target package, unit tests were run and passed.\r\n2. Build a SONiC image based on 202205 branch and installed on physical DUT. Re try the steps in #16190 and can see below success response:\r\n\r\n```\r\n$ sudo config apply-patch patch.json\r\nPatch Applier: Patch application starting.\r\nPatch Applier: Patch: [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\r\nPatch Applier: Getting current config db.\r\nPatch Applier: Simulating the target full config after applying the patch.\r\nPatch Applier: Validating all JsonPatch operations are permitted on the specified fields\r\nPatch Applier: Validating target config does not have empty tables, since they do not show up in ConfigDb.\r\nPatch Applier: Sorting patch updates.\r\nPatch Applier: The patch was sorted into 1 change:\r\nPatch Applier:   * [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\r\nPatch Applier: Applying 1 change in order:\r\nPatch Applier:   * [{\"op\": \"add\", \"path\": \"/ACL_RULE/SAMPLE_ACL_TABLE|RULE_3000\", \"value\": {\"PACKET_ACTION\": \"FORWARD\", \"PRIORITY\": \"7000\", \"IN_PORTS\": \"Ethernet2\"}}]\r\nPatch Applier: Verifying patch updates are reflected on ConfigDB.\r\nPatch Applier: Patch application completed.\r\nPatch applied successfully.\r\n```\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 201811\r\n- [ ] 201911\r\n- [ ] 202006\r\n- [ ] 202012\r\n- [ ] 202106\r\n- [ ] 202111\r\n- [x] 202205\r\n- [x] 202211\r\n- [x] 202305\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "src/sonic-yang-models/tests/yang_model_tests/tests/acl.json",
+          "additions": 6,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-models/tests/yang_model_tests/tests_config/acl.json",
+          "additions": 108,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-yang-models/yang-templates/sonic-acl.yang.j2",
+          "additions": 6,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "wen587",
+          "createdAt": "2023-08-22T04:40:20Z",
+          "body": "lgtm"
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2023-08-22T15:56:01Z",
+          "body": "Thanks for the fix!\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-22T18:27:09Z",
+          "body": "Cherry-pick PR to 202205: https://github.com/sonic-net/sonic-buildimage/pull/16235"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-22T18:27:15Z",
+          "body": "Cherry-pick PR to 202211: https://github.com/sonic-net/sonic-buildimage/pull/16236"
+        },
+        {
+          "author": "lizhijianrd",
+          "createdAt": "2023-08-23T09:15:07Z",
+          "body": "@yxieca Can you please help to add label \"Approved for 202305 Branch\"? We need this PR in 202305. Thanks."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-23T18:08:25Z",
+          "body": "Cherry-pick PR to 202305: https://github.com/sonic-net/sonic-buildimage/pull/16253"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-25T22:33:36Z",
+          "body": "@lizhijianrd cherry pick PR didn't pass PR checker. Please check!!! Auto cherry pick PR will be closed in 24 days.<br>https://github.com/sonic-net/sonic-buildimage/pull/16236"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-26T22:33:32Z",
+          "body": "@lizhijianrd cherry pick PR didn't pass PR checker. Please check!!! Auto cherry pick PR will be closed in 24 days.<br>https://github.com/sonic-net/sonic-buildimage/pull/16236"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-27T22:33:24Z",
+          "body": "@lizhijianrd cherry pick PR didn't pass PR checker. Please check!!! Auto cherry pick PR will be closed in 24 days.<br>https://github.com/sonic-net/sonic-buildimage/pull/16236"
+        }
+      ]
+    }
+  ]
+}

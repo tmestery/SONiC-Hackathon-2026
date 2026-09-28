@@ -1,0 +1,133 @@
+{
+  "number": 23798,
+  "title": "[trixie] `test_rexec_without_password_input` in sonic-utilities is hanging on Trixie",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/23798",
+  "createdAt": "2025-08-23T17:03:31Z",
+  "closedAt": "2025-09-24T01:28:32Z",
+  "author": "saiarcot895",
+  "labels": [
+    "baseimage",
+    "Triaged",
+    "nexthop-ai",
+    "Trixie"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe `test_rexec_without_password_input` test case in `sonic-utilities` has been hanging on Python 3.13 on Trixie. Specifically, when the code is trying to read the password, the pytest process is getting the SIGTTOU signal, suggesting that two processes want to write to the terminal at the same time.\n\n### Steps to Reproduce\n\nIn the `trixie` branch, in `src/sonic-utilities/tests/remote_cli_test.py`, remove the skip decorator for the `test_rexec_without_password_input` test cases. Then, run that test case via pytest.\n\n### Actual Behavior and Expected Behavior\n\nTests should pass.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "prabhataravind",
+      "createdAt": "2025-09-10T15:50:58Z",
+      "body": "@anders-nexthop has volunteered to help on this @saiarcot895 "
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2025-09-11T01:47:04Z",
+      "body": "Thanks @anders-nexthop! Note that the trixie branch is at https://github.com/saiarcot895/sonic-buildimage/tree/trixie."
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2025-09-11T20:46:58Z",
+      "body": "@saiarcot895 \n\nThe root cause of the hang is that Python 3.13 is more defensive about TTY interaction. When a TTY is accessed from a background process (such as when running tests under pytest), Python will send SIGTTOU/SIGTTIN signals (depending on whether it's a write or read operation). This affects `getpass.getpass()`, so any code using `getpass` in background contexts (scripts, daemons, or test suites) needs to be updated to handle these signals properly.\n\nHere's a commit with a proposed fix (all sonic-utilities unit tests pass with this fix):\n```\ncommit 296404cebe1711c02ff8ba4c1e62cd730c79ecda (HEAD)\nAuthor: Anders Linn <anders@nexthop.ai>\nDate:   Thu Sep 11 20:32:43 2025 +0000\n\n    Issue 23798: Wrap getpass.getpass in a signal handler to avoid SIGTTOU\n\n    Python 3.13 will raise a SIGTTOU signal when getpass.getpass is called\n    in a background process, like when running under pytest. Wrap the call\n    in a signal handler to ignore the signal and avoid hanging.\n\ndiff --git a/tests/remote_cli_test.py b/tests/remote_cli_test.py\nindex bf34f537..e68ba5f2 100644\n--- a/tests/remote_cli_test.py\n+++ b/tests/remote_cli_test.py\n@@ -1,4 +1,5 @@\n import os\n+import signal\n from click.testing import CliRunner\n import paramiko\n from rcli import rexec\n@@ -13,6 +14,7 @@ import socket\n import termios\n import getpass\n import pytest\n+import signal\n\n MULTI_LC_REXEC_OUTPUT = '''======== LINE-CARD0|sonic-lc1 output: ========\n hello world\n@@ -82,7 +84,18 @@ def mock_getpass(prompt=\"Password:\", stream=None):\n\n\n class TestRemoteExec(object):\n-    __getpass = getpass.getpass\n+    # Store the original function at class definition time to avoid recursion\n+    _original_getpass = getpass.getpass\n+\n+    @staticmethod\n+    def __getpass(prompt=\"Password:\", stream=None):\n+        \"\"\"SIGTTOU-safe wrapper for getpass.getpass() for Python 3.13 compatibility\"\"\"\n+        original_sigttou_handler = signal.signal(signal.SIGTTOU, signal.SIG_IGN)\n+        try:\n+            # Call the original function, in case getpass.getpass has been overridden\n+            return TestRemoteExec._original_getpass(prompt, stream)\n+        finally:\n+            signal.signal(signal.SIGTTOU, original_sigttou_handler)\n\n     @classmethod\n     def setup_class(cls):\n@@ -220,16 +233,14 @@ class TestRemoteExec(object):\n\n     @mock.patch(\"sonic_py_common.device_info.is_chassis\", mock.MagicMock(return_value=True))\n     @mock.patch(\"os.getlogin\", mock.MagicMock(return_value=\"admin\"))\n-    @pytest.mark.skip(reason=\"Causes test case to get stuck in Trixie slave container\")\n     def test_rexec_without_password_input(self):\n-        # TODO(trixie): figure out why SIGTTOU is being sent during\n-        # getpass.getpass, and if it needs to be ignored.\n         runner = CliRunner()\n         getpass.getpass = TestRemoteExec.__getpass\n         LINECARD_NAME = \"all\"\n-        result = runner.invoke(\n-            rexec.cli, [LINECARD_NAME, \"-c\", \"show version\"])\n+\n+        result = runner.invoke(rexec.cli, [LINECARD_NAME, \"-c\", \"show version\"])\n         getpass.getpass = mock_getpass\n+\n         print(result.output)\n         assert result.exit_code == 1, result.output\n         assert \"Aborted\" in result.output\n(END)\n```\nDo you want me to submit this somewhere? or is it easier for you to just commit it in your branch?"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2025-09-15T05:40:33Z",
+      "body": "If you can raise a PR to https://github.com/saiarcot895/sonic-buildimage/tree/trixie, that would be great."
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2025-09-15T16:47:21Z",
+      "body": "> If you can raise a PR to https://github.com/saiarcot895/sonic-buildimage/tree/trixie, that would be great.\n\nThe changes are all in sonic-utilities. Do you have a private trixie fork of that repo I can commit to (rather than sonic-buildimage)?"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2025-09-15T19:08:24Z",
+      "body": "Ah, in that case, looking at these changes, it looks like it won't cause any breakages for Bookworm. If so, can you raise a PR directly to master branch of sonic-utilities?"
+    },
+    {
+      "author": "anders-nexthop",
+      "createdAt": "2025-09-17T18:46:56Z",
+      "body": "> Ah, in that case, looking at these changes, it looks like it won't cause any breakages for Bookworm. If so, can you raise a PR directly to master branch of sonic-utilities?\n\nDone. [https://github.com/sonic-net/sonic-utilities/pull/4061](https://github.com/sonic-net/sonic-utilities/pull/4061)"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4061,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/4061",
+      "title": "Issue 23798: (trixie) Wrap getpass.getpass in a signal handler to avoid SIGTTOU",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-09-24T01:28:31Z",
+      "createdAt": "2025-09-17T18:44:52Z",
+      "author": "anders-nexthop",
+      "body": "\r\n<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\n\r\nPython 3.13 will raise a SIGTTOU signal when getpass.getpass is called in a background process, like when running under pytest. Add a signal handler to `tests/remote_cli_test.py` to handle SIGTTOU whenever `getpass.getpass()` is called, since this will raise SIGTTOU when running `trixie`.\r\n\r\nThis closes [#23798](https://github.com/sonic-net/sonic-buildimage/issues/23798)\r\n\r\n#### How I did it\r\n\r\nWrap the call in a signal handler to ignore the signal. This avoids a hang when running `trixie`.\r\n\r\n#### How to verify it\r\n\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n",
+      "files": [
+        {
+          "path": "tests/remote_cli_test.py",
+          "additions": 16,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-17T18:45:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-17T18:45:11Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-09-17T18:47:24Z",
+          "body": "@qiluo-msft @saiarcot895 please review or assign reviewers"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-18T18:46:11Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-18T18:46:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "BYGX-wcr",
+          "createdAt": "2025-09-18T21:01:37Z",
+          "body": "We mocked getpass at the setup phase of the class and only recovered it at the end of the UT. How will the original getpass be invoked during test?"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-09-18T22:03:44Z",
+          "body": "> We mocked getpass at the setup phase of the class and only recovered it at the end of the UT. How will the original getpass be invoked during test?\r\n\r\nWe explicitly re-assign it in `test_rexec_without_password_input()`, which overrides the mock for the duration of the test:\r\n```\r\n    def test_rexec_without_password_input(self):\r\n        runner = CliRunner()\r\n        getpass.getpass = TestRemoteExec.__getpass\r\n        LINECARD_NAME = \"all\"\r\n        result = runner.invoke(\r\n            rexec.cli, [LINECARD_NAME, \"-c\", \"show version\"])\r\n\r\n        result = runner.invoke(rexec.cli, [LINECARD_NAME, \"-c\", \"show version\"])\r\n        getpass.getpass = mock_getpass\r\n\r\n        print(result.output)\r\n        assert result.exit_code == 1, result.output\r\n        assert \"Aborted\" in result.output\r\n```"
+        },
+        {
+          "author": "BYGX-wcr",
+          "createdAt": "2025-09-18T22:25:21Z",
+          "body": "> > We mocked getpass at the setup phase of the class and only recovered it at the end of the UT. How will the original getpass be invoked during test?\r\n> \r\n> We explicitly re-assign it in `test_rexec_without_password_input()`, which overrides the mock for the duration of the test:\r\n> \r\n> ```\r\n>     def test_rexec_without_password_input(self):\r\n>         runner = CliRunner()\r\n>         getpass.getpass = TestRemoteExec.__getpass\r\n>         LINECARD_NAME = \"all\"\r\n>         result = runner.invoke(\r\n>             rexec.cli, [LINECARD_NAME, \"-c\", \"show version\"])\r\n> \r\n>         result = runner.invoke(rexec.cli, [LINECARD_NAME, \"-c\", \"show version\"])\r\n>         getpass.getpass = mock_getpass\r\n> \r\n>         print(result.output)\r\n>         assert result.exit_code == 1, result.output\r\n>         assert \"Aborted\" in result.output\r\n> ```\r\nI see."
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2025-09-19T16:45:30Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-09-19T16:45:33Z",
+          "body": "/AzurePipelines run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-09-19T16:45:45Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "number": 24562,
+  "title": "Bug: [Trixie] Some timezones not settable due to tzdata update",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24562",
+  "createdAt": "2025-11-18T11:52:51Z",
+  "closedAt": "2026-02-09T17:49:54Z",
+  "author": "benle7",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "Trixie"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThe test of test_clock.py::test_config_clock_timezone fails with the following errors:\nERR timedatectl[120334]: Failed to set time zone: Invalid or not installed time zone 'PST8PDT'\nERR hostcfgd: ['timedatectl', 'set-timezone', 'PST8PDT'] - failed: return code - 1, output:#012None\n\n**Observation:**\n/usr/share/zoneinfo/PST8PDT is missing on the Trixie image,\nbut appears in 'timedatectl list-timezones'.\nIn the master image, the /usr/share/zoneinfo/PST8PDT exists.\n\n**tzdata** package version (dpkg -l | grep tzdata):\nmaster: 2025b-0+deb12u2\nTrixie: **2025b-4+deb13u1**\n\n**Root Cause:**\nThe tzdata package was updated in the Trixie image (2025b-4+deb13u1).\nAccording to the tzdata NEWS file:\n**https://sources.debian.org/src/tzdata/2025b-4%2Bdeb13u1/NEWS**\n\"This affects only the legacy zones EST5EDT, CST6CDT, MST7MDT, **PST8PDT**, CET, MET, and EET, which previously used nonzero types for these timestamps.\"\n\nThe update removed or changed the structure of legacy POSIX zone files like PST8PDT.\ntimedatectl CLI requires a real zoneinfo file to set /etc/localtime, so it now fails.\n\n**Flow:**\n1. tests/clock/test_clock.py:ClockUtils.get_valid_timezones:\nshow clock timezones\n2. src/sonic-utilities/show/main.py:timezones:\ntimedatectl list-timezones\n3. This will list all timezones, including legacy entries like PST8PDT.\n4. tests/clock/test_clock.py:test_config_clock_timezone:\nconfig clock timezone PST8PDT\n5. src/sonic-host-services/scripts/hostcfgd:DeviceMetaCfg:timezone_update:\ntimedatectl set-timezone PST8PDT\n6. Error: Invalid or not installed time zone 'PST8PDT'\n\n### Steps to Reproduce\n\nOption 1: Run test_clock.py::test_config_clock_timezone\nOption 2: config clock timezone PST8PDT\nOption 3: timedatectl set-timezone PST8PDT\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\nERR timedatectl[120334]: Failed to set time zone: Invalid or not installed time zone 'PST8PDT'\nERR hostcfgd: ['timedatectl', 'set-timezone', 'PST8PDT'] - failed: return code - 1, output:#012None\n\nExpected Behavior:\nTimezone update passed successfully.\n\n\n### Relevant log output\n\n```shell\nERR timedatectl[120334]: Failed to set time zone: Invalid or not installed time zone 'PST8PDT'\nERR hostcfgd: ['timedatectl', 'set-timezone', 'PST8PDT'] - failed: return code - 1, output:#012None\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "tjchadaga",
+      "createdAt": "2025-12-03T16:52:35Z",
+      "body": "@benle7 - could you file this under sonic-mgmt and see if a test change is more suitable?"
+    },
+    {
+      "author": "benle7",
+      "createdAt": "2025-12-04T09:38:02Z",
+      "body": "@tjchadaga \nI'm not sure if this is a test issue.\n\nAs I described above, the test calls the following SONiC CLI:\nshow clock timezones\n\nThen, in src/sonic-utilities/show/main.py:timezones, it executes the following Linux command:\ntimedatectl list-timezones\n\nThe test logic selects one option from this list at random.\n\nThe issue is that 'PST8PDT' exists in the list, even though there is no corresponding file:\n/usr/share/zoneinfo/PST8PDT\nSo, it cannot be set."
+    },
+    {
+      "author": "volodymyrsamotiy",
+      "createdAt": "2025-12-08T17:31:44Z",
+      "body": "@saiarcot895 , could you please help to check?"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2025-12-17T18:56:05Z",
+      "body": "Root cause: https://bugs.launchpad.net/ubuntu/+source/systemd/+bug/2125405"
+    },
+    {
+      "author": "benle7",
+      "createdAt": "2025-12-31T18:12:35Z",
+      "body": "@tjchadaga @saiarcot895 \nHi,\nWhat is the status of this issue? Do we have a fix?"
+    },
+    {
+      "author": "saiarcot895",
+      "createdAt": "2026-01-06T01:30:18Z",
+      "body": "Debian bug opened at https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1124737.\n\nAs a workaround, installing the `tzdata-legacy` package should fix it."
+    },
+    {
+      "author": "dprital",
+      "createdAt": "2026-01-13T07:22:47Z",
+      "body": "> Debian bug opened at https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1124737.\n> \n> As a workaround, installing the `tzdata-legacy` package should fix it.\n\n@saiarcot895 , are you going to raise PR that add tzdata-legacy package to SONiC ?  or the plan is to wait until the bug (1124737) will be fixed ?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25272,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25272",
+      "title": "Install tzdata-legacy to allow using legacy timezones from timedatectl",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-09T17:49:53Z",
+      "createdAt": "2026-01-29T23:10:22Z",
+      "author": "saiarcot895",
+      "body": "\r\n\r\nFixes #24562\r\n\r\n<!--\r\n     Please make sure you've read and understood our contributing guidelines:\r\n     https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n     ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n     If this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n     \"closes #xxxx\" or \"resolves #xxxx\"\r\n\r\n     Please provide the following information:\r\n-->\r\n\r\n#### Why I did it\r\n\r\nThe tzdata package has moved the legacy/deprecated timezone names into a separate package called tzdata-legacy. However, the version of systemd in Trixie doesn't filter out timezones that are listed in zone.tab, but not actually physically present on the device, resulting in an error if those timezones try to get set.\r\n\r\nDebian bug: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1124737\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\n\r\nAs a workaround, install the tzdata-legacy package to make all timezones that are listed in timedatectl work.\r\n\r\n#### How to verify it\r\n\r\n<!--\r\nIf PR needs to be backported, then the PR must be tested against the base branch and the earliest backport release branch and provide tested image version on these two branches. For example, if the PR is requested for master, 202211 and 202012, then the requester needs to provide test results on master and 202012.\r\n-->\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n\r\n<!--\r\n- Please provide tested image version\r\n- e.g.\r\n- [x] 20201231.100\r\n-->\r\n\r\n- [ ] <!-- image version 1 -->\r\n- [ ] <!-- image version 2 -->\r\n\r\n#### Description for the changelog\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n<!--\r\n Ensure to add label/tag for the feature raised. example - PR#2174 under sonic-utilities repo. where, Generic Config and Update feature has been labelled as GCU.\r\n-->\r\n\r\n#### Link to config_db schema for YANG module changes\r\n<!--\r\nProvide a link to config_db schema for the table for which YANG model\r\nis defined\r\nLink should point to correct section on https://github.com/Azure/sonic-buildimage/blob/master/src/sonic-yang-models/doc/Configuration.md\r\n-->\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n",
+      "files": [
+        {
+          "path": "build_debian.sh",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-29T23:10:29Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-29T23:10:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-02-21T10:48:10Z",
+          "body": "@yxieca Please merge to 202511 . Still get \"AssertionError: Expected: Asia/Jerusalem == PRC \" when test_clock.py picks up a legacy TZ randomly .Thanks"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-09T18:15:04Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/25979"
+        }
+      ]
+    }
+  ]
+}

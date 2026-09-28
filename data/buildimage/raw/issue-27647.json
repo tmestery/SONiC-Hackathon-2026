@@ -1,0 +1,67 @@
+{
+  "number": 27647,
+  "title": "Bug: docker-netfilter-ready.sh in docker.service ExecStartPre causes minutes-long hangs on every docker restart",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/27647",
+  "createdAt": "2026-06-01T19:54:39Z",
+  "closedAt": "2026-06-03T16:35:36Z",
+  "author": "thisptr-sh",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "rameshraghupathy"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nPR [#27477] adds a new ExecStartPre hook to docker.service:\n```\n# files/docker/docker.service.conf\n[Service]\n...\nExecStartPre=/usr/local/bin/docker-netfilter-ready.sh\n```\nThe script ([files/docker/docker-netfilter-ready.sh](https://github.com/rameshraghupathy/sonic-buildimage/blob/e53beed4f34e869737ecbf8de7bd60b24c48b774/files/docker/docker-netfilter-ready.sh):\n```\nfor i in $(seq 1 30); do\n    if ip6tables -w 5 -t filter -L >/dev/null 2>&1 && \\\n       ip6tables -w 5 -t nat -L >/dev/null 2>&1; then\n        ...\n        exit 0\n    fi\n    sleep 1\ndone\n```\nThis runs on every systemctl start/restart docker (not just first boot), and on some hardware/kernels each ip6tables -L call itself blocks in the kernel for tens of seconds to several minutes. Result: any systemctl restart docker (including the routine one in sonic-mgmt config_sonic_basedon_testbed.yml -> \"restart docker service, let docker proxy takes effect\") appears to hang the entire DUT for 5\u201315+ minutes, often longer than ansible's SSH timeout, failing testbed deployment.\n\n### Steps to Reproduce\n\n1. Install SONiC build 20251110.31 (or any image containing PR #27477 ) on a Broadcom Tomahawk-class DUT.\n2. After DUT is fully up, run:\n`sudo systemctl restart docker`\n3. Observe the command hangs. Inspect:\n```\nsudo systemctl status docker.service --no-pager -l\nps -ef | grep -E 'netfilter-ready|ip6tables' | grep -v grep\n```\ndocker.service is in activating (start-pre) with [docker-netfilter-ready.sh](https://github.com/rameshraghupathy/sonic-buildimage/blob/e53beed4f34e869737ecbf8de7bd60b24c48b774/files/docker/docker-netfilter-ready.sh) and ip6tables -w 5 -t filter -L as the running children, stuck in do_sys_poll/__x64_sys_poll.\n\n### Actual Behavior and Expected Behavior\n\nExpected behavior\n\n- systemctl restart docker completes in a few seconds on a healthy, fully-booted DUT.\n- The first-boot netfilter readiness gating should not affect ongoing operational restarts.\n\nActual behavior\n\n- Every docker restart pays the full cost of the readiness probe.\n- The probe's \"30 attempts \u00d7 1 s sleep\" upper bound assumes each ip6tables -L call returns quickly. When the kernel call itself blocks for tens of seconds, there is no upper bound on total runtime.\n- All SONiC containers are inaccessible during the wait, docker ps/show commands just hang\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-06-01T22:30:40Z",
+      "body": "hi @rameshraghupathy could you please take a look at priority?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27654,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/27654",
+      "title": "[docker] Avoid slow docker restarts from netfilter readiness check",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-03T16:35:34Z",
+      "createdAt": "2026-06-02T00:31:18Z",
+      "author": "rameshraghupathy",
+      "body": "#### Why I did it\r\nThe initial docker netfilter readiness gate fixed a SmartSwitch first-boot\r\nrace where docker.service could start before the IPv6 netfilter/ip6tables\r\npath was fully ready, causing cascading dependency failures in database,\r\nconfig-setup, interfaces-config, and related services.\r\n\r\nHowever, the original implementation introduced long delays during normal\r\ndocker restarts on some platforms because ip6tables -L could block for\r\nextended periods in the kernel.\r\n\r\nImprove the readiness helper by:\r\n\r\nSkipping the readiness check after early boot (>120s uptime)\r\nAdding timeout protection around ip6tables invocations\r\nReducing iptables lock wait time from 5s to 1s\r\nUsing -n to avoid unnecessary name resolution during table listing\r\n\r\nThis preserves the SmartSwitch first-boot protection while avoiding\r\nminutes-long hangs during routine docker restarts on other platforms.\r\n\r\nFixes: #27647\r\n\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nUpdated docker-netfilter-ready.sh to avoid expensive or potentially blocking\r\nip6tables probes during normal docker restarts while still preserving the\r\nearly first-boot SmartSwitch protection.\r\n\r\nChanges made:\r\n\r\nSkip the readiness check once system uptime exceeds 120 seconds\r\nWrap each ip6tables invocation with timeout to prevent indefinite kernel-level blocking\r\nReduce xtables lock wait time from -w 5 to -w 1\r\nAdd -n to avoid DNS/service name resolution overhead during table listing\r\n\r\nThis keeps the original first-boot race protection intact while eliminating\r\nminutes-long delays seen during routine systemctl restart docker operations\r\non some platforms.\r\n\r\n#### How to verify it\r\nVerify SmartSwitch first-boot protection still works:\r\nInstall a fresh SONiC image using sonic-installer install\r\nReboot into the new image\r\nConfirm docker/database/config services start successfully during first boot\r\n\r\nVerify management interface is configured automatically:\r\n\r\nshow ip int | grep eth0\r\n\r\nVerify no long docker restart delays remain:\r\n\r\ntime sudo systemctl restart docker\r\n\r\nExpected:\r\n\r\nDocker restart completes normally without multi-minute delay\r\nRestart time is comparable to pre-fix behavior\r\n\r\nVerify readiness helper logging:\r\n\r\njournalctl -u docker.service | grep docker-netfilter-ready\r\nVerify normal platforms are unaffected:\r\nReboot non-SmartSwitch platforms\r\nConfirm docker.service and dependent services start successfully\r\nConfirm no prolonged startup delays are introduced\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n202511\r\n\r\n",
+      "files": [
+        {
+          "path": "files/docker/docker-netfilter-ready.sh",
+          "additions": 17,
+          "deletions": 6
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-02T00:31:26Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-02T00:31:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "kperumalbfn",
+          "createdAt": "2026-06-02T21:14:04Z",
+          "body": "\r\n/azp run Azure.sonic-buildimage\r\n\r\n"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-02T21:14:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

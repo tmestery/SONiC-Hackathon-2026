@@ -1,0 +1,100 @@
+{
+  "number": 4315,
+  "title": "sonic-slave-stretch build failed",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/4315",
+  "createdAt": "2020-03-24T13:39:48Z",
+  "closedAt": "2020-03-27T17:49:10Z",
+  "author": "tieguoevan",
+  "labels": [],
+  "assignees": [
+    "xumia"
+  ],
+  "milestone": null,
+  "body": "**Description**\r\n\r\nsonic-slave-stretch cannot be built because debhelper from stretch-backports is conflicted with cmake from stretch\r\n```\r\nStep 10/42 : RUN apt-get -t stretch-backports install -y debhelper\r\n ---> Running in b4298563bd0d\r\nReading package lists...\r\nBuilding dependency tree...\r\nReading state information...\r\nThe following packages were automatically installed and are no longer required:\r\n  cmake-data libarchive13 libuv1\r\nUse 'apt autoremove' to remove them.\r\nThe following additional packages will be installed:\r\n  dh-autoreconf dpatch dwz quilt\r\nThe following packages will be REMOVED:\r\n  cmake\r\nThe following NEW packages will be installed:\r\n  dwz\r\nThe following packages will be upgraded:\r\n  debhelper dh-autoreconf dpatch quilt\r\n4 upgraded, 1 newly installed, 1 to remove and 147 not upgraded.\r\nNeed to get 1515 kB of archives.\r\nAfter this operation, 15.9 MB disk space will be freed.\r\n```\r\n\r\nWithout cmake, subsequent compilation will fail\r\n```\r\nStep 31/42 : RUN cd /usr/src/gtest && cmake . && make -C /usr/src/gtest\r\n ---> Running in fc9ae8ff35ea\r\n^[[91m/bin/sh: 1: cmake: not found\r\n^[[0mThe command '/bin/sh -c cd /usr/src/gtest && cmake . && make -C /usr/src/gtest' returned a non-zero code: 127\r\nSending build context to Docker daemon  28.67kB\r\n```\r\nsonic-jenkins can also see related logs\r\nhttps://sonic-jenkins.westus2.cloudapp.azure.com/job/bldenv/job/sonic-slave-stretch/110/consoleFull\r\n\r\n**Steps to reproduce the issue:**\r\n1. remove existed sonic-slave-stretch\r\n2. make configure \r\n\r\n",
+  "comments": [
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2020-03-24T22:33:44Z",
+      "body": "I think related to this bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=954852\r\nThe upstream is broken.\r\n"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2020-03-25T03:15:07Z",
+      "body": "I suspect not. it seems to be cause by debhelper\r\n\r\n```\r\nlgh@8bb9636d98fc:/sonic$ apt show debhelper\r\nPackage: debhelper\r\nVersion: 12.1.1~bpo9+1\r\nPriority: optional\r\nSection: devel\r\nMaintainer: Debhelper Maintainers <debhelper@packages.debian.org>\r\nInstalled-Size: 1641 kB\r\nProvides: debhelper-compat (= 9), debhelper-compat (= 10), debhelper-compat (= 11), debhelper-compat (= 12), dh-sequence-dwz, dh-sequence-installinitramfs, dh-sequence-systemd\r\nDepends: autotools-dev, dh-autoreconf (>= 17~), dh-strip-nondeterminism (>= 0.028~), dpkg (>= 1.18.0~), dpkg-dev (>= 1.18.2~), dwz, file (>= 3.23), libdpkg-perl (>= 1.17.14), man-db, po-debconf, perl\r\nSuggests: dh-make\r\nBreaks: cmake (<< 3.9~), dh-systemd (<< 1.38), meson (<< 0.40.0~)\r\nReplaces: dh-systemd (<< 1.38)\r\nDownload-Size: 1012 kB\r\nAPT-Manual-Installed: yes\r\nAPT-Sources: http://debian-archive.trafficmanager.net/debian stretch-backports/main amd64 Packages\r\nDescription: helper programs for debian/rules\r\n\r\nN: There is 1 additional record. Please use the '-a' switch to see it\r\n```"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2020-03-25T06:10:57Z",
+      "body": "this is a tricky one. here is my analysis:\r\n\r\n- smartmontools requires debhelper >= 11, therefore, we need to install debhelper 12.1.1 from stretch-backports.\r\n\r\n- debhelper in requires cmake (>= 3.9)\r\n\r\n- previously, we install cmake v13.3.2, which is ok. recently, cmake in debhelper is upgraded to v13.6.3 which requires libarchive13 (>= 3.3.3).\r\n\r\n- but libarchive13 is not available in stretch-backports.\r\n\r\nNow, we cannot go back to cmake v13.3.2 since it is no longer available.\r\n\r\nit looks like libarchive13 (3.4.0-2~bpo9+1) is in stretch-backports-sloppy"
+    },
+    {
+      "author": "gpaussabrcm",
+      "createdAt": "2020-03-25T14:23:37Z",
+      "body": "With this change, please keep a close watch on building src/libyang. When I tried this, the newer version of cmake seems to behave differently regarding SWIG, causing the following error:\r\n\r\n```\r\nmake[3]: Entering directory '/sonic/src/libyang/libyang-1.0.73/build'                                                                                 \r\n[ 96%] Building CXX object swig/python2/CMakeFiles/_yang2.dir/yangPYTHON_wrap.cxx.o                                                                   \r\n/sonic/src/libyang/libyang-1.0.73/build/swig/python2/yangPYTHON_wrap.cxx:3292:33: error: expected initializer before '.' token                        \r\n #  define SWIG_init    init_yang.so                                                                                                                  \r\n                                 ^                                                                                                                    \r\n/sonic/src/libyang/libyang-1.0.73/build/swig/python2/yangPYTHON_wrap.cxx:102537:1: note: in expansion of macro 'SWIG_init'                            \r\n SWIG_init(void) {                                                                                                                                    \r\n ^                                                                                                                                                    \r\n/sonic/src/libyang/libyang-1.0.73/build/swig/python2/yangPYTHON_wrap.cxx:101971:24: warning: 'swig_const_table' defined but not used [-Wunused-variable]                                                                                                                                                    \r\n static swig_const_info swig_const_table[] = {                                                                                                        \r\n                        ^~~~~~~~~~~~~~~~                                                                                                              \r\n/sonic/src/libyang/libyang-1.0.73/build/swig/python2/yangPYTHON_wrap.cxx:99421:20: warning: 'SwigMethods' defined but not used [-Wunused-variable]    \r\n static PyMethodDef SwigMethods[] = {                                                                                                                 \r\n                    ^~~~~~~~~~~                                                                                                                       \r\nswig/python2/CMakeFiles/_yang2.dir/build.make:62: recipe for target 'swig/python2/CMakeFiles/_yang2.dir/yangPYTHON_wrap.cxx.o' failed\r\nmake[3]: *** [swig/python2/CMakeFiles/_yang2.dir/yangPYTHON_wrap.cxx.o] Error 1\r\nmake[3]: Leaving directory '/sonic/src/libyang/libyang-1.0.73/build'\r\nCMakeFiles/Makefile2:3866: recipe for target 'swig/python2/CMakeFiles/_yang2.dir/all' failed\r\n\r\n```\r\n\r\nNot sure if there are any other build errors in SONiC, but this is the first one I encountered.\r\n\r\nFor reference, here are the versions installed in my sonic-slave-stretch build container after making the Dockerfile.j2 changes:\r\n\r\n```\r\n# dpkg -l cmake libarchive13 debhelper  \r\nDesired=Unknown/Install/Remove/Purge/Hold                           \r\n| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend\r\n|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)                    \r\n||/ Name                            Version              Architecture         Description\r\n+++-===============================-====================-====================-====================================================================\r\nii  cmake                           3.16.3-1~bpo9+1      amd64                cross-platform, open-source make system                             \r\nii  debhelper                       12.1.1~bpo9+1        all                  helper programs for debian/rules                                    \r\nii  libarchive13:amd64              3.4.0-2~bpo9+1       amd64                Multi-format archive and compression library (shared library)       \r\n```\r\n-Greg"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2020-03-25T18:20:29Z",
+      "body": "ack. two solutions in my mind\r\n\r\n1. upgrade libyang to latest release 1.0.130 to see if there is issue.\r\n2. downgrade debhelper, and only install debhelper 12 before smartmontools and then download debhelper after build smartmontools."
+    },
+    {
+      "author": "gpaussabrcm",
+      "createdAt": "2020-03-27T01:15:56Z",
+      "body": "Consider the following change as an additional patch in the src/libyang/patch series:\r\n\r\n```\r\ndiff --git a/swig/CMakeLists.txt b/swig/CMakeLists.txt\r\nindex 0baa69ab..c0b75228 100644\r\n--- a/swig/CMakeLists.txt\r\n+++ b/swig/CMakeLists.txt\r\n@@ -31,7 +31,9 @@ if(GEN_PYTHON_BINDINGS AND SWIG_FOUND)\r\n             unset(PYTHON_INCLUDE_PATH CACHE)\r\n             unset(PYTHON_EXT_SUFFIX CACHE)\r\n             unset(PYTHON_MODULE_PATH CACHE)\r\n-            set(PYTHON_EXT_SUFFIX \".so\")\r\n+            if(${CMAKE_VERSION} VERSION_LESS \"3.16.0\")\r\n+                set(PYTHON_EXT_SUFFIX \".so\")\r\n+            endif()\r\n```\r\n\r\n             find_program(PYTHON_EXECUTABLE NAMES python${CUR_PYTHON_VERSION})\r\n             execute_process(COMMAND ${PYTHON_EXECUTABLE} -c\r\n\r\nThe VERSION_LESS check most likely isn't exactly right, but this is meant as an alternative to upgrading the libyang version, and is in addition to the sonic-slave-stretch/Dockerfile.j2 changes already proposed as a fix. I've not tried this with anything other than my one build that was previously unable to create the stretch base image, so it'll need some vetting.\r\n"
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2020-03-27T06:56:07Z",
+      "body": "@gpaussabrcm, thanks for the investigation. @qiluo-msft has found the pre-built binary for 3.13.2. we are fixing using this approach. It is probably better to keep cmake the same version. \r\n\r\ni think this time lesson learned. I did not realized so many project relies on the cmake. Did not realize cmake is such a basic tool. it is probably not a good idea to cmake from stretch-backports in the first place.\r\n\r\nWe should probably be more careful on accepting the pr that upgrades debhelper in the first place. after all, only one project requires debhelper >= 11. "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4319,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/4319",
+      "title": "[build]: install cmake 3.13.2",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-03-27T17:49:09Z",
+      "createdAt": "2020-03-25T06:13:01Z",
+      "author": "lguohan",
+      "body": "\u2026-sloppy\r\n\r\n- debhelper requires cmake (>= 3.9)\r\n- cmake v13.6.3 requires libarchive13 (>= 3.3.3)\r\n- libarchive13 (3.4.0-2~bpo9+1) is in stretch-backports-sloppy\r\n\r\nSigned-off-by: Guohan Lu <lguohan@gmail.com>\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\nIf this is a bug fix, make sure your description includes \"fixes #xxxx\", or\r\n\"closes #xxxx\"\r\n\r\nPlease provide the following information:\r\n-->\r\n\r\n**- What I did**\r\n\r\n**- How I did it**\r\n\r\n**- How to verify it**\r\nlocally build sonic-slave-stretch docker\r\n\r\n**- Description for the changelog**\r\n<!--\r\nWrite a short (one line) summary that describes the changes in this\r\npull request for inclusion in the changelog:\r\n-->\r\n\r\n\r\n**- A picture of a cute animal (not mandatory but encouraged)**\r\n",
+      "files": [
+        {
+          "path": "sonic-slave-stretch/Dockerfile.j2",
+          "additions": 17,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "lguohan",
+          "createdAt": "2020-03-25T15:04:21Z",
+          "body": "retest vs please"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2020-03-25T17:16:27Z",
+          "body": "i am not sure why only vs build fails on libyang"
+        },
+        {
+          "author": "baxia-lan",
+          "createdAt": "2020-03-27T05:55:15Z",
+          "body": "A possible way to install cmake 3.13.2:\r\n```\r\n# Install cmake-3.13.2, since installing debhelper removed cmake, and cmake-3.16.1 breaks libyang build.\r\nRUN wget -q -O cmake-linux.sh https://github.com/Kitware/CMake/releases/download/v3.13.2/cmake-3.13.2-Linux-x86_64.sh\r\nRUN sh cmake-linux.sh -- --skip-license --prefix=/usr\r\nRUN rm cmake-linux.sh\r\n```"
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2020-03-27T06:52:13Z",
+          "body": "@baxia-lan, thanks for the suggestion. @qiluo-msft has found the pre-built binary for 3.13.2. we are fixing using this approach."
+        },
+        {
+          "author": "lguohan",
+          "createdAt": "2020-03-27T10:33:27Z",
+          "body": "retest mellanox please"
+        }
+      ]
+    }
+  ]
+}

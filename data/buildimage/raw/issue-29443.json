@@ -1,0 +1,89 @@
+{
+  "number": 29443,
+  "title": "Bug: [FRR][zebra] RSS remains elevated after config reload with tcmalloc enabled",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/29443",
+  "createdAt": "2026-09-09T21:09:18Z",
+  "closedAt": "2026-09-17T20:32:19Z",
+  "author": "croos12",
+  "labels": [
+    "Bug :bug:",
+    "routing"
+  ],
+  "assignees": [
+    "zypgithub",
+    "deepak-singhal0408"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn SONiC branch 202605, using FRR 10.5.4 built with --enable-gperf-tcmalloc, a configuration reload restarts BGP and creates a new zebra process.\nIn an affected run, zebra used approximately 57.3 MiB RSS before the reload. The replacement zebra process grew to approximately 367 MiB RSS and was still using 376092 KiB more than nine minutes after startup.\nAt that point, show memory zebra reported 329 MiB in \u201cFree ordinary blocks,\u201d while show event cpu showed that tcmalloc_timer had been invoked 50 times. The behavior is intermittent.\n\nThese memory values are specific to the `Mellanox-SN5640-C512S2` HWSKU and the `t0-isolated-d256u256s2` scale topology.\n\n\n### Steps to Reproduce\n\n1. Deploy a SONiC `202605` image on the following configuration:\n\n   - Platform: `x86_64-nvidia_sn5640-r0`\n   - HWSKU: `Mellanox-SN5640-C512S2`\n   - Topology: `t0-isolated-d256u256s2`\n\n2. Confirm that FRR was built with tcmalloc:\n\n   ```shell\n   docker exec bgp vtysh -c \"show version\"\n   ```\n\n3. Record the initial zebra PID, RSS, and allocator statistics:\n\n   ```shell\n   docker exec bgp sh -c \\\n     'pid=$(cat /var/run/frr/zebra.pid); ps -o pid,etimes,vsz,rss,args -p \"$pid\"'\n\n   docker exec bgp vtysh -c \"show memory zebra\"\n   docker exec bgp vtysh -c \"show tcmalloc stats zebra\"\n   docker exec bgp vtysh -c \"show event cpu\"\n   ```\n\n4. Run the sonic-mgmt authorization test on the configured testbed:\n\n   ```shell\n   pytest \\\n     tests/tacacs/test_authorization.py::test_fallback_to_local_authorization_with_config_reload \\\n     --inventory <inventory> \\\n     --testbed <testbed-entry> \\\n     --testbed_file <testbed-file>\n   ```\n\n5. Confirm that zebra has a different PID after the configuration reload.\n\n6. Capture the following data immediately after restart and after approximately 1, 5, and 10 minutes:\n\n   ```shell\n   docker exec bgp sh -c \\\n     'pid=$(cat /var/run/frr/zebra.pid); ps -o pid,etimes,vsz,rss,args -p \"$pid\"'\n\n   docker exec bgp vtysh -c \"show memory zebra\"\n   docker exec bgp vtysh -c \"show tcmalloc stats zebra\"\n   docker exec bgp vtysh -c \"show event cpu\"\n\n   docker exec bgp sh -c \\\n     'pid=$(cat /var/run/frr/zebra.pid); grep -E \"^(Rss|Private_Dirty|AnonHugePages):\" /proc/$pid/smaps_rollup'\n   ```\n\n7. Repeat the test if necessary because the behavior is intermittent.\n\n### Actual Behavior and Expected Behavior\n\nFor `Mellanox-SN5640-C512S2` with the `t0-isolated-d256u256s2` topology:\n\n- Zebra RSS before reload was approximately 57.3 MiB.\n- The replacement zebra process reached approximately 367 MiB RSS.\n- RSS remained at 376092 KiB more than nine minutes after startup.\n- `show memory zebra` reported 329 MiB in \u201cFree ordinary blocks.\u201d\n- `tcmalloc_timer` was invoked 50 times.\n\nInvocation of the timer callback does not prove that the allocator\u2019s release operation was executed or that pages were successfully returned to the operating system.\n\nAfter the replacement zebra finishes rebuilding state for the same HWSKU and topology, its memory usage should converge toward a stable and repeatable steady-state level.\n\nUnused mapped pages should be returned to the operating system according to the configured tcmalloc release policy. Repeated configuration reloads should not progressively reduce available system memory\n\n### Relevant log output\n\n```shell\nroot@sonic:/home/admin# vtysh -c \"show memory zebra\"\nSystem allocator statistics:\n  Total heap allocated:  386 MiB\n  Holding block headers: 31 MiB\n  Used small blocks:     0 bytes\n  Used ordinary blocks:  25 MiB\n  Free small blocks:     2224 bytes\n  Free ordinary blocks:  361 MiB\n  Ordinary blocks:       4243\n  Small blocks:          64\n  Holding blocks:        35\n\n\nroot@sonic:/home/admin# docker exec bgp vtysh -c 'show tcmalloc stats zebra'\nTcmalloc version 'gperftools 2.16' (2.16)\nTcmalloc mallinfo statistics:\n  Total heap allocated:  1024 KiB\n  Holding block headers: 0 bytes\n  Used small blocks:     0 bytes\n  Used ordinary blocks:  0 bytes\n  Free small blocks:     8192 bytes\n  Free ordinary blocks:  1016 KiB\n  Ordinary blocks:       0\n  Small blocks:          0\n  Holding blocks:        0\n\ngeneric.heap_size: 1048576\ngeneric.total_physical_bytes: 3539008\ntcmalloc.pageheap_free_bytes: 1040384\n\n\n\nroot@sonic:/home/admin# top -b -n 1 | grep \"zebra\"\n1093737 300       20   0 1024504 404916  13464 S   0.0   1.2   1:26.17 zebra\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "dgsudharsan",
+      "createdAt": "2026-09-10T05:02:04Z",
+      "body": "@deepak-singhal0408 FYI"
+    },
+    {
+      "author": "croos12",
+      "createdAt": "2026-09-11T22:20:49Z",
+      "body": "@deepak-singhal0408 I updated the description with \"show memory zebra\" vs. show \"tcmalloc stats zebra\"\n\nI checked the bindings and got this:\n\n```\ndocker exec bgp sh -c 'LD_BIND_NOW=1 LD_DEBUG=bindings /usr/lib/frr/zebra --version 2>&1 | grep -E \"binding file .*(zebra|libfrr\\.so).*normal symbol.*(malloc|calloc|realloc|free|mallinfo2)\"'\n\n(relevant info only)\n\nbinding file .../libfrr.so.0 to .../libc.so.6: normal symbol `realloc'\nbinding file .../libfrr.so.0 to .../libc.so.6: normal symbol `calloc'\nbinding file .../libfrr.so.0 to .../libc.so.6: normal symbol `free'\nbinding file .../libfrr.so.0 to .../libc.so.6: normal symbol `mallinfo2'\nbinding file .../libfrr.so.0 to .../libc.so.6: normal symbol `malloc'\nbinding file .../libfrr.so.0 to .../libtcmalloc.so.4: normal symbol `tc_mallinfo2'\n\nbinding file /usr/lib/frr/zebra to .../libc.so.6: normal symbol `calloc' [GLIBC_2.2.5]\nbinding file /usr/lib/frr/zebra to .../libc.so.6: normal symbol `free' [GLIBC_2.2.5]\nbinding file /usr/lib/frr/zebra to .../libc.so.6: normal symbol `malloc' [GLIBC_2.2.5]\nbinding file /usr/lib/frr/zebra to .../libc.so.6: normal symbol `realloc' [GLIBC_2.2.5]\n```\n\nIt looks like even with tcmalloc enabled malloc, calloc, realloc, and free calls still bind to glibc even though tcmalloc is installed:\n\n```\ndocker exec bgp ldd /usr/lib/frr/zebra\n\tlinux-vdso.so.1 (0x00007f343a86b000)\n\tlibfrr.so.0 => /usr/lib/x86_64-linux-gnu/frr/libfrr.so.0 (0x00007f343a3d7000)\n\tlibjson-c.so.5 => /lib/x86_64-linux-gnu/libjson-c.so.5 (0x00007f343a3c0000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f343a1cc000)\n\tlibcap.so.2 => /lib/x86_64-linux-gnu/libcap.so.2 (0x00007f343a1c0000)\n\tlibunwind.so.8 => /lib/x86_64-linux-gnu/libunwind.so.8 (0x00007f343a1a1000)\n\tlibcrypt.so.1 => /lib/x86_64-linux-gnu/libcrypt.so.1 (0x00007f343a165000)\n\tlibyang.so.3 => /lib/x86_64-linux-gnu/libyang.so.3 (0x00007f343a00d000)\n\tlibpcre2-posix.so.3 => /lib/x86_64-linux-gnu/libpcre2-posix.so.3 (0x00007f343a008000)\n\tlibtcmalloc.so.4 => /lib/x86_64-linux-gnu/libtcmalloc.so.4 (0x00007f3439e0c000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f343a86d000)\n\tliblzma.so.5 => /lib/x86_64-linux-gnu/liblzma.so.5 (0x00007f3439dd9000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f3439ce9000)\n\tlibpcre2-8.so.0 => /lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007f3439c3a000)\n\tlibxxhash.so.0 => /lib/x86_64-linux-gnu/libxxhash.so.0 (0x00007f3439c27000)\n\tlibstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007f34399c1000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f3439992000)\n```\n"
+    },
+    {
+      "author": "deepak-singhal0408",
+      "createdAt": "2026-09-14T18:53:39Z",
+      "body": "Thanks @croos12. this confirms zebra is indeed using glibc. \nRemember seeing this in the report generated by Nokia team earlier(zebra was not releasing memory back).. https://github.com/sonic-net/sonic-buildimage/pull/27580#issuecomment-4606337626\nAt that time, it was validated with ldd which reported tcmalloc was linked(but it was via libfrr.so.0).\n\nI have created a FRR Issue(https://github.com/FRRouting/frr/issues/23338) and upstream PR(https://github.com/FRRouting/frr/pull/23359) for this.. will create a sonic patch PR as well...\n\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 29571,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/29571",
+      "title": "[FRR] Backport build fix to keep libtcmalloc in DT_NEEDED for all daemons",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-17T20:32:18Z",
+      "createdAt": "2026-09-15T22:29:11Z",
+      "author": "deepak-singhal0408",
+      "body": "#### Why I did it\n\nFixes https://github.com/sonic-net/sonic-buildimage/issues/29443.\n\nSONiC sets `ENABLE_FRR_TCMALLOC = y`, and zebra still runs on glibc malloc. gcc on Debian uses `--as-needed`, which keeps a `DT_NEEDED` entry only when the binary's own objects use a symbol from that library. FRR daemons allocate through `lib/`'s `XMALLOC` macros, so the malloc calls sit in `libfrr.so.0` and the linker drops `libtcmalloc` from most daemons, zebra included.\n\nUpstream FRR issue: https://github.com/FRRouting/frr/issues/23338\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\n\nAdd SONiC FRR patch `0118`, a backport of upstream [FRRouting/frr PR 23359](https://github.com/FRRouting/frr/pull/23359). It wraps both tcmalloc libraries in `configure.ac`, so `--as-needed` keeps them:\n\n```diff\n-LIBS=\"$LIBS -ltcmalloc_minimal\"\n+LIBS=\"$LIBS -Wl,--push-state,--no-as-needed,-ltcmalloc_minimal,--pop-state\"\n...\n-LIBS=\"$LIBS -ltcmalloc\"\n+LIBS=\"$LIBS -Wl,--push-state,--no-as-needed,-ltcmalloc,--pop-state\"\n```\n\nThe `--push-state`/`--pop-state` group matters. libtool moves a bare `-l` past a trailing `--as-needed`. A global `--no-as-needed` would keep every unused library too. The patch header lists the forms I measured.\n\n#### How to verify it\n\nCheck that every installed daemon lists the library:\n\n```bash\nfor d in /usr/lib/frr/*; do\n  [ -f \"$d\" ] && head -c4 \"$d\" | grep -q ELF || continue\n  readelf -d \"$d\" | grep -q libtcmalloc || echo \"MISSING tcmalloc: $d\"\ndone\n```\n\nToday it prints zebra and its peers. With the patch it prints nothing: checked=22, missing=0.\n\n**Route-scale before/after.** KVM `vms-kvm-t0`, FRR 10.5.4, same testbed both runs with only the `docker-fpm-frr` container swapped. `sharpd` installs 500,000 routes, then withdraws them. zebra RSS sampled for 15 minutes.\n\n| Stage | BEFORE (glibc) | AFTER (tcmalloc) |\n|---|---:|---:|\n| Idle baseline | 25.1 MB | 59.7 MB |\n| Peak @ 500k routes | 455.5 MB | 389.3 MB |\n| After 15 min | **447.8 MB** | **113.3 MB** |\n| Returned to the OS | **0 MB** | **269 MB** |\n\nThe release rate is ~0.9 MB/s, matching the 1 MiB/s cap that patch `0110` sets through `zebra memory release rate`.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n\n202605 ships FRR 10.5.4 with `ENABLE_FRR_TCMALLOC ?= y` and the same `src/sonic-frr` submodule pointer, so it has the same defect. Confirmed on the 202605 nightly, build 1215746. The commit applies unchanged, so an auto cherry-pick should work.\n\n#### Tested branch\n\n- [x] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n\nmaster: build 1216687 as the BEFORE arm. Route-scale before/after run on KVM `vms-kvm-t0`, table above. zebra RSS settles at 113.3 MB against 447.8 MB held.\n\n202605: build 1215746 as the BEFORE arm, where zebra has no `libtcmalloc` in `DT_NEEDED`. A rebuild with this patch links all 22 daemons: checked=22, missing=0. zebra `DT_NEEDED` becomes `libtcmalloc.so.4 libfrr.so.0 libjson-c.so.5 libgcc_s.so.1 libc.so.6`.\n\n#### Description for the changelog\n\n[frr] Keep libtcmalloc in DT_NEEDED for every daemon so zebra uses tcmalloc.\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 build-time link flags only.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\nN/A\n",
+      "files": [
+        {
+          "path": "src/sonic-frr/patch/0118-build-keep-tcmalloc-in-DT_NEEDED.patch",
+          "additions": 81,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-frr/patch/series",
+          "additions": 1,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-15T22:29:20Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-15T22:29:30Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-15T22:29:43Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-09-15T22:42:37Z",
+          "body": "Adding the runtime evidence, since `readelf -d` shows the link structure and this shows the actual allocator each call reaches.\n\nBoth arms are the same KVM DUT `vlab-01`, FRR 10.5.4, with only the `docker-fpm-frr` container swapped. Probe run on the DUT:\n\n```bash\ndocker exec bgp sh -c '\nLD_DEBUG=bindings LD_DEBUG_OUTPUT=/tmp/zb /usr/lib/frr/zebra --help >/dev/null 2>&1\nF=$(ls /tmp/zb.* | head -1)\ngrep -E \"binding file .*(libfrr|/zebra).*: normal symbol .(malloc|free|calloc|realloc)\" $F | sort -u\n'\n```\n\n**BEFORE**\n\n```\nbinding file /usr/lib/frr/zebra [0] to libc.so.6 [0]: normal symbol `malloc'\nbinding file /usr/lib/frr/zebra [0] to libc.so.6 [0]: normal symbol `free'\nbinding file /usr/lib/frr/zebra [0] to libc.so.6 [0]: normal symbol `calloc'\nbinding file /usr/lib/frr/zebra [0] to libc.so.6 [0]: normal symbol `realloc'\nbinding file frr/libfrr.so.0  [0] to libc.so.6 [0]: normal symbol `malloc'\nbinding file frr/libfrr.so.0  [0] to libc.so.6 [0]: normal symbol `malloc_usable_size'\n```\n\n**AFTER**\n\n```\nbinding file /usr/lib/frr/zebra [0] to libtcmalloc.so.4 [0]: normal symbol `malloc'\nbinding file /usr/lib/frr/zebra [0] to libtcmalloc.so.4 [0]: normal symbol `free'\nbinding file /usr/lib/frr/zebra [0] to libtcmalloc.so.4 [0]: normal symbol `calloc'\nbinding file /usr/lib/frr/zebra [0] to libtcmalloc.so.4 [0]: normal symbol `realloc'\nbinding file frr/libfrr.so.0  [0] to libtcmalloc.so.4 [0]: normal symbol `malloc'\nbinding file frr/libfrr.so.0  [0] to libtcmalloc.so.4 [0]: normal symbol `malloc_usable_size'\n```\n\n`libfrr.so.0` flips too. It always listed `libtcmalloc` in its own `DT_NEEDED`, so putting the dependency on each daemon is what changes the resolution order.\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-20T06:53:09Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-buildimage/pull/29647"
+        }
+      ]
+    }
+  ]
+}

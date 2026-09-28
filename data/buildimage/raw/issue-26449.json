@@ -1,0 +1,59 @@
+{
+  "number": 26449,
+  "title": "[broadcom] saibcm-modules-legacy-th build fails: stale symlinks from prior kernel module builds",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26449",
+  "createdAt": "2026-03-28T23:16:22Z",
+  "closedAt": "2026-03-30T03:05:34Z",
+  "author": "rustiqly",
+  "labels": [],
+  "assignees": [
+    "lipxu"
+  ],
+  "milestone": null,
+  "body": "## Description\n\nBuilding `sonic-aboot-broadcom.swi` from a clean clone of current master (`32875b5f8`) fails when building `opennsl-modules-legacy-th`:\n\n```\nln: failed to create symbolic link '.../arch/x86/module.lds': File exists\nmake[1]: *** [Makefile:15: /sonic/target/debs/bookworm/frr_10.5.1-sonic-0_amd64.deb] Error 128\n```\n\nActually the error is:\n```\nln: failed to create symbolic link '/usr/src/linux-headers-6.12.41+deb13-common-sonic/arch/x86/module.lds': File exists\n```\n\n## Root Cause\n\nThree Broadcom kernel module packages build sequentially via `_AFTER` ordering:\n\n1. **saibcm-modules** (first) \u2014 creates symlinks in `/usr/src/linux-headers-*-common-sonic/` with bare `ln -s`\n2. **saibcm-modules-dnx** (second) \u2014 has `if [ ! -e ... ]` guards, so it skips existing symlinks \u2705\n3. **saibcm-modules-legacy-th** (third) \u2014 uses bare `ln -s` without guards, **fails** because symlinks already exist from step 1 \u274c\n\nThe `saibcm-modules-legacy-th` directory was introduced in PR #25192 (as `saibcm-modules-legacy`) by copying from `saibcm-modules` without adding the existence guards that `saibcm-modules-dnx` has. PR #25871 renamed it to `legacy-th` but did not fix the bug.\n\n## Affected Files\n\n- `platform/broadcom/saibcm-modules/debian/rules` (lines 96-99) \u2014 no guards, but builds first so it works\n- `platform/broadcom/saibcm-modules-dnx/debian/rules` (lines 96-107) \u2014 has `if [ ! -e ]` guards \u2705\n- `platform/broadcom/saibcm-modules-legacy-th/debian/rules` (lines 96-99) \u2014 no guards \u274c\n\n## Proposed Fix\n\nUse `ln -sf` (force) instead of `ln -s` in all three `debian/rules` files. This is:\n- Simpler than `if [ ! -e ]` guards\n- Idempotent and defensive\n- Standard practice in kernel module Makefiles (Linux's own `scripts/Makefile.build` uses `ln -sf`)\n\n## Steps to Reproduce\n\n```bash\ngit clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git\ncd sonic-buildimage\nmake init\nmake configure PLATFORM=broadcom\nmake target/sonic-aboot-broadcom.swi\n```\n\nBuild fails at `opennsl-modules-legacy-th` every time.\n\n## Impact\n\n**All broadcom aboot/onie image builds are broken on current master** \u2014 this is a guaranteed failure since the `_AFTER` ordering ensures `saibcm-modules` always creates the symlinks before `saibcm-modules-legacy-th` tries to.\n\n/cc @lipxu",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26450,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26450",
+      "title": "[broadcom] Fix saibcm-modules symlink creation to be idempotent",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-30T03:05:33Z",
+      "createdAt": "2026-03-28T23:19:09Z",
+      "author": "rustiqly",
+      "body": "#### What I did\n\nFixed `saibcm-modules` and `saibcm-modules-legacy-th` kernel module packages to use idempotent symlink creation (`ln -sf`/`ln -sfn`) instead of bare `ln -s`.\n\n#### Why I did it\n\n**All broadcom image builds (aboot + onie) are broken on current master.** The three Broadcom kernel module packages build sequentially:\n\n1. `saibcm-modules` \u2192 creates symlinks in shared `linux-headers-*-common-sonic/`\n2. `saibcm-modules-dnx` \u2192 has `if [ ! -e ]` guards, skips existing symlinks \u2705\n3. `saibcm-modules-legacy-th` \u2192 uses bare `ln -s`, **fails** because symlinks already exist \u274c\n\nError:\n```\nln: failed to create symbolic link '/usr/src/linux-headers-6.12.41+deb13-common-sonic/arch/x86/module.lds': File exists\n```\n\nThis was introduced in PR #25192 (which copied `debian/rules` from `saibcm-modules` without the guards that `saibcm-modules-dnx` has) and persisted through PR #25871 (rename to `legacy-th`).\n\n#### How I did it\n\n- Replace `ln -s` with `ln -sfn` for directory symlinks (`-n` prevents creating a symlink *inside* an existing target directory)\n- Replace `ln -s` with `ln -sf` for the `module.lds` file symlink\n- Remove redundant `rm` before symlink creation (`ln -sf` handles this)\n- Applied to both `saibcm-modules` and `saibcm-modules-legacy-th`\n\n**Note:** `saibcm-modules-dnx` lives in a separate submodule (`sonic-net/saibcm-modules`) and already has `if [ ! -e ]` guards. A separate PR to that repo will normalize it to use `ln -sf` for consistency.\n\n#### How to verify it\n\n```bash\ngit clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git\ncd sonic-buildimage\nmake init\nmake configure PLATFORM=broadcom\nmake target/sonic-aboot-broadcom.swi\n```\n\nWithout this fix: build fails at `opennsl-modules-legacy-th` with symlink error.\nWith this fix: all three kernel module packages build successfully.\n\nFixes #26449\n\n/cc @lipxu",
+      "files": [
+        {
+          "path": "platform/broadcom/saibcm-modules-legacy-th/debian/rules",
+          "additions": 6,
+          "deletions": 8
+        },
+        {
+          "path": "platform/broadcom/saibcm-modules/debian/rules",
+          "additions": 6,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-28T23:19:19Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-28T23:19:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T23:44:29Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-buildimage/pull/26496"
+        }
+      ]
+    }
+  ]
+}

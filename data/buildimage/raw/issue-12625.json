@@ -1,0 +1,194 @@
+{
+  "number": 12625,
+  "title": "[warm-reboot] Upgrade from 201911 to 202205 is failing due to fpmsyncd crash",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/12625",
+  "createdAt": "2022-11-07T15:05:25Z",
+  "closedAt": "2023-03-03T20:45:42Z",
+  "author": "volodymyrsamotiy",
+  "labels": [
+    "Triaged",
+    "BRCM"
+  ],
+  "assignees": [
+    "nkelapur"
+  ],
+  "milestone": null,
+  "body": "<!--\r\n     If you are reporting a new issue, make sure that we do not have any duplicates\r\n     already open. You can ensure this by searching the issue list for this\r\n     repository. If there is a duplicate, please close your issue and add a comment\r\n     to the existing issue instead.\r\n\r\n     If you suspect your issue is a bug, please edit your issue description to\r\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\r\n     information within 7 days, we cannot debug your issue and will close it. We\r\n     will, however, reopen it if you later provide the information.\r\n\r\n     For more information about reporting issues, see\r\n     https://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n     ---------------------------------------------------\r\n     GENERAL SUPPORT INFORMATION\r\n     ---------------------------------------------------\r\n\r\n     The GitHub issue tracker is for bug reports and feature requests.\r\n     General support can be found at the following locations:\r\n\r\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n     ---------------------------------------------------\r\n     BUG REPORT INFORMATION\r\n     ---------------------------------------------------\r\n     Use the commands below to provide key information from your environment:\r\n     You do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n#### Description\r\n201911->202205 warm-upgrade is failing because of fpmsyncd crash on reconciliation stage during 202205 initialization after warm-reboot.\r\n```\r\nNov  7 14:18:00.088021 sonic NOTICE bgp#fpmsyncd: :- main: Warm-Restart timer expired.\r\nNov  7 14:18:00.088507 sonic NOTICE bgp#fpmsyncd: :- reconcile: Warm-Restart: Initiating reconciliation process for bgp application.\r\nNov  7 14:18:00.089566 sonic INFO bgp#supervisord: fpmsyncd fpmsyncd: ../warmrestart/warmRestartHelper.cpp:295: bool swss::WarmStartHelper::compareAllFV(const std::vector<std::pair<std::__cxx11::basic_string<char>, std::__cxx\r\n11::basic_string<char> > >&, const std::vector<std::pair<std::__cxx11::basic_string<char>, std::__cxx11::basic_string<char> > >&): Assertion `v1Iter != v1Map.end()' failed.\r\nNov  7 14:18:01.545656 sonic INFO bgp#supervisord 2022-11-03 14:18:01,544 INFO exited: fpmsyncd (terminated by SIGABRT (core dumped); not expected)\r\nNov  7 14:18:02.307563 sonic INFO systemd[1]: run-docker-runtime\\x2drunc-moby-216ca677eef9bbee9b1202cc3b1ddbff50a8ce9b1330da2f3fa1ea3e9afa6364-runc.F02N9R.mount: Succeeded.\r\nNov  7 14:18:02.580120 sonic INFO bgp#supervisor-proc-exit-listener: Process 'fpmsyncd' exited unexpectedly. Terminating supervisor 'bgp'\r\nNov  7 14:18:02.583203 sonic INFO bgp#supervisord 2022-11-07 14:18:02,580 WARN received SIGTERM indicating exit request\r\nNov  7 14:18:02.583414 sonic INFO bgp#supervisord 2022-11-07 14:18:02,580 INFO waiting for supervisor-proc-exit-listener, rsyslogd, staticd, zebra, bgpd, bgpcfgd, bgpmon to die\r\nNov  7 14:18:03.585041 sonic INFO bgp#supervisord 2022-11-07 14:18:03,584 INFO stopped: bgpmon (terminated by SIGTERM)\r\nNov  7 14:18:04.595653 sonic INFO bgp#supervisord 2022-11-07 14:18:04,594 INFO stopped: bgpcfgd (exit status 0)\r\nNov  7 14:18:04.611052 sonic INFO bgp#supervisord 2022-11-07 14:18:04,610 INFO stopped: bgpd (terminated by SIGKILL)\r\n```\r\n\r\nfpmsyncd is crashing due to shown below ```assert``` during routes reconciliation.\r\nhttps://github.com/sonic-net/sonic-swss/blob/202205/warmrestart/warmRestartHelper.cpp#L295\r\n```\r\n/*\r\n * Compare all field-value-tuples within two vectors.\r\n *\r\n * Example: v1 {nexthop: 10.1.1.1, ifname: eth1}\r\n *          v2 {nexthop: 10.1.1.2, ifname: eth2}\r\n...\r\nbool WarmStartHelper::compareAllFV(const std::vector<FieldValueTuple> &v1,\r\n                                   const std::vector<FieldValueTuple> &v2)\r\n{\r\n ...\r\n        assert(v1Iter != v1Map.end());\r\n...}\r\n```\r\n\r\nNot 100% sure if it is root cause for fpmsyncd crash, but it looks like route entries look different in 201911 and 202205. Reconciliation logic goes through all the routes in APP_DB, compares all the attributes  and expects them to match. But there is additional \"weight\"\" attribute in 202205, which is not present in 201911. As a result fpmsyncd is aborted.\r\n\r\nExample of APP_DD route config in 201911:\r\n```\r\n127.0.0.1:6379> HGETALL \"ROUTE_TABLE:192.237.160.128/25\"\r\n1) \"nexthop\"\r\n2) \"10.0.0.57,10.0.0.59,10.0.0.61,10.0.0.63\"\r\n3) \"ifname\"\r\n4) \"PortChannel101,PortChannel102,PortChannel103,PortChannel104\"\r\n```\r\n\r\nExample of APP_DD route config in 202205:\r\n```\r\n127.0.0.1:6379> HGETALL \"ROUTE_TABLE:192.206.96.0/25\"\r\n1) \"nexthop\"\r\n2) \"10.0.0.57,10.0.0.59,10.0.0.61,10.0.0.63\"\r\n3) \"ifname\"\r\n4) \"PortChannel101,PortChannel102,PortChannel103,PortChannel104\"\r\n5) \"weight\"\r\n6) \"1,1,1,1\"\r\n```\r\n\r\n#### Steps to reproduce the issue:\r\n1. Deploy 201911 image and T0 topology\r\n3. Install 202205 image\r\n4. Perform war-reboot\r\n5. Check syslog already on 202205 image and observe that fpmsyncd crashed on reconciliation stage\r\n\r\n#### Describe the results you received:\r\nfpmsyncd crash after warm-upgrading from 201911 to 202205\r\n\r\n#### Describe the results you expected:\r\nNo fpmsyncd crash after upgrading from 201911 to 202205\r\n\r\n#### Output of `show version`:\r\n* Latest 201911 image (e.g. image built on top of ```7781399bb``` hash was used)\r\n* Latest 202205 image (e.g. image built on top of ```d2540ae31``` hash was used)\r\n* \r\n#### Output of `show techsupport`:\r\nN/A\r\n\r\n#### Additional information you deem important (e.g. issue happens only occasionally):\r\nN/A",
+  "comments": [
+    {
+      "author": "nkelapur",
+      "createdAt": "2022-11-11T05:31:17Z",
+      "body": "The old design for warm-reboot was expecting that the number of fields will be same before and after warmreboot. However for a warm-reboot with upgrade scenario clearly this is not the case. Hence the assert needs to be removed and instead need to return \"true\" so that the new  route entry gets written to the APP-DB"
+    },
+    {
+      "author": "vaibhavhd",
+      "createdAt": "2022-11-21T17:14:59Z",
+      "body": "@adyeung , do you have any update on this issue?"
+    },
+    {
+      "author": "adyeung",
+      "createdAt": "2022-11-21T19:08:03Z",
+      "body": "@vaibhavhd expecting a fix to be posted by nkelapur"
+    },
+    {
+      "author": "nkelapur",
+      "createdAt": "2022-11-22T09:24:41Z",
+      "body": "created a commit https://github.com/sonic-net/sonic-swss/pull/2544 with the fix"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2544,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/2544",
+      "title": "[fpmsyncd] Bug Fix #12625 for Upgrade from 201911 to 202205 is failing ",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2022-11-22T09:15:44Z",
+      "author": "nkelapur",
+      "body": "Fixes https://github.com/sonic-net/sonic-buildimage/issues/12625\r\n\r\nfpmsyncd crash (#12625)\r\n\r\n        - What I did\r\n                On warm-reboot ignore the assert if a new dB filed is\r\n                detected in the new build\r\n\r\n        - How I did it\r\n                ignore the assert in case new field\r\n                is detected during warm-reboot\r\n\r\n        - How to verify it\r\n                Verified by warm-reboot with\r\n                new software  version having\r\n                new field added for ROUTE_TABLE\r\n\r\n        Signed-off-by: nikhil.kelapure@broadcom.com\r\n\r\n<!--\r\nPlease make sure you have read and understood the contribution guildlines:\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n1. Make sure your commit includes a signature generted with `git commit -s`\r\n2. Make sure your commit title follows the correct format: [component]: description\r\n3. Make sure your commit message contains enough details about the change and related tests\r\n4. Make sure your pull request adds related reviewers, asignees, labels\r\n\r\nPlease also provide the following information in this pull request:\r\n-->\r\n\r\n**What I did**\r\n\r\n**Why I did it**\r\n\r\n**How I verified it**\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "warmrestart/warmRestartHelper.cpp",
+          "additions": 11,
+          "deletions": 13
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2022-11-22T09:15:47Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: nkelapur  (d558f3e3cd7646e40dc6671ab38deac126c443b1)</li></ul>"
+        },
+        {
+          "author": "nkelapur",
+          "createdAt": "2022-11-23T04:07:01Z",
+          "body": "re test please"
+        },
+        {
+          "author": "nkelapur",
+          "createdAt": "2022-11-23T04:07:42Z",
+          "body": "retest please"
+        },
+        {
+          "author": "adyeung",
+          "createdAt": "2022-11-23T19:10:11Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "nkelapur",
+          "createdAt": "2022-11-24T03:11:47Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-11-24T03:11:49Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-11-24T03:11:58Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "nkelapur",
+          "createdAt": "2022-11-25T06:02:48Z",
+          "body": "/azpw run Azure.sonic-swss"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2022-11-25T06:02:49Z",
+          "body": "/AzurePipelines run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2022-11-25T06:02:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "adyeung",
+          "createdAt": "2022-11-28T23:11:57Z",
+          "body": "@vaibhavhd @prsunny pls help review the fix"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2023-01-10T20:11:13Z",
+          "body": "@nkelapur , @yxieca , is this PR still pursued? "
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2023-01-11T22:11:23Z",
+          "body": "> @nkelapur , @yxieca , is this PR still pursued?\r\n\r\nNo, we decided to pursue the db_migrator appraoch. we should close this PR.\r\n\r\nHowever, we are unable to repro the issue lately, we suspect the issue might have been caused by the service unmasking issue that was introduced and fixed recently. The timing matches."
+        }
+      ]
+    },
+    {
+      "number": 2691,
+      "repository": "sonic-net/sonic-utilities",
+      "url": "https://github.com/sonic-net/sonic-utilities/pull/2691",
+      "title": "[db_migrator] Add missing attribute 'weight' to route entries in APPL DB",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-03-03T20:45:41Z",
+      "createdAt": "2023-02-23T04:16:02Z",
+      "author": "vaibhavhd",
+      "body": "<!--\r\n    Please make sure you've read and understood our contributing guidelines:\r\n    https://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\n    ** Make sure all your commits include a signature generated with `git commit -s` **\r\n\r\n    If this is a bug fix, make sure your description includes \"closes #xxxx\",\r\n    \"fixes #xxxx\" or \"resolves #xxxx\" so that GitHub automatically closes the related\r\n    issue when the PR is merged.\r\n\r\n    If you are adding/modifying/removing any command or utility script, please also\r\n    make sure to add/modify/remove any unit tests from the tests\r\n    directory as appropriate.\r\n\r\n    If you are modifying or removing an existing 'show', 'config' or 'sonic-clear'\r\n    subcommand, or you are adding a new subcommand, please make sure you also\r\n    update the Command Line Reference Guide (doc/Command-Reference.md) to reflect\r\n    your changes.\r\n\r\n    Please provide the following information:\r\n-->\r\n\r\n#### What I did\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/12625\r\n\r\n\r\n#### How I did it\r\n\r\nCheck for missing attribute `weight` in APPLDB route entries. If found missing this attribute is added with empty value.\r\n\r\n#### How to verify it\r\nVerified on physical device. 201911 to 202205 upgrade worked fine.\r\n\r\n#### Previous command output (if the output of a command-line utility has changed)\r\n\r\n#### New command output (if the output of a command-line utility has changed)\r\n\r\n",
+      "files": [
+        {
+          "path": "scripts/db_migrator.py",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "tests/db_migrator_input/appl_db/routes_migrate_expected.json",
+          "additions": 12,
+          "deletions": 0
+        },
+        {
+          "path": "tests/db_migrator_input/appl_db/routes_migrate_input.json",
+          "additions": 10,
+          "deletions": 0
+        },
+        {
+          "path": "tests/db_migrator_input/config_db/routes_migrate_input.json",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "tests/db_migrator_test.py",
+          "additions": 35,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2023-03-02T18:15:11Z",
+          "body": "/Azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-03-02T18:16:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2023-03-03T04:30:41Z",
+          "body": "/Azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2023-03-03T04:30:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2023-04-26T14:48:13Z",
+          "body": "@vaibhavhd cherry-pick conflict, pls help to create separate PR for 202211."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "number": 24399,
+  "title": "Bug: `start.sh` in syncd startup is sometimes run twice",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/24399",
+  "createdAt": "2025-10-31T20:00:20Z",
+  "closedAt": "2026-03-24T02:41:52Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "Platform: Arista",
+    "Triaged"
+  ],
+  "assignees": [
+    "saiarcot895"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen the Syncd docker is created it runs a few programs that are dependent on each other completing.\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/platform/broadcom/docker-syncd-brcm-dnx/supervisord.conf#L22-L69\n```\nprogram:rsyslogd\nprogram:start\n   dependent_startup_wait_for=rsyslogd:running\nprogram:syncd\n   dependent_startup_wait_for=start:exited\n```\n\n`rsyslogd` running triggers `start` and `start` exiting triggers `syncd`.\n\nHowever, occasionally we see the `start` program triggered twice:\n```\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:24,662 INFO spawned: 'start' with pid 20\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:25,745 INFO success: start entered RUNNING state, process has stayed up for > than 0 seconds (startsecs)\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:25,749 INFO exited: start (exit status 0; expected)\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:25,773 INFO spawned: 'start' with pid 28\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:25,774 INFO success: start entered RUNNING state, process has stayed up for > than 0 seconds (startsecs)\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:25,836 INFO spawned: 'syncd' with pid 35\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:26,915 INFO success: syncd entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:26,931 INFO exited: start (exit status 0; expected)\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:26,942 INFO spawned: 'ledinit' with pid 56\ncmp214-5 INFO syncd0#supervisord 2025-10-30 02:09:26,942 INFO success: ledinit entered RUNNING state, process has stayed up for > than 0 seconds (startsecs)\n```\n\nThe problem here is that the `syncd` program will start running while the second `start` program is still running.\nThis causes issues if the `start.sh` script is executing it's `cp $HWSKU_DIR/sai.profile /etc/sai.d/sai.profile` operation at the same time the `syncd` program is reading the `sai.profile`.\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/platform/broadcom/docker-syncd-brcm-dnx/start.sh#L29C9-L29C57\nhttps://github.com/sonic-net/sonic-sairedis/blob/master/syncd/Syncd.cpp#L3917-L3960\n\nIf this occurs `syncd` will read an empty file and then no `SAI_INIT_CONFIG_FILE` is passed to the SAI/SDK.\n```\n> cat /etc/sai.d/sai.profile\nSAI_INIT_CONFIG_FILE=/usr/share/sonic/hwsku/j2p-a7800r3a-36d-36x400G.config.bcm\nSAI_SWITCH_NON_ECMP_MAX_SIZE=3072\n```\n\nThis may manifest as a symptom like syncd crashing with:\n```\n025 Oct 22 22:11:48.264022 str2-7804-lc5-1 INFO syncd0#supervisord: syncd DMA pool size: 33554432 bytes.#015\n2025 Oct 22 22:11:48.264022 str2-7804-lc5-1 INFO syncd0#supervisord: syncd BDE dev 0 (PCI), Dev 0x8852, Rev 0x02, Chip BCM88850_A1, Driver BCM88850_A1#015\n2025 Oct 22 22:11:48.264022 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015\n2025 Oct 22 22:11:48.264022 str2-7804-lc5-1 INFO syncd0#supervisord: syncd Initializing platform - Found Jericho2C+ Board#015\n2025 Oct 22 22:11:48.281599 str2-7804-lc5-1 INFO syncd0#supervisord: syncd Boot flags: Cold boot#015\n2025 Oct 22 22:11:48.281599 str2-7804-lc5-1 INFO syncd0#supervisord: syncd stable Size 3072000 Flag 0 Location 3#015\n2025 Oct 22 22:11:48.281599 str2-7804-lc5-1 INFO syncd0#supervisord: syncd rc: unit 0 device BCM88852_A1#015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd linux-user-bde:new probed device unit 0 dev_no 1 _ndevices 1#015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd DMA pool size: 33554432 bytes.#015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd BDE dev 0 (PCI), Dev 0x8852, Rev 0x02, Chip BCM88850_A1, Driver BCM88850_A1#015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd #015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd Initializing platform - Found Jericho2C+ Board#015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd 0:soc_dnxc_warn_if_device_is_used_by_diffrent_sdk: Process 40 may be an SDK process already controlling the device, which will prevent this process from controlling the device.#015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd  Current process id is 37#015\n2025 Oct 22 22:11:48.282553 str2-7804-lc5-1 INFO syncd1#supervisord: syncd process 40: /usr/bin/syncd --diag -u -s -B null -p /etc/sai.d/sai.profile -x /usr/share/sonic/hwsku/context_config.json -g 0 -b /tmp/break_before_make_objects#015\n2025 Oct 22 22:11:48.291883 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.291883 str2-7804-lc5-1 INFO syncd0#supervisord: syncd <nounit>:dbx_file_get_db_directory:  Error: Entry not found ; DB was not found in /db0:dbx_file_get_db_location: DB Directory does not exist#015\n2025 Oct 22 22:11:48.301421 str2-7804-lc5-1 INFO syncd1#supervisord: syncd Boot flags: Cold boot#015\n2025 Oct 22 22:11:48.301421 str2-7804-lc5-1 INFO syncd1#supervisord: syncd stable Size 3072000 Flag 0 Location 3#015\n2025 Oct 22 22:11:48.301421 str2-7804-lc5-1 INFO syncd1#supervisord: syncd rc: unit 0 device BCM88852_A1#015\n2025 Oct 22 22:11:48.310872 str2-7804-lc5-1 INFO syncd1#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.310872 str2-7804-lc5-1 INFO syncd1#supervisord: syncd <nounit>:dbx_file_get_db_directory:  Error: Entry not found ; DB was not found in /db0:dbx_file_get_db_location: DB Directory does not exist#015\n2025 Oct 22 22:11:48.378069 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.378069 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:dnxc_data_dyn_loader_dev_id_verify:  Error 'Invalid parameter' indicated, Dynamic DNX DATA - Incorrect DNX Data XML was provided. Current device ID is 8852, but the provided data belongs to device ID 8850 #015\n2025 Oct 22 22:11:48.378069 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.378069 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:dnxc_data_mgmt_values_set:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.378410 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.378444 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:utilex_seq_run_step_list_forward:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.378444 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.378458 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:utilex_seq_run:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.378494 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.378573 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:dnx_init_run:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.378602 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.378625 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:bcm_dnx_init:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.380104 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.380161 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:appl_dnxc_sdk_init:  Error: Invalid parameter ; bcm_init() Failed:#015\n2025 Oct 22 22:11:48.380211 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.380235 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:utilex_seq_run_step_list_forward:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.380257 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.380289 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:utilex_seq_run:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.380289 str2-7804-lc5-1 CRIT syncd0#syncd: [06:00.0] SAI_API_SWITCH:sai_driver_init:672 Error initializing driver, rc = -1.\n2025 Oct 22 22:11:48.380289 str2-7804-lc5-1 CRIT syncd0#syncd: [06:00.0] SAI_API_SWITCH:brcm_sai_dnx_create_switch:8918 initializing SDK failed with error Operation failed (0xfffffff5).\n2025 Oct 22 22:11:48.380358 str2-7804-lc5-1 ERR syncd0#syncd: :- sendApiResponse: api SAI_COMMON_API_CREATE failed in syncd mode: SAI_STATUS_FAILURE\n2025 Oct 22 22:11:48.380385 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.380416 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:appl_dnxc_steps_convert_and_run:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.380416 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.380416 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:appl_dnxc_init_step_list_run:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.380416 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.380428 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:sh_dnxc_init_run:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.380435 str2-7804-lc5-1 INFO syncd0#supervisord: syncd #015#015\n2025 Oct 22 22:11:48.380441 str2-7804-lc5-1 INFO syncd0#supervisord: syncd 0:sh_dnxc_init_dnx_cmd:  Error 'Invalid parameter' indicated ; #015#015\n2025 Oct 22 22:11:48.380447 str2-7804-lc5-1 INFO syncd0#supervisord: syncd initialization command \"INIT_DNX\" failed, rv = -1 (Internal error).#015#015\n2025 Oct 22 22:11:48.380846 str2-7804-lc5-1 ERR swss0#orchagent: :- create: create status: SAI_STATUS_FAILURE\n2025 Oct 22 22:11:48.380846 str2-7804-lc5-1 ERR swss0#orchagent: :- main: Failed to create a switch, rv:-1\n2025 Oct 22 22:11:48.380881 str2-7804-lc5-1 ERR syncd0#syncd: :- processQuadEvent: attr: SAI_SWITCH_ATTR_INIT_SWITCH: true\n```\n\n### Steps to Reproduce\n\nTo reproduce this we found it easiest to trigger `config reloads` many times back to back.\nWe wrote a sonic-mgmt test to do this:\n```\nfrom tests.common.helpers.multi_thread_utils import SafeThreadPoolExecutor\nfrom tests.common.config_reload import config_reload\nimport time\n\ndef run_config_reload(duthosts):\n    with SafeThreadPoolExecutor(max_workers=8) as executor:\n        for duthost in duthosts:\n            # Safe reload to make sure critical processes is up\n            executor.submit(\n                config_reload,\n                duthost, config_source='config_db', safe_reload=True, check_intf_up_ports=True,\n            )\n    time.sleep(60)  # Wait for a bit before starting next test when running consecutively\n\n\ndef test_config_reload(duthosts):\n    for i in range(30):\n        print(\"Iteration \" + str(i))\n        run_config_reload(duthosts)\n```\n\nI found I'd hit this problem a few times in a run\n\n### Actual Behavior and Expected Behavior\n\nThe `start` program in Syncd startup should only be run a single time, currently it's seen to run twice occasionally.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2025-10-31T20:00:49Z",
+      "body": "Note that we worked around this issue for now via https://github.com/Azure/sonic-buildimage-msft/pull/1770"
+    },
+    {
+      "author": "prgeor",
+      "createdAt": "2025-11-19T16:20:57Z",
+      "body": "@arista-nwolfe is this a platform specific issue? @saiarcot895 FYI"
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2025-11-24T16:58:14Z",
+      "body": "> [@arista-nwolfe](https://github.com/arista-nwolfe) is this a platform specific issue? [@saiarcot895](https://github.com/saiarcot895) FYI\n\nI don't believe the issue of the start script running twice is a platform specific issue.\nIt may be possible that running the start script twice only causes problems (syncd crash) on specific platforms (BRCM platforms)."
+    },
+    {
+      "author": "judyjoseph",
+      "createdAt": "2026-02-11T18:36:12Z",
+      "body": "workaround is available - but to rootcause on why this happens "
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-03-11T17:41:40Z",
+      "body": "PR for the workaround ready for merged"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2026-03-11T17:42:37Z",
+      "body": "@saiarcot895 can you please help root cause this issue."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25447,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/25447",
+      "title": "[Arista][DNX] Workaround for sai.profile being empty when syncd starts",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-24T02:41:51Z",
+      "createdAt": "2026-02-11T18:51:06Z",
+      "author": "arista-nwolfe",
+      "body": "Original PR https://github.com/Azure/sonic-buildimage-msft/pull/1770 went only to msft-202405 but the issue with `start.sh` running twice hasn't been fixed https://github.com/sonic-net/sonic-buildimage/issues/24399 so creating a PR for master and hopefully cast to 202511.\r\n\r\nWe're seeing an issue where start.sh is run multiple times on syncd startup and if the 'cp' operation in the 2nd start.sh occurs while the Syncd process is reading the /etc/sai.d/sai.profile it will end up reading an empty file.\r\n\r\nTherefor if we skip the 'cp' operation when the file is unchanged the 2nd start.sh run should always be a no-op.\r\n\r\nThis is a workaround until we find the reason and solution to stop start.sh from running multiple times.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n",
+      "files": [
+        {
+          "path": "platform/broadcom/docker-syncd-brcm-dnx/start.sh",
+          "additions": 10,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T18:51:55Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T18:52:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-11T22:46:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-11T22:46:26Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2026-03-24T02:31:38Z",
+          "body": "@rlhui, can you please help merge this PR"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "number": 21183,
+  "title": "Applying ACL rule causes BGP neighbor to go down",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/21183",
+  "createdAt": "2024-12-16T04:32:03Z",
+  "closedAt": "2025-01-31T23:32:47Z",
+  "author": "Javier-Tan",
+  "labels": [
+    "Chassis :robot:",
+    "Triaged",
+    "BRCM",
+    "Issue for 202405"
+  ],
+  "assignees": [
+    "arlakshm"
+  ],
+  "milestone": null,
+  "body": "<!--\n     If you are reporting a new issue, make sure that we do not have any duplicates\n     already open. You can ensure this by searching the issue list for this\n     repository. If there is a duplicate, please close your issue and add a comment\n     to the existing issue instead.\n\n     If you suspect your issue is a bug, please edit your issue description to\n     include the BUG REPORT INFORMATION shown below. If you fail to provide this\n     information within 7 days, we cannot debug your issue and will close it. We\n     will, however, reopen it if you later provide the information.\n\n     For more information about reporting issues, see\n     https://github.com/Azure/SONiC/wiki#report-issues\n\n     ---------------------------------------------------\n     GENERAL SUPPORT INFORMATION\n     ---------------------------------------------------\n\n     The GitHub issue tracker is for bug reports and feature requests.\n     General support can be found at the following locations:\n\n     - SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\n\n     ---------------------------------------------------\n     BUG REPORT INFORMATION\n     ---------------------------------------------------\n     Use the commands below to provide key information from your environment:\n     You do NOT have to include this information if this is a FEATURE REQUEST\n-->\n\n#### Description\nWe noticed that applying a specific ACL rules causes one specific BGP neighbor to go down (fc00::a) during ACL tests (specifically those with \"IPV6\" and \"INGRESS\" parameters). Removing it brings it back up.\n\n```\nadmin@sonic:~$ show acl rule\n...\nDATA_INGRESS_IPV6_TEST  RULE_15       9985        DROP      DST_IPV6: 20c0:a800::9/128      {'asic0': 'Active', 'asic1': 'Active'}\n                                                           IP_TYPE: IPV6ANY\n...\n\nadmin@sonic:~$ show ipv6 bgp sum\n...\n\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down    State/PfxRcd    NeighborName\n-----------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\n...\nfc00::a        4  65200        278         52         0      0       0  00:01:18   Connect         ARISTA03T3\n\nadmin@sonic:~$ show ipv6 interface\nInterface       Master    IPv6 address/mask                            Admin/Oper    BGP Neighbor    Neighbor IP\n--------------  --------  -------------------------------------------  ------------  --------------  -------------\n...\nEthernet64                fc00::9/126                                  up/up         ARISTA03T3      fc00::a\n```\n<!--\n     Briefly describe the problem you are having in a few paragraphs.\n-->\n\n#### Steps to reproduce the issue:\n1. Run any ACL tests with ipv6+ingress parameters e.g. `acl/test_acl.py::TestBasicAcl::test_ingress_unmatched_blocked[ipv6-ingress-downlink->uplink-default-no_vlan]` with breakpoint after ACL rules are applied\n2. After rule 15 is added, once BGP updates (~3mins), neighbor fc00::a will go down\n3. Removing the rule will bring it immediately back up\n\nNOTE: BGP neighbor fc00::a will always go down when the rule is applied during ipv6+ingress test runs, however, only tests that fail is `acl/test_acl.py::TestAclWithReboot...[ipv6-ingress...]` as there are explicit BGP neighbor up checks.\n\n#### Describe the results you received:\nACL rule 15 causes BGP neighbor fc00::a to go down when they are seeminly unrelated.\n\n#### Describe the results you expected:\nBGP neighbor fc00::a should stay up.\n\n#### Output of `show version`:\n```\nSONiC Software Version: SONiC.20240510.16\nBRCM SAI ver: [11.2.13.1], OCP SAI ver: [1.14.0], SDK ver: [sdk-6.5.30-SP4]\n```\n#### Output of `show techsupport`:\n\n```\n(paste your output here or download and attach the file here )\n```\n\n#### Additional information you deem important (e.g. issue happens only occasionally):\n\n<!--\n     Also attach debug file produced by `sudo generate_dump`\n-->\nRules applied can be found at `sonic-mgmt-int/tests/acl/templates/acltb_v6_test_rules.j2`\n```\n{\n    \"acl\": {\n        \"acl-sets\": {\n            \"acl-set\": {\n                \"{{ acl_table_name }}\": {\n                    \"acl-entries\": {\n                        \"acl-entry\": {\n                            ...\n                            \"15\": {\n                                \"actions\": {\n                                    \"config\": {\n                                        \"forwarding-action\": \"DROP\"\n                                    }\n                                },\n                                \"config\": {\n                                    \"sequence-id\": 15\n                                },\n                                \"ip\": {\n                                    \"config\": {\n                                        \"destination-ip-address\": \"20c0:a800::9/128\"\n                                    }\n                                }\n                            },\n                            ...\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n\n```",
+  "comments": [
+    {
+      "author": "Javier-Tan",
+      "createdAt": "2024-12-16T04:33:33Z",
+      "body": "@arlakshm for vis"
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2024-12-16T04:35:47Z",
+      "body": "after this change https://github.com/sonic-net/sonic-mgmt/pull/15921. If any the bgp sessions are down, the test is marked as failed. "
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2024-12-16T04:38:23Z",
+      "body": "@arista-nwolfe,  @kenneth-arista, @saksarav-nokia, @sanjair-git do you see these failures as well?"
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2024-12-16T20:28:08Z",
+      "body": "> @arista-nwolfe, @kenneth-arista, @saksarav-nokia, @sanjair-git do you see these failures as well?\r\n\r\nI'll try out the manual steps @Javier-Tan outlined with the `pdb` and wait to see if the bgp neighbors go down, but our ACL pass rate has been pretty consistently at 100% so we aren't seeing the failures caused by this."
+    },
+    {
+      "author": "arlakshm",
+      "createdAt": "2024-12-16T20:30:36Z",
+      "body": "Thanks @arista-nwolfe, are you using the latest sonic-mgmt code for 202405. As I mentioned earlier after this change https://github.com/sonic-net/sonic-mgmt/pull/15921. We check if all the bgp session are up after appling the ACLs"
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2024-12-16T20:35:51Z",
+      "body": "> Thanks @arista-nwolfe, are you using the latest sonic-mgmt code for 202405. As I mentioned earlier after this change [sonic-net/sonic-mgmt#15921](https://github.com/sonic-net/sonic-mgmt/pull/15921). We check if all the bgp session are up after appling the ACLs\r\n\r\nYeah this last weekend's run has this change and we didn't see any failures due to `All BGP sessions are not up after reboot, no point in continuing the test` on any of our 3 testbeds."
+    },
+    {
+      "author": "sanjair-git",
+      "createdAt": "2024-12-16T20:39:15Z",
+      "body": "Hi @arlakshm, we have the latest code change from #15921 and all the tests from ACL are passing in our test beds too."
+    },
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2024-12-16T21:40:37Z",
+      "body": "> > @arista-nwolfe, @kenneth-arista, @saksarav-nokia, @sanjair-git do you see these failures as well?\r\n> \r\n> I'll try out the manual steps @Javier-Tan outlined with the `pdb` and wait to see if the bgp neighbors go down, but our ACL pass rate has been pretty consistently at 100% so we aren't seeing the failures caused by this.\r\n\r\nI see the same behavior @Javier-Tan sees when I put a `pdb` after `setup_rules`:\r\n```\r\nDATA_INGRESS_IPV6_TEST  RULE_15       9985        DROP      DST_IPV6: 20c0:a800::9/128      {'asic0': 'Active', 'asic1': 'Active'}\r\n                                                            IP_TYPE: IPV6ANY\r\n```\r\n```\r\nNeighbhor       V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down    State/PfxRcd    NeighborName\r\n------------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\r\nfc00:3000::1    4  65100       1226       1220         0      0       0  00:22:33   6               ASIC0\r\nfc00:3000::3    4  65100       1219       1227         0      0       0  00:22:33   7               ASIC1\r\nfc00:3000::5    4  65100        719       1221         0      0       0  00:22:36   519             cmp214-6-ASIC0\r\nfc00:3000::5    4  65100        719       1228         0      0       0  00:22:36   519             cmp214-6-ASIC0\r\nfc00:3000::7    4  65100        719       1228         0      0       0  00:22:37   519             cmp214-6-ASIC1\r\nfc00:3000::7    4  65100        722       1224         0      0       0  00:22:42   519             cmp214-6-ASIC1\r\nfc00::2         4  65200        724       1046         0      0       0  00:22:38   34050           ARISTA01T3\r\nfc00::16        4  65200        726        796         0      0       0  00:22:43   34050           ARISTA06T3\r\nfc00::a         4  65200        699        757         0      0       0  00:01:11   Connect         ARISTA03T3\r\nfc00::e         4  65200        725        795         0      0       0  00:22:39   34050           ARISTA04T3\r\n```\r\n\r\nIt's just the 1 neighbor down that goes down strangely."
+    },
+    {
+      "author": "Javier-Tan",
+      "createdAt": "2024-12-16T22:33:05Z",
+      "body": "Sorry, I wasn't clear enough in the description but it was just that 1 BGP neighbor \"fc00::a\" that goes down @arista-nwolfe , so this is the same bug we see "
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2025-01-22T05:32:37Z",
+      "body": "CS00012383871"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16727,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16727",
+      "title": "Prevent T2 BGP neighbors going down during ACL tests",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-31T23:32:45Z",
+      "createdAt": "2025-01-30T06:21:35Z",
+      "author": "Javier-Tan",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes https://github.com/sonic-net/sonic-buildimage/issues/21183\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nPrevent T2 BGP neighbors going down during ACL tests\r\n#### How did you do it?\r\nPrevent last 64 bits of a DROP rule IP from being the same as a BGP neighbor\r\n#### How did you verify/test it?\r\nRun on T2 devices\r\nT1 regression test: https://elastictest.org/scheduler/testplan/679c3507f5a74203a8e1b10b\r\n#### Any platform specific information?\r\nN/A\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/acl/templates/acltb_v6_test_rules.j2",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/acl/templates/acltb_v6_test_rules_part_2.j2",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/acl/test_acl.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-30T06:21:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-30T06:21:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-01-30T23:54:35Z",
+          "body": "Thanks @Javier-Tan confirmed on Arista platform this also fixes the issue, I see BGP still up on all neighbors after applying the IPv6 ACLs."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-31T23:33:24Z",
+          "body": "Cherry-pick PR to msft-202405: https://github.com/Azure/sonic-mgmt.msft/pull/48"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-18T05:41:26Z",
+          "body": "Cherry-pick PR to msft-202503: https://github.com/Azure/sonic-mgmt.msft/pull/205"
+        }
+      ]
+    }
+  ]
+}

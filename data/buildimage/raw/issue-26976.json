@@ -1,0 +1,318 @@
+{
+  "number": 26976,
+  "title": "Bug: [202511][proc-exit-listener]: test_orchagent_watchdog failed: orchagent watchdog did not been trigger after 120 seconds",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/26976",
+  "createdAt": "2026-04-24T14:08:16Z",
+  "closedAt": "2026-08-19T21:43:57Z",
+  "author": "nazariig",
+  "labels": [
+    "Bug :bug:",
+    "Triaged",
+    "Issues for 202511"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nTest has failed to match the pattern:\n```\nloganalyzer.expect_regex = [\"Process \\'orchagent\\' is stuck in namespace\"]\n```\n\nLooks like the expected pattern is not emitted after `orchagnet` is paused.\n\n### Steps to Reproduce\n\n1. Run `test_watchdog.py`:\n```\nroot@6ebdbd8e31e6:~/sonic-mgmt/tests# python3 -m pytest system_health/test_watchdog.py\n```\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior: test is failed\nExpected Behavior: test should pass\n\n### Relevant log output\n\nPytest Traceback:\n```\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> traceback >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\nduthosts = [<MultiAsicSonicHost sonic>], enum_rand_one_per_hwsku_hostname = 'sonic', enum_rand_one_asic_index = None, pause_orchagent = None\n\n    def test_orchagent_watchdog(duthosts,\n                                enum_rand_one_per_hwsku_hostname,\n                                enum_rand_one_asic_index,\n                                pause_orchagent):           # noqa: F401\n        duthost = duthosts[enum_rand_one_per_hwsku_hostname]\n        if duthost.is_multi_asic:\n            asic_id = enum_rand_one_asic_index\n        else:\n            asic_id = ''\n\n        duthost = duthosts[enum_rand_one_per_hwsku_hostname]\n\n        # if watchdog_processes does not exits, watchdog been disabled\n        result = duthost.shell(\n                            r\"docker exec -i swss{} sh -c \\\n                                    'test -f /etc/supervisor/watchdog_processes && echo exist'\".format(asic_id),\n                            module_ignore_errors=True)['stdout']\n        logger.info('Check watchdog exist: {}'.format(result))\n        if result != 'exist':\n            pytest.skip(\"Skip orchagent watchdog test.\")\n\n        make_ut_fail_if_process_not_running(duthost, asic_id)\n\n        # initialize LogAnalyzer for check stuck warning message\n        last_loganalyzer, last_marker = create_log_analyzer(duthost)\n\n        # wait watchdog emit alert, orchagent watchdog timeout is 60 seconds\n        WATCHDOG_TIMEOUT = 120\n        current_attempt = 0\n        while (True):\n            time.sleep(SLEEP_TIME)\n\n            # LogAnalyzer can only analyze once, so create new analyzer for next iteration\n            new_loganalyzer, new_marker = create_log_analyzer(duthost)\n            analysis = last_loganalyzer.analyze(last_marker, fail=False)\n\n            last_loganalyzer = new_loganalyzer\n            last_marker = new_marker\n\n            logger.info('Get alert from host: {}'.format(analysis['total']['expected_match']))\n            if analysis['total']['expected_match']:\n                # found orchagent stuck alert\n                return\n            else:\n                # orchagent watchdog timeout is 60 seconds\n                if current_attempt >= WATCHDOG_TIMEOUT/SLEEP_TIME:\n>                   pytest_assert(\n                                False,\n                                \"orchagent watchdog did not been trigger after {} seconds\".format(WATCHDOG_TIMEOUT))\nE                   Failed: orchagent watchdog did not been trigger after 120 seconds\n```\n\n### Output of `show version`, `show techsupport`\n * N/A\n\n### Attach files (if any)\n* N/A",
+  "comments": [
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-05-06T15:50:29Z",
+      "body": "@qiluo-msft  to review the changes in PR 26840."
+    },
+    {
+      "author": "prsunny",
+      "createdAt": "2026-06-02T16:51:39Z",
+      "body": "@qiluo-msft , could you check the linked PR? looks like this is a behavioral change. @prabhataravind , @vmittal-msft for viz. "
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2026-06-02T22:43:33Z",
+      "body": "> [@qiluo-msft](https://github.com/qiluo-msft) , could you check the linked PR? looks like this is a behavioral change. [@prabhataravind](https://github.com/prabhataravind) , [@vmittal-msft](https://github.com/vmittal-msft) for viz.\n\nI reviewed."
+    },
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2026-08-19T21:43:48Z",
+      "body": "Fixed by https://github.com/sonic-net/sonic-buildimage/pull/28827\nand fixed by a later shorter approach https://github.com/sonic-net/sonic-buildimage/pull/29053"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26840,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/26840",
+      "title": "Replace syslog crate with libc",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-04-16T13:03:11Z",
+      "author": "MavChtz",
+      "body": "#### Why I did it\r\nThe Rust syslog crate does not attempt to reconnect when its connection to the socket is lost, nor does it provide a way to detect that the connection was broken. This causes the Rust listener to fail if it starts before the syslog daemon is initialized, since it attempts to connect to the socket without retrying on failure. Additionally, should an established syslog connection drop at any point, no reconnection is attempted. Messages sent after the disconnection are quietly lost, with no indication of failure to the application.\r\n\r\n#### How I did it\r\n- Replaced the syslog crate with libc\u2019s syslog in the `Logger` struct in sonic-rs-common\r\n- Added a `SimpleLogger` struct in sonic-rs-common which implements the `log::Log` trait using the `Logger` struct\r\n- Updated sonic-supervisord-utilities-rs to use `SimpleLogger`\r\n#### How to verify it\r\n\r\n1. Run `cargo test` for sonic-rs-common and sonic-supervisord-utilities-rs\r\n2. To reproduce the original issue (before this fix):\r\n\r\n      On a DUT open three separate shells.\r\n      \r\n      On the first one run:\r\n       `sudo tail -F /var/log/syslog`\r\n       \r\n      On the second one run:\r\n      `sudo docker exec -it syncd /usr/bin/supervisor-proc-exit-listener-rs \u2013container-name syncd`\r\n      \r\n      Here, type \u201cabcd\u201d and press Enter\r\n      Notice how in the first shell the following is printed:\r\n      `WARNING syncd#supervisor-proc-exit-listener-rs[668]: Missing \u2018len\u2019 in headers: {}`\r\n             \r\n      On the third one run:\r\n      `sudo docker exec -it syncd bash -c 'kill $(pidof rsyslogd)`\r\n      \r\n      If this is tested against Prestera you'll also need to run:\r\n      `sudo docker exec -it syncd bash -c '/usr/sbin/rsyslogd -n -iNONE'`\r\n      \r\n      Lastly, on the second shell, type \u201cabcd\u201d again and press Enter\r\n     The same message as before should be printed. Without this fix the message will not make it to syslog.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n- [x] 202511\r\n\r\nThis was introduced with https://github.com/sonic-net/sonic-buildimage/pull/24698.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n- [x] 202511\r\n\r\n#### Description for the changelog\r\nReplaced the syslog Rust crate with libc\u2019s syslog to fix logging failures when the syslog daemon is unavailable or restarts.\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\nLog cat\r\n\r\n<img width=\"150\" height=\"113\" alt=\"small-logcat\" src=\"https://github.com/user-attachments/assets/2c70ac82-c95f-4584-8ae0-719807b0afc3\" />\r\n\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/26976\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/26978",
+      "files": [
+        {
+          "path": "src/sonic-ctrmgrd-rs/Cargo.lock",
+          "additions": 17,
+          "deletions": 61
+        },
+        {
+          "path": "src/sonic-rs-common/Cargo.toml",
+          "additions": 4,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-rs-common/src/lib.rs",
+          "additions": 3,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-rs-common/src/logger.rs",
+          "additions": 93,
+          "deletions": 56
+        },
+        {
+          "path": "src/sonic-rs-common/src/simple_logger.rs",
+          "additions": 47,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-rs-common/tests/test_logger.rs",
+          "additions": 59,
+          "deletions": 26
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/Cargo.lock",
+          "additions": 34,
+          "deletions": 108
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/Cargo.toml",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/src/proc_exit_listener.rs",
+          "additions": 10,
+          "deletions": 11
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/tests/integration_tests.rs",
+          "additions": 15,
+          "deletions": 15
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-16T13:03:20Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-16T13:03:33Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-18T14:34:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-18T14:34:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-18T15:02:17Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-18T15:02:28Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-21T17:04:20Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-21T17:04:35Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-21T18:22:32Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-21T18:22:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-21T18:42:43Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-21T18:42:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-30T16:31:00Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-30T16:31:12Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-05T02:01:19Z",
+          "body": "This PR has backport request for branches: 202511.<br>Adding label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-05-06T15:49:20Z",
+          "body": "@qiluo-msft could you help review this PR?"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-05-06T17:49:19Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-06T17:49:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "nimicho",
+          "createdAt": "2026-07-02T15:39:51Z",
+          "body": "@qiluo-msft , I am proposing PR https://github.com/sonic-net/sonic-buildimage/pull/28216 to replace this one due to owner change. I will be responsible to tackle the open comments or any other issues from now on. \r\nWe could close this PR if we agree on that."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-02T15:53:38Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        }
+      ]
+    },
+    {
+      "number": 28216,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28216",
+      "title": "Replace syslog crate with libc (replacing #26840 due to owner change)",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-07-02T14:21:04Z",
+      "author": "nimicho",
+      "body": "\r\n\r\n#### Why I did it\r\n\r\nThe Rust syslog crate does not attempt to reconnect when its connection to the socket is lost, nor does it provide a way to detect that the connection was broken. This causes the Rust listener to fail if it starts before the syslog daemon is initialized, since it attempts to connect to the socket without retrying on failure. Additionally, should an established syslog connection drop at any point, no reconnection is attempted. Messages sent after the disconnection are quietly lost, with no indication of failure to the application.\r\n\r\nThis PR plans to replace https://github.com/sonic-net/sonic-buildimage/pull/26840 and tackle the current open comments, due to ownership change. \r\n\r\n\r\n#### How I did it\r\n\r\n-     Replaced the syslog crate with libc\u2019s syslog in the Logger struct in sonic-rs-common\r\n\r\n-     Added a SimpleLogger struct in sonic-rs-common which implements the log::Log trait using the Logger struct\r\n\r\n-     Updated sonic-supervisord-utilities-rs to use SimpleLogger\r\n\r\n\r\n#### How to verify it\r\n\r\n\r\n\r\n1. Run cargo test for sonic-rs-common and sonic-supervisord-utilities-rs\r\n\r\n1. To reproduce the original issue (before this fix):\r\n\r\nOn a DUT open three separate shells.\r\n\r\nOn the first one run:\r\nsudo tail -F /var/log/syslog\r\n\r\nOn the second one run:\r\nsudo docker exec -it syncd /usr/bin/supervisor-proc-exit-listener-rs \u2013container-name syncd\r\n\r\nHere, type \u201cabcd\u201d and press Enter\r\nNotice how in the first shell the following is printed:\r\nWARNING syncd#supervisor-proc-exit-listener-rs[668]: Missing \u2018len\u2019 in headers: {}\r\n\r\nOn the third one run:\r\nsudo docker exec -it syncd bash -c 'kill $(pidof rsyslogd)\r\n\r\nIf this is tested against Prestera you'll also need to run:\r\nsudo docker exec -it syncd bash -c '/usr/sbin/rsyslogd -n -iNONE'\r\n\r\nLastly, on the second shell, type \u201cabcd\u201d again and press Enter\r\nThe same message as before should be printed. Without this fix the message will not make it to syslog.\r\n\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n\r\n- [x] 202511\r\nThis was introduced with https://github.com/sonic-net/sonic-buildimage/pull/24698.\r\n\r\n#### Tested branch (Please provide the tested image version)\r\n- [x] 202511\r\n\r\n\r\n\r\n#### Description for the changelog\r\n\r\n\r\nReplaced the syslog Rust crate with libc\u2019s syslog to fix logging failures when the syslog daemon is unavailable or restarts.\r\n\r\n\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n![koala](https://placebear.com/300/300)\r\n\r\n\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/26976\r\nFixes: https://github.com/sonic-net/sonic-buildimage/issues/26978",
+      "files": [
+        {
+          "path": "src/sonic-ctrmgrd-rs/Cargo.lock",
+          "additions": 17,
+          "deletions": 61
+        },
+        {
+          "path": "src/sonic-rs-common/Cargo.toml",
+          "additions": 4,
+          "deletions": 2
+        },
+        {
+          "path": "src/sonic-rs-common/src/lib.rs",
+          "additions": 3,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-rs-common/src/logger.rs",
+          "additions": 93,
+          "deletions": 56
+        },
+        {
+          "path": "src/sonic-rs-common/src/simple_logger.rs",
+          "additions": 47,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-rs-common/tests/test_logger.rs",
+          "additions": 59,
+          "deletions": 26
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/Cargo.lock",
+          "additions": 34,
+          "deletions": 108
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/Cargo.toml",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/src/proc_exit_listener.rs",
+          "additions": 10,
+          "deletions": 11
+        },
+        {
+          "path": "src/sonic-supervisord-utilities-rs/tests/integration_tests.rs",
+          "additions": 15,
+          "deletions": 15
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-02T14:21:12Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-02T14:21:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-03T11:12:46Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "saiarcot895",
+          "createdAt": "2026-08-04T19:47:03Z",
+          "body": "@nimicho Is this ready for review?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T00:13:49Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "Sourabh-Kumar7",
+          "createdAt": "2026-08-14T19:26:18Z",
+          "body": "@nimicho could you pls resolve the conflict and pls let us know if the PR is ready for review?\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T11:39:14Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-20T11:39:21Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "nimicho",
+          "createdAt": "2026-08-20T16:23:46Z",
+          "body": "Hi, sorry for the delay on responding on your comments above as i was on vacations. I incorporated the initial review comments (of PR 26840) but still some conflicts exist. i checked further and the conflicts are due to pull request #29053 changes/updates.  Based on my understand the merged #29053 tackled exactly the same problem with a slightly different implementation approach. If this is the case we could close this PR. Your confirmation ( @saiarcot895 , @Sourabh-Kumar7) is more than welcome."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,258 @@
+{
+  "number": 28551,
+  "title": "Regression: Routes still advertised to T3 from UT2 in TSA mode with `CONFED` BGP config",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-buildimage/issues/28551",
+  "createdAt": "2026-07-21T23:25:22Z",
+  "closedAt": "2026-09-17T19:01:15Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "regression"
+  ],
+  "assignees": [
+    "YatishSVC"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nSpecific to UT2 topology\n\n### Importance or Severity\n\nCritical\n\n### Previous Working Version\n\n202511\n\n### Steps to Reproduce\n\nExecutes `TSA` on a UT2 device with CONFED BGP config and note that the UT2 stops advertising routes to the LT2 but still advertises routes to the T3:\n```\n>  show ip bgp summary\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down      State/PfxRcd  NeighborName\n-----------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\n10.0.0.1       4  65200       7374       6679    306965      0       0  00:13:25            34050  VM01T3\n10.0.0.3       4  65200       7386       6721    306965      0       0  00:13:22            34050  VM02T3\n10.0.0.5       4  65200       7384       6702    306965      0       0  00:13:20            34050  VM03T3\n10.0.0.101     4  65300       6938       7331    306965      0       0  04:54:35              257  VM05LT2\n10.0.0.103     4  65300       6947       7331    306965      0       0  04:54:35              257  VM07LT2\n```\n```\n# TSC no-stats\nSystem Mode: Maintenance\n```\n```\nroot@ctn104:~# show ip bgp neighbors 10.0.0.101 advertised-routes | tail -n 5\n\n \u00a0\u00a0\u00a0 Network\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 Next Hop\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 Metric LocPrf Weight Path\n*>\u00a0 10.1.0.1/32\u00a0\u00a0\u00a0\u00a0\u00a0 0.0.0.0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 0\u00a0\u00a0\u00a0 100\u00a0 32768 i\n\nTotal number of prefixes 1, total number of paths 1\nroot@ctn104:~# show ip bgp neighbors 10.0.0.103 advertised-routes | tail -n 5\n\n \u00a0\u00a0\u00a0 Network\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 Next Hop\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 Metric LocPrf Weight Path\n*>\u00a0 10.1.0.1/32\u00a0\u00a0\u00a0\u00a0\u00a0 0.0.0.0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 0\u00a0\u00a0\u00a0 100\u00a0 32768 i\n\nTotal number of prefixes 1, total number of paths 1\nroot@ctn104:~# show ip bgp neighbors 10.0.0.1 advertised-routes | tail -n 5\n*>\u00a0 194.55.243.0/25\u00a0 0.0.0.0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 0 65200 64999 65900 i\n*>\u00a0 194.55.243.128/25\n \u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 0.0.0.0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 0 65200 64999 65900 i\n\nTotal number of prefixes 51207, total number of paths 51207\n```\n\nThe issue is evident when looking at the `vtysh -c \"show run\"`, the LT2 neighbors are in the peer-group `PEER_V4` while the T3 neighbors aren't:\n```\nrouter bgp 66000\nneighbor 10.0.0.101 remote-as 65300\nneighbor 10.0.0.101 peer-group PEER_V4   <----- MISSING on T3\nneighbor 10.0.0.101 description VM05LT2\nneighbor 10.0.0.101 timers 3 10\nneighbor 10.0.0.101 timers connect 10\n\nneighbor 10.0.0.1 remote-as 65200\nneighbor 10.0.0.1 description VM01T3\nneighbor 10.0.0.1 timers 3 10\nneighbor 10.0.0.1 timers connect 10\u00a0\n```\n\nWhen I try to add the T3 neighbor into this peer group it gets rejected:\n```\n# config\n(config)# router bgp 66000\n(config-router)# neighbor 10.0.0.1 peer-group PEER_V4\n% Peer-group members must be all internal or all external.\n```\n\nIt appears the issue is in CONFED BGP the LT2 neighbors are treated as `internal` while the T3 neighbors are treated as `external` and they aren't allowed to share a peer-group.\n\n### Impact of this regression\n\nTSA is broken on UT2\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2026-07-21T23:27:50Z",
+      "body": "I'm wondering if it makes sense in `CONFED` BGP mode to create a new `INTERNAL_PEER_V4` peer-group which we assign to the LT2 neighbors to avoid this error with reusing the `PEER_V4` peer-group on both T3 and LT2 neighbors.\nI believe this would involve modifying these two templates:\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/dockers/docker-fpm-frr/frr/bgpd/templates/general/peer-group.conf.j2\nhttps://github.com/sonic-net/sonic-buildimage/blob/master/dockers/docker-fpm-frr/frr/bgpd/templates/general/instance.conf.j2\n\nI see that we have templates for `internal` peers here actually:\nhttps://github.com/sonic-net/sonic-buildimage/blob/4e3f9795d186fb4b892957fbe19190d5be19fb83/dockers/docker-fpm-frr/frr/bgpd/templates/internal/peer-group.conf.j2\nhttps://github.com/sonic-net/sonic-buildimage/blob/4e3f9795d186fb4b892957fbe19190d5be19fb83/dockers/docker-fpm-frr/frr/bgpd/templates/internal/instance.conf.j2#L11\n\nDo we just need to use the internal template for LT2 neighbors?"
+    },
+    {
+      "author": "abdosi",
+      "createdAt": "2026-07-22T18:04:36Z",
+      "body": "can we enhance public BGP templates to fix this case ?"
+    },
+    {
+      "author": "prabhataravind",
+      "createdAt": "2026-07-29T15:36:27Z",
+      "body": "@abdosi @arista-nwolfe could you discuss this and assign someone to work on this?"
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2026-08-05T17:29:47Z",
+      "body": "chassis WG: this is currently an issue from 202605 onwards"
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2026-08-23T17:17:52Z",
+      "body": "> chassis WG: this is currently an issue from 202605 onwards\n\n@YatishSVC , is the above not true?  could you please confirm/explain here."
+    },
+    {
+      "author": "YatishSVC",
+      "createdAt": "2026-08-26T16:56:58Z",
+      "body": "Required in 202511 as well:\nhttps://github.com/sonic-net/sonic-buildimage/pull/28687#issuecomment-5428270015"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 28687,
+      "repository": "sonic-net/sonic-buildimage",
+      "url": "https://github.com/sonic-net/sonic-buildimage/pull/28687",
+      "title": "[bgpcfgd] Fix TSA route leak to confed-external peers in CONFED BGP",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-17T19:01:14Z",
+      "createdAt": "2026-07-29T16:28:57Z",
+      "author": "YatishSVC",
+      "body": "### Why I did it\nOn BGP-confederation devices (e.g. UT2 ), FRR classifies neighbors by ASN relative to the local confederation:\n- **confed-internal** = the local member ASN (iBGP) **and** the configured confederation peers (e.g. LT2) \u2192 treated as *internal*\n- **confed-external** = everything else (e.g. T3) \u2192 treated as *external*\n\nThe `general` FRR templates place **every** neighbor into `PEER_V4`/`PEER_V6`. FRR refuses to mix internal and external members in one peer-group (`Peer-group members must be all internal or all external`), so the confed-external (T3) neighbors end up with **no peer-group at all**, and therefore **no outbound route-map**.\n\nTSA works by rewriting the peer-group's `out` route-map (`TO_BGP_PEER_V4/V6`). Since the T3 neighbors have no peer-group / out route-map, **TSA cannot stop advertising routes to them \u2192 routes leak to T3 during TSA** on confed devices.\n\nFixes #28551\n\n### Relationship to #28516\n#28516 added a guard so `DeviceGlobalCfgMgr` skips the `CONFED` key (preventing the spurious TSB in #28515). This PR covers that **same** `DeviceGlobalCfgMgr` code path **and** the FRR peer-group/template fix, so **#28516 is being closed in favour of this PR**.\n\nThis PR carries the guard itself, in the fail-closed **allowlist** form (`if key != \"STATE\": return True`) that the **internal branch already uses** \u2014 so it *converges* the public/internal divergence in `managers_device_global.py` instead of adding a competing guard. `CONFED` is stored in the bgpcfgd `Directory` **inside** that guard (and removed on delete) so the peer templates can read the confederation asn/peers, while the TSA/W-ECMP/IDF handlers are never run on a CONFED update.\n\n### How I did it\n- Add a second peer-group `PEER_EXTERNAL_V4`/`PEER_EXTERNAL_V6`, rendered **only when a confederation is configured**, that reuses the **same** in/out route-maps (`FROM_BGP_PEER_V4` / `TO_BGP_PEER_V4` \u2026) as `PEER_V4`.\n- In `instance.conf.j2`, assign a neighbor to `PEER_EXTERNAL_*` when it is confed-external (ASN \u2260 local member ASN **and** not in the confederation `peers` list); otherwise keep `PEER_V4/V6`.\n- `DeviceGlobalCfgMgr.set_handler` stores the `BGP_DEVICE_GLOBAL|CONFED` row in the bgpcfgd `Directory` (and `del_handler` removes it), and returns early so the TSA/W-ECMP/IDF handlers are not run on a CONFED update. `bgpcfgd` passes `CONFIG_DB__BGP_DEVICE_GLOBAL` to the peer templates so they can read the confederation asn/peers.\n- Register `PEER_EXTERNAL_V4/V6` under `bgp.peers.general.bbr` in `constants.yml.j2` so BBR toggles `allowas-in` on them exactly like `PEER_V4/V6` (no-op on non-confed devices, where those peer-groups are absent from the running config).\n\n**No TSA change is needed:** because `PEER_EXTERNAL_*` reuses `TO_BGP_PEER_V4/V6 out`, the existing TSA logic (which rewrites that route-map) automatically covers the external peer-group too.\n\n**No regression on non-confed devices:** the whole `PEER_EXTERNAL` block is guarded by `CONFIG_DB__BGP_DEVICE_GLOBAL is defined and 'CONFED' in \u2026`. When there is no confederation (or the row is absent) the templates render **byte-identically** to today (everything stays in `PEER_V4/V6`).\n\n### Validation done in this PR\n- [x] Rendered `peer-group.conf.j2` + `instance.conf.j2` for a confed device: T3 (AS 65200) \u2192 `PEER_EXTERNAL_V4`, LT2 (confed peer AS 65300) \u2192 `PEER_V4`, iBGP (AS 66000) \u2192 `PEER_V4`; `PEER_EXTERNAL_V4` reuses `TO_BGP_PEER_V4 out`.\n- [x] Confed data path: verified `set_handler` stores `CONFED` so `get_slot` exposes it to the template (previously the fix would have been a silent no-op); `del_handler` removes it.\n- [x] All 6 existing non-confed `peer-group.conf` golden cases render with **no** `PEER_EXTERNAL` \u2192 existing template unit tests unaffected.\n- [x] **bgpcfgd unit tests added:** `general/instance.conf` confed fixtures (confed-external T3 \u2192 `PEER_EXTERNAL_V4/V6`; confed-internal peer AS in `peers` \u2192 `PEER_V4`) and a negative-key regression `test_set_handler_unknown_key_does_not_run_tsa` (an unknown key must not reach `configure_tsa()`, guarding #28515). `test_device_global` 22/22 and `test_templates`+`test_bbr` 69/69 pass.\n\n### Still to do (tracked)\n- [x] Add bgpcfgd unit-test cases (`tests/data/general/instance.conf/param_confed*` + golden, and `DeviceGlobalCfgMgr` handler tests) \u2014 done in this PR.\n- [ ] Live TSA validation on a confed UT2 box running the public `general` templates: after `TSA`, confirm advertised-routes to T3 == 0.\n\n### Description for the changelog\nFix TSA route leak to confed-external peers on BGP confederation devices by giving them a dedicated peer-group that shares the TSA-managed out route-map.\n\n#### Which release branch to backport (provide reason below if selected)\n- [x] 202511\n- [x] 202605\n\n#### How did you verify/test it?\n- bgpcfgd unit tests (run on `master`): `test_device_global` 24/24 and `test_templates` 18/18, including the new confed `instance.conf`/`peer-group.conf` fixtures, the `prime_confed_from_config_db` success + None-table tests, and the negative-key regression for #28515.\n- Template render for a confed device confirms confed-external (T3, AS 65200) \u2192 `PEER_EXTERNAL_V4/V6` reusing the TSA-managed `TO_BGP_PEER_V4/V6 out`, while confed-internal peers stay in `PEER_V4/V6`; non-confed devices render byte-identically (no `PEER_EXTERNAL`).\n- **202511 / 202605:** the bgpcfgd + FRR-template code path is identical on both branches (the allowlist guard already exists there), so the same unit tests apply.\n- **Live on-hardware TSA validation is still pending** (tracked in *Still to do*): it needs a confed device on the public `general` templates; our lab confed boxes run the internal `msft.general` set.\n",
+      "files": [
+        {
+          "path": "dockers/docker-fpm-frr/frr/bgpd/templates/general/instance.conf.j2",
+          "additions": 21,
+          "deletions": 0
+        },
+        {
+          "path": "dockers/docker-fpm-frr/frr/bgpd/templates/general/peer-group.conf.j2",
+          "additions": 66,
+          "deletions": 0
+        },
+        {
+          "path": "files/build_templates/constants.yml.j2",
+          "additions": 11,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_bgp.py",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/bgpcfgd/managers_device_global.py",
+          "additions": 48,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/param_confed_external_unnumbered.json",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/param_confed_external_v4.json",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/param_confed_external_v6.json",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/param_confed_ibgp_v4.json",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/param_confed_internal_v4.json",
+          "additions": 19,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/result_confed_external_unnumbered.conf",
+          "additions": 17,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/result_confed_external_v4.conf",
+          "additions": 13,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/result_confed_external_v6.conf",
+          "additions": 13,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/result_confed_ibgp_v4.conf",
+          "additions": 13,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/instance.conf/result_confed_internal_v4.conf",
+          "additions": 13,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/peer-group.conf/param_confed.json",
+          "additions": 16,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/data/general/peer-group.conf/result_confed.conf",
+          "additions": 76,
+          "deletions": 0
+        },
+        {
+          "path": "src/sonic-bgpcfgd/tests/test_device_global.py",
+          "additions": 72,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T16:29:04Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T16:29:06Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T16:29:18Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T16:31:18Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T16:39:02Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T16:39:15Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T16:43:13Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T16:43:28Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-07-29T16:45:33Z",
+          "body": "@arista-nwolfe \r\nSince #28516 is already approved and backporting, I'll let it merge first, then rebase this so the change reduces to turning your \"ignore CONFED\" early-return into a \"store CONFED\" early-return. Flagging so we don't clobber each other's edit to that block."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T17:13:08Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-29T17:13:22Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-07-29T17:18:25Z",
+          "body": "@arista-nwolfe ,\r\nThanks for reviewing.\r\nGood catch \u2014 removed the duplicate [table-map](vscode-file://vscode-app/c:/Users/yatishkoul/AppData/Local/Programs/Microsoft%20VS%20Code/7a8049eb2d/resources/app/out/vs/code/electron-browser/workbench/workbench.html) in 4c40bc1. It's address-family-scoped, so the PEER_V4/V6 block already sets it; only the per-peer-group route-map lines needed repeating for PEER_EXTERNAL."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-29T18:12:34Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T19:29:36Z",
+          "body": "/azp run Azure.sonic-buildimage"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-04T19:29:51Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-08-04T20:24:55Z",
+          "body": "/azpw ms_conflict"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-08-05T17:26:22Z",
+          "body": "@yatishkoul , seems the public confed change was not in 202511, the issue mentioned https://github.com/sonic-net/sonic-buildimage/issues/28551 said it's working in 202511"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T00:13:41Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T00:13:43Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rookie-who",
+          "createdAt": "2026-08-18T07:39:15Z",
+          "body": "@YatishSVC \u2014 This PR is requested for the **202605 branch** but is missing test evidence. To move forward with cherry-pick approval, please:\n\n1. **Test on the 202605 branch** and add results (image version + test output) to the PR description\n2. **Check the `202605` box** in the \"Tested Branches\" section of the PR description\n3. **Add the \"Tested for 202605 branch\" label** once testing is complete\n\nAlso, to help us prioritize correctly, could you clarify: **Is this PR a bug fix / regression fix, a new feature, a platform config change, or a dependency/infra update?** Understanding the nature of the change helps us triage the cherry-pick queue.\n\nThank you!\n\n*Review by @vaibhavhd via automated tooling*"
+        }
+      ]
+    }
+  ]
+}
