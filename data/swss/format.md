@@ -54,7 +54,8 @@ Include a record when a linked PR is merged and its body is non-empty after HTML
   "quality": {
     "has_diagnostic_signal": true,
     "notes": null
-  }
+  },
+  "split": "train"
 }
 ```
 
@@ -66,4 +67,10 @@ Include a record when a linked PR is merged and its body is non-empty after HTML
 | `issue_type` | `bug` | `enhancement` | `regression` | `build` | `question` |
 
 
-Unknown values are `null` or `[]`. Bodies are HTML-comment-stripped and scrubbed; discussion comments stay in `raw/`. No authors, `patch`, or `split` in v1.
+Unknown values are `null` or `[]`. Bodies are HTML-comment-stripped and scrubbed; discussion comments stay in `raw/`. No authors or `patch` in v1.
+
+## `split`
+
+`split` is `"train"`, `"test"`, or `null`. Only records with `quality.has_diagnostic_signal == true` are assigned a split (75% train / 25% test, seeded deterministically — `SPLIT_SEED = 42` in `clean_swss.py`); records without diagnostic signal keep `split: null` and stay out of train/test entirely.
+
+The same assignment is mirrored in [`clean/split.json`](clean/split.json) as an `id -> split` map, alongside the seed, ratio, and counts, so splits can be looked up without opening every record.

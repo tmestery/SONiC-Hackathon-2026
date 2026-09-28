@@ -8,6 +8,7 @@ Does not modify raw/. See data/swss/format.md for the schema.
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 from collections import Counter
@@ -17,8 +18,11 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = ROOT / "data" / "swss" / "raw"
 CLEAN_DIR = ROOT / "data" / "swss" / "clean"
 MANIFEST_FILE = CLEAN_DIR / "manifest.json"
+SPLIT_FILE = CLEAN_DIR / "split.json"
 SCHEMA_VERSION = "1.0"
 SOURCE = "sonic-swss"
+SPLIT_SEED = 42
+SPLIT_TRAIN_RATIO = 0.75
 
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 EMOJI_RE = re.compile(
@@ -392,7 +396,26 @@ def clean_issue(raw: dict) -> dict | None:
             "has_diagnostic_signal": has_diagnostic_signal(failure_body),
             "notes": None,
         },
+        "split": None,
     }
+
+
+def assign_splits(records: list[dict]) -> dict[str, str]:
+    """Deterministically assign train/test to records with diagnostic signal.
+
+    Records without diagnostic signal are excluded from train/val/test
+    (see format.md) and keep split == None.
+    """
+    eligible_ids = sorted(
+        (r["id"] for r in records if r["quality"]["has_diagnostic_signal"])
+    )
+    shuffled = eligible_ids[:]
+    random.Random(SPLIT_SEED).shuffle(shuffled)
+
+    train_count = round(len(shuffled) * SPLIT_TRAIN_RATIO)
+    train_ids = set(shuffled[:train_count])
+
+    return {rid: ("train" if rid in train_ids else "test") for rid in eligible_ids}
 
 
 def main() -> None:
@@ -401,13 +424,9 @@ def main() -> None:
         old.unlink()
 
     raw_files = sorted(RAW_DIR.glob("issue-*.json"), key=lambda p: int(p.stem.split("-")[1]))
-    written = []
+    records = []
     skipped_no_merged = 0
     skipped_empty_desc = 0
-    severity_counts = Counter()
-    priority_counts = Counter()
-    type_counts = Counter()
-    diagnostic_true = 0
 
     start = time.time()
     for path in raw_files:
@@ -421,6 +440,18 @@ def main() -> None:
             else:
                 skipped_empty_desc += 1
             continue
+        records.append(record)
+
+    split_assignments = assign_splits(records)
+
+    written = []
+    severity_counts = Counter()
+    priority_counts = Counter()
+    type_counts = Counter()
+    diagnostic_true = 0
+
+    for record in records:
+        record["split"] = split_assignments.get(record["id"])
 
         out = CLEAN_DIR / f"issue-{record['issue']['number']}.json"
         with out.open("w", encoding="utf-8") as fh:
@@ -437,6 +468,7 @@ def main() -> None:
                 "priority": record["metadata"]["priority"],
                 "issue_type": record["metadata"]["issue_type"],
                 "has_diagnostic_signal": record["quality"]["has_diagnostic_signal"],
+                "split": record["split"],
             }
         )
         severity_counts[record["metadata"]["severity"] or "null"] += 1
@@ -444,6 +476,8 @@ def main() -> None:
         type_counts[record["metadata"]["issue_type"] or "null"] += 1
         if record["quality"]["has_diagnostic_signal"]:
             diagnostic_true += 1
+
+    split_counts = Counter(split_assignments.values())
 
     manifest = {
         "source": SOURCE,
@@ -459,6 +493,11 @@ def main() -> None:
             "issue_type": dict(type_counts),
             "has_diagnostic_signal": diagnostic_true,
             "no_diagnostic_signal": len(written) - diagnostic_true,
+            "split": {
+                "train": split_counts.get("train", 0),
+                "test": split_counts.get("test", 0),
+                "excluded": len(written) - len(split_assignments),
+            },
         },
         "records": written,
     }
@@ -466,12 +505,35 @@ def main() -> None:
         json.dump(manifest, fh, indent=2)
         fh.write("\n")
 
+    split_manifest = {
+        "source": SOURCE,
+        "schema_version": SCHEMA_VERSION,
+        "seed": SPLIT_SEED,
+        "train_ratio": SPLIT_TRAIN_RATIO,
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "total_records": len(written),
+        "eligible_for_split": len(split_assignments),
+        "excluded_no_diagnostic_signal": len(written) - len(split_assignments),
+        "counts": {
+            "train": split_counts.get("train", 0),
+            "test": split_counts.get("test", 0),
+        },
+        "assignments": {
+            record["id"]: record["split"] for record in records
+        },
+    }
+    with SPLIT_FILE.open("w", encoding="utf-8") as fh:
+        json.dump(split_manifest, fh, indent=2)
+        fh.write("\n")
+
     elapsed = time.time() - start
     print(f"Cleaned {len(written)} records in {elapsed:.1f}s")
     print(f"Skipped no merged PR: {skipped_no_merged}")
     print(f"Skipped empty PR description: {skipped_empty_desc}")
     print(f"Diagnostic signal: {diagnostic_true}/{len(written)}")
+    print(f"Split: train={split_counts.get('train', 0)} test={split_counts.get('test', 0)} excluded={len(written) - len(split_assignments)}")
     print(f"Manifest: {MANIFEST_FILE}")
+    print(f"Split file: {SPLIT_FILE}")
 
 
 if __name__ == "__main__":
