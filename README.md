@@ -1,10 +1,10 @@
-<p align="center">
-  <img src="assets/sonic-rca-logo.jpg" alt="SONiC RCA — Test Failure Root-Cause Analysis" width="900">
-</p>
-
 # SONiC Test Failure Root-Cause Analysis
 
 **AI-assisted debugging and triage of SONiC test failures — SONiC Hackathon 2026**
+
+<p align="center">
+  <img src="assets/sonic-rca-logo.jpg" alt="SONiC RCA — Test Failure Root-Cause Analysis" width="900">
+</p>
 
 This project delivers the first dataset, benchmark, and tooling for automated
 root-cause analysis of [SONiC](https://sonicfoundation.dev/) test failures. It
