@@ -18,9 +18,10 @@ data/buildimage/
 ├── raw/                      # Unprocessed mined data (immutable)
 │   ├── issue-<number>.json   # Per-issue raw payload with linked PRs
 │   └── manifest.json         # Index of all mined issues and linked PRs
-├── clean/                    # Schema 1.0 records for train/val/test
+├── clean/                    # Schema 1.0 records for train/test
 │   ├── issue-<number>.json
 │   └── manifest.json
+├── splits.json               # Frozen train/test issue lists (do not overwrite)
 ├── format.md                 # Schema for entries in clean/
 └── readme.md                 # This documentation
 ```
@@ -30,6 +31,8 @@ See [`format.md`](format.md) for field definitions. Rebuild clean records with:
 ```
 python3 scripts/buildimage/clean_buildimage.py
 ```
+
+Frozen splits are re-applied automatically if [`splits.json`](splits.json) exists.
 
 ## Raw Data Specification (`raw/`)
 
@@ -112,7 +115,7 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 | Label | `resolution.description` (PR body, HTML comments stripped) |
 | Auxiliary | `resolution.files` |
 | Audit | `issue.url`, `resolution.url` |
-| Filter / splits | `metadata` (severity, priority, issue_type, platform, target_releases, topics), dates, `quality.has_diagnostic_signal` |
+| Filter / splits | `metadata`, dates, `related_prs`, `quality.has_diagnostic_signal`, **`split`** |
 
 **How the resolving PR is chosen.** Among `linkedPullRequests` with `merged == true`, take the latest `mergedAt`. Other linked PRs are listed in `related_prs` without bodies. Cross-repo PRs keep `repository` + `url`. Issues with no merged PR are skipped (13 in the current mine). Discussion comments stay in `raw/` only — they often name the fix.
 
@@ -122,7 +125,20 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 - `priority` / `issue_type` / `target_releases` / `topics` from labels (emoji shortcodes stripped)
 - `platform` from `Is it platform specific`, else vendor/platform labels
 
-**Train/val/test.** Prefer `quality.has_diagnostic_signal == true` (error/traceback/fail/log-like text in the issue body). Explicit `split` values are not assigned in v1.
+**Train/test (frozen).** Source of truth: [`splits.json`](splits.json).
+
+- Eligible: `has_diagnostic_signal == true` only
+- Method: temporal by `issue.closed_at` (oldest → newest)
+- **75% train / 25% test** — test is the newest quarter; **never train on it**
+- Non-diagnostic rows: `split: null` (excluded)
+
+Current freeze: **640 train / 214 test** (130 excluded). Cutoff `closed_at >= 2025-05-06T16:18:54Z` for test.
+
+```bash
+python3 scripts/buildimage/freeze_splits.py --apply-only   # re-stamp after a clean rebuild
+```
+
+Do **not** re-run without `--apply-only` / `--force` — overwriting the freeze invalidates any prior eval numbers.
 
 **RAG.** Do not index these records. Use [`data/rag/`](../rag/) only.
 

@@ -1,8 +1,9 @@
 # sonic-buildimage clean schema (`1.0`)
 
-Labeled train/val/test records in `clean/issue-<n>.json`. Not a RAG corpus — that is [`data/rag/`](../rag/).
+Labeled train/test records in `clean/issue-<n>.json`. Not a RAG corpus — that is [`data/rag/`](../rag/).
 
 Build with `python3 scripts/buildimage/clean_buildimage.py`. Never edit `raw/`.
+Frozen splits live in [`splits.json`](splits.json) — **never train on `split: "test"`**.
 
 
 | Role        | Fields                                      |
@@ -12,15 +13,19 @@ Build with `python3 scripts/buildimage/clean_buildimage.py`. Never edit `raw/`.
 | Optional    | `resolution.files`                          |
 | Audit       | `issue.url`, `resolution.url`               |
 | Filter only | `metadata`, dates, `related_prs`, `quality` |
+| Split       | `split`: `train` \| `test` \| `null`        |
 
 
-Include a record when a linked PR is merged and its body is non-empty after HTML comments are stripped. Primary PR is the latest `mergedAt`. Other linked PRs go in `related_prs` (no bodies). Keep `has_diagnostic_signal == false` rows out of train/val/test.
+Include a record when a linked PR is merged and its body is non-empty after HTML comments are stripped. Primary PR is the latest `mergedAt`. Other linked PRs go in `related_prs` (no bodies).
+
+**Splits (frozen):** only `has_diagnostic_signal == true` rows are assigned. Sorted by `closed_at` (oldest → newest): **75% train / 25% test**. Non-diagnostic rows get `split: null` (excluded). Rebuild stamps with `python3 scripts/buildimage/freeze_splits.py --apply-only`.
 
 ```json
 {
   "id": "buildimage-26363",
   "schema_version": "1.0",
   "source": "sonic-buildimage",
+  "split": "test",
   "issue": {
     "number": 26363,
     "url": "https://github.com/sonic-net/sonic-buildimage/issues/26363",
@@ -66,4 +71,4 @@ Include a record when a linked PR is merged and its body is non-empty after HTML
 | `issue_type` | `bug` | `enhancement` | `regression` | `build` | `question` |
 
 
-Unknown values are `null` or `[]`. Bodies are HTML-comment-stripped and scrubbed; discussion comments stay in `raw/`. No authors, `patch`, or `split` in v1.
+Unknown values are `null` or `[]`. Bodies are HTML-comment-stripped and scrubbed; discussion comments stay in `raw/`. No authors or `patch` in v1.
