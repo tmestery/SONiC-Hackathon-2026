@@ -18,10 +18,10 @@ data/swss/
 ├── raw/                      # Unprocessed mined data (immutable)
 │   ├── issue-<number>.json   # Per-issue raw payload with linked PRs
 │   └── manifest.json         # Index of all mined issues and linked PRs
-├── clean/                    # Schema 1.0 records for train/val/test
+├── clean/                    # Schema 1.0 records for train/test
 │   ├── issue-<number>.json
-│   ├── manifest.json
-│   └── split.json            # id -> train/test assignment
+│   └── manifest.json
+├── splits.json               # Frozen train/test issue lists (do not overwrite)
 ├── format.md                 # Schema for entries in clean/
 └── readme.md                 # This documentation
 ```
@@ -31,6 +31,8 @@ See [`format.md`](format.md) for field definitions. Rebuild clean records with:
 ```
 python3 scripts/swss/clean_swss.py
 ```
+
+Frozen splits are re-applied automatically if [`splits.json`](splits.json) exists.
 
 ## Raw Data Specification (`raw/`)
 
@@ -114,7 +116,7 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 | Label | `resolution.description` (PR body, HTML comments stripped) |
 | Auxiliary | `resolution.files` |
 | Audit | `issue.url`, `resolution.url` |
-| Filter / splits | `metadata` (severity, priority, issue_type, platform, target_releases, topics), dates, `quality.has_diagnostic_signal` |
+| Filter / splits | `metadata`, dates, `related_prs`, `quality.has_diagnostic_signal`, **`split`** |
 
 **How the resolving PR is chosen.** Among `linkedPullRequests` with `merged == true`, take the latest `mergedAt`. Other linked PRs are listed in `related_prs` without bodies. Cross-repo PRs keep `repository` + `url`.
 
@@ -124,9 +126,22 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 - `priority` / `issue_type` / `target_releases` / `topics` from labels (emoji shortcodes stripped)
 - `platform` from `Is it platform specific` / `Platform` body lines, else vendor/platform labels
 
-**Diagnostic signal.** `quality.has_diagnostic_signal` looks for failure-oriented language plus swss-specific markers: `error`, `traceback`, `crash`, `segfault`, `timeout`, `orchagent`, `syncd`, `swss#`, `sairedis`, `valgrind`, `asan`/`sanitizer`, `deadlock`, `memory leak`, `show techsupport`, `FAILED`. Keep `false` rows out of train/val/test.
+**Diagnostic signal.** `quality.has_diagnostic_signal` looks for failure-oriented language plus swss-specific markers: `error`, `traceback`, `crash`, `segfault`, `timeout`, `orchagent`, `syncd`, `swss#`, `sairedis`, `valgrind`, `asan`/`sanitizer`, `deadlock`, `memory leak`, `show techsupport`, `FAILED`.
 
-**Train/test split.** Each record's top-level `split` field is `"train"`, `"test"`, or `null`. Only records with `quality.has_diagnostic_signal == true` get a split — 75% train / 25% test, assigned deterministically (seed `42`, see `assign_splits()` in `clean_swss.py`). Records without diagnostic signal keep `split: null`. The same mapping is written to [`clean/split.json`](clean/split.json) as `{ id: "train" | "test" | null }` alongside the seed, ratio, and counts.
+**Train/test (frozen).** Source of truth: [`splits.json`](splits.json).
+
+- Eligible: `has_diagnostic_signal == true` only
+- Method: random shuffle, seed `42`
+- **75% train / 25% test** — test is frozen; **never train on it**
+- Non-diagnostic rows: `split: null` (excluded)
+
+Current freeze: **30 train / 11 test** (16 excluded).
+
+```bash
+python3 scripts/swss/freeze_splits.py --apply-only   # re-stamp after a clean rebuild
+```
+
+Do **not** re-run without `--apply-only` / `--force` — overwriting the freeze invalidates any prior eval numbers.
 
 **RAG.** Do not index these records. Use [`data/rag/`](../rag/) only.
 
@@ -138,9 +153,8 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 - **Skipped (no merged PR)**: 0
 - **Skipped (empty PR description)**: 0
 - **With diagnostic signal**: 41
-- **Split**: 31 train / 10 test (75/25 of the 41 with diagnostic signal, seed 42); 16 excluded (no diagnostic signal)
 
-Rebuild with `python3 scripts/swss/clean_swss.py`. Counts by severity/priority/type/split are in `clean/manifest.json`; the full id -> split map is in `clean/split.json`.
+Rebuild with `python3 scripts/swss/clean_swss.py`. Counts by severity/priority/type are in `clean/manifest.json`.
 
 ## Ground Rules
 
