@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/sonic-rca-logo.jpg" alt="SONiC RCA — Test Failure Root-Cause Analysis" width="900">
+</p>
+
 # SONiC Test Failure Root-Cause Analysis
 
 **AI-assisted debugging and triage of SONiC test failures — SONiC Hackathon 2026**
@@ -68,7 +72,6 @@ ground rules.
 ## Status
 
 This project is under active development for the SONiC Hackathon 2026.
-
 
 ## Contributers
 
