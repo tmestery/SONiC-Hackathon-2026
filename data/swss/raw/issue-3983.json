@@ -1,0 +1,152 @@
+{
+  "number": 3983,
+  "title": "[DPB]: Stale queue counter mappings in COUNTERS_DB post port breakout",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/3983",
+  "createdAt": "2025-11-09T10:15:54Z",
+  "closedAt": "2025-11-28T05:30:52Z",
+  "author": "rminnikanti",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": " **Description:**\nAfter dynamic port breakout of a port, `show queue counters <Port>` doesn't work as queue counter map in the COUNTERS_DB is not updated.\n\n**How to reproduce:**\nPerform breakout of a port and check queue counters after breakout:\n\n```bash\n# sudo config interface breakout Ethernet448 \"1x800G[400G,200G]\" -y -f\n\nRunning Breakout Mode : 1x800G[400G,200G]\nTarget Breakout Mode : 1x800G[400G,200G]\n[WARNING] No action will be taken as current and desired Breakout Mode are same.\nroot@sonic:/home/admin# sudo config interface breakout Ethernet448 \"8x100G[50G]\" -y -f\n\nRunning Breakout Mode : 1x800G[400G,200G]\nTarget Breakout Mode : 8x100G[50G]\n\nPorts to be deleted :\n {\n    \"Ethernet448\": \"800000\"\n}\nPorts to be added :\n {\n    \"Ethernet448\": \"100000\",\n    \"Ethernet449\": \"100000\",\n    \"Ethernet450\": \"100000\",\n    \"Ethernet451\": \"100000\",\n    \"Ethernet452\": \"100000\",\n    \"Ethernet453\": \"100000\",\n    \"Ethernet454\": \"100000\",\n    \"Ethernet455\": \"100000\"\n}\nBreakout process got successfully completed.\nPlease note loaded setting will be lost after system reboot. To preserve setting, run `config save`.\n```\n\n**Issue**\n```bash\nshow queue counters Ethernet0\nTraceback (most recent call last):\nFile \"/usr/local/bin/queuestat\", line 455, in <module>\nmain()\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 764, in {}call{}\nreturn self.main(*args, **kwargs)\n^^^^^^^^^^^^^^^^^^^^^^^^^^\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 717, in main\nrv = self.invoke(ctx)\n^^^^^^^^^^^^^^^^\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 956, in invoke\nreturn ctx.invoke(self.callback, **ctx.params)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFile \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 555, in invoke\nreturn callback(*args, **kwargs)\n^^^^^^^^^^^^^^^^^^^^^^^^^\nFile \"/usr/local/bin/queuestat\", line 450, in main\nqueuestat_wrapper.run(save_fresh_stats, port_to_show_stats, json_opt, non_zero)\nFile \"/usr/local/lib/python3.11/dist-packages/utilities_common/multi_asic.py\", line 156, in wrapped_run_on_all_asics\nfunc(self, *args, **kwargs)\nFile \"/usr/local/bin/queuestat\", line 117, in run\nqueuestat = Queuestat(self.multi_asic.current_namespace, self.db, self.voq)\n```\n\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 3982,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/3982",
+      "title": "[DPB]: Fix stale queue counter maps in COUNTERS_DB after port breakout",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-11-28T05:30:51Z",
+      "createdAt": "2025-11-09T10:15:13Z",
+      "author": "rminnikanti",
+      "body": "Fixes #3983 \r\n\r\n**What I did**\r\nAdded cleanup of COUNTERS_*_NAME_MAP entries for a port during its deinit phase, and regenerated the NAME_MAP tables with fresh OIDs during port init when queue flex counters are already enabled.\r\n\r\n**Why I did it**\r\nAfter dynamic port breakout of a port, queue name map tables in the COUNTERS_DB table are not regenerated leaving stale entries resulting in CLI crash\r\n\r\n**How I verified it**\r\n```bash\r\n# show queue counters Ethernet0\r\nFor namespace :\r\n     Port    TxQ    Counter/pkts    Counter/bytes    Drop/pkts    Drop/bytes\r\n---------  -----  --------------  ---------------  -----------  ------------\r\nEthernet0    UC0               0                0            0             0\r\nEthernet0    UC1               0                0            0             0\r\nEthernet0    UC2               0                0            0             0\r\nEthernet0    UC3               0                0            0             0\r\nEthernet0    UC4               0                0            0             0\r\nEthernet0    UC5               0                0            0             0\r\nEthernet0    UC6               0                0            0             0\r\nEthernet0    UC7               0                0            0             0\r\n\r\nroot@sonic:~# redis-dump -d 2 -k \"COUNTERS_PORT_NAME_MAP*\" | jq | grep Ethernet448\r\n      \"Ethernet448\": \"oid:0x100000000085c\",\r\nroot@sonic:~#  redis-dump -d 2 -k \"COUNTERS_QUEUE_PORT_MAP*\" | jq | grep 0x100000000085c\r\n      \"oid:0x15000000000860\": \"oid:0x100000000085c\",\r\n      \"oid:0x15000000000861\": \"oid:0x100000000085c\",\r\n      \"oid:0x15000000000862\": \"oid:0x100000000085c\",\r\n      \"oid:0x15000000000863\": \"oid:0x100000000085c\",\r\n      \"oid:0x15000000000864\": \"oid:0x100000000085c\",\r\n      \"oid:0x1500000000085d\": \"oid:0x100000000085c\",\r\n      \"oid:0x1500000000085f\": \"oid:0x100000000085c\",\r\n      \"oid:0x1500000000085e\": \"oid:0x100000000085c\",\r\nroot@sonic:~# redis-dump -d 2 -k \"COUNTERS_QUEUE_NAME_MAP*\" | jq | grep -E \"0x15000000000860|0x15000000000861|0x15000000000862|0x15000000000863|0x15000000000864|0x1500000000085d|0x1500000000085f|0x1500000000085e\"\r\n      \"Ethernet448:6\": \"oid:0x15000000000863\",\r\n      \"Ethernet448:2\": \"oid:0x1500000000085f\",\r\n      \"Ethernet448:4\": \"oid:0x15000000000861\",\r\n      \"Ethernet448:7\": \"oid:0x15000000000864\",\r\n      \"Ethernet448:3\": \"oid:0x15000000000860\",\r\n      \"Ethernet448:0\": \"oid:0x1500000000085d\",\r\n      \"Ethernet448:5\": \"oid:0x15000000000862\",\r\n      \"Ethernet448:1\": \"oid:0x1500000000085e\",\r\nroot@sonic:~# redis-dump -d 2 -k \"COUNTERS_QUEUE_INDEX_MAP*\" | jq | grep -E \"0x15000000000860|0x15000000000861|0x15000000000862|0x15000000000863|0x15000000000864|0x1500000000085d|0x1500000000085f|0x1500000000085e\"\r\n      \"oid:0x15000000000860\": \"3\",\r\n      \"oid:0x15000000000861\": \"4\",\r\n      \"oid:0x15000000000862\": \"5\",\r\n      \"oid:0x15000000000863\": \"6\",\r\n      \"oid:0x15000000000864\": \"7\",\r\n      \"oid:0x1500000000085d\": \"0\",\r\n      \"oid:0x1500000000085f\": \"2\",\r\n      \"oid:0x1500000000085e\": \"1\",\r\nroot@sonic:~#  redis-dump -d 2 -k \"COUNTERS_QUEUE_TYPE_MAP*\" | jq | grep -E \"0x15000000000860|0x15000000000861|0x15000000000862|0x15000000000863|0x15000000000864|0x1500000000085d|0x1500000000085f|0x1500000000085e\"\r\n      \"oid:0x15000000000860\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n      \"oid:0x15000000000861\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n      \"oid:0x15000000000862\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n      \"oid:0x15000000000863\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n      \"oid:0x15000000000864\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n      \"oid:0x1500000000085d\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n      \"oid:0x1500000000085f\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n      \"oid:0x1500000000085e\": \"SAI_QUEUE_TYPE_UNICAST\",\r\n```\r\n\r\n**Details if related**\r\n",
+      "files": [
+        {
+          "path": "orchagent/high_frequency_telemetry/counternameupdater.cpp",
+          "additions": 6,
+          "deletions": 9
+        },
+        {
+          "path": "orchagent/portsorch.cpp",
+          "additions": 39,
+          "deletions": 2
+        },
+        {
+          "path": "tests/mock_tests/mock_table.cpp",
+          "additions": 29,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/portsorch_ut.cpp",
+          "additions": 73,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-09T10:15:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-09T10:15:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-09T14:46:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-09T14:47:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-11T22:26:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-11T22:26:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-13T01:59:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-13T01:59:20Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2025-11-13T06:09:54Z",
+          "body": "/azp run Azure.sonic-swss"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-13T06:10:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-16T06:43:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-16T06:43:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "sdszhang",
+          "createdAt": "2025-11-19T07:22:08Z",
+          "body": "@rminnikanti  can you create a cherry-pick PR to msft-202412"
+        },
+        {
+          "author": "rminnikanti",
+          "createdAt": "2025-11-19T12:14:53Z",
+          "body": "> @rminnikanti can you create a cherry-pick PR to msft-202412\r\n\r\n@sdszhang created PR - https://github.com/Azure/sonic-swss.msft/pull/170 "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-21T02:47:04Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-21T02:47:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-11-23T11:08:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-11-23T11:08:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ZhaohuiS",
+          "createdAt": "2025-11-24T06:19:39Z",
+          "body": "@rminnikanti could you pls help fix the UT failures in PR test?\r\n\r\n\r\n\r\n```\r\nTestsuite summary for sonic-swss 1.0\r\n============================================================================\r\n# TOTAL: 1\r\n# PASS:  0\r\n# SKIP:  0\r\n# XFAIL: 0\r\n# FAIL:  1\r\n# XPASS: 0\r\n# ERROR: 0\r\n============================================================================\r\nSee orchagent/p4orch/tests/test-suite.log\r\n============================================================================\r\nmake[5]: *** [Makefile:1884: test-suite.log] Error 1\r\nmake[5]: Leaving directory '/__w/1/s/orchagent/p4orch/tests'\r\nmake[4]: *** [Makefile:1992: check-TESTS] Error 2\r\nmake[4]: Leaving directory '/__w/1/s/orchagent/p4orch/tests'\r\nmake[3]: *** [Makefile:2064: check-am] Error 2\r\nmake[3]: Leaving directory '/__w/1/s/orchagent/p4orch/tests'\r\nmake[2]: *** [Makefile:2756: check-recursive] Error 1\r\nmake[2]: Leaving directory '/__w/1/s/orchagent'\r\nmake[1]: *** [Makefile:420: check-recursive] Error 1\r\nmake[1]: Leaving directory '/__w/1/s'\r\ndh_auto_test: error: make -j4 check \"TESTSUITEFLAGS=-j4 --verbose\" VERBOSE=1 returned exit code 2\r\nmake: *** [debian/rules:22: build] Error 25\r\ndpkg-buildpackage: error: debian/rules build subprocess returned exit status 2\r\n\r\n\r\n```"
+        },
+        {
+          "author": "r12f",
+          "createdAt": "2025-11-24T19:56:33Z",
+          "body": "hi @rminnikanti , do you mind to help look into this build issue? I will postpone the 202412 branch merge once the master is merged."
+        }
+      ]
+    }
+  ]
+}

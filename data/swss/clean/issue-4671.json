@@ -1,0 +1,78 @@
+{
+  "id": "swss-4671",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4671,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4671",
+    "title": "[orchagent] ACL table group type hardcoded to PARALLEL instead of querying SAI capability",
+    "created_at": "2026-06-14T13:04:42Z",
+    "closed_at": "2026-09-19T00:30:31Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n\nWhen `orchagent` creates an ACL table group to bind an ACL table to a port or to the switch, it\nunconditionally hardcodes the group type to `SAI_ACL_TABLE_GROUP_TYPE_PARALLEL`:\n\n- `PortsOrch::createBindAclTableGroup()` (orchagent/portsorch.cpp) sets\n  `group_attr.value.s32 = SAI_ACL_TABLE_GROUP_TYPE_PARALLEL;`\n- `SwitchOrch::createAclGroup()` (orchagent/switchorch.cpp) sets\n  `acl_grp_attr.value.s32 = SAI_ACL_TABLE_GROUP_TYPE_PARALLEL;`\n\nThe SAI specification default for `SAI_ACL_TABLE_GROUP_ATTR_TYPE` is actually\n`SAI_ACL_TABLE_GROUP_TYPE_SEQUENTIAL`, so PARALLEL is already an orchagent-imposed override. On a\nplatform whose ASIC/SAI implementation does not realize PARALLEL ACL table groups, the\n`create_acl_table_group()` call fails and the ACL never binds, with no graceful fallback.\n\nThere is a SAI API to discover what a platform supports \u2014 `sai_query_attribute_enum_values_capability()`\nfor `(SAI_OBJECT_TYPE_ACL_TABLE_GROUP, SAI_ACL_TABLE_GROUP_ATTR_TYPE)` \u2014 but orchagent does not use it\nfor the group type.\n\n**Steps to reproduce**\n\n1. Run orchagent on a platform whose SAI implementation supports only SEQUENTIAL ACL table groups.\n2. Configure an ingress ACL table bound to a port (or a switch-level ACL group).\n3. Observe `create_acl_table_group()` fail / the bind not program, because PARALLEL is hardcoded.\n\n**Expected behavior**\n\norchagent should query the platform capability for `SAI_ACL_TABLE_GROUP_ATTR_TYPE` and choose the\nsupported group type, while preserving the historical PARALLEL behavior whenever the capability query\nis unavailable or reports PARALLEL (so platforms that don't implement the query are unaffected).\n\n**Actual behavior**\n\nThe ACL table group type is always PARALLEL regardless of platform capability.\n\n**Additional information**\n\nThis mirrors the capability-gating approach already taken for ACL table match fields in\n#4661. The proposed change is backward compatible: PARALLEL remains the result on every\nnon-definitive capability answer (`SAI_STATUS_NOT_IMPLEMENTED` / `SAI_STATUS_NOT_SUPPORTED` /\ngenuine query failure / PARALLEL listed), and only switches to SEQUENTIAL when the platform\nexplicitly reports SEQUENTIAL-only."
+  },
+  "resolution": {
+    "pr_number": 4672,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4672",
+    "title": "orchagent: query ACL table group type capability instead of hardcoding PARALLEL",
+    "merged_at": "2026-09-19T00:30:30Z",
+    "description": "**What I did**\n\n`PortsOrch::createBindAclTableGroup()` and `SwitchOrch::createAclGroup()` hardcoded\n`SAI_ACL_TABLE_GROUP_TYPE_PARALLEL` when creating ACL table groups. This replaces both with a new\n`saihelper` free function `querySupportedAclTableGroupType()` that discovers the platform-supported\ngroup type via `sai_query_attribute_enum_values_capability(SAI_OBJECT_TYPE_ACL_TABLE_GROUP,\nSAI_ACL_TABLE_GROUP_ATTR_TYPE)`.\n\nThe helper returns the historical `PARALLEL` default on every non-definitive result and only returns\n`SEQUENTIAL` when the platform *successfully* reports SEQUENTIAL as the only supported type:\n\n| Capability query result | Returned type |\n|---|---|\n| SUCCESS, PARALLEL listed | PARALLEL (unchanged) |\n| SUCCESS, only SEQUENTIAL listed | SEQUENTIAL |\n| SUCCESS, empty / unusable list | PARALLEL |\n| `SAI_STATUS_NOT_IMPLEMENTED` / `SAI_STATUS_NOT_SUPPORTED` | PARALLEL |\n| any other genuine query failure | PARALLEL |\n\n**Why I did it**\n\nFixes #4671. The SAI spec default for `SAI_ACL_TABLE_GROUP_ATTR_TYPE` is `SEQUENTIAL`, so the hardcoded\n`PARALLEL` is an orchagent-imposed override. On a platform whose SAI implementation does not realize\nPARALLEL ACL table groups, `create_acl_table_group()` fails and the ACL never binds, with no graceful\nfallback. This mirrors the capability-gating already done for ACL table match fields in #4661.\n\nThe change is backward compatible by construction: `PARALLEL` is preserved on every path except an\nexplicit, successful \"SEQUENTIAL-only\" answer \u2014 so platforms that don't implement the enum-values\nquery (i.e. today's behavior) are unaffected, and no new create/retry loop is introduced because\nPARALLEL is exactly what is programmed today.\n\n**How I verified it**\n\n- **Unit tests** (`tests/mock_tests/saihelper_ut.cpp`): 6 new gtest cases in the\n  `QuerySupportedAclTableGroupType` suite cover all outcomes \u2014 PARALLEL supported, SEQUENTIAL-only,\n  empty list, `NOT_SUPPORTED`, `NOT_IMPLEMENTED`, and a genuine `SAI_STATUS_FAILURE` \u2014 each asserting\n  the documented result. The enum-values SAI call is driven through a generic, registrable `--wrap`\n  override (`sai_enum_cap_ut`) in the shared unified capability wrap `mock_sai_capability_wrap` (the\n  wrapper introduced by #4613), so no test reaches real hardware.\n\n```\n$ ./tests --gtest_filter='QuerySupportedAclTableGroupType.*'\n[----------] 6 tests from QuerySupportedAclTableGroupType\n[ RUN      ] QuerySupportedAclTableGroupType.ParallelSupportedReturnsParallel\n[       OK ] QuerySupportedAclTableGroupType.ParallelSupportedReturnsParallel (0 ms)\n[ RUN      ] QuerySupportedAclTableGroupType.OnlySequentialReturnsSequential\n[       OK ] QuerySupportedAclTableGroupType.OnlySequentialReturnsSequential (0 ms)\n[ RUN      ] QuerySupportedAclTableGroupType.EmptyListPreservesParallel\n[       OK ] QuerySupportedAclTableGroupType.EmptyListPreservesParallel (0 ms)\n[ RUN      ] QuerySupportedAclTableGroupType.NotSupportedPreservesParallel\n[       OK ] QuerySupportedAclTableGroupType.NotSupportedPreservesParallel (0 ms)\n[ RUN      ] QuerySupportedAclTableGroupType.NotImplementedPreservesParallel\n[       OK ] QuerySupportedAclTableGroupType.NotImplementedPreservesParallel (0 ms)\n[ RUN      ] QuerySupportedAclTableGroupType.GenuineFailurePreservesParallel\n[       OK ] QuerySupportedAclTableGroupType.GenuineFailurePreservesParallel (0 ms)\n[----------] 6 tests from QuerySupportedAclTableGroupType (0 ms total)\n[  PASSED  ] 6 tests.\n```\n\n- **Build**: orchagent compiles clean with the change.\n- **Hardware E2E**: with a companion libsai that implements the enum-values query for\n  `ACL_TABLE_GROUP/TYPE`): after deploy the ingress ACL table group is created as `PARALLEL` via the\n  capability path (`createBindAclTableGroup` \u2192 `querySupportedAclTableGroupType` \u2192 SUCCESS+{PARALLEL}),\n  ASIC ACL table/group/member/entry counts are unchanged, and existing ACL programming is unaffected.\n  A direct probe of the deployed libsai confirms `sai_query_attribute_enum_values_capability(\n  ACL_TABLE_GROUP, TYPE)` returns `SAI_STATUS_SUCCESS` with `{PARALLEL}`.\n\n**Details if related**\n- Related: #4661 (ACL table match-field capability gating).",
+    "files": [
+      {
+        "path": "orchagent/p4orch/tests/test_main.cpp",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/saihelper.cpp",
+        "additions": 88,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/saihelper.h",
+        "additions": 9,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/switchorch.cpp",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/mock_tests/mock_sai_capability_wrap.cpp",
+        "additions": 38,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/mock_sai_capability_wrap.h",
+        "additions": 36,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/saihelper_ut.cpp",
+        "additions": 112,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

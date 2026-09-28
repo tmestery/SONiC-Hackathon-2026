@@ -1,0 +1,48 @@
+{
+  "id": "swss-4736",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4736,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4736",
+    "title": "EVPN Race Condition: disableNeighbor() Does Not Handle Neighbor-First, MAC-Second Programming Scenario",
+    "created_at": "2026-07-06T11:12:19Z",
+    "closed_at": "2026-07-08T18:27:34Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "Summary -\n\nThe issue is caused by a race condition between EVPN remote MAC programming and neighbor programming on the VTEP.\nUnder normal EVPN operation, the remote Type-2 MAC is expected to be installed first as a VXLAN tunnel FDB entry,\nafter which the corresponding neighbor entry is programmed and resolved through that remote MAC.\nHowever, in the observed failure scenario, the sequence occurred in the reverse order.\nThe neighbor entry was programmed first, followed by the remote MAC FDB entry approximately 15\u201320 ms later.\nWhen this reverse ordering occurs, only the affected MAC/neighbor pairs enter the traffic-loss state.\n\nThe EVPN MH fix([SONIC #2195](https://github.com/sonic-net/sonic-swss/pull/4615)) available in the community have added this changes and doesn\u2019t address the underlying race condition.\n\nInstead, it blindly removes the neighbor entry from hardware when the remote MAC is learned. As a result, the device does not recover\nautomatically because the software and hardware states become out of sync.\n\nPlease check disableNeighbor code changes as it is not addressing the reverse order of programming (neighbors first, mac second).\n\nTopology -\n\nHost A - VTEP1 - CLOUD - VTEP2 -- HOST B\n\nEnvironment\n\n- Symmetric IRB\n- there is no MAC move in the system.\n- only Host A to VTEP1 port is flapped multiple times which  cause sequencing issue.\n\nSequence -\n\n45924 2026 Jul  6 <IPV6>.855446 vtep3 NOTICE swss#orchagent: :- addNeighbor: Created neighbor ip <IP>, <IPV6> on Vlan100                                                                                                                                           45925 2026 Jul  6 <IPV6>.856635 vtep3 NOTICE swss#orchagent: :- addNextHop: Created next hop <IP> on Vlan100                                                                                                                                                                  45926 2026 Jul  6 <IPV6>.868827 vtep3 NOTICE swss#orchagent: :- addFdbEntry: EVPN_NBR_DBG: addFdbEntry remote mac=<IPV6> bv_id=0x260000000007b9 dest_type=Vtep macUpdate=0 oldOrigin=0 remoteToRemoteMove=0\n45927 2026 Jul  6 <IPV6>.868827 vtep3 NOTICE swss#orchagent: :- addFdbEntry: EVPN_NBR_DBG: addFdbEntry -> processFDBDelete (disableNeighbor) mac=<IPV6> bv_id=0x260000000007b9\n45928 2026 Jul  6 <IPV6>.870228 vtep3 NOTICE swss#orchagent: :- addFdbEntry: EVPN_NBR_DBG: addFdbEntry remote mac=<IPV6> bv_id=0x260000000007b9 dest_type=Vtep macUpdate=0 oldOrigin=0 remoteToRemoteMove=0\n45929 2026 Jul  6 <IPV6>.870228 vtep3 NOTICE swss#orchagent: :- addFdbEntry: EVPN_NBR_DBG: addFdbEntry -> processFDBDelete (disableNeighbor) mac=<IPV6> bv_id=0x260000000007b9\n45930 2026 Jul  6 <IPV6>.870228 vtep3 NOTICE swss#orchagent: :- disableNeighbor: Neighbor disable request for <IP>                                                                                                                                                            45931 2026 Jul  6 <IPV6>.871226 vtep3 NOTICE swss#orchagent: :- removeNeighbor: Removed next hop <IP> on Vlan100"
+  },
+  "resolution": {
+    "pr_number": 4739,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4739",
+    "title": "Fix EVPN neighbor-first remote MAC race",
+    "merged_at": "2026-07-08T18:27:33Z",
+    "description": "Fixes #4736\n\n## Summary\n- Restrict the EVPN remote-FDB neighbor delete path to actual local-to-remote MAC moves.\n- Avoid disabling an already-programmed neighbor when a neighbor is programmed before its remote VXLAN FDB entry.\n- Add a VXLAN FDB mock regression for the neighbor-first, MAC-second sequence.\n\n## Why I did it\nWhen the neighbor is programmed before the remote EVPN MAC, `FdbOrch::addFdbEntry()` currently treats the first remote FDB add like a MAC move and calls `processFDBDelete()`. That removes the neighbor from hardware even though there was no local-to-remote MAC move, leaving software and hardware neighbor state out of sync.\n\n## How I did it\nThe fix gates `processFDBDelete()` on `macUpdate` and the previous FDB origin, so it only runs when an existing local entry moves to the remote VXLAN/NHG side. The regression test programs the neighbor first, then adds the remote VXLAN FDB entry, and verifies the neighbor remove path is not called.\n\n## How to verify it\nValidated through the SONiC buildimage Trixie SWSS package path in `sbi0`:\n\n```bash\nmake PLATFORM=vs NOJESSIE=1 NOSTRETCH=1 NOBUSTER=1 NOBULLSEYE=1 NOBOOKWORM=1 NOTRIXIE=0 \\\n     SONIC_BUILD_JOBS=4 SONIC_CONFIG_MAKE_JOBS=32 \\\n     target/debs/trixie/swss_1.0.0_amd64.deb\n```\n\nA/B result:\n- With this fix: `A_WITH_FIX_PACKAGE_RC=0`\n- With only `orchagent/fdborch.cpp` reverted to the pre-fix behavior while keeping the regression test: `B_WITHOUT_FIX_PACKAGE_RC=2`\n- No-fix failure: `VxlanFdbOrchTest.RemoteMacAddAfterNeighborDoesNotDisableNeighbor` failed because `remove_neighbor_entry(...)` was called once despite the test expecting it never to be called.\n\nAlso checked:\n\n```bash\ngit diff --check github/master..HEAD\n```",
+    "files": [
+      {
+        "path": "orchagent/fdborch.cpp",
+        "additions": 6,
+        "deletions": 4
+      },
+      {
+        "path": "tests/mock_tests/fdborch/fdborch_vxlan_ut.cpp",
+        "additions": 120,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

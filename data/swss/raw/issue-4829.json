@@ -1,0 +1,187 @@
+{
+  "number": 4829,
+  "title": "[DualToR] orchagent creates a core dump during `config reload` with standby mux ports",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4829",
+  "createdAt": "2026-08-19T19:27:27Z",
+  "closedAt": "2026-09-21T18:33:01Z",
+  "author": "rajkumar1-arista",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn an active-standby DualToR system, `orchagent` crashes during `config\nreload` when mux ports are in the standby state. The reload command returns\nsuccessfully, but a new orchagent core file is created in\n`/var/core/`.\n\n### Steps to Reproduce\n\n1. Use an active-standby DualToR device with one or more mux ports in the\n   `standby` state.\n2. Verify the state with `show mux status`.\n3. Run `sudo config reload -y`.\n4. Run `ls /var/core/` and compare the output with the list before the reload.\n\n### Actual Behavior and Expected Behavior\n\n**Actual:** `orchagent` creates a core dump during config reload.\n\n**Expected:** config reload completes without orchagent crashing or\ncreating a new orchagent core file, including when mux ports are in standby.\n\n### Relevant log output\n\n```shell\nadmin@ldp408:~$ ls /var/core/\norchagent.1785068889.170.core.gz  orchagent.1785069102.255.core.gz\n\nadmin@ldp408:~$ sudo config reload -y\nAcquired lock on /etc/sonic/reload.lock\n...\nRestarting SONiC target ...\n...\nReleased lock on /etc/sonic/reload.lock\n\nadmin@ldp408:~$ ls /var/core/\norchagent.1785068889.170.core.gz  orchagent.1785069102.255.core.gz  orchagent.1785153078.190.core.gz\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nadmin@ldp408:~$ show version --brief\n\nSONiC Software Version: SONiC.branch.202605-ars.6e4b5dc6-buildimage.89ae323bca4e5777f36534b4a4e1f3470aeae4e4-nightly-2026.08.02.14.40\nSONiC OS Version: 13\nDistribution: Debian 13.6\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 58be37645\nBuild date: Sun Aug  2 17:07:52 UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-arsonic-backend-k8s-93153-8xfcp-5cbnk\n\nPlatform: x86_64-arista_7050cx3_32c\nHwSKU: Arista-7050CX3-32C-C6S104\nASIC: broadcom\nASIC Count: 1\nSerial Number: HBG244203NX\nModel Number: DCS-7050CX3-32C\nHardware Revision: 01.00\nUptime: 12:20:27 up 48 min,  2 users,  load average: 1.00, 0.86, 0.93\nDate: Tue 04 Aug 2026 12:20:27\nadmin@ldp408:~$\n```\n\n### Attach files (if any)\n\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4830,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4830",
+      "title": "Fix orchagent  on shutdown in active-standby dualtor topologies.",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-21T18:33:00Z",
+      "createdAt": "2026-08-19T20:15:53Z",
+      "author": "rajkumar1-arista",
+      "body": "#### Why I did it\r\n\r\nFixes: https://github.com/sonic-net/sonic-swss/issues/4829\r\n\r\nFix an `orchagent` SIGSEGV during shutdown/config reload on active-standby\r\nDualToR systems with one or more mux ports in standby. `gAclOrch` is destroyed\r\nbefore `gMuxOrch` due to `m_orchList` ordering. When MuxAclHandler's destructor\r\ncalls `gAclOrch->getAclRule()` on the dangling pointer, it crashes with a null\r\nvtable dereference that creates an orchagent core dump during `config reload`.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**:\r\n\r\n#### How I did it\r\nRather than reordering m_orchList (which is fragile \u2014 PR [#2397](https://github.com/sonic-net/sonic-swss/pull/2397)\r\nsilently broke PR [#2010](https://github.com/sonic-net/sonic-swss/pull/2010) ordering intent 8 months\r\nlater), guard the destructor:\r\n\r\n- Clear `gAclOrch` when `AclOrch` is destroyed and skip `MuxAclHandler` ACL\r\n  cleanup when it has already gone away during shutdown.\r\n- Add an explicit `Orch::detachObservers()` shutdown phase before any orch is\r\n  deleted, and implement it for MuxOrch, NeighOrch, and FdbOrch. This removes\r\n  observer/subject destruction-order dependencies.\r\n- Clear the corresponding global pointers in the affected orch destructors.\r\n- Iterate ACL tables by const reference in `AclOrch::getTableById()` to avoid\r\n  copying `AclTable` instances and their `shared_ptr<AclRule>` maps.\r\n- Add a mux integration test that places a mux port in standby, stops\r\n  orchagent, and verifies it stops without a coredump.\r\n\r\n#### How to verify it\r\n\r\n- On an active-standby DualToR device, put at least one mux port in `standby`,\r\n  run `sudo config reload -y`, and verify that no new `orchagent` core file is\r\n  created in `/var/core/`.\r\n- Run the new `TestMuxShutdownWithStandby` test in `tests/test_mux.py`.\r\n\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):https://github.com/sonic-net/sonic-swss/issues/4829\r\n\r\nFailure type: regression\r\n\r\nReason for backport: the issue is reproducible on the 202605 active-standby\r\nDualToR setup and causes an orchagent crash/core dump during config reload.\r\n\r\n#### Tested branch\r\n\r\n- [ ] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\n202605: SONiC.branch.202605-ars.465d18bd-buildimage.71eda5ea11a604186d18c70df5068ca4b1578ab5-review.759356.3-2026.08.13.19.59 -\r\n[no_orch_crash.log](https://github.com/user-attachments/files/31238895/no_orch_crash.log)\r\n\r\n\r\n#### Description for the changelog\r\n\r\nPrevent orchagent crashes during config reload on active-standby DualToR systems with standby mux ports.\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\nN/A \u2014 no YANG or config_db schema changes.\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n```\r\n__\r\n'. \\\r\n '- \\\r\n  / /_         .---.\r\n / | \\\\,.\\/--.//    )\r\n |  \\//        )/  /\r\n  \\  ' ^ ^    /    )____.----..  6\r\n   '.____.    .___/            \\._)\r\n      .\\/.                      )\r\n       '\\                       /\r\n       _/ \\/    ).        )    (\r\n      /#  .!    |        /\\    /\r\n      \\  C// #  /'-----''/ #  /\r\n   .   'C/ |    |    |   |    |mrf  ,\r\n   \\), .. .'OOO-'. ..'OOO'OOO-'. ..\\(,\r\n```\r\n",
+      "files": [
+        {
+          "path": "orchagent/aclorch.cpp",
+          "additions": 4,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/fdborch.cpp",
+          "additions": 11,
+          "deletions": 1
+        },
+        {
+          "path": "orchagent/fdborch.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/muxorch.cpp",
+          "additions": 27,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/muxorch.h",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/neighorch.cpp",
+          "additions": 7,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/neighorch.h",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/orch.h",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "orchagent/orchdaemon.cpp",
+          "additions": 11,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/mock_orch_test.cpp",
+          "additions": 5,
+          "deletions": 0
+        },
+        {
+          "path": "tests/test_mux.py",
+          "additions": 30,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-19T20:16:01Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-19T20:16:02Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-19T20:16:13Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T00:20:48Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T00:20:52Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-21T06:00:11Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-21T06:00:49Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-26T07:55:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-26T07:55:34Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-08-27T03:49:57Z",
+          "body": "hi @rajkumar1-arista could you check the CI failure?\r\n"
+        },
+        {
+          "author": "rajkumar1-arista",
+          "createdAt": "2026-09-07T06:50:49Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T06:50:52Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T06:50:54Z",
+          "body": "No Azure DevOps builds found for sonic-net/sonic-swss#4830."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T06:51:33Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-07T06:51:44Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rajkumar1-arista",
+          "createdAt": "2026-09-09T07:51:12Z",
+          "body": "> hi @rajkumar1-arista could you check the CI failure?\r\n\r\nFixed, all are passing now "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-21T09:59:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-21T09:59:28Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-21T19:16:50Z",
+          "body": "The change is not in 202605 yet. @rajkumar1-arista, please manually create the cherry pick PR for branch 202605.<br>You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rajkumar1-arista",
+          "createdAt": "2026-09-27T08:43:55Z",
+          "body": "Created a manual cherry-pick for 202605: https://github.com/sonic-net/sonic-swss/pull/4941"
+        }
+      ]
+    }
+  ]
+}

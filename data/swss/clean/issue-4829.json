@@ -1,0 +1,93 @@
+{
+  "id": "swss-4829",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4829,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4829",
+    "title": "[DualToR] orchagent creates a core dump during `config reload` with standby mux ports",
+    "created_at": "2026-08-19T19:27:27Z",
+    "closed_at": "2026-09-21T18:33:01Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn an active-standby DualToR system, `orchagent` crashes during `config\nreload` when mux ports are in the standby state. The reload command returns\nsuccessfully, but a new orchagent core file is created in\n`/var/core/`.\n\n### Steps to Reproduce\n\n1. Use an active-standby DualToR device with one or more mux ports in the\n   `standby` state.\n2. Verify the state with `show mux status`.\n3. Run `sudo config reload -y`.\n4. Run `ls /var/core/` and compare the output with the list before the reload.\n\n### Actual Behavior and Expected Behavior\n\n**Actual:** `orchagent` creates a core dump during config reload.\n\n**Expected:** config reload completes without orchagent crashing or\ncreating a new orchagent core file, including when mux ports are in standby.\n\n### Relevant log output\n\n```shell\nadmin@ldp408:~$ ls /var/core/\norchagent.1785068889.170.core.gz  orchagent.1785069102.255.core.gz\n\nadmin@ldp408:~$ sudo config reload -y\nAcquired lock on /etc/sonic/reload.lock\n...\nRestarting SONiC target ...\n...\nReleased lock on /etc/sonic/reload.lock\n\nadmin@ldp408:~$ ls /var/core/\norchagent.1785068889.170.core.gz  orchagent.1785069102.255.core.gz  orchagent.1785153078.190.core.gz\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nadmin@ldp408:~$ show version --brief\n\nSONiC Software Version: SONiC.branch.202605-ars.6e4b5dc6-buildimage.89ae323bca4e5777f36534b4a4e1f3470aeae4e4-nightly-2026.08.02.14.40\nSONiC OS Version: 13\nDistribution: Debian 13.6\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 58be37645\nBuild date: Sun Aug  2 <IPV6> UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-arsonic-backend-k8s-93153-8xfcp-5cbnk\n\nPlatform: x86_64-arista_7050cx3_32c\nHwSKU: Arista-7050CX3-32C-C6S104\nASIC: broadcom\nASIC Count: 1\nSerial Number: HBG244203NX\nModel Number: DCS-7050CX3-32C\nHardware Revision: 01.00\nUptime: <IPV6> up 48 min,  2 users,  load average: 1.00, 0.86, 0.93\nDate: Tue 04 Aug 2026 <IPV6>\nadmin@ldp408:~$\n```\n\n### Attach files (if any)"
+  },
+  "resolution": {
+    "pr_number": 4830,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4830",
+    "title": "Fix orchagent  on shutdown in active-standby dualtor topologies.",
+    "merged_at": "2026-09-21T18:33:00Z",
+    "description": "#### Why I did it\n\nFixes: https://github.com/sonic-net/sonic-swss/issues/4829\n\nFix an `orchagent` SIGSEGV during shutdown/config reload on active-standby\nDualToR systems with one or more mux ports in standby. `gAclOrch` is destroyed\nbefore `gMuxOrch` due to `m_orchList` ordering. When MuxAclHandler's destructor\ncalls `gAclOrch->getAclRule()` on the dangling pointer, it crashes with a null\nvtable dereference that creates an orchagent core dump during `config reload`.\n\n##### Work item tracking\n- Microsoft ADO **(number only)**:\n\n#### How I did it\nRather than reordering m_orchList (which is fragile \u2014 PR [#2397](https://github.com/sonic-net/sonic-swss/pull/2397)\nsilently broke PR [#2010](https://github.com/sonic-net/sonic-swss/pull/2010) ordering intent 8 months\nlater), guard the destructor:\n\n- Clear `gAclOrch` when `AclOrch` is destroyed and skip `MuxAclHandler` ACL\n  cleanup when it has already gone away during shutdown.\n- Add an explicit `Orch::detachObservers()` shutdown phase before any orch is\n  deleted, and implement it for MuxOrch, NeighOrch, and FdbOrch. This removes\n  observer/subject destruction-order dependencies.\n- Clear the corresponding global pointers in the affected orch destructors.\n- Iterate ACL tables by const reference in `AclOrch::getTableById()` to avoid\n  copying `AclTable` instances and their `shared_ptr<AclRule>` maps.\n- Add a mux integration test that places a mux port in standby, stops\n  orchagent, and verifies it stops without a coredump.\n\n#### How to verify it\n\n- On an active-standby DualToR device, put at least one mux port in `standby`,\n  run `sudo config reload -y`, and verify that no new `orchagent` core file is\n  created in `/var/core/`.\n- Run the new `TestMuxShutdownWithStandby` test in `tests/test_mux.py`.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):https://github.com/sonic-net/sonic-swss/issues/4829\n\nFailure type: regression\n\nReason for backport: the issue is reproducible on the 202605 active-standby\nDualToR setup and causes an orchagent crash/core dump during config reload.\n\n#### Tested branch\n\n- [ ] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n202605: SONiC.branch.202605-ars.465d18bd-buildimage.71eda5ea11a604186d18c70df5068ca4b1578ab5-review.759356.3-2026.08.13.19.59 -\n[no_orch_crash.log](https://github.com/user-attachments/files/31238895/no_orch_crash.log)\n\n#### Description for the changelog\n\nPrevent orchagent crashes during config reload on active-standby DualToR systems with standby mux ports.\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 no YANG or config_db schema changes.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n\n```\n__\n'. \\\n '- \\\n  / /_         .---.\n / | \\\\,.\\/--.//    )\n |  \\//        )/  /\n  \\  ' ^ ^    /    )____.----..  6\n   '.____.    .___/            \\._)\n      .\\/.                      )\n       '\\                       /\n       _/ \\/    ).        )    (\n      /#  .!    |        /\\    /\n      \\  C// #  /'-----''/ #  /\n   .   'C/ |    |    |   |    |mrf  ,\n   \\), .. .'OOO-'. ..'OOO'OOO-'. ..\\(,\n```",
+    "files": [
+      {
+        "path": "orchagent/aclorch.cpp",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/fdborch.cpp",
+        "additions": 11,
+        "deletions": 1
+      },
+      {
+        "path": "orchagent/fdborch.h",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/muxorch.cpp",
+        "additions": 27,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/muxorch.h",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/neighorch.cpp",
+        "additions": 7,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/neighorch.h",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/orch.h",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "orchagent/orchdaemon.cpp",
+        "additions": 11,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/mock_orch_test.cpp",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "tests/test_mux.py",
+        "additions": 30,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

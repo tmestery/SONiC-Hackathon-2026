@@ -1,0 +1,72 @@
+{
+  "number": 4667,
+  "title": "PFCWD leaves stale PFC_WD_TABLE_INSTORM entry in APPL_DB after `pfcwd stop` during an active storm",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4667",
+  "createdAt": "2026-06-12T18:04:05Z",
+  "closedAt": "2026-06-19T18:44:07Z",
+  "author": "darius-nexthop",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh: after a warm restart, the replayed entry installs the configured PFCWD action (e.g., drop ACL) on a queue with no actual storm, blackholing traffic indefinitely.\n\n### Description of the bug\n\nWhen PFCWD detects a storm, `PfcWdActionHandler` records it in APPL_DB via `HSET PFC_WD_TABLE_INSTORM:<port> <queue_index> storm`. However, `PfcWdSwOrch::unregisterFromWdDb()` (run on `pfcwd stop`, or any path that unregisters a port from the watchdog) only cleans up the COUNTERS_DB fields. If the watchdog is stopped while a queue is in storm state, the entry becomes stale.\n\nA stale entry alone is a small issue. However, on a subsequent warm restart of swss (`config warm_restart enable swss` + service restart, or as part of a full system `warm-reboot`), the stale entry is **replayed** via `PfcWdSwOrch::bake()` \u2192 `refillToSync(m_applTable)` and PFCWD fabricates a storm that doesn't exist: the configured action (drop) is installed on the queue, and since the queue was never actually storming, the restoration path is not exercised so the queue stays blackholed indefinitely.\n\n### Steps to reproduce\n\n1. `sudo pfcwd start <port> 400`\n2. Inject a PFC storm on the port; confirm `show pfcwd stats` reports `stormed`.\n3. `sudo pfcwd stop` while the storm is active.\n4. Check APPL_DB and verify the INSTORM entry is stale:\n\n```\nadmin@sonic:~$ show pfcwd stats\n        QUEUE    STATUS    STORM DETECTED/RESTORED    ...\n-------------  --------  -------------------------\nEthernet128:3   stormed                        2/1\nEthernet128:4   stormed                        2/1\n\nadmin@sonic:~$ sudo pfcwd stop\n\nadmin@sonic:~$ show pfcwd stats\n        QUEUE    STATUS    STORM DETECTED/RESTORED    ...\n-------------  --------  -------------------------\nEthernet128:3       N/A                        2/2\nEthernet128:4       N/A                        2/2\n\nadmin@sonic:~$ sudo sonic-db-cli APPL_DB KEYS \"*PFC*WD*\"\nPFC_WD_TABLE_INSTORM:Ethernet128\nadmin@sonic:~$ sudo sonic-db-cli APPL_DB HGETALL \"PFC_WD_TABLE_INSTORM:Ethernet128\"\n{'4': 'storm', '3': 'storm'}\n```\n\n5. Warm restart swss (`sudo config warm_restart enable swss && sudo systemctl restart swss`). The stale entry is replayed, a drop ACL is installed on the port, and `show pfcwd stats` reports a sticky `stormed` queue with no storm present.\n\nObserved on 202511; code path is identical on master.\n\n### Fix\n\n`unregisterFromWdDb()` should delete the queue's INSTORM field during cleanup, mirroring the `HSET` done in `startWdActionOnQueue()`.",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 4647,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4647",
+      "title": "[pfcwdorch]: Clean up PFC_WD_TABLE_INSTORM on PFC watchdog stop",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-19T18:44:06Z",
+      "createdAt": "2026-06-04T18:30:44Z",
+      "author": "darius-nexthop",
+      "body": "**What I did**\r\n\r\nClean up the stale `PFC_WD_TABLE_INSTORM:<port>` entry in APPL_DB when PFC watchdog is stopped on a port. In `PfcWdSwOrch::unregisterFromWdDb()`, the per-queue cleanup loop already removed the COUNTERS_DB watchdog fields; this change additionally drops each queue's field from the port's `INSTORM` hash so the table is consistent once watchdog is stopped.\r\n\r\n**Why I did it**\r\n\r\nWhen PFC watchdog is stopped on a port while one or more of its queues are in storm, the per-queue fields under `PFC_WD_TABLE_INSTORM:<port>` were left behind (e.g. `PFC_WD_TABLE_INSTORM:Ethernet20` -> `{'3':'storm','4':'storm'}`) with no active storm.\r\n\r\nThe stale row is replayed on warm boot: on startup, pfcwdorch drains the `APP_PFC_WD_TABLE` consumer, reads the stale in-storm queues, and re-enters the storm handler even though no storm exists.\r\n\r\n**How I verified it**\r\n\r\n- `pfcwd start` on a port, inject a storm so the queue is detected as stormed and `PFC_WD_TABLE_INSTORM:<port>` is populated.\r\n- `pfcwd stop <port>`; confirm `sonic-db-cli APPL_DB HGETALL PFC_WD_TABLE_INSTORM:<port>` returns `{}`.\r\n- Warm restart swss with no active storm; confirm the port no longer comes up in `show pfcwd stats` as stormed.\r\n\r\n**Details if related**\r\n\r\nRelated to #1691, which addresses the same stale in-storm state for warm-reboot but also bundles a broader portsorch/big-red-switch refactor and has remained unmerged since 2021. This PR is a minimal, self-contained fix for the pfcwd-stop case only.\r\n\r\nFixes #4667",
+      "files": [
+        {
+          "path": "orchagent/pfcwdorch.cpp",
+          "additions": 7,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-04T18:30:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-04T18:31:05Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "pinky-nexthop",
+          "createdAt": "2026-06-11T15:43:57Z",
+          "body": "@vmittal-msft  @kperumalbfn  kindly review. "
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-06-18T14:17:23Z",
+          "body": "@saksarav-nokia @ysmanman please help review as well"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-19T18:44:28Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-swss/pull/4685"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-06-19T18:44:48Z",
+          "body": "@vmittal-msft , if you are taking this for 202511, then should be requested for 202605 as well. @yxieca \r\n@kperumalbfn for viz"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-22T23:21:59Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-swss/pull/4697"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "id": "swss-2579",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 2579,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/2579",
+    "title": "[muxorch] tunnel route is removed twice on standby port after deleting the `FAILED` neighbor",
+    "created_at": "2022-12-19T09:40:34Z",
+    "closed_at": "2026-09-22T15:46:43Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "Steps to reproduce:\n\n1. set `Ethernet8` to `standby`\n```\n# show mux config | grep -w Ethernet8\nEthernet8   auto     <IP>/32   fc02:1000::4/128   active-active  <IP>/32\n# config mux mode standby Ethernet8\nport       state\n---------  ----------\nEthernet8  INPROGRESS\n```\n\n2. ping the server ipv6 address to create a `FAIELD` neighbor and standalone tunnel route\n```\n# ping -6 fc02:1000::4\nPING fc02:1000::4(fc02:1000::4) 56 data bytes\nFrom fc02:1000::1 icmp_seq=1 Destination unreachable: Address unreachable\nFrom fc02:1000::1 icmp_seq=5 Destination unreachable: Address unreachable\nFrom fc02:1000::1 icmp_seq=6 Destination unreachable: Address unreachable\nFrom fc02:1000::1 icmp_seq=7 Destination unreachable: Address unreachable\n^C\n--- fc02:1000::4 ping statistics ---\n7 packets transmitted, 0 received, +4 errors, 100% packet loss, time 6096ms\n\n# ip neighbor | grep fc02:1000::4\nfc02:1000::4 dev Vlan1000  FAILED\n```\n\n3. delete the `FAILED` neighbor `fc02:1000::4`\n```\n# ip neighbor del fc02:1000::4 dev Vlan1000\n```\n\n4. check the syslog\n```\nDec 19 <IPV6>.014445 DEMO_DEVICE INFO swss#orchagent: :- addZeroMacTunnelRoute: Creating tunnel route for neighbor fc02:1000::4\nDec 19 <IPV6>.014540 DEMO_DEVICE INFO swss#orchagent: :- createStandaloneTunnelRoute: Creating standalone tunnel route for neighbor fc02:1000::4\nDec 19 <IPV6>.017193 DEMO_DEVICE NOTICE swss#orchagent: :- create_route: Created tunnel route to fc02:1000::4/128\nDec 19 <IPV6>.159894 DEMO_DEVICE INFO swss#orchagent: :- set: setting attribute 0x10000004 status: SAI_STATUS_SUCCESS\n...\nDec 19 <IPV6>.731712 DEMO_DEVICE NOTICE swss#orchagent: :- removeNeighbor: Removed neighbor <IPV6> on Vlan1000\nDec 19 <IPV6>.731712 DEMO_DEVICE INFO swss#orchagent: :- removeStandaloneTunnelRoute: Removing standalone tunnel route for neighbor fc02:1000::4\nDec 19 <IPV6>.735661 DEMO_DEVICE NOTICE swss#orchagent: :- remove_route: Removed tunnel route to fc02:1000::4/128\nDec 19 <IPV6>.736101 DEMO_DEVICE INFO swss#orchagent: :- update: Neigh fc02:1000::4 on Vlan1000, add 0, state 2\nDec 19 <IPV6>.736333 DEMO_DEVICE ERR swss#orchagent: :- meta_sai_validate_route_entry: object key SAI_OBJECT_TYPE_ROUTE_ENTRY:{\"dest\":\"fc02:1000::4/128\",\"switch_id\":\"oid:0x21000000000000\",\"vr\":\"oid:0x3000000000024\"} doesn't exist\nDec 19 <IPV6>.736461 DEMO_DEVICE ERR swss#orchagent: :- remove_route: Failed to remove tunnel route fc02:1000::4, rv:-5\nDec 19 <IPV6>.736576 DEMO_DEVICE INFO swss#orchagent: :- removeTunnelRoute: Remove tunnel route DB 'Vlan1000:fc02:1000::4/128'\nDec 19 <IPV6>.740132 DEMO_DEVICE INFO swss#supervisord: tunnelmgrd RTNETLINK answers: No such process\n```"
+  },
+  "resolution": {
+    "pr_number": 4828,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4828",
+    "title": "Fix double tunnel route deletion for standalone zero-MAC neighbors",
+    "merged_at": "2026-09-22T15:46:41Z",
+    "description": "#### Why I did it\n\nFixes: https://github.com/sonic-net/sonic-swss/issues/2579\n\nDeleting a FAILED (zero-MAC) neighbor on a standby mux port removed its\nstandalone tunnel route twice. `removeStandaloneTunnelRoute()` removed the SAI\nroute first, then the downstream mux-neighbor handler attempted to remove the\nsame route again, producing a SAI meta-validation ERR and causing\nloganalyzer-based teardown failures.\n\n##### Work item tracking\n\n- Microsoft ADO **(number only)**: 38932127\n\n#### How I did it\n\nReturn from `MuxOrch::updateNeighbor()` after removing a standalone tunnel\nroute for a delete notification. Standalone zero-MAC neighbors do not reach or\nregister with `MuxNbrHandler`, so no downstream cleanup is needed. Valid-MAC\nadditions continue through the existing path after the standalone route is\nremoved.\n\nAdded mock unit coverage that verifies a standalone-route delete calls\n`remove_route_entry` exactly once, and that `NeighOrch` drops a zero-MAC update\nfor an already known valid-MAC neighbor.\n\n#### How to verify it\ncheck https://github.com/sonic-net/sonic-swss/issues/2579 OR\n\n1. Set a mux port to standby.\n2. Create a FAILED neighbor for the server IP so that a standalone tunnel route\n   is installed.\n3. Delete that neighbor.\n4. Confirm the route removal succeeds without a\n   `meta_sai_validate_route_entry ... doesn't exist` syslog error.\n\nThe added `StandaloneTunnelRouteDeleteNoDoubleRemove` mock test also verifies\nthat SAI receives exactly one route-entry removal request.\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n\nBackport reason: this is a day-one issue on 202605 that generates erroneous\norchagent ERR logs and causes loganalyzer-based test failures.\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): https://github.com/sonic-net/sonic-swss/issues/2579/ ADO: 38932127\n\nFailure type: day-one issue\n\n#### Tested branch\n\n- [ ] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\n\n202605: `SONiC.branch.202605-ars.465d18bd-buildimage.71eda5ea11a604186d18c70df5068ca4b1578ab5-review.759356.3-2026.08.13.19.59` -\n[msft_1378_passing.log](https://github.com/user-attachments/files/31235279/msft_1378_passing.log)\n\n#### Description for the changelog\n\nFix duplicate deletion of standalone tunnel routes for FAILED neighbors on standby mux ports.\n\n#### Link to config_db schema for YANG module changes\n\nN/A \u2014 this change does not modify a YANG module or CONFIG_DB schema.\n\n#### A picture of a cute animal (not mandatory but encouraged)\n```\n  /\\ ___ /\\\n (  o   o  )\n  \\  >#<  /\n  /       \\\n /         \\       ^\n|           |     //\n \\         /    //\n  ///  ///   --\n```",
+    "files": [
+      {
+        "path": "orchagent/muxorch.cpp",
+        "additions": 7,
+        "deletions": 0
+      },
+      {
+        "path": "tests/mock_tests/mux_rollback_ut.cpp",
+        "additions": 75,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

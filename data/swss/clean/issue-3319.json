@@ -1,0 +1,55 @@
+{
+  "id": "swss-3319",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 3319,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/3319",
+    "title": "[dash] Private Link CA to PA configuration fails due to irrelevant attributes",
+    "created_at": "2024-10-09T21:03:12Z",
+    "closed_at": "2024-12-02T16:59:03Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "smartswitch"
+    ]
+  },
+  "failure": {
+    "body": "SWSS when applying CA to PA configuration for the PL feature adds extra `SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DMAC` and `SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_USE_DST_VNET_VNI` attributes that are irrelevant attributes that causes SAI validation failure:\n\n```\n2024-09-11.<IPV6>.414891|c|SAI_OBJECT_TYPE_VIP_ENTRY:{\"switch_id\":\"oid:0x21000000000000\",\"vip\":\"<IP>\"}|SAI_VIP_ENTRY_ATTR_ACTION=SAI_VIP_ENTRY_ACTION_ACCEPT\n2024-09-11.<IPV6>.429397|c|SAI_OBJECT_TYPE_DIRECTION_LOOKUP_ENTRY:{\"switch_id\":\"oid:0x21000000000000\",\"vni\":\"4321\"}|SAI_DIRECTION_LOOKUP_ENTRY_ATTR_ACTION=SAI_DIRECTION_LOOKUP_ENTRY_ACTION_SET_OUTBOUND_DIRECTION\n2024-09-11.<IPV6>.432452|C|SAI_OBJECT_TYPE_VNET||oid:0xe00800000001d|SAI_VNET_ATTR_VNI=45654\n2024-09-11.<IPV6>.435982|C|SAI_OBJECT_TYPE_OUTBOUND_CA_TO_PA_ENTRY||{\"dip\":\"<IP>\",\"dst_vnet_id\":\"oid:0xe00800000001d\",\"switch_id\":\"oid:0x21000000000000\"}|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_DASH_ENCAPSULATION=SAI_DASH_ENCAPSULATION_NVGRE|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_TUNNEL_KEY=100|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_UNDERLAY_DIP=<IP>|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_ACTION=SAI_OUTBOUND_CA_TO_PA_ENTRY_ACTION_SET_PRIVATE_LINK_MAPPING|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DIP=<IPV6>::3401:203|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DIP_MASK=<IPV6>|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_SIP=<IPV6>::|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_SIP_MASK=<IPV6>::|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DMAC=<IPV6>|\n\tSAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_USE_DST_VNET_VNI=false\n2024-09-11.<IPV6>.438551|E|SAI_STATUS_FAILURE||-196603\n```\n\n```\n2024 Sep 15 <IPV6>.213972 sonic NOTICE syncd#syncd#SAI: [SAI_UTILS.NOTICE] ./src/mlnx_sai_utils.c[2225]- mlnx_bulk_statuses_print: [BULK_CREATE] 1 vnets: 1 success, 0 not executed, 0 failed\n2024 Sep 15 <IPV6>.214597 sonic NOTICE syncd#syncd#SAI: [SAI_UTILS_ETH.NOTICE] ./src/mlnx_sai_utils_dpu.c[708]- mlnx_create_bulk_objects: created vnets in bulk with NASA handler\n2024 Sep 15 <IPV6>.217549 sonic NOTICE syncd#syncd#SAI: [SAI_UTILS_ETH.NOTICE] ./src/mlnx_sai_utils_dpu.c[779]- mlnx_create_bulk_key_entries: create 1 outbound ca_to_pa entries in bulk\n2024 Sep 15 <IPV6>.218154 sonic ERR syncd#syncd#SAI: [SAI_UTILS.ERR] ./src/mlnx_sai_utils.c[1602]- sai_attribute_valid_condition_check: Attribute SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DMAC doesn't match a valid conditions: {(SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_ACTION : SET_TUNNEL_MAPPING)}\n2024 Sep 15 <IPV6>.218844 sonic ERR syncd#syncd#SAI: [SAI_UTILS_ETH.ERR] ./src/mlnx_sai_utils_dpu.c[634]- mlnx_bulk_create_validate_attribs_check_metadata: failed attribs check for attr_list index 0\n2024 Sep 15 <IPV6>.219814 sonic ERR swss#orchagent: :- flush_creating_entries: EntityBulker.flush create entries failed, number of entries to create: 1, status: SAI_STATUS_FAILURE\n2024 Sep 15 <IPV6>.220322 sonic NOTICE syncd#syncd#SAI: [SAI_UTILS.NOTICE] ./src/mlnx_sai_utils.c[2225]- mlnx_bulk_statuses_print: [BULK_CREATE] 1 outbound ca_to_pa: 0 success, 0 not executed, 1 failed\n2024 Sep 15 <IPV6>.221295 sonic ERR syncd#syncd#SAI: [SAI_UTILS_ETH.ERR] ./src/mlnx_sai_utils_dpu.c[797]- mlnx_create_bulk_key_entries: failed to create outbound ca_to_pa entries in bulk, err SAI_STATUS_FAILURE\n2024 Sep 15 <IPV6>.221400 sonic ERR syncd#syncd#SAI: :- sendApiResponse: api SAI_COMMON_API_BULK_CREATE failed in syncd mode: SAI_STATUS_FAILURE\n```\n\nAccording to the SAI headers definition both attributes can be configured only with `SAI_OUTBOUND_CA_TO_PA_ENTRY_ACTION_SET_TUNNEL_MAPPING` action and should not be used together with PL.\n```\n    /**\n     * @brief Action parameter overlay destination MAC\n     *\n     * @type sai_mac_t\n     * @flags CREATE_AND_SET\n     * @default vendor\n     * @validonly SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_ACTION == SAI_OUTBOUND_CA_TO_PA_ENTRY_ACTION_SET_TUNNEL_MAPPING\n     */\n    SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DMAC,\n\n    /**\n     * @brief Action parameter use dst VNET VNI\n     *\n     * @type bool\n     * @flags CREATE_AND_SET\n     * @default false\n     * @validonly SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_ACTION == SAI_OUTBOUND_CA_TO_PA_ENTRY_ACTION_SET_TUNNEL_MAPPING\n     */\n    SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_USE_DST_VNET_VNI,\n\n```"
+  },
+  "resolution": {
+    "pr_number": 3381,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/3381",
+    "title": "Only set OUTBOUND_CA_TO_PA attributes when needed",
+    "merged_at": "2024-12-02T16:59:02Z",
+    "description": "Fixes #3319\n\n**What I did**\nOnly set SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DMAC and SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_USE_DST_VNET_VNI when provided in configs\n\n**Why I did it**\nThese attributes are required for all scenarios and will cause SAI validation issues if set when not needed.\n\n**How I verified it**\n\n**Details if related**",
+    "files": [
+      {
+        "path": "orchagent/dash/dashvnetorch.cpp",
+        "additions": 12,
+        "deletions": 6
+      },
+      {
+        "path": "tests/dash/dash_configs.py",
+        "additions": 0,
+        "deletions": 1
+      },
+      {
+        "path": "tests/dash/test_dash_vnet.py",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

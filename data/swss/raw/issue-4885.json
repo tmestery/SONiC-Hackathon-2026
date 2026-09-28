@@ -1,0 +1,143 @@
+{
+  "number": 4885,
+  "title": "[Dualtor][Prefix-route]:Next Hop Group Remove Failure on Dualtor with Prefix-Route Neighbor Mode, `ERR swss#orchagent: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-swss/issues/4885",
+  "createdAt": "2026-09-14T06:45:38Z",
+  "closedAt": "2026-09-22T15:48:07Z",
+  "author": "rajkumar1-arista",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn an active-standby DualToR system with `neighbor_mode: prefix-route`, deleting an ECMP static route after all its nexthop mux cables have transitioned to standby causes a persistent orchagent failure. The `SAI_API_NEXT_HOP_GROUP` remove operation fails with `SAI_STATUS_NOT_EXECUTED`.\n\nThe issue does not occur on DualToR systems with `neighbor_mode: host-route`.\n\n### Steps to Reproduce\n\nfull repro logs: https://github.com/sonic-net/sonic-swss/issues/4885#issuecomment-5660106255\n\nOn a dualtor DUT with `neighbor_mode: prefix-route`:\n\n```bash\n# Verify neighbor_mode is prefix-route:\n# show mux config | head -8\n\n# Step 1: Set 2 mux ports to active and resolve neighbors\nsudo config mux mode active Ethernet4\nsudo config mux mode active Ethernet8\nsleep 5\nsudo ip neigh replace 192.168.0.3 lladdr aa:bb:cc:dd:ee:01 dev Vlan1000\nsudo ip neigh replace 192.168.0.4 lladdr aa:bb:cc:dd:ee:02 dev Vlan1000\nsleep 5\n\n# Step 2: Create ECMP static route with 2+ nexthops behind mux cables\nsudo config route add prefix 9.9.9.0/24 nexthop 192.168.0.3,192.168.0.4\nsleep 5\nshow ip route 9.9.9.0/24\n# Should show 2 nexthops via Vlan1000\n\n# Step 3: Set the mux ports to standby\nsudo config mux mode standby Ethernet4\nsudo config mux mode standby Ethernet8\nsleep 5\n\n# Step 4: Delete the static route \u2014 this triggers the bug\nsudo config route del prefix 9.9.9.0/24\nsleep 2\n\n# Step 5: Check for the error\nsudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\n# Error count grows over time (~1 per second):\nsudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | wc -l\n```\n\n**Key conditions:**\n- `neighbor_mode` must be `prefix-route` (not `host-route`)\n- Static route must have 2+ nexthops pointing to Vlan neighbors behind mux cables\n- Mux must transition active -> standby _after_ the route exists\n- Route must be deleted _after_ mux standby\n\n### Actual Behavior and Expected Behavior\n\n**Actual:**\nAfter deleting the ECMP route, the next hop group removal fails with `SAI_STATUS_NOT_EXECUTED`.\n**Expected:**\nRoute deletion should complete cleanly without SAI errors. Orchagent should remain healthy.\n\n### Relevant log output\n\n```shell\n2026 Sep 14 05:25:47.099420 gd450 ERR swss#orchagent: :- handleSaiFailure: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 05:25:47.099504 gd450 NOTICE swss#orchagent: :- publish: EVENT_PUBLISHED: {\"sonic-events-swss:sai-operation-failure\":{\"api\":\"SAI_API_NEXT_HOP_GROUP\",\"operation\":\"remove\",\"status\":\"SAI_STATUS_NOT_EXECUTED\",\"timestamp\":\"2026-09-14T05:25:47.99434Z\"}}\n2026 Sep 14 05:25:48.203935 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 05:25:49.397119 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 05:25:50.915318 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n```\n\n### Output of `show version`, `show techsupport`\n\n```shell\nSONiC Software Version: SONiC.branch.202605-ars.543cbf5a-buildimage.ccd774c0f0bab05d35518f9fab1ac40a401b5ca1-nightly-2026.09.13.14.39\nSONiC OS Version: 13\nDistribution: Debian 13.7\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 4b4a34c43\nBuild date: Sun Sep 13 17:01:29 UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-arsonic-backend-k8s-116789-411w1-t7qbq\n\nPlatform: x86_64-arista_7260cx3_64\nHwSKU: Arista-7260CX3-D108C8\nASIC: broadcom\nASIC Count: 1\nSerial Number: FGN22072791\nModel Number: DCS-7260CX3-64\nHardware Revision: 03.00\n```\n\n### Attach files (if any)\n\n[NHG_bug_reproduced.log](https://github.com/user-attachments/files/32182630/NHG_bug_reproduced.log)",
+  "comments": [
+    {
+      "author": "rajkumar1-arista",
+      "createdAt": "2026-09-14T06:46:34Z",
+      "body": "full repro\n```shell\nadmin@gd450:~$ sudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\nadmin@gd450:~$ show version --brief\n\nSONiC Software Version: SONiC.branch.202605-ars.543cbf5a-buildimage.ccd774c0f0bab05d35518f9fab1ac40a401b5ca1-nightly-2026.09.13.14.39\nSONiC OS Version: 13\nDistribution: Debian 13.7\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 4b4a34c43\nBuild date: Sun Sep 13 17:01:29 UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-arsonic-backend-k8s-116789-411w1-t7qbq\n\nPlatform: x86_64-arista_7260cx3_64\nHwSKU: Arista-7260CX3-D108C8\nASIC: broadcom\nASIC Count: 1\nSerial Number: FGN22072791\nModel Number: DCS-7260CX3-64\nHardware Revision: 03.00\nUptime: 05:23:21 up 36 min,  4 users,  load average: 2.57, 3.70, 3.71\nDate: Mon 14 Sep 2026 05:23:21\nadmin@gd450:~$\nadmin@gd450:~$\nadmin@gd450:~$ show mux config | head -8\nSWITCH_NAME    PEER_TOR\n-------------  ----------\ngd383          10.1.0.32\nport         state    ipv4             ipv6               cable_type    soc_ipv4    soc_ipv6    prober_type    neighbor_mode\n-----------  -------  ---------------  -----------------  ------------  ----------  ----------  -------------  ---------------\nEthernet0    auto     192.168.0.2/32   fc02:1000::2/128                                         software       prefix-route\nEthernet4    auto     192.168.0.3/32   fc02:1000::3/128                                         software       prefix-route\nEthernet8    auto     192.168.0.4/32   fc02:1000::4/128                                         software       prefix-route\nadmin@gd450:~$\nadmin@gd450:~$\nadmin@gd450:~$ show mux status | head -5\nPORT         STATUS    SERVER_STATUS    HEALTH     HWSTATUS    LAST_SWITCHOVER_TIME\n-----------  --------  ---------------  ---------  ----------  ---------------------------\nEthernet0    standby   standby          unhealthy  consistent  2026-Sep-14 05:21:02.744188\nEthernet4    standby   standby          unhealthy  consistent  2026-Sep-14 05:20:43.024441\nEthernet8    standby   standby          unhealthy  consistent  2026-Sep-14 05:21:07.918327\nadmin@gd450:~$\nadmin@gd450:~$\nadmin@gd450:~$ sudo config mux mode active Ethernet4\nport       state\n---------  ----------\nEthernet4  INPROGRESS\nadmin@gd450:~$ sudo config mux mode active Ethernet8\nport       state\n---------  ----------\nEthernet8  INPROGRESS\nadmin@gd450:~$ show mux status | head -5\nPORT         STATUS    SERVER_STATUS    HEALTH     HWSTATUS    LAST_SWITCHOVER_TIME\n-----------  --------  ---------------  ---------  ----------  ---------------------------\nEthernet0    standby   standby          unhealthy  consistent  2026-Sep-14 05:21:02.744188\nEthernet4    active    active           unhealthy  consistent  2026-Sep-14 05:24:01.437891\nEthernet8    active    active           unhealthy  consistent  2026-Sep-14 05:24:07.903815\nadmin@gd450:~$ sudo ip neigh replace 192.168.0.3 lladdr aa:bb:cc:dd:ee:01 dev Vlan1000\nadmin@gd450:~$ sudo ip neigh replace 192.168.0.4 lladdr aa:bb:cc:dd:ee:02 dev Vlan1000\nadmin@gd450:~$\nadmin@gd450:~$\nadmin@gd450:~$ sudo config route add prefix 9.9.9.0/24 nexthop 192.168.0.3,192.168.0.4\nadmin@gd450:~$ show ip route 9.9.9.0/24\nRouting entry for 9.9.9.0/24\n  Known via \"static\", distance 1, metric 0, best\n  Last update 00:00:07 ago\n  * 192.168.0.3, via Vlan1000\n  * 192.168.0.4, via Vlan1000\n\nadmin@gd450:~$ sudo config mux mode standby Ethernet4\nport       state\n---------  ----------\nEthernet4  INPROGRESS\nadmin@gd450:~$ sudo config mux mode standby Ethernet8\nport       state\n---------  ----------\nEthernet8  INPROGRESS\nadmin@gd450:~$ show mux status | head -5\nPORT         STATUS    SERVER_STATUS    HEALTH     HWSTATUS    LAST_SWITCHOVER_TIME\n-----------  --------  ---------------  ---------  ----------  ---------------------------\nEthernet0    standby   standby          unhealthy  consistent  2026-Sep-14 05:21:02.744188\nEthernet4    standby   standby          unhealthy  consistent  2026-Sep-14 05:25:03.371259\nEthernet8    standby   standby          unhealthy  consistent  2026-Sep-14 05:25:09.165402\nadmin@gd450:~$\nadmin@gd450:~$ sudo config route del prefix 9.9.9.0/24\nadmin@gd450:~$ sudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\n2026 Sep 14 05:25:47.099420 gd450 ERR swss#orchagent: :- handleSaiFailure: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 05:25:47.099504 gd450 NOTICE swss#orchagent: :- publish: EVENT_PUBLISHED: {\"sonic-events-swss:sai-operation-failure\":{\"api\":\"SAI_API_NEXT_HOP_GROUP\",\"operation\":\"remove\",\"status\":\"SAI_STATUS_NOT_EXECUTED\",\"timestamp\":\"2026-09-14T05:25:47.99434Z\"}}\n2026 Sep 14 05:25:48.203935 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 05:25:49.397119 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\n2026 Sep 14 05:25:50.915318 gd450 ERR swss#orchagent: :- start: Encountered failure in remove operation, SAI API: SAI_API_NEXT_HOP_GROUP, status: SAI_STATUS_NOT_EXECUTED\nadmin@gd450:~$ sudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | wc -l\n5\nadmin@gd450:~$\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 4886,
+      "repository": "sonic-net/sonic-swss",
+      "url": "https://github.com/sonic-net/sonic-swss/pull/4886",
+      "title": "[Dualtor][Prefix-route]: Fix NHG member stale OID causing remove failure on dualtor prefix-route mode",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-22T15:48:06Z",
+      "createdAt": "2026-09-14T07:45:53Z",
+      "author": "rajkumar1-arista",
+      "body": "#### Why I did it\r\n\r\nFixes: https://github.com/sonic-net/sonic-swss/issues/4885\r\n\r\nOn dualtor topologies with `neighbor_mode: prefix-route`, deleting an ECMP\r\nstatic route after all its nexthop mux cables have transitioned to standby\r\ncauses a persistent orchagent failure. The `SAI_API_NEXT_HOP_GROUP` remove\r\noperation fails with `SAI_STATUS_NOT_EXECUTED`.\r\n\r\nWhen mux cables go to standby, `MuxPrefixBasedNbrHandler::disable()` calls\r\n`invalidnexthopinNextHopGroup()` to remove NHG members from SAI. Unlike the\r\nhost-route handler which always pairs invalidate with validate to swap members,\r\nthe prefix-route handler intentionally does not add tunnel replacements \u2014\r\nroute-to-tunnel redirection is handled separately via `setBulkRouteNH()`.\r\n\r\nHowever, `invalidnexthopinNextHopGroup()` does not update the in-memory\r\n`nhopgroup_members` map after removing members from SAI. The stale OIDs remain\r\nin the map. When the route is later deleted, `removeNextHopGroup()` reads these\r\nstale OIDs and submits them for bulk removal. SAI meta validation fails with\r\n`SAI_STATUS_ITEM_NOT_FOUND`, and `SAI_BULK_OP_ERROR_MODE_STOP_ON_ERROR` causes\r\nthe remaining members to get `SAI_STATUS_NOT_EXECUTED`.\r\n\r\nThe issue does not occur with `neighbor_mode: host-route` because that handler\r\nalways calls `validnexthopinNextHopGroup()` after invalidation, which overwrites\r\nthe stale OID with a fresh one.\r\n\r\n##### Work item tracking\r\n- Microsoft ADO **(number only)**: \r\n\r\n#### How I did it\r\n\r\n- In `invalidnexthopinNextHopGroup()`, set the member OID to\r\n  `SAI_NULL_OBJECT_ID` after successful SAI removal. This preserves `seq_id`\r\n  for ordered ECMP re-add via `validnexthopinNextHopGroup()` while clearly\r\n  marking the member as already removed from SAI.\r\n- In `removeNextHopGroup()`, skip members whose OID is `SAI_NULL_OBJECT_ID`\r\n  since they have already been removed from SAI.\r\n- Add a mock unit test (`RemoveNhgAfterAllMembersInvalidatedWithoutReplacement`)\r\n  that exercises the exact sequence: create ECMP route, invalidate all members\r\n  without replacement, delete route and verifies no SAI failures occur.\r\n- Add a virtual switch test (`test_multi_nexthop_all_standby_then_delete_route`)\r\n  that creates an ECMP route while mux is active, transitions all mux ports to\r\n  standby, deletes the route, and verifies: NHG members are cleaned up from\r\n  ASIC DB, no SAI error is logged, and orchagent remains healthy.\r\n\r\n#### How to verify it\r\n\r\nOn an active-standby DualToR device with `neighbor_mode: prefix-route`:\r\n\r\n```bash\r\n# Step 1: Set 2 mux ports to active and resolve neighbors\r\nsudo config mux mode active Ethernet4\r\nsudo config mux mode active Ethernet8\r\nsudo ip neigh replace 192.168.0.3 lladdr aa:bb:cc:dd:ee:01 dev Vlan1000\r\nsudo ip neigh replace 192.168.0.4 lladdr aa:bb:cc:dd:ee:02 dev Vlan1000\r\n\r\n# Step 2: Create ECMP static route\r\nsudo config route add prefix 9.9.9.0/24 nexthop 192.168.0.3,192.168.0.4\r\n\r\n# Step 3: Set mux ports to standby\r\nsudo config mux mode standby Ethernet4\r\nsudo config mux mode standby Ethernet8\r\n\r\n# Step 4: Delete the route\r\nsudo config route del prefix 9.9.9.0/24\r\n\r\n# Step 5: Verify no SAI errors\r\nsudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\r\n# Expected: no output (no errors logged)\r\n```\r\n\r\n- Run the new mock UT: `RemoveNhgAfterAllMembersInvalidatedWithoutReplacement`\r\n  in `tests/mock_tests/routeorch_ut.cpp`.\r\n- Run the new VS test: `test_multi_nexthop_all_standby_then_delete_route` in\r\n  `tests/test_mux_prefixroute.py`.\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): https://github.com/sonic-net/sonic-swss/issues/4885\r\n\r\nFailure type: <!-- day-one issue / regression / other --> day-one issue\r\n\r\nReason for backport: the issue is reproducible on 202605 active-standby\r\nDualToR setups with `neighbor_mode: prefix-route` and causes sonic-mgmt tests like `route/test_static_route.py` to fail due to presence of syslog error that is being caught by logAnalyzer\r\n\r\n#### Tested branch\r\n\r\n- [ ] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\n202605: SONiC.branch.202605-ars.f113c325-buildimage.ccd774c0f0bab05d35518f9fab1ac40a401b5ca1-review.801796.5-2026.09.13.15.46 - \r\n[Passing_test_static_route.xml](https://github.com/user-attachments/files/32184195/Passing_test_static_route.xml)\r\n[NHG_bug_fixed.log](https://github.com/user-attachments/files/32184239/NHG_bug_fixed.log)\r\n\r\n\r\n#### Description for the changelog\r\n\r\nFix NHG member stale OID causing SAI remove failure on dualtor with prefix-route neighbor mode.\r\n\r\n#### Link to config_db schema for YANG module changes\r\n\r\nN/A \u2014 no YANG or config_db schema changes.\r\n\r\n#### A picture of a cute animal (not mandatory but encouraged)\r\n\r\n```\r\n\r\n /\\     /\\\r\n{  `---'  }\r\n{  O   O  }\r\n~~>  V  <~~\r\n \\  \\|/  /\r\n  `-----'__\r\n  /     \\  `^\\_\r\n {       }\\ |\\_\\_   W\r\n |  \\_/  |/ /  \\_\\_( )\r\n  \\__/  /(_E     \\__/\r\n    (  /\r\n```",
+      "files": [
+        {
+          "path": "orchagent/routeorch.cpp",
+          "additions": 13,
+          "deletions": 0
+        },
+        {
+          "path": "tests/mock_tests/routeorch_ut.cpp",
+          "additions": 62,
+          "deletions": 0
+        },
+        {
+          "path": "tests/test_mux_prefixroute.py",
+          "additions": 71,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-14T07:46:02Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-14T07:46:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-14T07:46:23Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-14T12:16:28Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-14T12:16:32Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "zjswhhh",
+          "createdAt": "2026-09-15T06:04:43Z",
+          "body": "Hi @Ndancejic - can you help review?"
+        },
+        {
+          "author": "Ndancejic",
+          "createdAt": "2026-09-15T18:19:33Z",
+          "body": "Looks good to me! @rajkumar1-arista have you tested with both prefix and host route mode to confirm the behavior for host route mode hasn't changed?"
+        },
+        {
+          "author": "Ndancejic",
+          "createdAt": "2026-09-15T22:30:49Z",
+          "body": "@manamand2020 for review as well"
+        },
+        {
+          "author": "manamand2020",
+          "createdAt": "2026-09-16T00:34:34Z",
+          "body": "LGTM. @rajkumar1-arista do you want to verify the nexthop ref count as well in the tests since **invalidnexthopinNextHopGroup()** only removes SAI members; NeighOrch refcount is unchanged until the NHG itself is destroyed. "
+        },
+        {
+          "author": "rajkumar1-arista",
+          "createdAt": "2026-09-17T06:02:10Z",
+          "body": "> Looks good to me! @rajkumar1-arista have you tested with both prefix and host route mode to confirm the behavior for host route mode hasn't changed?\r\n\r\nYes, this was verified for host-route mode.\r\n\r\n<details>\r\n<summary>Click to expand</summary>\r\n\r\n```shell\r\nadmin@gd274:~$ show version --brief\r\n\r\nSONiC Software Version: SONiC.branch.202605-ars.34c55f68-buildimage.94f39efbfba9878881126e45c3b926decb74dd48-review.801796.6-2026.09.15.21.27\r\nSONiC OS Version: 13\r\nDistribution: Debian 13.7\r\nKernel: 6.12.41+deb13-sonic-amd64\r\nBuild commit: 2c28d7a75\r\nBuild date: Tue Sep 15 22:15:20 UTC 2026\r\nBuilt by: jenkins@jenkins-arsonic-k8s-arsonic-backend-k8s-117770-cqt2r-g680m\r\n\r\nPlatform: x86_64-arista_7260cx3_64\r\nHwSKU: Arista-7260CX3-D108C8\r\nASIC: broadcom\r\nASIC Count: 1\r\nSerial Number: SSJ18010321\r\nModel Number: DCS-7260CX3-64\r\nHardware Revision: 03.00\r\nUptime: 05:40:51 up 22:45,  1 user,  load average: 1.50, 1.54, 1.36\r\nDate: Thu 17 Sep 2026 05:40:51\r\nadmin@gd274:~$ sudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\r\nadmin@gd274:~$\r\nadmin@gd274:~$\r\nadmin@gd274:~$ show mux config | head -8\r\nSWITCH_NAME    PEER_TOR\r\n-------------  ----------\r\ngd333          10.1.0.33\r\nport         state    ipv4             ipv6               cable_type    soc_ipv4    soc_ipv6    prober_type    neighbor_mode\r\n-----------  -------  ---------------  -----------------  ------------  ----------  ----------  -------------  ---------------\r\nEthernet0    auto     192.168.0.2/32   fc02:1000::2/128                                         software       host-route\r\nEthernet4    auto     192.168.0.3/32   fc02:1000::3/128                                         software       host-route\r\nEthernet8    auto     192.168.0.4/32   fc02:1000::4/128                                         software       host-route\r\nadmin@gd274:~$\r\nadmin@gd274:~$\r\nadmin@gd274:~$ show mux status | head -5\r\nPORT         STATUS    SERVER_STATUS    HEALTH     HWSTATUS    LAST_SWITCHOVER_TIME\r\n-----------  --------  ---------------  ---------  ----------  ---------------------------\r\nEthernet0    standby   standby          unhealthy  consistent  2026-Sep-16 13:06:18.366025\r\nEthernet4    standby   standby          unhealthy  consistent  2026-Sep-16 13:06:17.726109\r\nEthernet8    standby   standby          unhealthy  consistent  2026-Sep-17 04:49:28.457891\r\nadmin@gd274:~$\r\nadmin@gd274:~$ sudo config mux mode active Ethernet4\r\nport       state\r\n---------  ----------\r\nEthernet4  INPROGRESS\r\nadmin@gd274:~$ sudo config mux mode active Ethernet8\r\nport       state\r\n---------  ----------\r\nEthernet8  INPROGRESS\r\nadmin@gd274:~$ show mux status | head -5\r\nPORT         STATUS    SERVER_STATUS    HEALTH     HWSTATUS    LAST_SWITCHOVER_TIME\r\n-----------  --------  ---------------  ---------  ----------  ---------------------------\r\nEthernet0    standby   standby          unhealthy  consistent  2026-Sep-16 13:06:18.366025\r\nEthernet4    active    active           unhealthy  consistent  2026-Sep-17 05:41:34.602152\r\nEthernet8    active    active           unhealthy  consistent  2026-Sep-17 05:41:39.322464\r\nadmin@gd274:~$ sudo ip neigh replace 192.168.0.3 lladdr aa:bb:cc:dd:ee:01 dev Vlan1000\r\nadmin@gd274:~$ sudo ip neigh replace 192.168.0.4 lladdr aa:bb:cc:dd:ee:02 dev Vlan1000\r\nadmin@gd274:~$ sudo config route add prefix 9.9.9.0/24 nexthop 192.168.0.3,192.168.0.4\r\nadmin@gd274:~$ show ip route 9.9.9.0/24\r\nRouting entry for 9.9.9.0/24\r\n  Known via \"static\", distance 1, metric 0, best\r\n  Last update 00:00:09 ago\r\n  * 192.168.0.3, via Vlan1000\r\n  * 192.168.0.4, via Vlan1000\r\n\r\nadmin@gd274:~$ sudo config mux mode standby Ethernet4\r\nport       state\r\n---------  ----------\r\nEthernet4  INPROGRESS\r\nadmin@gd274:~$ sudo config mux mode standby Ethernet8\r\nport       state\r\n---------  ----------\r\nEthernet8  INPROGRESS\r\nadmin@gd274:~$ show mux status | head -5\r\nPORT         STATUS    SERVER_STATUS    HEALTH     HWSTATUS      LAST_SWITCHOVER_TIME\r\n-----------  --------  ---------------  ---------  ------------  ---------------------------\r\nEthernet0    standby   standby          unhealthy  consistent    2026-Sep-16 13:06:18.366025\r\nEthernet4    standby   standby          unhealthy  consistent    2026-Sep-17 05:42:43.686706\r\nEthernet8    standby   standby          unhealthy  consistent    2026-Sep-17 05:42:47.686158\r\nadmin@gd274:~$ sudo config route del prefix 9.9.9.0/24\r\nadmin@gd274:~$ sudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | tail -5\r\nadmin@gd274:~$ sudo grep \"SAI_STATUS_NOT_EXECUTED\" /var/log/syslog | wc -l\r\n0\r\nadmin@gd274:~$\r\n```\r\n</details>\r\n\r\n[(host_route)test_static_route.tar.gz](https://github.com/user-attachments/files/32321461/host_route.test_static_route.tar.gz)\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-17T06:10:01Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "rajkumar1-arista",
+          "createdAt": "2026-09-17T06:10:07Z",
+          "body": "> do you want to verify the nexthop ref count as well in the tests since **invalidnexthopinNextHopGroup()** only removes SAI members; NeighOrch refcount is unchanged until the NHG itself is destroyed.\r\n\r\nThanks, added in the UT"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-17T06:10:13Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-18T05:15:49Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-18T05:15:59Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prsunny",
+          "createdAt": "2026-09-22T15:48:52Z",
+          "body": "@rajkumar1-arista , there is a cherry-pick conflict for 202605. Would you raise a separate PR for 202605? "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T16:18:29Z",
+          "body": "The change is not in 202605 yet. @rajkumar1-arista, please manually create the cherry pick PR for branch 202605.<br>You can ping the release branch owner(github account: vaibhavhd) to approve your cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "wsycqyz",
+          "createdAt": "2026-09-23T04:09:26Z",
+          "body": "Manual cherry-pick to `202605` (auto cherry-pick hit a conflict): #4921"
+        }
+      ]
+    }
+  ]
+}

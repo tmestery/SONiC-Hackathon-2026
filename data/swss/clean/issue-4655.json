@@ -1,0 +1,48 @@
+{
+  "id": "swss-4655",
+  "schema_version": "1.0",
+  "source": "sonic-swss",
+  "issue": {
+    "number": 4655,
+    "url": "https://github.com/sonic-net/sonic-swss/issues/4655",
+    "title": "[portsorch] Invalid LAG learn_mode handling may corrupt m_toSync iterator in PortsOrch::doLagTask",
+    "created_at": "2026-06-09T08:43:57Z",
+    "closed_at": "2026-06-12T17:48:28Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nSONiC Version: latest master\nDescription:\nIn `PortsOrch::doLagTask()` in `orchagent/portsorch.cpp`, when parsing LAG attributes, the invalid `learn_mode` handling updates the outer `m_toSync` iterator inside the inner field parsing loop.\nCurrent logic is similar to:\n```cpp\nauto it = consumer.m_toSync.begin();\nwhile (it != consumer.m_toSync.end())\n{\n    auto &t = it->second;\n    for (auto i : kfvFieldsValues(t))\n    {\n        if (fvField(i) == \"learn_mode\")\n        {\n            const auto cit = learn_mode_map.find(learn_mode_str);\n            if (cit == learn_mode_map.end())\n            {\n                SWSS_LOG_ERROR(\"Invalid MAC learn mode: %s\", learn_mode_str.c_str());\n                it++;\n                continue;\n            }\n            learn_mode = cit->second;\n        }\n    }\n    // Continue processing current LAG task...\n}\n```\nThere are two issues here:\n - The continue statement is inside the inner for (auto i : kfvFieldsValues(t)) loop, so it only continues the field parsing loop. It does not skip the current LAG task in the outer while loop.\n - The outer iterator it is incremented inside the inner loop while the code is still processing the current task through \"it\" and alias. This may cause the iterator to point to the next pending task while the current task is still being processed.\n\nAs a result, when an invalid learn_mode is configured:\n1. The current invalid LAG task may still be processed with the default learning mode.\n2. A later erase(it) or it++ may operate on the wrong pending task.\n3. The outer m_toSync iterator may become inconsistent with the task currently being processed.\n\n<img width=\"1180\" height=\"905\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/289f688f-b11e-4fbc-8d98-1bb92470b699\" />"
+  },
+  "resolution": {
+    "pr_number": 4656,
+    "repository": "sonic-net/sonic-swss",
+    "url": "https://github.com/sonic-net/sonic-swss/pull/4656",
+    "title": "[portsorch] Fix invalid LAG field handling in doLagTask",
+    "merged_at": "2026-06-12T17:48:27Z",
+    "description": "Fixes #4655\n\n**What I did**\nFixed invalid LAG field handling in `PortsOrch::doLagTask()`.\nPreviously, when an invalid `learn_mode` or `oper_status` value was detected, the code incremented the outer `m_toSync` iterator inside the inner field parsing loop. However, the following `continue` only applied to the inner loop, so the current task could still be processed while the iterator already pointed to the next task.\nThis change uses an `invalid_field` flag to stop field parsing and handles the current task explicitly in the outer loop.\n\n**Why I did it**\nThe previous logic could make the current task and the outer iterator inconsistent. This may cause the invalid task to continue being processed, or cause a later erase/increment operation to affect the wrong pending task.",
+    "files": [
+      {
+        "path": "orchagent/portsorch.cpp",
+        "additions": 11,
+        "deletions": 4
+      },
+      {
+        "path": "tests/mock_tests/portsorch_ut.cpp",
+        "additions": 142,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}
