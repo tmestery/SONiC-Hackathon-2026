@@ -1,0 +1,102 @@
+{
+  "number": 24907,
+  "title": "Bug:test_hft_config_deletion_stream failed on phase1 validation with Expected Msg/s >0 but got []",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24907",
+  "createdAt": "2026-05-27T21:58:28Z",
+  "closedAt": "2026-06-16T06:34:04Z",
+  "author": "OriTrabelsi",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "Pterosaur"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\ntest_hft_config_deletion_stream runs three HFT phases (create \u2192 delete \u2192 create). After collection, results are checked in validate_config_state_transitions, which calls validate_counter_output with expected_poll_interval=None. On the enabled path, Msg/s is only parsed when a poll interval is set, so msg_per_sec_matches stays empty, actual_msg_per_sec is [], and has_active_msgs is always false for create phases\u2014even if countersyncd is reporting data.\n\nAfter that the test has validation of `f\"Phase 1 (create): Expected Msg/s > 0, got {validation_results[phase1_key]['actual_msg_per_sec']}\" ` and fail as the actual_msg_per_sec=msg_per_sec_matches = [].\n\nexpected_poll_interval was set to None on this pr https://github.com/sonic-net/sonic-mgmt/pull/22975\n\n\n\n\n\n\n### Steps to Reproduce\n\nrun the test\n\n### Actual Behavior and Expected Behavior\n\ntest should pass\n\n### Relevant log output\n\n```shell\nINFO     tests.high_frequency_telemetry.utilities:utilities.py:653 Starting phase_1_create: create configuration for 240 seconds\n......\n\n\n Type: Port (1)\", \"         [  1] Object: Ethernet0      , Stat: IF_IN_OCTETS             , Counter:          392680, Msg/s:   39.0, LastTime: 2026-05-26 21:49:29.787159834 UTC\", \"         [  2] Object: Ethernet16     , Stat: IF_IN_OCTETS             , Counter:          395207, Msg/s:   39.0, LastTime: 2026-05-26 21:49:29.787159834 UTC\", \"\", \"[2026-05-26 21:49:49.440] [crates/countersyncd/src/actor/control_netlink.rs:395] [INFO] ControlNetlinkActor is running normally - monitoring family 'sonic_stel', family_was_available=true\", \"[2026-05-26 21:49:49.454] [crates/countersyncd/src/actor/data_netlink.rs:609] [INFO] Socket healthy - data received 18 seconds ago, skipping reconnect\", \"[Report #3] SAI Counters Report\", \"   Total Unique Counters: 2\", \"   Total Messages Received: 9356\", \"   Detailed Counters:\", \"      Type: Port (1)\", \"         [  1] Object: Ethernet0      , Stat: IF_IN_OCTETS             , Counter:          402963, Msg/s:  117.0, LastTime: 2026-05-26 21:50:39.961589897 UTC\", \"         [  2] Object: Ethernet16     , Stat: IF_IN_OCTETS             , Counter:          405630, Msg/s:  117.0, LastTime\n....\n\n\nINFO     tests.high_frequency_telemetry.utilities:utilities.py:704 Completed phase_1_create. Output length: 4450 chars, File positions: 3841 -> 8292\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "liat-grozovik",
+      "createdAt": "2026-06-09T08:19:24Z",
+      "body": "@r12f can you please review and assign it to the test owner?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25355,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25355",
+      "title": "[hft] Parse Msg/s without rate validation",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-16T06:34:03Z",
+      "createdAt": "2026-06-15T02:58:12Z",
+      "author": "Pterosaur",
+      "body": "## Description of PR\r\nSummary:\r\nFix HFT config transition validation after #22975 by parsing Msg/s values even when strict poll-interval based rate validation is disabled.\r\n\r\nFixes #24907\r\n\r\n## Type of change\r\n- Bug fix\r\n- Test case improvement\r\n\r\n## Approach\r\n### What is the motivation for this PR?\r\n#22975 intentionally passes expected_poll_interval=None for config transition validation so the test does not fail on cumulative average Msg/s drift caused by config application latency.\r\n\r\nHowever, validate_enabled_stream_output only parsed Msg/s inside the expected_poll_interval branch. As a result, config create/re-create phases received actual_msg_per_sec=[] and has_active_msgs=False even when countersyncd output contained non-zero Msg/s values.\r\n\r\n### How did you do it?\r\n- Always parse Msg/s values from stable countersyncd reports.\r\n- Keep strict Msg/s range validation gated by expected_poll_interval.\r\n\r\n### How did you verify/test it?\r\n- python -m py_compile tests/high_frequency_telemetry/utilities.py\r\n- Reviewed the validation flow to confirm create/re-create phases can detect active Msg/s values while strict rate validation remains disabled when expected_poll_interval=None.\r\n-\r\n```\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_port_counters[str4-sn5640-3] PASSED [  7%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_queue_counters[str4-sn5640-3] PASSED [ 14%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_ingress_priority_group_counters[str4-sn5640-3] PASSED [ 21%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_buffer_pool_counters[str4-sn5640-3] SKIPPED [ 28%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_counters[str4-sn5640-3] SKIPPED [ 35%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_port_counters[str4-sn5640-3] PASSED [ 42%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_disabled_stream[str4-sn5640-3] PASSED [ 50%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_config_deletion_stream[str4-sn5640-3] \r\n-------------------------------- live log setup --------------------------------\r\n10:29:29 conftest.get_swss_uptime_seconds         L0064 WARNING| Failed to parse status line: c7774a4fa085   docker-orchagent:latest   \"/usr/bin/docker-ini\u2026\"   About an hour ago   Up About an hour             swss\r\n10:29:29 conftest.ensure_swss_ready               L0080 WARNING| swss container is not running, attempting to start...\r\nPASSED                                                                   [ 57%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-1000-1000] SKIPPED [ 64%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-10000-100] SKIPPED [ 71%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-100000-10] SKIPPED [ 78%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-1000000-1] SKIPPED [ 85%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-10000000-0.1] SKIPPED [ 92%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_port_shutdown_stream[str4-sn5640-3] PASSED [100%]\r\n```\r\n\r\n## Any platform specific information?\r\nNo platform-specific behavior introduced.",
+      "files": [
+        {
+          "path": "tests/high_frequency_telemetry/utilities.py",
+          "additions": 4,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T02:58:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T02:58:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T03:20:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T03:20:56Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T03:27:19Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T03:27:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "OriTrabelsi",
+          "createdAt": "2026-06-15T06:03:04Z",
+          "body": "LGTM.\r\nI think that better run all hft tests to make sure that other tests are not expected empty msg_per_sec_matches  for some reason (with this pr now always has msg_per_sec_matches no empty) ."
+        },
+        {
+          "author": "Pterosaur",
+          "createdAt": "2026-06-15T11:42:27Z",
+          "body": "> LGTM. I think that better run all hft tests to make sure that other tests are not expected empty msg_per_sec_matches for some reason (with this pr now always has msg_per_sec_matches no empty) .\r\n\r\nHi @OriTrabelsi , thanks for your review. I did checked all hft tests locally.\r\n```\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_port_counters[str4-sn5640-3] PASSED [  7%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_queue_counters[str4-sn5640-3] PASSED [ 14%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_ingress_priority_group_counters[str4-sn5640-3] PASSED [ 21%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_buffer_pool_counters[str4-sn5640-3] SKIPPED [ 28%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_counters[str4-sn5640-3] SKIPPED [ 35%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_port_counters[str4-sn5640-3] PASSED [ 42%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_disabled_stream[str4-sn5640-3] PASSED [ 50%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_config_deletion_stream[str4-sn5640-3] \r\n-------------------------------- live log setup --------------------------------\r\n10:29:29 conftest.get_swss_uptime_seconds         L0064 WARNING| Failed to parse status line: c7774a4fa085   docker-orchagent:latest   \"/usr/bin/docker-ini\u2026\"   About an hour ago   Up About an hour             swss\r\n10:29:29 conftest.ensure_swss_ready               L0080 WARNING| swss container is not running, attempting to start...\r\nPASSED                                                                   [ 57%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-1000-1000] SKIPPED [ 64%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-10000-100] SKIPPED [ 71%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-100000-10] SKIPPED [ 78%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-1000000-1] SKIPPED [ 85%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-10000000-0.1] SKIPPED [ 92%]\r\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_port_shutdown_stream[str4-sn5640-3] PASSED [100%]\r\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T19:45:24Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26231"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-18T21:12:45Z",
+          "body": "@Pterosaur cherry pick PR didn't pass PR checker after retry. Please help check! Thanks.<br>https://github.com/sonic-net/sonic-mgmt/pull/26231\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-09T06:16:32Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

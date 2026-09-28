@@ -1,0 +1,43 @@
+{
+  "id": "management-27247",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27247,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27247",
+    "title": "[test] NTP tests fail on testbeds with ntpsec-based PTF containers (Debian 12+)",
+    "created_at": "2026-08-22T16:12:05Z",
+    "closed_at": "2026-09-01T15:14:43Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "#### Description\n\nNTP tests (`ntp/test_ntp.py`) fail with `NTP server was not started in PTF container` on any testbed where the PTF container runs **ntpsec** (Debian 12+ / Trixie) instead of classic `ntp`.\n\n#### Root Cause\n\nTwo issues in `tests/common/helpers/ntp_helper.py`:\n\n1. **`server <IP> prefer`** \u2014 ntpsec dropped support for the legacy refclock address syntax. The daemon silently ignores it, never synchronizes to the local clock, `ntpstat` returns rc\u22600, and `check_ntp_status()` times out after 120s.\n\n2. **`interface listen mgmt`** \u2014 standalone Docker PTF containers have no `mgmt` interface (only `eth0` veth pair). ntpsec starts but binds to no network interface, making port 123 unreachable.\n\n#### Impact\n\nAll IPv4 NTP tests error during fixture setup:\n- `test_ntp_long_jump_enabled[ipv4_allowed]`\n- `test_ntp_long_jump_disabled[ipv4_allowed]`\n- `test_ntp[ipv4_allowed]`\n\n#### Environment\n\n- PTF image: `docker-ptf:internal` (Debian 12, ntpsec 1.2.2)\n- Testbed: BMC topology with standalone Docker PTF container\n- sonic-mgmt: master branch (as of Aug 2026)\n\n#### Fix\n\nPR #27246"
+  },
+  "resolution": {
+    "pr_number": 27246,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27246",
+    "title": "[test] Fix NTP helper for ntpsec on standalone Docker PTF containers",
+    "merged_at": "2026-09-01T15:14:42Z",
+    "description": "#### Why I did it\nFixes #27247\n\nThe NTP test helper (`tests/common/helpers/ntp_helper.py`) fails on testbeds where the PTF container runs **ntpsec** (Debian 12+ / Trixie) instead of classic `ntp`:\n\n1. `server <IP> prefer` \u2014 ntpsec dropped the legacy refclock address syntax; the daemon ignores it, `ntpstat` never reports synchronised, and `check_ntp_status` times out.\n2. `interface listen mgmt` \u2014 standalone Docker PTF containers have no `mgmt` interface (only `eth0` veth pair); ntpsec starts but binds to nothing.\n\nBoth cause `NTP server was not started in PTF container` errors in `test_ntp.py`.\n\n#### How I did it\n- Probe for the `mgmt` interface (`ip link show mgmt`); skip interface restrictions when it doesn't exist.\n- For ntpsec, use `refclock local stratum 3 prefer` (native syntax) and add `restrict <IP>` / `restrict ::1` so `ntpq` can query the daemon.\n- Clean up new directives in teardown.\n\n#### How to verify it\nRun `ntp/test_ntp.py` against a testbed using a Docker PTF container with ntpsec (e.g., `docker-ptf:internal` based on Debian 12).\n\nBefore fix: 3 errors (`NTP server was not started`)\nAfter fix: 3 passed, 3 skipped (IPv6 tests skip due to no IPv6 on PTF)",
+    "files": [
+      {
+        "path": "tests/common/helpers/ntp_helper.py",
+        "additions": 39,
+        "deletions": 29
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

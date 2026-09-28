@@ -1,0 +1,101 @@
+{
+  "number": 1615,
+  "title": "Mgmtvrf test fails with 'Host Unreachable' error",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/1615",
+  "createdAt": "2020-04-26T08:07:40Z",
+  "closedAt": "2020-07-01T09:56:17Z",
+  "author": "noaOrMlnx",
+  "labels": [
+    "Bug :bug:",
+    "Pytest :snake:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\nIf you are reporting a new issue, make sure that we do not have any duplicates\r\nalready open. You can ensure this by searching the issue list for this\r\nrepository. If there is a duplicate, please close your issue and add a comment\r\nto the existing issue instead.\r\n\r\nIf you suspect your issue is a bug, please edit your issue description to\r\ninclude the BUG REPORT INFORMATION shown below. If you fail to provide this\r\ninformation within 7 days, we cannot debug your issue and will close it. We\r\nwill, however, reopen it if you later provide the information.\r\n\r\nFor more information about reporting issues, see\r\nhttps://github.com/Azure/SONiC/wiki#report-issues\r\n\r\n---------------------------------------------------\r\nGENERAL SUPPORT INFORMATION\r\n---------------------------------------------------\r\n\r\nThe GitHub issue tracker is for bug reports and feature requests.\r\nGeneral support can be found at the following locations:\r\n\r\n- SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n---------------------------------------------------\r\nBUG REPORT INFORMATION\r\n---------------------------------------------------\r\nUse the commands below to provide key information from your environment:\r\nYou do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n**Description**\r\n\r\n<!--\r\nBriefly describe the problem you are having in a few paragraphs.\r\n-->\r\ntest_mgmtvrf.py fails on setup_mvrf() function when tries to execute:\r\nlocalhost.wait_for(host=var['dut_ip'], port=22, state='started', search_regex=SONIC_SSH_REGEX, timeout=90)\r\n\r\nNOTE: mgmt vrf becomes enabled after this function execution. \r\n\r\nWhen ignoring the wait_for() function on setup_mvrf() function, the test fails on test_service_acl() test case - also on wait_for() function.\r\n \r\n**Steps to reproduce the issue:**\r\n1. Execute test_mgmtvrf.py\r\n2. Test fails on wait_for() function saying 'Host Unreachable'. \r\n\r\n\r\n**Describe the results you received:**\r\n'Host Unreachable'. \r\n\r\n**Describe the results you expected:**\r\nTest should pass. \r\n",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2020-05-06T15:42:07Z",
+      "body": "@noaOrMlnx looks like the wait_for is waiting for dut to reboot. This is a known instability with using wait_for for this purpose. Please use work-around similar to reboot test to wait for DUT to come back."
+    },
+    {
+      "author": "wangxin",
+      "createdAt": "2020-05-06T23:57:07Z",
+      "body": "Checked the test script, it's not related with reboot. @noaOrMlnx Could you please check if manual SSH to DUT works after `duthost.command('sudo config vrf add  mgmt')`?"
+    },
+    {
+      "author": "vsenchyshyn",
+      "createdAt": "2020-05-07T14:41:44Z",
+      "body": "The console where ```sudo config vrf add mgmt``` is executed manually hangs and I guess this is why following wait_for() call in the test fails with timeout. It is possible to connect to DUT from the separate console window."
+    },
+    {
+      "author": "wangxin",
+      "createdAt": "2020-05-09T03:39:55Z",
+      "body": "@vsenchyshyn If running `sudo config vrf add mgmt` hangs, it's another issue of the product and need further investigation.\r\n\r\nI tried from my side on master image and got some findings:\r\n\r\n* Initiate SSH connection to DUT from sonic-mgmt docker\r\n* Run \"sudo config vrf add mgmt\" on DUT. The SSH connection was not broken.\r\n* Run \"sudo config vrf del mgmt\" on DUT. The SSH connection was not broken.\r\n\r\nWhen the SSH connection is not broken, the localhost.wait_for module will always fail with \"Host Unreachable\". Probably a limitation of the module.\r\n\r\nSo, is the SSH connection to DUT supposed to be broken or not when mgmt VRF is configured/removed on DUT? @chitra-raghavan "
+    },
+    {
+      "author": "chitra-raghavan",
+      "createdAt": "2020-05-11T11:36:38Z",
+      "body": "@vsenchyshyn , When the  tests were written , the command hangs device for long time and ssh connection got broken.  Now in latest images, if ansible ssh  doesnt get timed out , wait_for can be removed "
+    },
+    {
+      "author": "lguohan",
+      "createdAt": "2020-06-07T20:50:31Z",
+      "body": "@chitra-raghavan , can you open an pr to resolve this issue?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 1775,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/1775",
+      "title": "[MgmtVrf ]: fix for  Host Unreachable' error",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-07-01T09:56:17Z",
+      "createdAt": "2020-06-16T10:07:54Z",
+      "author": "chitra-raghavan",
+      "body": "\r\n\r\nSummary:\r\nFixes #1615 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\n#### How did you do it?\r\nRemoved the wait_for after adding mgmt vrf. \r\n\r\n#### How did you verify/test it?\r\nTested by running in S5232 testbed. \r\n\r\n#### Logs \r\n\r\npy.test --inventory=../ansible/lab --host-pattern=sonic-s5232-01 --module-path ../ansible/library/ --testbed=vms-t0-56 --testbed_file=../ansible/testbed.csv test_mgmtvrf.py  --log-level=DEBUG --log-file mvrf-debug.log  --disable_loganalyzer -rab  -vvv\r\n============================= test session starts ==============================\r\nplatform linux2 -- Python 2.7.12, pytest-4.6.5, py-1.8.0, pluggy-0.13.1 -- /usr/bin/python\r\ncachedir: .pytest_cache\r\nansible: 2.8.7\r\nrootdir: /var/johnar/sonic-mgmt/tests, inifile: pytest.ini\r\nplugins: xdist-1.28.0, repeat-0.8.0, forked-1.1.3, ansible-2.2.2\r\ncollecting ... collected 10 items\r\n\r\ntest_mgmtvrf.py::TestMvrfInbound::test_ping PASSED                       [ 10%]\r\ntest_mgmtvrf.py::TestMvrfInbound::test_snmp_fact PASSED                  [ 20%]\r\ntest_mgmtvrf.py::TestMvrfOutbound::test_ping PASSED                      [ 30%]\r\ntest_mgmtvrf.py::TestMvrfOutbound::test_wget PASSED                      [ 40%]\r\ntest_mgmtvrf.py::TestMvrfOutbound::test_curl PASSED                      [ 50%]\r\ntest_mgmtvrf.py::TestServices::test_ntp PASSED                           [ 60%]\r\ntest_mgmtvrf.py::TestServices::test_service_acl PASSED                   [ 70%]\r\ntest_mgmtvrf.py::TestReboot::test_warmboot PASSED                        [ 80%]\r\ntest_mgmtvrf.py::TestReboot::test_reboot PASSED                          [ 90%]\r\ntest_mgmtvrf.py::TestReboot::test_fastboot PASSED                        [100%]\r\n\r\n========================= 10 passed in 1549.91 seconds =========================\r\nTriggering a new build of write_to_csv\r\nFinished: SUCCESS\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/test_mgmtvrf.py",
+          "additions": 5,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-06-16T10:24:05Z",
+          "body": "This pull request **introduces 1 alert** and **fixes 1** when merging cf5e310522f6c8558b137cca6e9d1f3bb37057bb into ce122b6f658a9ad4d26c0b789ef95a2e77043457 - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-ca254ad157a74c3081f93993d44082c5fd1b6c86)\n\n**new alerts:**\n\n* 1 for Variable defined multiple times\n\n**fixed alerts:**\n\n* 1 for Variable defined multiple times"
+        },
+        {
+          "author": "chitra-raghavan",
+          "createdAt": "2020-06-19T08:13:30Z",
+          "body": "retest this please"
+        },
+        {
+          "author": "daall",
+          "createdAt": "2020-06-19T17:14:16Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "chitra-raghavan",
+          "createdAt": "2020-06-22T04:59:51Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "chitra-raghavan",
+          "createdAt": "2020-06-23T11:36:28Z",
+          "body": "retest vsimage please"
+        },
+        {
+          "author": "irene-pan1202",
+          "createdAt": "2020-10-19T09:21:18Z",
+          "body": "@chitra-raghavan @wangxin \r\nSolution is removed the wait_for after adding mgmt vrf. Why need to add the wait_for SSH stop after deleting mgmt vrf?\r\nBecause after deleting mgmt vrf, some models only need 1 second to disconnect, adding this confirmation seems to cause the test timeout. Thanks."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-24907",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24907,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24907",
+    "title": "Bug:test_hft_config_deletion_stream failed on phase1 validation with Expected Msg/s >0 but got []",
+    "created_at": "2026-05-27T21:58:28Z",
+    "closed_at": "2026-06-16T06:34:04Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\ntest_hft_config_deletion_stream runs three HFT phases (create \u2192 delete \u2192 create). After collection, results are checked in validate_config_state_transitions, which calls validate_counter_output with expected_poll_interval=None. On the enabled path, Msg/s is only parsed when a poll interval is set, so msg_per_sec_matches stays empty, actual_msg_per_sec is [], and has_active_msgs is always false for create phases\u2014even if countersyncd is reporting data.\n\nAfter that the test has validation of `f\"Phase 1 (create): Expected Msg/s > 0, got {validation_results[phase1_key]['actual_msg_per_sec']}\" ` and fail as the actual_msg_per_sec=msg_per_sec_matches = [].\n\nexpected_poll_interval was set to None on this pr https://github.com/sonic-net/sonic-mgmt/pull/22975\n\n### Steps to Reproduce\n\nrun the test\n\n### Actual Behavior and Expected Behavior\n\ntest should pass\n\n### Relevant log output\n\n```shell\nINFO     tests.high_frequency_telemetry.utilities:utilities.py:653 Starting phase_1_create: create configuration for 240 seconds\n......\n\n Type: Port (1)\", \"         [  1] Object: Ethernet0      , Stat: IF_IN_OCTETS             , Counter:          392680, Msg/s:   39.0, LastTime: 2026-05-26 <IPV6>.787159834 UTC\", \"         [  2] Object: Ethernet16     , Stat: IF_IN_OCTETS             , Counter:          395207, Msg/s:   39.0, LastTime: 2026-05-26 <IPV6>.787159834 UTC\", \"\", \"[2026-05-26 <IPV6>.440] [crates/countersyncd/src/actor/control_netlink.rs:395] [INFO] ControlNetlinkActor is running normally - monitoring family 'sonic_stel', family_was_available=true\", \"[2026-05-26 <IPV6>.454] [crates/countersyncd/src/actor/data_netlink.rs:609] [INFO] Socket healthy - data received 18 seconds ago, skipping reconnect\", \"[Report #3] SAI Counters Report\", \"   Total Unique Counters: 2\", \"   Total Messages Received: 9356\", \"   Detailed Counters:\", \"      Type: Port (1)\", \"         [  1] Object: Ethernet0      , Stat: IF_IN_OCTETS             , Counter:          402963, Msg/s:  117.0, LastTime: 2026-05-26 <IPV6>.961589897 UTC\", \"         [  2] Object: Ethernet16     , Stat: IF_IN_OCTETS             , Counter:          405630, Msg/s:  117.0, LastTime\n....\n\nINFO     tests.high_frequency_telemetry.utilities:utilities.py:704 Completed phase_1_create. Output length: 4450 chars, File positions: 3841 -> 8292\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25355,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25355",
+    "title": "[hft] Parse Msg/s without rate validation",
+    "merged_at": "2026-06-16T06:34:03Z",
+    "description": "## Description of PR\nSummary:\nFix HFT config transition validation after #22975 by parsing Msg/s values even when strict poll-interval based rate validation is disabled.\n\nFixes #24907\n\n## Type of change\n- Bug fix\n- Test case improvement\n\n## Approach\n### What is the motivation for this PR?\n#22975 intentionally passes expected_poll_interval=None for config transition validation so the test does not fail on cumulative average Msg/s drift caused by config application latency.\n\nHowever, validate_enabled_stream_output only parsed Msg/s inside the expected_poll_interval branch. As a result, config create/re-create phases received actual_msg_per_sec=[] and has_active_msgs=False even when countersyncd output contained non-zero Msg/s values.\n\n### How did you do it?\n- Always parse Msg/s values from stable countersyncd reports.\n- Keep strict Msg/s range validation gated by expected_poll_interval.\n\n### How did you verify/test it?\n- python -m py_compile tests/high_frequency_telemetry/utilities.py\n- Reviewed the validation flow to confirm create/re-create phases can detect active Msg/s values while strict rate validation remains disabled when expected_poll_interval=None.\n-\n```\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_port_counters[str4-sn5640-3] PASSED [  7%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_queue_counters[str4-sn5640-3] PASSED [ 14%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_ingress_priority_group_counters[str4-sn5640-3] PASSED [ 21%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_buffer_pool_counters[str4-sn5640-3] SKIPPED [ 28%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_counters[str4-sn5640-3] SKIPPED [ 35%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_full_port_counters[str4-sn5640-3] PASSED [ 42%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_disabled_stream[str4-sn5640-3] PASSED [ 50%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_config_deletion_stream[str4-sn5640-3]\n-------------------------------- live log setup --------------------------------\n<IPV6> conftest.get_swss_uptime_seconds         L0064 WARNING| Failed to parse status line: c7774a4fa085   docker-orchagent:latest   \"/usr/bin/docker-ini\u2026\"   About an hour ago   Up About an hour             swss\n<IPV6> conftest.ensure_swss_ready               L0080 WARNING| swss container is not running, attempting to start...\nPASSED                                                                   [ 57%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-1000-1000] SKIPPED [ 64%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-10000-100] SKIPPED [ 71%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-100000-10] SKIPPED [ 78%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-1000000-1] SKIPPED [ 85%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_poll_interval_validation[str4-sn5640-3-10000000-0.1] SKIPPED [ 92%]\nhigh_frequency_telemetry/test_high_frequency_telemetry.py::test_hft_port_shutdown_stream[str4-sn5640-3] PASSED [100%]\n```\n\n## Any platform specific information?\nNo platform-specific behavior introduced.",
+    "files": [
+      {
+        "path": "tests/high_frequency_telemetry/utilities.py",
+        "additions": 4,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

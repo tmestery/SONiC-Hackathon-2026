@@ -1,0 +1,48 @@
+{
+  "id": "management-25099",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25099,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25099",
+    "title": "[snappi][macsec] DUT SCI-ID, in-flight flow metrics and cleanup needs fix.",
+    "created_at": "2026-06-03T14:27:43Z",
+    "closed_at": "2026-08-06T17:56:52Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThere are three issues here:\n- The DUT SCI ID is read incorrectly in case of multiple LC testcase. The DUT SCI ID is read from the first DUT MAC defined in the 'duthosts' list.\n- The in_flight_flow_metrics is called outside the for loop again and fails when ptype is true (macsec case).\n- The stats tgen_tx_frames and tgen_rx_frames are strings when returned from macsec flow statistics and needs to be handled appropriately.\n- The function tgen_port_info is called again in the end of the test case (via yield) with setup==False. The setup_dut_port will function '__intf_config_macsec' with the same flag. The function needs to return True when setup=False. In this case, 'cleanup_config' defined in the test, will explicitly remove the MACSEC configuration on the DUT.\n\n### Steps to Reproduce\n\n- Ensure that variables.override.yml file has multiple LC's added as Tx and Rx ports.\n- Run test_pfc_pause_lossless_with_snappi.py with '--snappi_macsec' flag.\n\n### Actual Behavior and Expected Behavior\n\n- The dut_sci_id on the tgen should reflect the mac_address of the DUT on which macsec is configured. In this case, it is mac_address of first DUT defined in the duthost list.\n- The tgen_tx_frames and tgen_rx_frames when ptype is true (macsec case) are strings and hence comparison fails for verify_tx_frame_count and verify_rx_frame_count.\n- The in_flight_flow_metrics is called again outside and fails when ptype is true(macsec case).\n- When __intf_config_macsec is called in the end during cleanup, it will configure macsec again on the DUT. Explicit cleanup in the test will take care of this, hence when setup=False, the __intf_config_macsec should not do anything.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25100,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25100",
+    "title": "[snappi-macsec] Fix the dut_sci_id, in_flight_flow_metrics and tgen_frames issue while executing with macsec flag",
+    "merged_at": "2026-08-06T17:56:51Z",
+    "description": "### Description of PR\n\nFollowing changes are done in the pull-request:\n- The dut_sci_id required on tgen side is taken from the first DUT defined in the duthost list and will work if both Rx and Tx ports are on the same DUT. However, it will not work when they are from different DUTs or line-cards.\n- The in_flight_flow_metrics is called twice; one for non-macsec and other for macsec case. However, it is called again causing the macsec case to fail.\n- The tgen_tx_frames and tgen_rx_frames are strings from macsec. They fail when there is check if loss percentage is less than loss_tolerance level.\n- The tgen_port_info function calls setup_dut_port twice. Once with setup=True and in the end again with setup=False. In case of setup=False, the __intf_config_macsec does not check for setup flag and hence will end up reconfiguring macsec again. There is an explicit cleanup_config defined in the test, which will cleanup the MACSEC config.\n\nSummary:\nFixes #25099\n\n### Type of change\n\n- [X] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\n### Approach\n#### What is the motivation for this PR?\nThe pull-request fixes the issues mentioned in the description above.\nThe fixes will resolve issues seen while running multi-line-card test with macsec enabled on egress port and plain IP on the ingress port.\n\n#### How did you do it?\n- DUT_SCI_ID: Checking for port_id == 1 to determine the MACSEC endpoint and using the mac_address of the DUT to configure the dut_sci_id on the tgen.\n- in_flight_flow_metrics: Removed the duplicate in_flight_flow_metrics called outside the if-else statement (with and without ptype).\n- tgen_tx_frames and tgen_rx_frames: Create a small function to check if the value is string. If yes, then convert to integer. If not, then simply return the value as is.\n- Function __intf_config_macsec with setup == False: Added an implicit code in function to return True when it is called with setup==False flag. The explicit cleanup_config called in the test_script should clean-up the MACSEC configuration on the DUT.\n\n#### How did you verify/test it?\nRan the test manually on local clone.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/snappi_tests/snappi_fixtures.py",
+        "additions": 16,
+        "deletions": 17
+      },
+      {
+        "path": "tests/common/snappi_tests/traffic_generation.py",
+        "additions": 132,
+        "deletions": 41
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

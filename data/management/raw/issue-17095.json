@@ -1,0 +1,138 @@
+{
+  "number": 17095,
+  "title": "[Test Gap][LAG][t0-64] Applying lag members configuration is not awaited",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/17095",
+  "createdAt": "2025-02-21T12:07:03Z",
+  "closedAt": "2026-04-03T15:23:21Z",
+  "author": "illia-kotvitskyi",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Test Gap Description\n\nAs part of `test_lag_member_forwarding_packets` test we disable portchannel members by swssconfig.\n\nOnce the swssconfig command finished, we are sending traffic to ensure it will be dropped.\n\nThe issue here is that swssconfig command finished its execution before the config actually was applied:\n\nTest logs:\n`AnsibleModule::shell Result => {\"changed\": true, \"stdout\": \"\", \"stderr\": \"\", \"rc\": 0, \"cmd\": \"docker exec -i swss swssconfig /dev/stdin < /tmp/tmp.u3nD3MuRDV\", \"start\": \"2025-02-19 10:01:18.090075\", \"end\": \"2025-02-19 10:01:18.166119\"`\nFinished at 2025-02-19 **10:01:18.166119**\n\nSwitch logs:\n```2025 Feb 19 10:01:18.091372 r-tigon-20 INFO python[585907]: ansible-ansible.legacy.command Invoked with _raw_params=docker exec -i swss swssconfig /dev/stdin < /tmp/tmp.u3nD3MuRDV _uses_shell=True warn=False stdin_add_newline=True strip_empty_ends=True argv=None chdir=None executable=None creates=None removes=None stdin=None\n2025 Feb 19 10:01:18.161836 r-tigon-20 NOTICE swss#swssconfig: :- main: Loading config from JSON file:/dev/stdin...\n2025 Feb 19 10:01:18.437393 r-tigon-20 NOTICE syncd#SDK: [SAI_UTILS.NOTICE] ./src/mlnx_sai_utils.c[1969]- set_dispatch_attrib_handler: Set EGRESS_DISABLE, key:LAG_MEMBER [OID:0x100690000001B] [log_port:0x10069, lag_log_id:0x0], val:true\n2025 Feb 19 10:01:18.439446 r-tigon-20 NOTICE swss#orchagent: :- setDistributionOnLagMember: Disable distribution on LAG member Ethernet0\n2025 Feb 19 10:01:18.440116 r-tigon-20 NOTICE syncd#SDK: [SAI_UTILS.NOTICE] ./src/mlnx_sai_utils.c[1969]- set_dispatch_attrib_handler: Set INGRESS_DISABLE, key:LAG_MEMBER [OID:0x100690000001B] [log_port:0x10069, lag_log_id:0x0], val:true\n2025 Feb 19 10:01:18.441281 r-tigon-20 NOTICE swss#orchagent: :- setCollectionOnLagMember: Disable collection on LAG member Ethernet0\n2025 Feb 19 10:01:18.442631 r-tigon-20 NOTICE syncd#SDK: [SAI_UTILS.NOTICE] ./src/mlnx_sai_utils.c[1969]- set_dispatch_attrib_handler: Set EGRESS_DISABLE, key:LAG_MEMBER [OID:0x1006B0000001B] [log_port:0x1006B, lag_log_id:0x0], val:true\n2025 Feb 19 10:01:18.444374 r-tigon-20 NOTICE swss#orchagent: :- setDistributionOnLagMember: Disable distribution on LAG member Ethernet4\n2025 Feb 19 10:01:18.445108 r-tigon-20 NOTICE syncd#SDK: [SAI_UTILS.NOTICE] ./src/mlnx_sai_utils.c[1969]- set_dispatch_attrib_handler: Set INGRESS_DISABLE, key:LAG_MEMBER [OID:0x1006B0000001B] [log_port:0x1006B, lag_log_id:0x0], val:true\n2025 Feb 19 10:01:18.446193 r-tigon-20 NOTICE swss#orchagent: :- setCollectionOnLagMember: Disable collection on LAG member Ethernet4\n```\n\nActual configuration applied at 2025 Feb 19 **10:01:18.446193**\n\nWe should wait until the configuration applied, otherwise some traffic will still not be dropped causing test to fail\n\n\n### Test Plan\n\n_No response_\n\n### Test environment\n\ntopo: t0-64\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "weiguo-nvidia",
+      "createdAt": "2026-03-12T01:23:59Z",
+      "body": "PR https://github.com/sonic-net/sonic-mgmt/pull/22849 can resolve the issue"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22849,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22849",
+      "title": "Wait for ASIC_DB confirmation after disabling LAG members",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-03T15:23:20Z",
+      "createdAt": "2026-03-10T17:12:05Z",
+      "author": "yxieca",
+      "body": "### Description of PR\n\nSummary:\nAfter `swssconfig` disables LAG members, the command returns before orchagent/syncd finishes applying the configuration to ASIC_DB. This race causes intermittent test failures in `test_lag_member_forwarding_packets` because traffic verification runs before hardware actually disables the LAG members (~280ms gap observed).\n\nAdded a `wait_until` poll on ASIC_DB to confirm all LAG members have `SAI_LAG_MEMBER_ATTR_EGRESS_DISABLE=true` before proceeding with traffic tests.\n\nFixes #17095\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\n`swssconfig` returns immediately after writing to APP_DB, but orchagent has not yet processed the request and applied it via syncd to ASIC_DB/hardware. The test sends traffic immediately after `swssconfig` returns, hitting a race window where LAG members are still active. This causes `test_lag_member_forwarding_packets` to fail intermittently on hardware platforms.\n\n#### How did you do it?\n\nAdded a `wait_until(10, 0.5, 0, ...)` poll after `swssconfig` that checks ASIC_DB for `SAI_LAG_MEMBER_ATTR_EGRESS_DISABLE=true` on all LAG member entries. This is the definitive signal that orchagent\u2192syncd has fully applied the disable to hardware. The 0.5s poll interval with 10s timeout is generous \u2014 real-world logs show the gap is ~280ms.\n\n#### How did you verify/test it?\n\n- Code review of the race condition timing from issue logs\n- flake8 lint pass (max-line-length=120)\n- The fix uses the same `wait_until` pattern used extensively throughout sonic-mgmt\n\n#### Any platform specific information?\n\nThe VS (virtual switch) platform stores EGRESS_DISABLE in ASIC_DB but does not enforce it in the kernel dataplane \u2014 the existing VS skip block runs after this new wait, so VS tests still skip traffic verification as before.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A (bug fix)\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "tests/pc/test_lag_member_forwarding.py",
+          "additions": 99,
+          "deletions": 10
+        }
+      ],
+      "comments": [
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-10T17:12:10Z",
+          "body": "This PR was raised by an AI agent on behalf of Ying Xie."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T17:12:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T17:12:30Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-10T18:48:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-10T18:48:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-10T20:04:30Z",
+          "body": "## Local KVM Test Results (commit 0a01830d8)\n\n**Test**: `pc/test_lag_member_forwarding.py` on KVM T0 (vms-kvm-t0, vlab-01)\n\n```\n1 passed in 239.26s (0:03:59)\n```\n\n**Fix in this commit**: Moved VS early-return before the ASIC_DB wait \u2014 VS SAI does not populate `SAI_LAG_MEMBER_ATTR_EGRESS_DISABLE` in ASIC_DB, so the `wait_until` check was timing out. On real hardware, the ASIC_DB poll confirms config is applied before traffic verification."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-12T02:00:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-12T02:01:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-12T02:05:33Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-12T02:05:49Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-12T02:19:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-12T02:19:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-12T02:30:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-12T02:30:38Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca-admin",
+          "createdAt": "2026-03-18T04:13:07Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-18T04:13:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-01T15:22:03Z",
+          "body": "## High-Level Summary of Changes\n\n**Problem (issue #17095):**\n`test_lag_member_forwarding_packets` fails intermittently on hardware. Root cause: `swssconfig` returns immediately after writing to APP_DB, but orchagent/syncd has not yet disabled the LAG members in ASIC_DB (~280ms gap). The test sends traffic during that race window, so disabled LAG members are still forwarding.\n\n**Evolution across 6 commits:**\n\n1. **Initial fix** \u2014 Added a `wait_until` poll on ASIC_DB checking `SAI_LAG_MEMBER_ATTR_EGRESS_DISABLE=true` before sending traffic\n\n2. **Move VS skip earlier** \u2014 VS SAI does not populate the EGRESS_DISABLE attribute, so moved the VS platform skip before the ASIC_DB wait (otherwise it would timeout on VS)\n\n3. **Scope the check to the tested LAG only** \u2014 Original check was looking at ALL LAG members in ASIC_DB. Fixed to only verify members belonging to the specific PortChannel under test\n\n4. **Remove broken fallback** \u2014 If the LAG OID was not found, there was a silent fallback that would skip the check. Changed to fail explicitly instead of hiding the problem\n\n5. **Select PortChannels with established BGP** \u2014 Pick test candidates that actually have all BGP neighbors up, avoiding flaky selection of half-up LAGs\n\n6. **Use port OIDs for member lookup** \u2014 Instead of querying by LAG OID (which required an extra lookup step), directly match ASIC_DB LAG member entries using the port OIDs. Simpler and more reliable.\n\n**TL;DR**: Started with a straightforward ASIC_DB wait, then iteratively tightened the scope (right LAG, right members), hardened error handling (no silent fallback), improved test robustness (only pick healthy LAGs), and simplified the ASIC_DB query path."
+        },
+        {
+          "author": "nhe-NV",
+          "createdAt": "2026-04-02T01:29:10Z",
+          "body": "@yxieca  the issue also happen on the 202511 branch, should it also include in the 202511 branch, right? "
+        },
+        {
+          "author": "vrajeshe",
+          "createdAt": "2026-05-11T08:41:47Z",
+          "body": "Applicable for 202511 also"
+        }
+      ]
+    }
+  ]
+}

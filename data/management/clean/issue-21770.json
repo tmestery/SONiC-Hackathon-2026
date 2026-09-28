@@ -1,0 +1,53 @@
+{
+  "id": "management-21770",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 21770,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/21770",
+    "title": "Bug: ACL v6 tests uplink to downlink direction fails due to wrong configuration",
+    "created_at": "2025-12-22T12:39:09Z",
+    "closed_at": "2026-02-25T11:39:34Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nAfter merging the following PR:\nhttps://github.com/sonic-net/sonic-mgmt/pull/21155\nand enabling ACL tests on v6 only isolated topologies, multiple ACL test cases failed on uplink->downlink side, due to packet loss.\n\nThe root cause, as I analyzed, is mentioned in the test_acl.py module:\n```\n# TODO: These routes don't match the VLAN interface from the T0 topology.\n# This needs to be addressed before we can enable the v6 tests for T0\n```\n\nThe IPv6 routes don't match the VLAN interface configuration for T0 topology, As well as t1 topologies.\n\nThe DOWNSTREAM_DST_IP is staticaly set and doesn't exist for the topologies.\n\n### Steps to Reproduce\n\nRun test_acl.py on t0/t1 v6 isolated topologies, with uplink->downlink parameter.\n\nFor example:\n test_icmp_match_forwarded[ipv6-ingress-uplink->downlink-default-no_vlan]\n\n### Actual Behavior and Expected Behavior\n\nActual behavior: The packet gets routed via some default or fallback path, ending up on some port (which appears to be an upstream port, not in the expected downstream ports list)\n\n`AssertionError: Received expected packet on port 97 for device 0, but it should have arrived on one of these ports: [0, 8, 108, 120, 128, 136, 144, 152, 160, 168, 176, 184, 16, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 24, 272, 280, 288, 296, 304, 312, 320, 332, 340, 352, 32, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432, 40, 440, 448, 456, 48, 56, 64, 72, 80, 88, 100].`\n\nExpected behavior: The traffic routes correctly, tests pass.\n\n### Relevant log output\n\n```shell\nAssertionError: Expected packet was not received on device 0, port 8.\n========== EXPECTED ==========\nMask:\n\npacket status: OK\npacket:\n0000  50 00 E6 71 7D AA B8 E9 24 53 D0 00 86 DD 60 00  P..q}...$S....`.\n0010  00 00 00 2E 06 40 60 C0 A8 00 00 00 00 00 00 00  .....@`.........\n0020  00 00 00 00 00 05 20 C0 A8 00 00 00 00 00 00 00  ...... .........\n0030  00 00 00 00 00 14 12 0D 00 51 00 00 00 00 00 00  .........Q......\n0040  00 00 50 02 20 00 8E B6 00 00 74 65 73 74 5F 61  ..P. .....test_a\n0050  63 6C 20 74 65 73 74 5F 61 63 6C 20 74 65 73 74  cl test_acl test\n0060  5F 61 63 6C                                      _acl\n\npacket's mask:\n0000  00 00 00 00 00 00 00 00 00 00 00 00 FF FF FF FF  ................\n0010  FF FF FF FF FF 00 FF FF FF FF FF FF FF FF FF FF  ................\n0020  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\n0030  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\n0040  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\n0050  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\n0060  FF FF FF FF                                      ....\n\n========== RECEIVED ==========\n0 total packets.\n==============================\nself =\nsetup = {'acl_table_ports': defaultdict(, {'': ['Ethernet0', 'Ethernet8', 'Ethernet16', 'Ethernet24', 'Ethernet3...', 88: '<IPV6>', ...}}, 'downstream_port_ids': [0, 8, 16, 24, 32, 40, ...], 'loopback_ip': '<IP>', ...}\ndirection = 'uplink->downlink'\nptfadapter =\ncounters_sanity_check = [7, 15, 14, 26, 25], ip_version = 'ipv6'\n\n    def test_l4_sport_match_forwarded(self, setup, direction, ptfadapter,\n                                      counters_sanity_check, ip_version):\n        \"\"\"Verify that we can match and forward on L4 source port.\"\"\"\n        pkt = self.tcp_packet(setup, direction, ptfadapter, ip_version, sport=0x120D)\n\n>       self._verify_acl_traffic(setup, direction, ptfadapter, pkt, False, ip_version)\n\ncounters_sanity_check = [7, 15, 14, 26, 25]\ndirection  = 'uplink->downlink'\nip_version = 'ipv6'\npkt        = >>>\nptfadapter =\nself       =\nsetup      = {'acl_table_ports': defaultdict(, {'': ['Ethernet0', 'Ethernet8', 'Ethernet16', 'Ethernet24', 'Ethernet3...', 88: '<IPV6>', ...}}, 'downstream_port_ids': [0, 8, 16, 24, 32, 40, ...], 'loopback_ip': '<IP>', ...}\n\nacl/test_acl.py:1195:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nacl/test_acl.py:1301: in _verify_acl_traffic\n    testutils.verify_packet(ptfadapter, exp_pkt, downstream_dst_port)\n        direction  = 'uplink->downlink'\n        downstream_dst_port = 8\n        dropped    = False\n        exp_pkt    =\n        ip_version = 'ipv6'\n        pkt        = >>>\n        ptfadapter =\n        self       =\n        setup      = {'acl_table_ports': defaultdict(, {'': ['Ethernet0', 'Ethernet8', 'Ethernet16', 'Ethernet24', 'Ethernet3...', 88: '<IPV6>', ...}}, 'downstream_port_ids': [0, 8, 16, 24, 32, 40, ...], 'loopback_ip': '<IP>', ...}\n/usr/local/lib/python3.8/dist-packages/ptf/testutils.py:3250: in verify_packet\n    test.fail(\n        device     = 0\n        pkt        =\n        port       = 8\n        port_id    = 8\n        result     = PollFailure(device=None, port=None, packet=None, time=None)\n        test       =\n        timeout    = 2\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\nself =\nmsg = 'Expected packet was not received on device 0, port 8.\\n========== EXPECTED ==========\\nMask:\\n\\npacket status: OK\\npa...                            ....\\n\\n========== RECEIVED ==========\\n0 total packets.\\n==============================\\n'\n\n    def fail(self, msg=None):\n        \"\"\"Fail immediately, with the given message.\"\"\"\n>       raise self.failureException(msg)\nE       AssertionError: Expected packet was not received on device 0, port 8.\nE       ========== EXPECTED ==========\nE       Mask:\nE\nE       packet status: OK\nE       packet:\nE       0000  50 00 E6 71 7D AA B8 E9 24 53 D0 00 86 DD 60 00  P..q}...$S....`.\nE       0010  00 00 00 2E 06 40 60 C0 A8 00 00 00 00 00 00 00  .....@`.........\nE       0020  00 00 00 00 00 05 20 C0 A8 00 00 00 00 00 00 00  ...... .........\nE       0030  00 00 00 00 00 14 12 0D 00 51 00 00 00 00 00 00  .........Q......\nE       0040  00 00 50 02 20 00 8E B6 00 00 74 65 73 74 5F 61  ..P. .....test_a\nE       0050  63 6C 20 74 65 73 74 5F 61 63 6C 20 74 65 73 74  cl test_acl test\nE       0060  5F 61 63 6C                                      _acl\nE\nE       packet's mask:\nE       0000  00 00 00 00 00 00 00 00 00 00 00 00 FF FF FF FF  ................\nE       0010  FF FF FF FF FF 00 FF FF FF FF FF FF FF FF FF FF  ................\nE       0020  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\nE       0030  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\nE       0040  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\nE       0050  FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF  ................\nE       0060  FF FF FF FF                                      ....\nE\nE       ========== RECEIVED ==========\nE       0 total packets.\nE       ==============================\n\nmsg        = 'Expected packet was not received on device 0, port 8.\\n========== EXPECTED ==========\\nMask:\\n\\npacket status: OK\\npa...                            ....\\n\\n========== RECEIVED ==========\\n0 total packets.\\n==============================\\n'\nself       =\n\n/usr/lib/python3.8/unittest/case.py:753: AssertionError\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 21760,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/21760",
+    "title": "Fix test_acl.py [ipv6-ingress-uplink->downlink-*] cases for v6 topo",
+    "merged_at": "2026-02-25T11:39:33Z",
+    "description": "### Description of PR\n\nSummary:\nt0-isolated-v6-*:\nDownstream neighbors are servers connected to VLAN interface. Use DOWNSTREAM_DST_IP_VLAN as dest ips. IPv6 cases have been skipped for t0 since beginning, only fix it for v6 topos now.\n\nt1-isolated-v6-*:\nV6 topo files set ipv6_address_pattern: <IPV6>::%02X%02X:%02X%02X:0/120.\nannounce_routes.py uses the pattern to generate routes for PTF and pass them to VMs. If it is not set, default pattern 20%02X:%02X%02X:0:%02X::/64 is used.\nacl tests use hardcoded dest ip 20c0:a800::1 that is not covered by v6 topo pattern, so packets are forwarded with the default route to upstream VM.\nFix it by changing dest ip for v6 topos, also add acl rules for these dest ips.\n\nWith extra ACL rules for v6 topos, also increase timeout for check_rule_counters.\nFixes #21770\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [x] 202412\n- [x] 202505\n\n### Approach\n#### What is the motivation for this PR?\ntest_acl.py [ipv6-ingress-uplink->downlink-*] cases failed on v6 topo\n\n#### How did you do it?\nCorrect DOWNSTREAM_DST_IP for t0/t1-isolated-v6-*. topos, and add corresponding acl rules\n\n#### How did you verify/test it?\nTest passed on t0/t1-isolated-v6-*. topos\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/acl/templates/acltb_v6_test_rules.j2",
+        "additions": 30,
+        "deletions": 0
+      },
+      {
+        "path": "tests/acl/templates/acltb_v6_test_rules_part_2.j2",
+        "additions": 30,
+        "deletions": 0
+      },
+      {
+        "path": "tests/acl/test_acl.py",
+        "additions": 36,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

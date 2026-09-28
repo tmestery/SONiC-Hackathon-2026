@@ -1,0 +1,87 @@
+{
+  "number": 22510,
+  "title": "[Bug] test_retry_count.py failure in KVM CI due to PORT_PHY_ATTR ERR logs",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22510",
+  "createdAt": "2026-02-20T18:57:50Z",
+  "closedAt": "2026-02-21T00:15:19Z",
+  "author": "rustiqly",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nVS/KVM\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`tests/pc/test_retry_count.py::test_retry_count` is failing in KVM CI test runs. The failure is triggered by ERR-level syslog messages from orchagent's new PORT_PHY_ATTR flex counter feature (sonic-swss#3957, sonic-swss#4017):\n\n```\nERR swss#orchagent: :- verifyPortSupportsAllPhyAttr: PORT_PHY_ATTR: Port Ethernet0 does not support RX_SIGNAL_DETECT attribute (status=-15)\nERR swss#orchagent: :- verifyPortSupportsAllPhyAttr: PORT_PHY_ATTR: Port Ethernet1 does not support RX_SIGNAL_DETECT attribute (status=-15)\n```\n\nThe VS SAI doesn't implement PHY attributes (`RX_SIGNAL_DETECT`, `FEC_ALIGNMENT_LOCK`, `RX_SNR`), so every port triggers this ERR log. The log analyzer picks these up as unexpected errors, causing test failures.\n\n### Steps to Reproduce\n\nRun `tests/pc/test_retry_count.py` on a VS/KVM testbed after sonic-swss submodule includes #3957/#4017.\n\n### Elastictest Reference\n\n- Test plan: https://elastictest.org/scheduler/testplan/6997eef5184b36a9b4fb45b6?testcase=pc%2Ftest_retry_count.py%7C%7C%7C2&type=console\n- PR triggering the failure: sonic-net/sonic-buildimage#25552 (unrelated change \u2014 build hooks fix)\n\n### Related Issues\n\n- sonic-net/sonic-swss#4242 \u2014 Root cause: orchagent logs ERR for unsupported PHY attributes on VS\n- #19400 \u2014 Pre-existing test_retry_count setup fixture issue (may be related or compounding)\n\n### Suggested Fix\n\nShort-term: Add `verifyPortSupportsAllPhyAttr` ERR messages to the log analyzer's expected errors list for VS/KVM platforms.\n\nLong-term: Fix in sonic-swss to downgrade the log level from ERR to WARNING/INFO when SAI returns `SAI_STATUS_NOT_SUPPORTED` (tracked in sonic-swss#4242).",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22511,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22511",
+      "title": "[loganalyzer] Ignore PORT_PHY_ATTR ERR on VS/KVM platforms (fixes #22510)",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-21T00:15:18Z",
+      "createdAt": "2026-02-20T19:00:39Z",
+      "author": "rustiqly",
+      "body": "## What\nAdd `verifyPortSupportsAllPhyAttr` ERR pattern to `loganalyzer_common_ignore.txt`.\n\n## Why\nVS SAI does not implement PHY attributes (`RX_SIGNAL_DETECT`, `FEC_ALIGNMENT_LOCK`, `RX_SNR`), so orchagent logs ERR for every port after sonic-swss#3957/#4017. The log analyzer picks these up as unexpected errors, causing test failures (e.g., `test_retry_count`).\n\n## How\nSingle regex in the common ignore list:\n```\nr, \".*ERR swss#orchagent.*verifyPortSupportsAllPhyAttr.*PORT_PHY_ATTR.*does not support.*attribute.*\"\n```\n\n## Long-term fix\nTracked in sonic-net/sonic-swss#4242 \u2014 downgrade the log level from ERR to WARNING/INFO when SAI returns `SAI_STATUS_NOT_SUPPORTED`.\n\nFixes #22510",
+      "files": [
+        {
+          "path": "tests/common/plugins/loganalyzer/__init__.py",
+          "additions": 20,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-20T19:00:47Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-02-20T19:00:48Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: rustiqly / name: Rustiqly  (c04f5d443924cc13478ef9d9c99f0bae54d47759)</li></ul>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-20T19:01:04Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-02-20T19:03:30Z",
+          "body": "Suggestion: since this is VS/KVM-only noise, consider scoping the ignore to KVM (platform-specific ignore list) rather than global, to avoid masking real PHY attr issues on hw."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-20T19:05:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-20T19:05:51Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-02-20T19:05:52Z",
+          "body": "Good call \u2014 moved from global `loganalyzer_common_ignore.txt` to a platform-scoped `autouse` fixture in `tests/common/plugins/loganalyzer/__init__.py`. The ignore now only applies when `asic_type == 'vs'`, following the same pattern as the existing `ignore_pkt_trim_errors` fixture.\n\nThis way real PHY attribute issues on hardware platforms won't be masked."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-20T19:05:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-20T19:06:10Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-02-20T21:06:51Z",
+          "body": "### VS Testbed Validation Results\n\n**Testbed:** T0 (vms-kvm-t0), DUT: vlab-01 (VS/KVM), 4 BGP peers (ARISTA01T1-04T1)\n**Branch:** `fix/loganalyzer-ignore-phy-attr-vs` (commit `c04f5d443`)\n**Test:** `pc/test_retry_count.py` (uses loganalyzer fixtures)\n\n| Test | Result | Notes |\n|------|--------|-------|\n| TestNeighborRetryCount::test_peer_retry_count | \u23ed\ufe0f SKIPPED | Requires SONiC neighbor VMs (not EOS) |\n| TestDutRetryCount::test_retry_count | \u26a0\ufe0f ERROR (teardown) | `RuntimeError: Database not start` \u2014 pre-existing VS testbed limitation |\n\n**Key validation:** The `ignore_port_phy_attr_errors_on_vs` autouse fixture loaded successfully. The loganalyzer did **not** flag any PORT_PHY_ATTR ERR messages during the test run. Without this fix, these ERR messages in syslog would cause loganalyzer to fail tests on VS/KVM platforms.\n\n**Environment details:**\n- `ANSIBLE_MODULE_UTILS` required for `config_facts` module (`port_utils` dependency)\n- Tests used `--testbed vms-kvm-t0` (conf-name, not group-name)"
+        }
+      ]
+    }
+  ]
+}

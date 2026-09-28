@@ -1,0 +1,99 @@
+{
+  "number": 26673,
+  "title": "Bug: dualtor golden config generation preserves unused ports as admin up",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26673",
+  "createdAt": "2026-07-30T02:19:32Z",
+  "closedAt": "2026-08-06T08:34:04Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nAfter PR #26376, dualtor topologies generate `golden_config_db.json`\n  through `generate_dualtor_golden_config_db()`. That path copies the\n  `PORT` table from minigraph into golden config.\n\n  The deploy playbook already runs `config load_minigraph -y` before\n  golden config generation for `lt2` and `ft2`, because those topologies\n  modify/copy `PORT` and need the DUT config to reflect testbed-specific\n  admin state first. The new dualtor golden config path missed this\n  preload step.\n\n  As a result, unused routed ports can be preserved as `admin up` in\n  golden config. These ports have no physical link, stay `oper down`, and\n  pretest interface sanity fails.\n\n### Steps to Reproduce\n\n1. Use a 202605 sonic-mgmt checkout containing PR #26376.\n2. Deploy a dualtor or dualtor-aa testbed using `deploy-mg`.\n3. Run pretest:\n     `sudo ./run_tests.sh -n <testbed> -m individual -r -t any,util,dualtor,t0 -f ../ansible/testbed.yaml -u -c test_pretest.py`\n4. Check `test_pretest.log` or `test_pretest.xml`.\n\n### Actual Behavior and Expected Behavior\n\n **Actual behavior:**\n  - Pretest fails during setup sanity.\n  - Interface sanity reports unused routed ports as down ports.\n  - Example failures:\n    - `Ethernet128`, `Ethernet132`\n    - `Ethernet256`, `Ethernet260`\n  - `show interfaces status` shows those ports as `routed down up`.\n\n  **Expected behavior:**\n  - Unused routed ports should remain `admin down / oper down`.\n  - Pretest interface sanity should not fail on unused ports.\n  - dualtor golden config generation should follow the same minigraph\n    preload flow as lt2/ft2 before copying `PORT`.\n\n\n### Relevant log output\n\n```shell\ntst-esx-61:\n  stage_pre_test sanity check after recovery failed\n  check_item: interfaces\n  host: ld301\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n  host: ld302\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n\n  Ethernet128 ... routed down up\n  Ethernet132 ... routed down up\n\n  tst-esx-62:\n  stage_pre_test sanity check after recovery failed\n  check_item: interfaces\n  host: gd377\n  down_ports: [\"Ethernet256\", \"Ethernet260\"]\n  host: gd426\n  down_ports: [\"Ethernet256\", \"Ethernet260\"]\n\n  Ethernet256 ... routed down up\n  Ethernet260 ... routed down up\n\n  tst-esx-63:\n  stage_pre_test sanity check after recovery failed\n  check_item: interfaces\n  host: ldp203\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n  host: ldp205\n  down_ports: [\"Ethernet128\", \"Ethernet132\"]\n\n  Ethernet128 ... routed down up\n  Ethernet132 ... routed down up\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[test_pretest.log](https://github.com/user-attachments/files/30528564/test_pretest.log)\n[test_pretest.xml](https://github.com/user-attachments/files/30528565/test_pretest.xml)\n\n[test_pretest.log](https://github.com/user-attachments/files/30528570/test_pretest.log)\n[test_pretest.xml](https://github.com/user-attachments/files/30528569/test_pretest.xml)",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26676,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26676",
+      "title": "[dualtor] Load minigraph before golden config generation",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-06T08:34:03Z",
+      "createdAt": "2026-07-30T02:40:50Z",
+      "author": "pdam-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\nPR #26376 added dual-ToR golden config generation support for `prober_type`\r\n  and `neighbor_mode`. As part of that change, dualtor topologies started\r\n  generating `golden_config_db.json` with a `PORT` table copied from minigraph.\r\n\r\n  The deploy flow already runs `config load_minigraph -y` before golden config\r\n  generation for `lt2` and `ft2`, because those topologies modify/copy `PORT`\r\n  and need the DUT config to reflect testbed-specific interface admin state\r\n  first. The new dualtor golden config path missed this preload step.\r\n\r\n  Without the preload, unused routed ports can be preserved as `admin up` in\r\n  `golden_config_db.json`. These ports have no link, remain `oper down`, and\r\n  pretest interface sanity fails.\r\n\r\n  This PR extends the existing preload condition to include dualtor.\r\n\r\nSummary:\r\nFixes #26673\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n- [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: regression\r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n\r\n202605 \r\n\r\n**Failure Results** \r\n  - SONiC image: branch.202605-ars.e7f59890-buildimage.de4f9f0baae9667c05bfe9fdeb1a4fdf4bd19d6c-nightly-2026.07.28.16.40\r\n  - SONiC build commit: 0a4101e99\r\n  - Build date: Tue Jul 28 21:11:40 UTC 2026\r\n[test_pretest.log](https://github.com/user-attachments/files/30528920/test_pretest.log)\r\n[test_pretest.xml](https://github.com/user-attachments/files/30528921/test_pretest.xml)\r\n\r\n**Pass Results (after fix)**\r\n  - SONiC image: branch.202605-ars.e7f59890-buildimage.de4f9f0baae9667c05bfe9fdeb1a4fdf4bd19d6c-nightly-2026.07.28.16.40\r\n  - SONiC build commit: 0a4101e99\r\n  - Build date: Tue Jul 28 21:11:40 UTC 2026\r\n[test_pretest.log](https://github.com/user-attachments/files/30528954/test_pretest.log)\r\n[test_pretest.xml](https://github.com/user-attachments/files/30528955/test_pretest.xml)\r\n\r\nsonic-mgmt change under test:\r\n  - PR head commit: f0c462b86ee7257451aede547b4d099a778678ef\r\n\r\n  Note: Both before and after tests used the same SONiC image/build; the validated change is in sonic-mgmt.\r\n\r\n\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nFix a regression introduced when dualtor was added to the golden config\r\n  generation path. dualtor golden config now copies `PORT`, so it needs the\r\n  same minigraph preload step that already exists for `lt2` and `ft2`.\r\n\r\n#### How did you do it?\r\n\r\n Updated `ansible/config_sonic_basedon_testbed.yml` so the existing\r\n  `config load_minigraph -y` step runs for dualtor before\r\n  `golden_config_db.json` is generated.\r\n\r\n```\r\n  -        when: \"'lt2' in topo or 'ft2' in topo\"\r\n  +        when: \"'lt2' in topo or 'ft2' in topo or 'dualtor' in topo\"\r\n```\r\n\r\n\r\n#### How did you verify/test it?\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\nInspected failed pretest logs from tst-esx-31. \r\nAll failed during pretest setup sanity with unused routed ports\r\n  left as admin up / oper down. \r\nApplied the fix and sanitized the duts , ran deploy-mg and  pret-tests\r\n\r\n#### Any platform specific information?\r\nN/A\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nN/A",
+      "files": [
+        {
+          "path": "ansible/config_sonic_basedon_testbed.yml",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T02:40:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T02:40:59Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T02:41:15Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-07-30T06:03:33Z",
+          "body": " arp/test_neighbor_mac.py failed in pipeline . Its not directly related to my fix . We could address this subsequently \r\n     \r\n```\r\npytest_assert(\r\n            ping_succeeded,\r\n            \"Failed to ping DUT interface {} from PTF IP {}{}, stdout: {}, stderr: {}\".format(\r\n                self.DUT_INTF_IP,\r\n                self.PTF_HOST_IP,\r\n                \" within {} seconds\".format(self.PING_RETRY_TIMEOUT) if is_vpp else \"\",\r\n                ping_result.get(\"stdout\", \"\"),\r\n                ping_result.get(\"stderr\", \"\")\r\n            )\r\n        )\r\nE       Failed: Failed to ping DUT interface 20.0.0.1 from PTF IP 20.0.0.2 within 120 seconds, stdout: PING 20.0.0.1 (20.0.0.1) from 20.0.0.2 : 56(84) bytes of data.\r\nE       \r\nE       --- 20.0.0.1 ping statistics ---\r\nE       1 packets transmitted, 0 received, 100% packet loss, time 0ms, stderr:\r\n\r\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T06:15:19Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T06:15:23Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T16:52:28Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T16:52:29Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T16:52:46Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-08-16T23:59:13Z",
+          "body": "@pdam-arista \u2014 this 202605 backport request is not approval-ready yet. Please update the PR description with:\n\n- the exact 202605 image/commit used for the attached before/after test results\n\nThis information needs to be in the backport/test sections so the request is traceable and BuildBot can validate it.\n\n<!-- copilot-202605-backport-reminder -->"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-08-17T05:01:16Z",
+          "body": "> @pdam-arista \u2014 this 202605 backport request is not approval-ready yet. Please update the PR description with:\r\n> \r\n> * the exact 202605 image/commit used for the attached before/after test results\r\n> \r\n> This information needs to be in the backport/test sections so the request is traceable and BuildBot can validate it.\r\n\r\nHi @StormLiangMS , updated the necessary information  "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T12:49:29Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/27337"
+        }
+      ]
+    }
+  ]
+}

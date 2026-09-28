@@ -1,0 +1,116 @@
+{
+  "number": 27481,
+  "title": "Bug: Drop counters skip logic can read ASIC type from the wrong DUT",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27481",
+  "createdAt": "2026-08-30T10:53:39Z",
+  "closedAt": "2026-09-22T12:13:52Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "pdam-arista"
+  ],
+  "milestone": null,
+  "body": "## Description\n\n`tests/drop_packets/test_drop_counters.py` uses a selected frontend DUT for packet test execution, but `do_test` reads ASIC type from `duthosts[0]`.\n\nIn multi-DUT topologies, `duthosts[0]` can be a different DUT than the selected frontend DUT, so skip logic can be based on the wrong ASIC type.\n\nAffected test:\n\n- `drop_packets/test_drop_counters.py`\n\n## Steps to reproduce\n\n1. Run `drop_packets/test_drop_counters.py` on a dualtor or other multi-DUT topology.\n2. Inspect `do_test` and the module-scope test path.\n3. Observe that `do_test` reads `duthosts[0].facts[\"asic_type\"]`, while the module selects the frontend DUT using `duthosts[enum_rand_one_per_hwsku_frontend_hostname]`.\n\n## Actual behavior\n\nASIC type is read from `duthosts[0]`:\n\n```python\nasic_type = duthosts[0].facts[\"asic_type\"]\n```\n\nReference dualtor execution shows the suite host can differ from the testcase DUT:\n\n```text\ntst-esx-62 XML: suite host=gd377 while the non-skipped testcases are parametrized with [gd426].\ntst-esx-63 XML: suite host=ldp203 while the non-skipped testcases are parametrized with [ldp205].\n```\n\n## Expected behavior\n\nASIC type should be read from the selected frontend DUT:\n\n```python\nduthost = duthosts[enum_rand_one_per_hwsku_frontend_hostname]\nasic_type = duthost.facts[\"asic_type\"]\n```\n\n## Impact\n\nSkip behavior can be based on a different DUT than the one under test in multi-DUT topologies.\n\n## Test image\n\n```text\nbranch.202605-ars.8512e7eb-buildimage.ad6f5b869a8cacb3cb7eefe7dc226bf6f85480ff-nightly-2026.08.25.14.40\n```\n\n## Relevant log output\n\nBefore-fix evidence:\n\n[drop_counters_before_fix_logs.zip](https://github.com/user-attachments/files/31609257/drop_counters_before_fix_logs.zip)\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27482,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27482",
+      "title": "Fix drop counters ASIC type lookup",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-22T12:13:51Z",
+      "createdAt": "2026-08-30T10:55:31Z",
+      "author": "pdam-arista",
+      "body": "### Description of PR\n\nSummary:\nFixes #27481\n\nThe drop counters test selects a frontend DUT through `enum_rand_one_per_hwsku_frontend_hostname`, but `do_test` read ASIC type from `duthosts[0]`.\nIn multi-DUT topologies, `duthosts[0]` can be different from the selected frontend DUT, so skip logic can use the wrong DUT's ASIC type.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFixes #27481\n\nFailure type: day-one issue\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n202605:\n\n***After Fix***\n\nTested on Version branch.202605-ars.8512e7eb-buildimage.ad6f5b869a8cacb3cb7eefe7dc226bf6f85480ff-nightly-2026.08.25.14.40\n\n- `drop_packets/test_drop_counters.py`: 34 passed, 68 skipped\n- Revised implementation targeted validation: `test_acl_drop` result was 1 passed, 2 skipped, 99 deselected\n- [drop_counters_asic_type_after_fix_logs.zip](https://github.com/user-attachments/files/31611649/drop_counters_asic_type_after_fix_logs.zip)\n\n### Approach\n#### What is the motivation for this PR?\n\nKeep drop counter skip logic aligned with the selected frontend DUT in multi-DUT topologies.\n\n#### How did you do it?\n\nChanged `do_test` to take `enum_rand_one_per_hwsku_frontend_hostname`, resolve the selected DUT with `duthosts[enum_rand_one_per_hwsku_frontend_hostname]`, and read ASIC type from that selected DUT.\n\n#### How did you verify/test it?\n\nCode inspection:\n\n- `do_test` previously read ASIC type from `duthosts[0]`.\n- The module-scope consumers and supporting fixtures use `enum_rand_one_per_hwsku_frontend_hostname` for the selected DUT path.\n- After the change, ASIC-type skip logic uses the same selected DUT as the packet test path.\n\nRuntime:\n\n- Verified `drop_packets/test_drop_counters.py` passed on 202605 dualtor.\n- Verified targeted `test_acl_drop` validation passed after revising the implementation.\n\n#### Any platform specific information?\n\ngeneric\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A\n",
+      "files": [
+        {
+          "path": "tests/drop_packets/test_drop_counters.py",
+          "additions": 4,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-30T10:55:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T10:55:50Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-30T10:56:06Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T11:52:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-30T11:53:10Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T12:13:52Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-30T12:13:56Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T12:14:17Z",
+          "body": "@pdam-arista PR conflicts with 202605 branch"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T14:18:46Z",
+          "body": "This PR is approved for branch 202605. No cherry pick PR has been created because of code conflict. @pdam-arista, please manually create the cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-09-22T18:21:00Z",
+          "body": "> This PR is approved for branch 202605. No cherry pick PR has been created because of code conflict. @pdam-arista, please manually create the cherry pick PR.If this change is already in 202605, please comment \"already in 202605\". Thanks!\r\n> \r\n> ---Powered by SONiC BuildBot\r\n\r\nHi @StormLiangMS , this is the Cherry Pick for 202605 as there was conflicts .Please review it   https://github.com/sonic-net/sonic-mgmt/pull/28097"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T20:17:44Z",
+          "body": "The change is already in 202605. Removing cherry pick conflict label and adding included label.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T21:18:04Z",
+          "body": "This PR is approved for branch 202605, but no cherry pick PR has been created. Removing approved label and adding it again to trigger cherry pick workflow.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T21:18:36Z",
+          "body": "@pdam-arista PR conflicts with 202605 branch"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T22:17:21Z",
+          "body": "The change is already in 202605. Removing cherry pick conflict label and adding included label.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T23:17:20Z",
+          "body": "Cherry pick PR is not created after readding the approved label. @yijingyan2, please help check if the cherry pick workflow is working. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

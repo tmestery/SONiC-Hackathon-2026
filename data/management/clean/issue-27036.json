@@ -1,0 +1,56 @@
+{
+  "id": "management-27036",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27036,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27036",
+    "title": "Bug: [DHCP_SERVER][COMMON] dhcp_server module teardown disables feature but leaves it in critical services, breaking later config_reload",
+    "created_at": "2026-08-13T12:22:58Z",
+    "closed_at": "2026-08-27T11:43:29Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe `tests/dhcp_server` suite on mx platforms reported many pytest **errors on fixture teardown** for `sonic-relay-agent` parametrizations. The DHCP **test bodies passed**; failures occurred when cleaning up the `enable_sonic_dhcpv4_relay_agent` fixture and restoring relay state.\n\nAfter sonic-mgmt PR **#26284** refactored `restart_dhcp_service()` to use explicit `relay_types`, teardown always waited for legacy ISC supervisord programs (`isc-dhcpv4-relay-*`, `dhcpmon-*`) to be **RUNNING**. With the **dhcp_server** feature enabled (required by these tests), **dhcprelayd intentionally keeps those programs STOPPED** and runs standalone **`dhcrelay`** toward the Kea container instead.\n\nA second issue left **`dhcp_server` disabled** in saved config after the module while pytest could still track it as a **critical service**, causing later suites that call `config_reload` to wait indefinitely for a container that will not start.\n\n### Steps to Reproduce\n\n1. Use a testbed with topology **`mx`**, dhcp_server feature present (e.g. Nokia 7215-A1), image with dhcp_server + dhcp_relay containers.\n2. Run the dhcp_server suite\n3. Observe teardown errors on all or most **`[sonic-relay-agent]`** cases in `test_dhcp_server.py` and `test_dhcp_server_stress.py`.\n4. Run any subsequent test module that performs **`config_reload`** / `wait_critical_processes` on the same DUT without re-enabling dhcp_server or refreshing the critical-services list.\n\n### Actual Behavior and Expected Behavior\n\n## Expected behavior\n\n| Area | Expected |\n|------|----------|\n| **Test call** | Client receives DHCP offer/ack from Kea via relay (ISC or sonic agent); assertions pass. |\n| **Sonic-relay teardown** | Remove `has_sonic_dhcpv4_relay`, restart `dhcp_relay`, wait only for states valid when **dhcp_server is enabled** (`dhcprelayd` RUNNING; ISC/dhcpmon supervisord entries may stay STOPPED). |\n| **Fixture order** | `DHCP_SERVER_IPV4` CONFIG cleanup runs **before** relay restoration on teardown. |\n| **Module teardown** | `dhcp_server` feature remains **enabled** on platforms that ship it; pytest `critical_services` list matches CONFIG_DB. |\n| **Downstream tests** | `config_reload` does not hang waiting for `dhcp_server` when the feature is disabled. |\n\n---\n\n## Actual behavior (before fix)\n\n### A. Teardown readiness mismatch (PR #26284 regression)\n\n- **Symptom:** `Failed: dhcp_relay is not ready (relay_types=['isc'] ...)`\n- **Supervisor state:** `dhcprelayd` RUNNING, `isc-dhcpv4-relay-Vlan1000` STOPPED, `dhcpmon-Vlan1000` STOPPED.\n- **Scope:** 20/40 errors in `test_dhcp_server.py` (all `sonic-relay-agent`); 1 error in stress; 0 assertion failures in test bodies.\n- **Cause:** `sonic_dhcpv4_flag_config_and_unconfig(duthost, False)` called `restart_dhcp_service(duthost, ['isc'])`, which is incompatible with dhcp_server + dhcprelayd design.\n\n### B. Wrong teardown order (without PR #26732)\n\n- `enable_sonic_dhcpv4_relay_agent` teardown could run **before** `clean_dhcp_server_config()`, making relay restoration harder while `DHCP_SERVER_IPV4` entries were still present.\n\n### C. dhcp_server left disabled + stale critical services\n\n- Module fixture `dhcp_server_setup_teardown` enabled dhcp_server when it was off at module start, then on teardown ran:\n\n  ```text\n  config feature state dhcp_server disabled\n  docker rm dhcp_server\n  ```\n\n- Pytest\u2019s in-memory **`critical_services`** list could still include **`dhcp_server`** (populated when the feature was enabled mid-module).\n- Later **`config_reload`** refreshed config but waited for critical services including **`dhcp_server`** while the feature/container could not start \u2192 **timeouts in unrelated suites**.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\nSONiC Software Version: SONiC.HEAD.1609120-202605-4323ab96\nSONiC OS Version: 13\nDistribution: Debian 13.6\nKernel: 6.12.41+deb13-sonic-arm64\nBuild commit: 4323ab96\nBuild date: Thu Aug  6 <IPV6> UTC 2026\nBuilt by: gitlab-runner@sonic-armv45\n\nPlatform: arm64-nokia_ixs7215_52xb-r0\nHwSKU: Nokia-7215-A1\nASIC: marvell-prestera\nASIC Count: 1\nSerial Number: NK1240800025\nModel Number: 3HE18723AARA01\nHardware Revision: 0\nUptime: <IPV6> up 1 day,  2:46,  1 user,  load average: 0.17, 0.47, 0.57\nDate: Thu 13 Aug 2026 <IPV6>\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27228,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27228",
+    "title": "[DHCP_SERVER] Fix sonic-relay teardown readiness on topologies with dhcp_server enabled",
+    "merged_at": "2026-08-27T11:43:27Z",
+    "description": "Signed-off-by: Michail-Nektarios Karatzidis <<EMAIL>>\n\n FIXES: #27036\n  ### Description of PR\n  Fixes teardown errors and downstream testbed breakage in `tests/dhcp_server/` on mx platforms when running\n  `[sonic-relay-agent]` parametrizations.\n  After PR #26284, `sonic_dhcpv4_flag_config_and_unconfig(..., False)` always waited for `relay_types=['isc']`, requiring\n  every `isc-dhcpv4-relay-*` and `dhcpmon-*` supervisord entry to be RUNNING. With the **dhcp_server** feature enabled\n  (required by this suite), **dhcprelayd** intentionally keeps those programs STOPPED and manages v4 relay via standalone\n  `dhcrelay`. The test bodies passed; only fixture teardown failed.\n  This change also:\n  - Ensures `DHCP_SERVER_IPV4` cleanup runs **before** sonic relay restoration (same intent as #26732).\n  - Stops disabling `dhcp_server` at module teardown while pytest may still track it as a critical service, which caused\n  later `config_reload` / `critical_services_fully_started` waits to hang.\n  **Reviewer start:** `tests/common/dhcp_relay_utils.py` (`_relay_types_after_sonic_disable`, new `orchestrator` relay\n  type), then `tests/dhcp_server/conftest.py` (fixture order + module teardown).\n  **Dependencies:** None. Complements the relay readiness refactor in #26284; does not require image changes.\n  Summary:\n  Fixes #<issue>\n  ### Type of change\n  - [ ] Bug fix\n  - [x] Testbed and Framework(new/improvement)\n  - [ ] New Test case\n      - [ ] Skipped for non-supported platforms\n  - [ ] Test case improvement\n  ### Back port request\n  - [ ] 202311\n  - [ ] 202405\n  - [ ] 202411\n  - [ ] 202505\n  - [ ] 202511\n  - [ ] 202512\n  - [x] 202605\n  Tracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\n\n  Failure type: regression (exposed by #26284 explicit `relay_types=['isc']` on sonic-relay disable; dhcp_server suite not\n  covered in that PR\u2019s validation)\n  ### Tested branch\n  - [x] master\n  - [ ] 202311\n  - [ ] 202405\n  - [ ] 202411\n  - [ ] 202505\n  - [ ] 202511\n  - [ ] 202512\n  - [x] 202605\n  - [ ] N/A\n  ### Test result\n  **TOPOLOGY:** `mx`,\n  **Image:** `SONiC.HEAD.1609120-202605-4323ab96`\n  **Before fix (master, same image):**\n  - 20/40 errors in `test_dhcp_server.py` \u2014 all `[sonic-relay-agent]` teardown: `dhcp_relay is not ready\n  (relay_types=['isc'] ... isc-dhcpv4-relay-Vlan1000': 'STOPPED')`\n  - Test call assertions passed; failures were fixture teardown only\n  **Regression:** `tests/dhcp_relay/` sonic-relay cases still use `['isc']` on disable when dhcp_server is not enabled\n  **After the fix:**\n Majority of the testcases are passing with some failing due to another open issue: #24868\n  ### Approach\n  #### What is the motivation for this PR?\n  PR #26284 correctly made DHCP relay readiness explicit via `relay_types`, but `sonic_dhcpv4_flag_config_and_unconfig()`\n  still assumed that disabling sonic relay implies legacy ISC supervisord helpers must be RUNNING. That contract is\n  invalid when **dhcp_server** is enabled: dhcprelayd stops `isc-dhcpv4-relay-*` / `dhcpmon-*` by design.\n  Separately, `dhcp_server_setup_teardown` disabled the dhcp_server feature at module exit after temporarily enabling it,\n  while pytest could still list `dhcp_server` in `critical_services`, breaking subsequent modules on the same DUT.\n  #### How did you do it?\n  1. **`tests/common/dhcp_relay_utils.py`**\n     - Add `orchestrator` relay type (only `dhcprelayd` RUNNING required).\n     - Add `_dhcp_server_feature_enabled()` and `_relay_types_after_sonic_disable()`.\n     - On sonic disable: use `['orchestrator']` when dhcp_server is enabled, else `['isc']`.\n  2. **`tests/dhcp_server/conftest.py`**\n     - Tie `clean_dhcp_server_config_after_test` to `enable_sonic_dhcpv4_relay_agent` so teardown order is: clean\n  `DHCP_SERVER_IPV4*` \u2192 restore relay.\n     - Module teardown: leave dhcp_server **enabled** and call `critical_services_tracking_list()` instead of `disabled` +\n  `docker rm dhcp_server`.\n  #### How did you verify/test it?\n  - Ran full `tests/dhcp_server/` on MX topology, including all `[sonic-relay-agent]` and `[isc-relay-agent]`\n  parametrizations, on **master** and **202605** with image `HEAD.1609120-202605-4323ab96`.\n  - Confirmed on DUT after sonic-relay cases: `dhcprelayd` RUNNING, `dhcrelay` present, `isc-dhcpv4-relay-*` STOPPED\n  (expected with dhcp_server on), `has_sonic_dhcpv4_relay` unset after teardown.\n  - Verified downstream suites no longer hang on `config_reload` waiting for a disabled `dhcp_server` critical service.\n  #### Any platform specific information?\n  Observed on **mx** topology with **dhcp_server** feature enabled. The readiness mismatch applies\n  whenever dhcp_server + sonic-relay-agent tests run together; fix is gated on FEATURE state, not hard-coded to a\n  platform.\n  Pure `tests/dhcp_relay/` paths with dhcp_server disabled still use `['isc']` on sonic disable.\n  #### Supported testbed topology if it's a new test case?\n  N/A \u2014 no new test cases.\n  ### Documentation\n  N/A \u2014 test harness / fixture fix only; inline comments and `restart_dhcp_service` docstring updated for `orchestrator`\n  relay type.",
+    "files": [
+      {
+        "path": "tests/common/dhcp_relay_utils.py",
+        "additions": 30,
+        "deletions": 2
+      },
+      {
+        "path": "tests/dhcp_server/conftest.py",
+        "additions": 16,
+        "deletions": 8
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 26525,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26525",
+      "title": "[dhcp_relay]: Model external and internal relay readiness",
+      "merged": false
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-1882",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 1882,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/1882",
+    "title": "test_vlan.py may unintentionally add a port-channel member port as a VLAN member",
+    "created_at": "2020-07-12T08:10:57Z",
+    "closed_at": "2020-07-14T03:31:09Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "**Description**\n _test_vlan_ verifies the VLAN functionality.\nhttps://github.com/Azure/sonic-mgmt/blob/master/tests/vlan/test_vlan.py\n\nIt selects four ports from the device and adds them as VLAN members.\nThe script creates a candidate list of ports consisting of all port-channels and ports from the config whose links are up. From this candidate list, the first four ports are picked.\n\nThe candidate list of ports (stored in variable _ports_) should be either Port-channels or front panel ports that are not members of any port-channel.\nHowever, in the current script, _ports_ contains port-channels and all front-panel ports including ports that are members of port-channels.\nDepending on the order in which the ports are present in the python dictionary,  the test could end up unintentionally adding a port-channel member port as a VLAN member.\nIdeally, port-channel members should not be added to a VLAN, only the parent port-channel interface should be added to the VLAN.\n\n```\n 42     # when running on t0 we can use the portchannel members\n 43     if config_portchannels:\n 44         for po in config_portchannels.keys()[:2]:\n 45             port = config_portchannels[po]['members'][0]\n 46             vlan_ports_list.append({\n 47                 'dev' : po,\n 48                 'port_index' : config_port_indices[port],\n 49                 'pvid' : pvid_cycle.next(),\n 50                 'permit_vlanid' : { vid : {\n 51                     'peer_ip' : '192.168.{}.{}'.format(vid, 2 + config_port_indices.keys().index(port)),\n 52                     'remote_ip' : '{}.1.1.{}'.format(vid, 2 + config_port_indices.keys().index(port))\n 53                     } for vid in vlan_id_list }\n 54             })\n 55\n 56     ports = [ port for port in config_ports\n 57         if config_port_indices[port] in ptf_ports_available_in_topo and config_ports[port].get('admin_status',     'down') == 'up' ]\n 58\n 59     for port in ports[:4]:\n 60         vlan_ports_list.append({\n 61             'dev' : port,\n 62             'port_index' : config_port_indices[port],\n 63             'pvid' : pvid_cycle.next(),\n 64             'permit_vlanid' : { vid : {\n 65                 'peer_ip' : '192.168.{}.{}'.format(vid, 2 + config_port_indices.keys().index(port)),\n 66                 'remote_ip' : '{}.1.1.{}'.format(vid, 2 + config_port_indices.keys().index(port))\n 67                 } for vid in vlan_id_list }\n 68         })\n 69\n 70     return vlan_ports_list\n```\n\n**Steps to reproduce the issue:**\n1. Run vlan/test_vlan.py  on t0 testbed\n2. Reproduction depends on the internal python dictionary hashing. If any of the port-channel member ports occur among the first four entries, then the script would fail.\n\n**Describe the results you received:**\nOn some topologies, the test fails. This happens if any of the port-channel member ports occur among the first four entries in the script variable _ports_\n\n**Describe the results you expected:**\nPort-channel member ports should not be added as VLAN members.\n\n**Fix for the issue:**\nThe below patch fixed the issue.\n\n```\n--- a/tests/vlan/test_vlan.py\n+++ b/tests/vlan/test_vlan.py\n@@ -36,9 +36,10 @@ def vlan_ports_list(cfg_facts, ptfhost):\n     config_portchannels = cfg_facts.get('PORTCHANNEL', {})\n     config_port_indices = cfg_facts['port_index_map']\n     ptf_ports_available_in_topo = ptfhost.host.options['variable_manager'].extra_vars.get(\"ifaces_map\")\n+    config_port_channel_member_ports = [port_channel_member[1].keys()[0] for port_channel_member in config_portchannels.items()]\n\n    pvid_cycle = itertools.cycle(vlan_id_list)\n\n     # when running on t0 we can use the portchannel members\n     if config_portchannels:\n         for po in config_portchannels.keys()[:2]:\n@@ -54,7 +55,7 @@ def vlan_ports_list(cfg_facts, ptfhost):\n             })\n\n     ports = [ port for port in config_ports\n-        if config_port_indices[port] in ptf_ports_available_in_topo and config_ports[port].get('admin_status', 'down') == 'up' ]\n+        if config_port_indices[port] in ptf_ports_available_in_topo and config_ports[port].get('admin_status', 'down') == 'up' and port not in config_port_channel_member_ports]\n\n     for port in ports[:4]:\n         vlan_ports_list.append({\n\n```"
+  },
+  "resolution": {
+    "pr_number": 1889,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/1889",
+    "title": "[vlan] fix unintentionally addidng portchannel member as vlan member",
+    "merged_at": "2020-07-14T03:31:09Z",
+    "description": "Change-Id: I92950baa343082c6725a1d516a9343b12f50012d\nSigned-off-by: Mykola Faryma <<EMAIL>>\n\n### Description of PR\n\nSummary:\nFixes #1882\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Approach\n#### What is the motivation for this PR?\n\n#### How did you do it?\n\n#### How did you verify/test it?\nRun the vlan test\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/vlan/test_vlan.py",
+        "additions": 8,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

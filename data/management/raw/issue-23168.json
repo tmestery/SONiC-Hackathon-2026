@@ -1,0 +1,150 @@
+{
+  "number": 23168,
+  "title": "Bug: test_bgp_router_id fails default route check on full-scale topologies",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23168",
+  "createdAt": "2026-03-20T14:45:49Z",
+  "closedAt": "2026-04-01T20:20:10Z",
+  "author": "wrideout-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nFull-scale topologies cannot use kernel command \"ip route show\" and its variants in order to get default route information, due to known issue https://github.com/sonic-net/sonic-buildimage/issues/24537.\n\nbgp/test_bgp_router_id.py uses \"ip route show default\" in order to get default route information.  On full-scale topologies this command does not return output which results in test failure.  The fix is to verify the default route using the frr command \"show ip route\", etc.\n\n### Steps to Reproduce\n\nRun bgp/test_bgp_router_id.py on a full-scale topology testbed.\n\n### Actual Behavior and Expected Behavior\n\nThe test should not fail due to default route verification issues.\n\n### Relevant log output\n\n```shell\nduthosts = [<MultiAsicSonicHost qspf410>]\\nenum_frontend_dut_hostname = 'qspf410', loopback_ip = '10.1.0.32'\\ntbinfo = {'auto_recover': True, 'comment': 'Tests Arista Arista-7060X6-64PE-B-C512S2', 'conf-name': 'ardut', 'duts': ['qspf410'], ...}\\n\\n    @pytest.fixture(scope=\\\"function\\\")\\n    def router_id_loopback_setup_and_teardown(duthosts, enum_frontend_dut_hostname, loopback_ip, tbinfo):\\n        duthost = duthosts[enum_frontend_dut_hostname]\\n        duthost.shell(\\\"sonic-db-cli CONFIG_DB hset \\\\\\\"DEVICE_METADATA|localhost\\\\\\\" \\\\\\\"bgp_router_id\\\\\\\" \\\\\\\"{}\\\\\\\"\\\"\\n                      .format(CUSTOMIZED_BGP_ROUTER_ID), module_ignore_errors=True)\\n        duthost.shell(\\\"sonic-db-cli CONFIG_DB del \\\\\\\"LOOPBACK_INTERFACE|Loopback0|{}/32\\\\\\\"\\\".format(loopback_ip))\\n>       restart_bgp(duthost, tbinfo)\\n\\nduthost    = <MultiAsicSonicHost qspf410>\\nduthosts   = [<MultiAsicSonicHost qspf410>]\\nenum_frontend_dut_hostname = 'qspf410'\\nloopback_ip = '10.1.0.32'\\ntbinfo     = {'auto_recover': True, 'comment': 'Tests Arista Arista-7060X6-64PE-B-C512S2', 'conf-name': 'ardut', 'duts': ['qspf410'], ...}\\n\\nbgp/test_bgp_router_id.py:145: \\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \\n\\nduthost = <MultiAsicSonicHost qspf410>\\ntbinfo = {'auto_recover': True, 'comment': 'Tests Arista Arista-7060X6-64PE-B-C512S2', 'conf-name': 'ardut', 'duts': ['qspf410'], ...}\\n\\n    def restart_bgp(duthost, tbinfo):\\n        duthost.reset_service(\\\"bgp\\\")\\n        duthost.restart_service(\\\"bgp\\\")\\n        pytest_assert(wait_until(100, 10, 10, duthost.is_service_fully_started_per_asic_or_host, \\\"bgp\\\"), \\\"BGP not started.\\\")\\n>       pytest_assert(wait_until(100, 10, 10, duthost.check_default_route,\\n                                 ipv4=not is_ipv6_only_topology(tbinfo)), \\\"Default route not ready\\\")\\nE       Failed: Default route not ready\\n\\nduthost    = <MultiAsicSonicHost qspf410>\\ntbinfo     = {'auto_recover': True, 'comment': 'Tests Arista Arista-7060X6-64PE-B-C512S2', 'conf-name': 'ardut', 'duts': ['qspf410'], ...}\\n\\nbgp/test_bgp_router_id.py:119: Failed\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "notorious1337",
+      "createdAt": "2026-03-21T04:47:26Z",
+      "body": "/assign\n"
+    },
+    {
+      "author": "wrideout-arista",
+      "createdAt": "2026-04-01T20:20:09Z",
+      "body": "Fixed by https://github.com/sonic-net/sonic-mgmt/pull/22956."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 23351,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23351",
+      "title": "[bgp] Use FRR route check instead of kernel ip route in test_bgp_router_id",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-03-26T18:45:11Z",
+      "author": "rustiqly",
+      "body": "## Description\nOn full-scale topologies, the kernel `ip route show` command returns empty output due to a known issue (sonic-net/sonic-buildimage#24537). This causes `check_default_route()` (which uses `get_ip_route_info` \u2192 `ip route list`) to fail with 'Default route not ready' in `restart_bgp()`.\n\n### Fix\nAdd a local helper `_check_default_route_via_frr()` that uses `vtysh -c 'show ip route 0.0.0.0/0'` (FRR) instead of the kernel `ip route` command. This bypasses the kernel route table limitation on full-scale topologies while still validating that a default route with a valid nexthop exists.\n\n### Changes\n- `tests/bgp/test_bgp_router_id.py`: Add `_check_default_route_via_frr()` helper and use it in `restart_bgp()`\n\nFixes: #23168",
+      "files": [
+        {
+          "path": "tests/bgp/test_bgp_router_id.py",
+          "additions": 33,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-26T18:45:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-03-26T18:45:21Z",
+          "body": "@copilot review"
+        },
+        {
+          "author": "yijingyan2",
+          "createdAt": "2026-03-27T22:37:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-27T22:38:09Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-03-28T03:02:54Z",
+          "body": "CI t1-lag failure is unrelated to this PR \u2014 the failing test is `bgp/test_bgp_aggregate_address.py` (2 failures), not `test_bgp_router_id.py`. t0 and t2 passed. Requesting re-run.\n\n/azp run"
+        },
+        {
+          "author": "lihuay",
+          "createdAt": "2026-03-29T14:54:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-29T14:55:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-03T19:02:22Z",
+          "body": "Thanks for the review @StormLiangMS! Good catch on the IPv6 default.\n\nLooking at the code: `restart_bgp()` calls `_check_default_route_via_frr(duthost, ipv4=not is_ipv6_only_topology(tbinfo))` \u2014 this only passes `ipv4` but leaves `ipv6=True` (the default). On non-IPv6-only topologies, the DUT should still have an IPv6 default route since dual-stack is the norm. However, if there's a topology where IPv6 default route genuinely doesn't exist, you're right that `wait_until` would timeout.\n\nI'll update `restart_bgp()` to explicitly pass `ipv6=True` only when the topology supports IPv6 (which is always for dual-stack, but let me also add `ipv6=not is_ipv4_only_topology(tbinfo)` as a safeguard). Will push an update."
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-03T19:04:35Z",
+          "body": "Pushed a fix: now explicitly passing `ipv6=is_v6_only` so that on non-IPv6-only topologies we only check IPv4 default route via FRR, and on IPv6-only topologies we only check IPv6. This avoids the potential `wait_until` timeout you flagged. Thanks!"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-03T19:04:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-03T19:04:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-03T23:02:49Z",
+          "body": "CI failure in `Pre_test Validate Test Cases` is unrelated to this PR \u2014 it's caused by import errors in `test_bgp_aggregate_address_dual_stack.py` and `test_bgp_aggregate_address_negative.py` (repo-wide issue, fix pending in #23602). The actual code changes here are clean."
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-04T17:36:03Z",
+          "body": "@StormLiangMS Thanks for the review! You raise a valid point about the IPv6 check.\n\nThe test already had the IPv6 check before this PR \u2014 it was using `ip -6 route` (kernel). I just changed it to use `vtysh -c 'show ipv6 route'` (FRR) to match the IPv4 change. The default `True` for IPv6 checking was pre-existing behavior.\n\nThat said, you're right that on non-IPv6-only topologies, the FRR route table might not have IPv6 routes depending on config. I can add a guard that checks `check_ipv6` only when the topology actually has IPv6 enabled (e.g., checking the test fixture or DUT config). Would you prefer:\n1. Skip IPv6 check when `check_ipv6=False` (caller decides)\n2. Auto-detect from DUT config whether IPv6 is configured on the router-id interface\n\nOption 1 is simpler and more predictable."
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-09T03:43:26Z",
+          "body": "@StormLiangMS Good catch \u2014 but this is actually already handled in the code. In `restart_bgp()` (line 148-150):\n\n```python\nis_v6_only = is_ipv6_only_topology(tbinfo)\npytest_assert(wait_until(100, 10, 10, _check_default_route_via_frr,\n                         duthost, ipv4=not is_v6_only, ipv6=is_v6_only),\n```\n\nSo `ipv6=True` is only passed on IPv6-only topologies, and `ipv4=True` only on non-IPv6-only topologies. On a standard v4 topology, only the IPv4 default route check runs. The `_check_default_route_via_frr` defaults of `ipv4=True, ipv6=True` are always overridden by the caller."
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-04-13T19:01:46Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-13T19:20:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-11T14:05:01Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-11T14:05:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T15:36:34Z",
+          "body": "Rechecked https://github.com/sonic-net/sonic-mgmt/pull/23351 CI. The current impacted-area failures appear to be Elastictest infrastructure/setup failures, not test failures from this BGP route-check change: `PREPARE_TESTBED_FAILED`, command `Checkout sonic-mgmt repo`, with the failing job also showing repeated `Git fetch failed with exit code 128` retries.\n\nRequesting a rerun.\n\n/azp run Azure.sonic-mgmt\n"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-05-11T15:37:15Z",
+          "body": "/azp run Azure.sonic-mgmt"
+        }
+      ]
+    }
+  ]
+}

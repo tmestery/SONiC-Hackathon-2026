@@ -1,0 +1,45 @@
+{
+  "id": "management-27441",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27441,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27441",
+    "title": "[bmp] test_restart_bmp_docker fails on DUTs without BMP feature: \"Unit bmp.service not found\"",
+    "created_at": "2026-08-28T00:28:58Z",
+    "closed_at": "2026-08-31T03:20:33Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Triage"
+    ]
+  },
+  "failure": {
+    "body": "### Description\n\n`bmp/test_docker_restart.py::test_restart_bmp_docker` fails on testbeds where the BMP feature is not enabled/installed. The test unconditionally calls `asichost.restart_service(\"bmp\")`, which runs `sudo systemctl start bmp`. On a DUT without the BMP service the command returns rc=5 with `Failed to start bmp.service: Unit bmp.service not found.`, failing the test instead of skipping.\n\nObserved on testbed with a BMC DUT.\n\n### Steps to reproduce\n\n```\npython3 -m pytest bmp/test_docker_restart.py \\\n    --inventory=../ansible/veos,../ansible/str4 --host-pattern=all \\\n    --testbed=<bmc_testbed> --testbed_file=../ansible/testbed.yaml \\\n    --topology bmc,any\n```\n\n### Actual result\n\n```\ntests.common.errors.RunAnsibleModuleFail: run module command failed, Ansible Results =>\nfailed = True\nrc = 5\ncmd = ['sudo', 'systemctl', 'start', 'bmp']\nstderr = Failed to start bmp.service: Unit bmp.service not found.\n```\n\nTraceback:\n```\nFile \".../tests/bmp/test_docker_restart.py\", line 21, in test_restart_bmp_docker\n    asichost.restart_service(\"bmp\")\nFile \".../tests/common/devices/sonic_asic.py\", line 249, in restart_service\n    return self.sonichost.restart_service(service_name, docker_name)\nFile \".../tests/common/devices/sonic.py\", line 2341, in restart_service\n    self.command(\"sudo systemctl start {}\".format(service_name))\n```\n\n### Expected result\n\nThe test should not hard-fail on DUTs/platforms where the BMP feature/service is not present. It should either:\n- Skip (`pytest.skip`) when the BMP image/feature is unavailable (consistent with `BMPEnvironment` in `tests/common/helpers/bmp_utils.py`, which checks `docker images | grep -w sonic-bmp` and `docker ps | grep -w bmp`), or\n- Enable the BMP feature first (`sudo config feature state bmp enabled`, as in `bmp/helper.py:enable_bmp_feature`) and only skip if BMP is not supported at all.\n\n### Additional context\n\n- Test file: `tests/bmp/test_docker_restart.py`\n- Related helpers: `tests/bmp/helper.py` (`enable_bmp_feature`), `tests/common/helpers/bmp_utils.py` (`BMPEnvironment`)\n- Other BMP tests (`test_bmp_configdb.py`, `test_bmp_statedb.py`) enable BMP tables but likewise assume the BMP container is present.\n\n### Type of issue\n- [x] Test case bug / test infrastructure improvement"
+  },
+  "resolution": {
+    "pr_number": 27442,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27442",
+    "title": "[bmc][bmp]: Skip test_restart_bmp_docker on bmc topology",
+    "merged_at": "2026-08-31T03:20:31Z",
+    "description": "### Description of PR\nSummary:\nFixes #27441\n\n`bmp/test_docker_restart.py::test_restart_bmp_docker` calls `asichost.restart_service(\"bmp\")`, which runs `sudo systemctl start bmp`. On `bmc` topology the BMP service is not present, so this fails with `Failed to start bmp.service: Unit bmp.service not found.` (rc=5) instead of being skipped.\n\nThis PR skips the test on `bmc` topology using the `conditional_mark` plugin (no in-code changes to the test).\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [x] 202608\n\n### Approach\n#### What is the motivation for this PR?\nThe test hard-fails on `bmc` topology testbeds (e.g. `str4-Nokia-7220-Th6p-1-bmc` on `vms77-bmc-7220-1`), producing false negatives because the BMP service is not present there.\n\n#### How did you do it?\nAdded a `conditional_mark` entry in `tests/common/plugins/conditional_mark/tests_mark_conditions.yaml` that skips `bmp/test_docker_restart.py::test_restart_bmp_docker` when `topo_type in ['bmc']`. This keeps the skip policy in the central conditions file and leaves the test body unchanged.\n\n#### How did you verify/test it?\n- Verified the YAML parses and the new key resolves to the expected skip condition.\n- On a `bmc` topology, the test is marked skipped; on other topologies it runs as before.\n\n#### Any platform specific information?\nSkips on `bmc` topology.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 existing test.\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+        "additions": 6,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

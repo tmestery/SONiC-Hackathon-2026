@@ -1,0 +1,100 @@
+{
+  "number": 26098,
+  "title": "Bug: test_add_rack failure due to unmatched Ethernet136 status",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26098",
+  "createdAt": "2026-07-13T04:10:59Z",
+  "closedAt": "2026-08-05T03:03:49Z",
+  "author": "wenjwang-nv",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nmellanox\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nThis ticket is used to track fix https://github.com/sonic-net/sonic-mgmt/pull/24658\n\nThe configlet.test_add_rack.test_add_rack test has been flaky on Cisco-8102-C64 and Mellanox SN4600C/SN4700 platforms, while consistently passing on Arista. The failure manifests as PORT|Ethernet136 retaining admin_status: up in CONFIG_DB and APP_DB after the T0 removal patch, causing the DB comparison to fail across all 8 retry cycles.\n\n### Steps to Reproduce\n\nRun test_add_rack on specific platforms\n\n### Actual Behavior and Expected Behavior\n\nAssertionError: DB compare failed after adding T0 via generic patch updater\n\n### Relevant log output\n\n```shell\nduthost = , skip_load = True, hack_apply = False\n\n    def generic_patch_rm_t0(duthost, skip_load=False, hack_apply=False):\n        # Load config with T0\n        #\n        if not skip_load:\n            duthost.copy(src=os.path.join(orig_db_dir, \"config_db.json\"),\n                         dest=\"/etc/sonic/config_db.json\")\n            config_reload(duthost, wait=RELOAD_WAIT_TIME, start_bgp=True)\n    \n        if hack_apply:\n            # Hack: TODO: Before removing port, patch updater need to ensure\n            # the port is down. Until then bring it down explicitly.\n            #\n            for link in tor_data[\"links\"]:\n                tor_ifname = link[\"local\"][\"sonic_name\"]\n                duthost.shell(\"config interface shutdown {}\".format(tor_ifname))\n                do_pause(PAUSE_INTF_DOWN, \"pause upon i/f {} shutdown before add patch\".format(tor_ifname))\n    \n        patch_files = _list_patch_files(patch_rm_t0_dir)\n    \n        CMD = CMD_APPLY_HACK if hack_apply else CMD_APPLY\n    \n        for fl in patch_files:\n            sonic_fl = os.path.join(\"/etc/sonic\", fl)\n            duthost.copy(src=os.path.join(patch_rm_t0_dir, fl), dest=sonic_fl)\n            duthost.shell(CMD.format(sonic_fl), module_ignore_errors=True)\n    \n            # HACK: TODO: There are scenarios, where it applies patch and still consider as failed\n            # \"...Error: After applying patch to config, there are still some parts not updated\\n\"\n            # The above error is possible, if some control plane component is making an update.\n            # We can ignore rc, as DB comp is the final check. So skip it.\n            # assert res[\"rc\"] == 0, \"Failed to apply patch\"\n    \n        # Manual shutdown needed because the removal of admin_status won't operate shutdown. It will\n        # by default keep the previous admin_status state. Thus making app-db comparison fail.\n        for link in tor_data[\"links\"]:\n            tor_ifname = link[\"local\"][\"sonic_name\"]\n            duthost.shell(\"config interface shutdown {}\".format(tor_ifname))\n            do_pause(PAUSE_INTF_DOWN, \"pause upon i/f {} shutdown before add patch\".format(tor_ifname))\n    \n>       assert wait_until(DB_COMP_WAIT_TIME, 20, 0, db_comp, duthost, patch_rm_t0_dir,\n                          no_t0_db_dir, \"generic_patch_rm_t0\"), \\\n            \"DB compare failed after adding T0 via generic patch updater\"\nE       AssertionError: DB compare failed after adding T0 via generic patch updater\n\nCMD        = 'config apply-patch -v {}'\nduthost    = \nfl         = 'patch_0_all.json'\nhack_apply = False\nlink       = {'local': {'alias': 'Ethernet136', 'sonic_name': 'Ethernet136'}, 'remote': 'Ethernet1'}\npatch_files = ['patch_0_all.json']\nskip_load  = True\nsonic_fl   = '/etc/sonic/patch_0_all.json'\ntor_ifname = 'Ethernet136'\n\nconfiglet/util/generic_patch.py:231: AssertionError\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "StormLiangMS",
+      "createdAt": "2026-07-30T10:14:52Z",
+      "body": "Updated triage from 202605 nightly data:\r\n\r\n- 108 deduplicated plan/testbed failures share the same `generic_patch_rm_t0` DB-compare assertion.\r\n- The signature reproduces across Cisco-8102/8101, Arista-7260CX3, Mellanox-SN4600C, and Mellanox-SN4700, so it is not Mellanox-specific.\r\n- Full logs show the generated no-T0 reference expects the selected physical interface `admin_status=up`, but the test unconditionally runs `config interface shutdown` after applying the remove patch.\r\n- CONFIG_DB then differs on the PORT admin state; APP_DB keeps the LAG/member down and does not restore the expected route and neighbor entries.\r\n- This also explains why PR #24658's forced-down target is not sufficient for the current failures; its exact `test_add_rack` CI failed.\r\n\r\nDraft fix: https://github.com/sonic-net/sonic-mgmt/pull/26695\r\n\r\nThe fix restores each interface to the state captured in the generated no-T0 reference (`up`, or `down` when explicitly/default configured) before the existing DB comparison.\r\n"
+    },
+    {
+      "author": "StormLiangMS",
+      "createdAt": "2026-08-04T13:33:34Z",
+      "body": "Validation completed on SONiC.20260510.08. The fix in #26695 passed configlet/test_add_rack.py on the first attempt on all representative affected platforms:\n\n- Cisco-8102-C64: https://elastictest.org/scheduler/testplan/6a6b41d0101ed2146e809781\n- Arista-7260CX3-C64: https://elastictest.org/scheduler/testplan/6a6b41e1101ed2146e809784\n- Mellanox-SN4600C-C64: https://elastictest.org/scheduler/testplan/6a6b41f7c738d690ad9c1bbf"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26695,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26695",
+      "title": "[configlet]: Restore interface state after T0 removal",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-05T03:03:48Z",
+      "createdAt": "2026-07-30T10:14:34Z",
+      "author": "StormLiangMS",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nRestore removed-rack interfaces to the admin state captured in the generated no-T0 reference configuration before comparing databases. The previous unconditional shutdown left interfaces down even when the reference expected them up, causing persistent CONFIG_DB and APP_DB mismatches across Cisco, Arista, and Mellanox 202605 testbeds.\r\n\r\nFixes #26098\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): https://github.com/sonic-net/sonic-mgmt/issues/26098\r\nFailure type: day-one issue on 202605\r\n\r\n### Tested branch\r\n\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n\r\n- master: all PR checks passed, including `impacted-area-kvmtest-t1-lag` and `impacted-area-kvmtest-multi-asic-t1`.\r\n- 202605: SONiC.20260510.08 - `configlet/test_add_rack.py` passed on the first attempt on all representative platforms:\r\n  - Cisco-8102-C64: https://elastictest.org/scheduler/testplan/6a6b41d0101ed2146e809781\r\n  - Arista-7260CX3-C64: https://elastictest.org/scheduler/testplan/6a6b41e1101ed2146e809784\r\n  - Mellanox-SN4600C-C64: https://elastictest.org/scheduler/testplan/6a6b41f7c738d690ad9c1bbf\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nIn 202605 nightly results, the remove-T0 phase of `configlet/test_add_rack.py` repeatedly fails after the generated patch is applied. The no-T0 reference CONFIG_DB expects the selected physical interface to be up, while `generic_patch_rm_t0()` unconditionally shuts it down. The resulting state mismatch keeps the LAG member down and prevents the expected APP_DB routes and neighbors from returning.\r\n\r\nThe same failure signature was observed across Cisco-8000, Broadcom, and Mellanox platforms. PR #24658 forces the target state down, but that contradicts the current generated no-T0 reference state and its exact `test_add_rack` CI did not pass.\r\n\r\n#### How did you do it?\r\n\r\nRead the target interface state from `no_t0_db_dir/config_db.json` after applying the remove patch, then explicitly start or shut down each removed-rack interface to match that reference. If `admin_status` is omitted, preserve SONiC's default-down behavior. Also correct the remove-path assertion message.\r\n\r\n#### How did you verify/test it?\r\n\r\nRan the repository pre-commit checks for the changed file, Python syntax validation, and a focused behavior check covering target `admin_status=up` and omitted/default-down states. The full PR pipeline passed, including both targeted T1 KVM jobs. Physical 202605 validation passed on Cisco-8102-C64, Arista-7260CX3-C64, and Mellanox-SN4600C-C64.\r\n\r\n#### Any platform specific information?\r\n\r\nThe failure is not platform-specific. It has reproduced on Cisco-8102/8101, Arista-7260CX3, Mellanox-SN4600C, and Mellanox-SN4700.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nN/A\r\n\r\n### Documentation\r\n\r\nN/A\r\n",
+      "files": [
+        {
+          "path": "tests/configlet/util/generic_patch.py",
+          "additions": 24,
+          "deletions": 7
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T10:14:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T10:14:43Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-30T10:14:58Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T12:15:59Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-30T12:16:01Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-04T13:33:17Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "lipxu",
+          "createdAt": "2026-08-04T13:48:52Z",
+          "body": "**Verdict:** Solid, well-targeted bug fix \u2014 approving. It replaces the unconditional shutdown in `generic_patch_rm_t0()` with `_restore_interface_admin_status()`, which drives each interface's state from the no-T0 reference `config_db.json` instead of forcing it down. That's the correct root-cause fix for the CONFIG_DB/APP_DB mismatch in #26098, and the default-down handling plus the assertion-message correction are nice touches.\n\nTwo minor, optional suggestions:\n1. Consider passing `tor_data` (or the links list) into `_restore_interface_admin_status` as a parameter instead of using the module global \u2014 cleaner and easier to unit-test.\n2. Worth confirming the no-T0 reference always keeps PORT entries for these links; otherwise `assert isinstance(port_config, dict)` trips for every interface."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T18:15:47Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-05T03:04:27Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26780"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-26T06:16:30Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

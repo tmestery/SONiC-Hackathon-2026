@@ -1,0 +1,45 @@
+{
+  "id": "management-10223",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 10223,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/10223",
+    "title": "test_cacl_application.py::test_cacl_application_nondualtor missing iptable rules on supervisor",
+    "created_at": "2023-10-03T23:35:30Z",
+    "closed_at": "2023-10-25T04:53:14Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "chassis"
+    ]
+  },
+  "failure": {
+    "body": "E       Failed: Missing expected iptables rules: set(['-A INPUT -i eth1-midplane -j ACCEPT'])\n\nThe test fails because it expects the iptable rule on the supervisor to be learned against `eth1-midplane` but it's learned against `br1`:\n```\n(Pdb) set(expected_iptables_rules) - set(actual_iptables_rules)\nset(['-A INPUT -i eth1-midplane -j ACCEPT'])\n(Pdb) set(actual_iptables_rules) - set(expected_iptables_rules)\nset([u'-A INPUT -i br1 -j ACCEPT'])\n```\n\nThis was introduced in https://github.com/sonic-net/sonic-buildimage/pull/16505 where `br1` had an alias of `eth1-midplane` added.\nThis causes the test to into the `if result` conditional and add these expected entries:\n```\ndef append_midplane_traffic_rules(duthost, iptables_rules):\n    result = duthost.shell('ip link show | grep -w \"eth1-midplane\"', module_ignore_errors=True)['stdout']\n    if result:\n        midplane_ip = duthost.shell('ip -4 -o addr show eth1-midplane | awk \\'{print $4}\\' | cut -d / -f1 | head -1',\n                                    module_ignore_errors=True)['stdout']\n        iptables_rules.append(\"-A INPUT -i eth1-midplane -j ACCEPT\")\n        iptables_rules.append(\"-A INPUT -s {}/32 -d {}/32 -j ACCEPT\".format(midplane_ip, midplane_ip))\n```"
+  },
+  "resolution": {
+    "pr_number": 10227,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/10227",
+    "title": "Handle eth1-midplane being a kernel intf altname",
+    "merged_at": "2023-10-25T04:53:13Z",
+    "description": "### Description of PR\n\nExtract the kernel name eth1-midplane is attached to in the event it's an altname and use that kernel name in the ip rules\n\nSummary:\nFixes #10223\n\n### Type of change\n[x] Bug fix\n\n### Back port request\n- [x] 202205\n- [x] 202305\n\n### Approach\n#### What is the motivation for this PR?\ntest_cacl_application.py::test_cacl_application_nondualtor is failing today because it's expecting the wrong ip table rule:\n```\n(Pdb) set(expected_iptables_rules) - set(actual_iptables_rules)\nset(['-A INPUT -i eth1-midplane -j ACCEPT'])\n(Pdb) set(actual_iptables_rules) - set(expected_iptables_rules)\nset([u'-A INPUT -i br1 -j ACCEPT'])\n```\n\n#### How did you do it?\n`ip link show <name>` seems to return the same data regardless of whether we pass the kernel name or an altname.\nSo either way we should cut out the kernel name and use it:\n```\nroot@nfc420:~# ip link show br1\n7: br1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\n    link/ether <IPV6> brd <IPV6>\n    altname eth1-midplane\nroot@nfc420:~# ip link show eth1-midplane\n7: br1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\n    link/ether <IPV6> brd <IPV6>\n    altname eth1-midplane\n```\n\n#### How did you verify/test it?\nI saw test_cacl_application.py passing all testcases after this change.",
+    "files": [
+      {
+        "path": "tests/cacl/test_cacl_application.py",
+        "additions": 4,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "id": "management-1731",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 1731,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/1731",
+    "title": "Pytest | Unprintable RunAnsibleModuleFail object",
+    "created_at": "2020-06-03T18:05:08Z",
+    "closed_at": "2020-06-22T06:57:09Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Pytest"
+    ]
+  },
+  "failure": {
+    "body": "**Description**\n\nWhile using pytest framework sometimes it happens that `RunAnsibleModuleFail` exception can't be handled properly:\n```\nself = <common.devices.PTFHost object at 0x7f95070c0550>\nmodule_args = ('ptf --test-dir ptftests dhcp_relay_test.DHCPTest --platform-dir ptftests --platform remote -t \\'num_dhcp_servers=4;l...elay_iface_mac=\\'\"\\'\"\\'<IPV6>\\'\"\\'\"\\'\\' --relax --debug info --log-file /tmp/dhcp_relay_test.DHCPTest.log',)\ncomplex_args = {'chdir': '/root'}, module_ignore_errors = False\nmodule_async = False\nres = {'stderr_lines': [u'dhcp_relay_test.DHCPTest ... FAIL', u'', u'===============...': True, u'stdin': None}}, 'stdout_lines': [], u'msg': u'non-zero return code'}\n    def _run(self, *module_args, **complex_args):\n        module_ignore_errors = complex_args.pop('module_ignore_errors', False)\n        module_async = complex_args.pop('module_async', False)\n        if module_async:\n            def run_module(module_args, complex_args):\n                return self.module(*module_args, **complex_args)[self.hostname]\n            pool = ThreadPool()\n            result = pool.apply_async(run_module, (module_args, complex_args))\n            return pool, result\n        res = self.module(*module_args, **complex_args)[self.hostname]\n        if res.is_failed and not module_ignore_errors:\n>           raise RunAnsibleModuleFail(\"run module {} failed\".format(self.module_name), res)\nE           RunAnsibleModuleFail: <unprintable RunAnsibleModuleFail object>\n```\nLooks like this piece of code introduces a bug:\n```\nclass AnsibleHostBase(object):\n    \"\"\"\n    @summary: The base class for various objects.\n\n    This class filters an object from the ansible_adhoc fixture by hostname. The object can be considered as an\n    ansible host object although it is not under the hood. Anyway, we can use this object to run ansible module\n    on the host.\n    \"\"\"\n    def _run(self, *module_args, **complex_args):\n        module_ignore_errors = complex_args.pop('module_ignore_errors', False)\n        module_async = complex_args.pop('module_async', False)\n\n        if module_async:\n            def run_module(module_args, complex_args):\n                return self.module(*module_args, **complex_args)[self.hostname]\n            pool = ThreadPool()\n            result = pool.apply_async(run_module, (module_args, complex_args))\n            return pool, result\n\n        res = self.module(*module_args, **complex_args)[self.hostname]\n        if res.is_failed and not module_ignore_errors:\n            raise RunAnsibleModuleFail(\"run module {} failed\".format(self.module_name), res)\n```\n\nOriginal `AnsibleError` implementation:\n```\nclass AnsibleError(Exception):\n    '''\n    This is the base class for all errors raised from Ansible code,\n    and can be instantiated with two optional parameters beyond the\n    error message to control whether detailed information is displayed\n    when the error occurred while parsing a data file of some kind.\n    Usage:\n        raise AnsibleError('some message here', obj=obj, show_content=True)\n    Where \"obj\" is some subclass of ansible.parsing.yaml.objects.AnsibleBaseYAMLObject,\n    which should be returned by the DataLoader() class.\n    '''\n    def __str__(self):\n        return self.message\n\n    def __repr__(self):\n        return self.message\n```\n\nPytest `RunAnsibleModuleFail` implementation:\n```\nclass RunAnsibleModuleFail(AnsibleError):\n\n    \"\"\"Sub-class AnsibleError when module exceptions occur.\"\"\"\n\n    def __init__(self, msg, results=None):\n        super(RunAnsibleModuleFail, self).__init__(msg)\n        self.results = results\n\n    def __str__(self):\n        return \"{}\\nAnsible Results => {}\".format(self.message, dump_ansible_results(self.results))\n\n```\n\n**Steps to reproduce the issue:**\n* N/A\n\n**Describe the results you received:**\n* We have got module exception as unprintable object\n\n**Describe the results you expected:**\n* We expect that module exception will be converted to a string with the meaningful definition\n* `__str__` or `__repr__` should have internal exception protection\n\n**Additional information you deem important:**\n\n* N/A"
+  },
+  "resolution": {
+    "pr_number": 1739,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/1739",
+    "title": "Fix the issue of unprintable RunAnsibleModuleFail object",
+    "merged_at": "2020-06-22T06:57:08Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #1731\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Approach\n#### What is the motivation for this PR?\nFix issue #1731\n\n#### How did you do it?\nThe possible reason is that exception is raised in __str__ method of the RunAnsibleModuleFail class. The change is to catch any possible error of json.dumps while converting the ansible module result to human friendly string. If the json.dumps call failed, use the safer builtin str() function to convert the ansible result to a less human friendly string as a fall back method.\n\n#### How did you verify/test it?\nThe original issue is not reproducible on my side. That's why I make this PR as a draft at this point.\n\nWhat I tested:\n* Create a simple pytest script to run ansible module that will fail on purpose.\n* Run the script.\n* Verify that appropriate exception is logged.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/errors.py",
+        "additions": 15,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

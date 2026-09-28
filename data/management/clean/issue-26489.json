@@ -1,0 +1,43 @@
+{
+  "id": "management-26489",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26489,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26489",
+    "title": "Bug: test_console_stress_output fails on conserver console due to unsupported read_timeout argument",
+    "created_at": "2026-07-22T20:46:13Z",
+    "closed_at": "2026-07-28T01:45:40Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n`dut_console/test_console_stress.py::test_console_stress_output` fails before\n  running the console stress command when the console fixture returns the\n  pexpect-based `ConserverConsoleConn` backend.\n\n  The test passes Netmiko-style arguments to `duthost_console.send_command()`:\n  `read_timeout=300` and `cmd_verify=False`. These arguments are valid for\n  Netmiko-backed sessions, but `ConserverConsoleConn.send_command()` does not\n  accept them. It uses `max_loops` for timeout control.\n\n  The observed upstream failure hits the first unsupported argument:\n\n  `TypeError: ConserverConsoleConn.send_command() got an unexpected keyword\n  argument 'read_timeout'`\n\n  The fix is to replace `read_timeout=300` with `max_loops=300` and remove\n  `cmd_verify=False`.\n\n### Steps to Reproduce\n\nRun the console stress output test on a testbed where duthost_console uses\n  ConserverConsoleConn:\n\n ```\n sudo ./run_tests.sh -n dtAA -m individual -r -p logs_console_stress \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -c \"dut_console/test_console_stress.py::test_console_stress_output\"\n```\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior:**\n\n  The test fails immediately with `TypeError` because Netmiko-style keyword\n  arguments are passed to `ConserverConsoleConn.send_command()`. The observed\n  failure hits `read_timeout` first:\n\n  `TypeError: ConserverConsoleConn.send_command() got an unexpected keyword argument 'read_timeout'`\n\n  The same call also passes `cmd_verify=False`, which is another Netmiko-style\n  argument not supported by `ConserverConsoleConn`.\n\n  **Expected behavior:**\n\n  The test should run the console stress command and validate the output.\n  It should use arguments supported by the pexpect-based console backend, such\n  as `max_loops` for timeout control, and should not pass Netmiko-only keyword\n  arguments to `ConserverConsoleConn`.\n### Relevant log output\n\n```shell\n TypeError: ConserverConsoleConn.send_command() got an unexpected keyword\n  argument 'read_timeout'\n```\n\n### Output of `show version`\n\n### Attach files (if any)\n\n[test_console_stress.py::test_console_stress_output.log](https://github.com/user-attachments/files/30285082/test_console_stress.py.test_console_stress_output.log)\n[test_console_stress.py::test_console_stress_output.xml](https://github.com/user-attachments/files/30285081/test_console_stress.py.test_console_stress_output.xml)"
+  },
+  "resolution": {
+    "pr_number": 26490,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26490",
+    "title": "Fix console stress test for conserver backend",
+    "merged_at": "2026-07-28T01:45:39Z",
+    "description": "### Description of PR\n\nReplace the Netmiko-style console arguments in\n  dut_console/test_console_stress.py::test_console_stress_output with arguments\n  supported by the shared console fixture path.\n\n  On conserver-console testbeds, duthost_console can be backed by the\n  pexpect-based ConserverConsoleConn backend. ConserverConsoleConn.send_command()\n  does not accept Netmiko-specific arguments such as read_timeout or cmd_verify;\n  it uses max_loops for timeout control.\n\n  Passing unsupported console kwargs causes the test to fail with TypeError\n  before the console stress command is executed.\n\nSummary:\nFixes #26489\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nhttps://github.com/sonic-net/sonic-mgmt/issues/26489\nFailure type: regression\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n202605:\n**After  Fix**\n[test_console_stress.py::test_console_stress_output.log](https://github.com/user-attachments/files/30284300/test_console_stress.py.test_console_stress_output.log)\n[test_console_stress.py::test_console_stress_output.xml](https://github.com/user-attachments/files/30284301/test_console_stress.py.test_console_stress_output.xml)\n\n### Approach\n\n#### What is the motivation for this PR?\n`test_console_stress_output` used Netmiko-style arguments with\n  `duthost_console.send_command()`. On conserver-console testbeds, the console\n  fixture can return the pexpect-based `ConserverConsoleConn` backend, whose\n  `send_command()` API does not accept `read_timeout` or `cmd_verify`.\n  This causes the test to fail with `TypeError` before the console stress\n  command is executed.\n\n#### How did you do it?\nReplaced `read_timeout=300` with `max_loops=300` and removed the unsupported\n  `cmd_verify` argument from `test_console_stress_output`.\n\n#### How did you verify/test it?\n\n```\n sudo ./run_tests.sh -n dtAA -m individual -r -p logs_bug1908390_pass \\\n    -t any,util,dualtor,t0 \\\n    -f ../ansible/testbed.yaml \\\n    -u \\\n    -c \"dut_console/test_console_stress.py::test_console_stress_output\"\n\n```\n\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/dut_console/test_console_stress.py",
+        "additions": 1,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

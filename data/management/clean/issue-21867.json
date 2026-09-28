@@ -1,0 +1,43 @@
+{
+  "id": "management-21867",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 21867,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/21867",
+    "title": "Regression: system_health.test_system_health test_service_checker_with_process_exit failing after addition of check_system_health_led_info",
+    "created_at": "2026-01-08T14:52:45Z",
+    "closed_at": "2026-02-11T04:06:34Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Previous Working Version\n\nPrior to #20716 merging\n\n### Steps to Reproduce\n\nRun `system_health/test_system_health::test_service_checker_with_process_exit`, and observe the following failure:\n```\n\n        if all(status == \"OK\" for status in status_dict.values()):\n            assert system_led_status.lower() == 'green', \\\n                f\"System status LED is not green, but it is {system_led_status}\"\n        else:\n>           assert system_led_status.lower() in [\"yellow\", \"amber\", \"red\"], \\\n                f\"System status LED is not yellow, amber, or red, but it is {system_led_status}\"\nE           AssertionError: System status LED is not yellow, amber, or red, but it is green\n\nduthost    = <MultiAsicSonicHost gold228>\nstatus_data = [('Services', 'Not'), ('Hardware', 'OK')]\nstatus_dict = {'Hardware': 'OK', 'Services': 'Not'}\nsystem_health_summary = 'Invalid color\\nSystem status summary\\n\\n  System status LED  green\\n  Services:\\n    Status: Not OK\\n    Not Running: snmp:snmpd\\n  Hardware:\\n    Status: OK'\nsystem_led_res = ['green']\nsystem_led_status = 'green'\n\nsystem_health/test_system_health.py:520: AssertionError\n```\nAt this point in the test, a critical process has been shut down by the test to ensure that the system health status has changed to unhealthy. This will attempt to set the system LED to the `fault` status. We then call `check_system_health_led_info` which checks that the system status LED is yellow, amber, or red:\n`assert system_led_status.lower() in [\"yellow\", \"amber\", \"red\"]`\nHowever, as part of the setup for this test, `ConfigFileContext(duthost, os.path.join(FILES_DIR, IGNORE_DEVICE_CHECK_CONFIG_FILE))` has been invoked which puts https://github.com/sonic-net/sonic-mgmt/blob/master/tests/system_health/files/ignore_device_check.json in place of the system's default health checker config. This contains:\n```\n    \"led_color\": {\n      \"fault\": \"orange\",\n```\n\nThis creates 2 possibilties for how this test can go:\n1. If the device doesn't support \"orange\" as a system LED color, it will fail to set the color and fail the test because the LED is still green/healthy. We see this in the test above, note the `Invalid color` log before the normal output in `system_health_summary`.\n2. If the device does support \"orange\", the device will set its system led to orange/fault and the test will fail because the color isn't in the checked set, yellow, amber, and red.\n\nReviewing the test, I'm not sure it's possible to pass as is.\n\nWe can fix this for case 1 above by omitting the `ConfigFileContext` for this test, I'm not sure it is required for this test. I'll send a PR with this fix.\n\nFor number 2, we could add orange to the list of \"bad\" colors in check_system_health_led_info.\n\nHowever, I think there is a more fundamental problem with the test_system_health.py tests overriding the system health checker config with colors that the devices don't support. I'm not sure what the best way to solve that is.\n\n### Impact of this regression\n\nThe test fails when it shouldn't.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22262,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22262",
+    "title": "Fix LED config in test_system_health.py",
+    "merged_at": "2026-02-11T04:06:33Z",
+    "description": "### Description of PR\n\nSummary:\nTest config files replace original system_health_monitoring_config.json during the test. Some settings like led_color are platform-specific, so an unsupported color in the test config causes the test to fail.\nFix it by updating the original file with the test config content instead of replacing it, and ignore led_color during the update.\nFixes #21867\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\ntest_system_health.py::test_service_checker_with_process_exit failed because test config file overwrites platform-specific settings like led_color\n\n#### How did you do it?\nUpdate the original system_health_monitoring_config.json during the test and ignore platform-specific settings\n\n#### How did you verify/test it?\ntest_system_health.py passed on multiple Arista SKUs\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/system_health/test_system_health.py",
+        "additions": 16,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

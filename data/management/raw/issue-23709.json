@@ -1,0 +1,89 @@
+{
+  "number": 23709,
+  "title": "SNAPPI/IXIA tests skipped with 0 ports when fanout connects to multiple testbeds",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23709",
+  "createdAt": "2026-04-08T02:11:39Z",
+  "closedAt": "2026-04-10T07:35:31Z",
+  "author": "sdszhang",
+  "labels": [],
+  "assignees": [
+    "sdszhang"
+  ],
+  "milestone": null,
+  "body": "### Description\n\nSNAPPI/IXIA tests are skipped with the error:\n```\nSKIPPED [2] snappi_tests/pfcwd/test_pfcwd_a2a_with_snappi.py:25: Need Minimum of 2 ports defined in ansible/files/*links.csv file, got:0\n```\n\n### Root Cause\n\nWhen a fanout (e.g. IXIA chassis) is shared across multiple testbeds, `fanout_graph_facts` returns `device_conn` containing ports for **all** connected DUTs, not just the selected ones. However, `SnappiFanoutManager.get_fanout_device_details()` reads from `device_conn` (which has the full unscoped port list), while `get_ports(peer_device=duthost.hostname)` filters by the selected DUT hostname.\n\nThe underlying issue is that `get_graph_facts` is called with only the fanout hostname, so it returns the fanout's connections to all DUTs across all testbeds. When the graph query results are processed, `device_linked_ports` ends up empty (`{}`), and `device_conn` contains ports linked to DUTs outside the current testbed.\n\nIn `snappi_helpers.py`, `SnappiFanoutManager` references `device_conn` for chassis connection details, but after scoping fixes it should reference `device_linked_ports` instead.\n\n### Example Setup\n\nConsider an IXIA chassis shared across multiple testbeds via a links.csv like:\n\n```\nStartDevice,StartPort,EndDevice,EndPort,BandWidth,...\ndut1,Ethernet100,ixia-chassis-1,Card1/Port6,100000,...\ndut1,Ethernet104,ixia-chassis-1,Card1/Port7,100000,...\ndut1,Ethernet108,ixia-chassis-1,Card1/Port8,100000,...\ndut2,Ethernet100,ixia-chassis-1,Card1/Port6,100000,...\ndut2,Ethernet104,ixia-chassis-1,Card1/Port7,100000,...\ndut2,Ethernet108,ixia-chassis-1,Card1/Port8,100000,...\ndut3,Ethernet200,ixia-chassis-1,Card1/Port6,400000,...\ndut3,Ethernet208,ixia-chassis-1,Card1/Port7,400000,...\ndut3,Ethernet216,ixia-chassis-1,Card1/Port8,400000,...\n```\n\nNote that `ixia-chassis-1` Card1/Port6-8 are shared between `dut1` and `dut4` (different testbeds). When running tests for `dut4`, the graph query returns all connections including those to `dut1`, `dut2`, and `dut3`.\n\n### Debug Evidence\n\n```python\n(Pdb) snappi_ports\n[]\n\n(Pdb) fanout_graph_facts\n{'ixia-chassis-1': {\n    'device_conn': {\n        'Card1/Port6': {'peerdevice': 'dut3', ...},  # different testbed\n        'Card1/Port7': {'peerdevice': 'dut3', ...},  # different testbed\n        'Card1/Port8': {'peerdevice': 'dut3', ...},  # different testbed        ...\n    },\n    'device_linked_ports': {},  # <-- empty, should contain scoped ports\n    ...\n}}\n```\n\nThe `device_conn` includes ports to DUTs from other testbeds (`dut2`, `dut3`), none of which are the selected DUT `dut1`. Meanwhile `device_linked_ports` is empty because the graph query wasn't scoped to the selected DUTs.\n\n### Affected Tests\n\nAll SNAPPI/IXIA-based tests when the IXIA chassis is shared across multiple testbeds, e.g.:\n- `snappi_tests/pfcwd/test_pfcwd_a2a_with_snappi.py`\n\n### Affected Files\n\n- `tests/common/fixtures/conn_graph_facts.py` \u2014 `fanout_graph_facts` and `fanout_graph_facts_multidut`\n- `tests/common/snappi_tests/snappi_helpers.py` \u2014 `SnappiFanoutManager`\n\n### Fix\n\nPR #23708 addresses this by scoping the `get_graph_facts` call to include the selected DUT hostnames alongside the fanout, and updating `snappi_helpers.py` to use `device_linked_ports` instead of `device_conn`.\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23708,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23708",
+      "title": "[snappi]fix fanout connects to multi testbeds issue",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-10T07:35:30Z",
+      "createdAt": "2026-04-08T02:05:37Z",
+      "author": "sdszhang",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nFix fanout connects to multi testbeds issue.\r\nFixes #23709\r\n\r\nWhen a fanout (IXIA chassis) is shared across multiple testbeds, `get_graph_facts` was queried with only the fanout hostname, returning ports linked to all testbeds rather than just the selected DUTs. This caused `device_conn` returns links to other devices, that results in `get_ports()` to return 0 ports, skipping all SNAPPI tests.\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nSNAPPI/IXIA tests are skipped with `Need Minimum of 2 ports, got:0` when the IXIA chassis connects to multiple testbeds. This happens in L1 OCS setup scenario.\r\n\r\n#### How did you do it?\r\n- In `fanout_graph_facts` and `fanout_graph_facts_multidut`, pass `selected_dut_hostnames + [fanout]` to `get_graph_facts` so the query is scoped to the selected DUTs.\r\n- Added `if fanout in v` guard when building the fanout data dict.\r\n- Fixed `snappi_helpers.py` to reference `device_linked_ports` instead of `device_conn`.\r\n\r\n#### How did you verify/test it?\r\nVerified on a testbed where a fanout connects to multiple testbeds.\r\n\r\n#### Any platform specific information?\r\nN/A\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n\r\nSigned-off-by: Dashuai Zhang <dashuaizhang@microsoft.com>",
+      "files": [
+        {
+          "path": "tests/common/fixtures/conn_graph_facts.py",
+          "additions": 11,
+          "deletions": 2
+        },
+        {
+          "path": "tests/common/snappi_tests/snappi_helpers.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T02:05:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T02:05:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T06:02:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T06:03:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "sdszhang",
+          "createdAt": "2026-04-08T23:27:58Z",
+          "body": "@amitpawar12 @kamalsahu0001 @selldinesh for viz."
+        },
+        {
+          "author": "wangxin",
+          "createdAt": "2026-04-09T09:09:00Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-09T09:09:03Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-09T09:09:06Z",
+          "body": "Retrying failed(or canceled) stages in build 1082935:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t0 by Elastictest: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-10T08:58:48Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/23826"
+        }
+      ]
+    }
+  ]
+}

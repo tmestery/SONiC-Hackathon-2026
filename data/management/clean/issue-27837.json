@@ -1,0 +1,43 @@
+{
+  "id": "management-27837",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27837,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27837",
+    "title": "Bug: `bgp/test_prefix_list_suppress.py` fails expecting syslog `AsPath Manager is enabled for`",
+    "created_at": "2026-09-10T00:24:50Z",
+    "closed_at": "2026-09-28T21:06:58Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nOn UT2 we see `bgp/test_prefix_list_suppress.py::TestAnchorPrefixRegression::test_prefix_list_mgr_running_on_every_device` fail occasionally on UT2 systems expecting a syslog that hasn't arrived yet:\n```\n>               pytest_assert(\n                    new_line.strip(),\n                    \"Expected 'AsPath Manager is enabled for <DEVICE_TYPE>'\"\n                    \" log line on spine device {} after bgpcfgd restart in\"\n                    \" {}\".format(duthost.hostname, container),\n                )\nE               Failed: Expected 'AsPath Manager is enabled for <DEVICE_TYPE>' log line on spine device ctn104 after bgpcfgd restart in bgp\n\ncontainer  = 'bgp'\nduthost    = <MultiAsicSonicHost ctn104>\nlegacy     = ''\nmarker     = 'SONIC_TEST_MARKER_eace12a77bd4'\nnew_line   = ''\nrand_one_frontend_duthost = <MultiAsicSonicHost ctn104>\nself       = <test_prefix_list_suppress.TestAnchorPrefixRegression object at 0x7f607f797bc0>\nsonichost  = <SonicHost ctn104>\nspine      = True\n\nbgp/test_prefix_list_suppress.py:735: Failed\n```\n\nLooking at the syslog we can see that it searched for the syslog here:\n```\n2026 Sep  9 <IPV6>.971255 ctn104 INFO python3.13[680444]: ansible-ansible.legacy.command Invoked with _raw_params=sudo sed -n '/SONIC_TEST_MARKER_eace12a77bd4/,$p' /var/log/syslog | grep -v 'Invoked with _raw_params' | grep -E 'AsPath Manager is enabled for' || true _uses_shell=True expand_argument_vars=True stdin_add_newline=True strip_empty_ends=True cmd=None argv=None chdir=None executable=None creates=None removes=None stdin=None\n```\n\nAnd the syslog showed up ~1s later:\n```\n2026 Sep  9 <IPV6>.160259 ctn104 NOTICE bgp#bgpcfgd: AsPath Manager is enabled for UpperSpineRouter\n```\n\nHere is the full syslog of relevant logs:\n```\n2026 Sep  9 <IPV6>.488914 ctn104 NOTICE SONIC_TEST: SONIC_TEST_MARKER_eace12a77bd4\n\n2026 Sep  9 <IPV6>.257317 ctn104 INFO python3.13[680286]: ansible-ansible.legacy.command Invoked with _raw_params=sudo docker exec bgp supervisorctl restart bgpcfgd _uses_shell=True expand_argument_vars=True stdin_add_newline=True strip_empty_ends=True cmd=None argv=None chdir=None executable=None creates=None removes=None stdin=None\n\n2026 Sep  9 <IPV6>.968968 ctn104 INFO python3.13[680392]: ansible-ansible.legacy.command Invoked with _raw_params=docker exec bgp supervisorctl status bgpcfgd _uses_shell=False expand_argument_vars=True stdin_add_newline=True strip_empty_ends=True cmd=None argv=None chdir=None executable=None creates=None removes=None stdin=None\n\n2026 Sep  9 <IPV6>.458479 ctn104 INFO python3.13[680430]: ansible-ansible.legacy.command Invoked with _raw_params=sudo sed -n '/SONIC_TEST_MARKER_eace12a77bd4/,$p' /var/log/syslog | grep -v 'Invoked with _raw_params' | grep -E 'Prefix List Manager and AsPath Manager are enabled for UpperSpineRouter/UpstreamLC' || true _uses_shell=True expand_argument_vars=True stdin_add_newline=True strip_empty_ends=True cmd=None argv=None chdir=None executable=None creates=None removes=None stdin=None\n\n2026 Sep  9 <IPV6>.971255 ctn104 INFO python3.13[680444]: ansible-ansible.legacy.command Invoked with _raw_params=sudo sed -n '/SONIC_TEST_MARKER_eace12a77bd4/,$p' /var/log/syslog | grep -v 'Invoked with _raw_params' | grep -E 'AsPath Manager is enabled for' || true _uses_shell=True expand_argument_vars=True stdin_add_newline=True strip_empty_ends=True cmd=None argv=None chdir=None executable=None creates=None removes=None stdin=None\n\n2026 Sep  9 <IPV6>.160259 ctn104 NOTICE bgp#bgpcfgd: AsPath Manager is enabled for UpperSpineRouter\n```\n\n### Steps to Reproduce\n\nRun `bgp/test_prefix_list_suppress.py::TestAnchorPrefixRegression::test_prefix_list_mgr_running_on_every_device` on a UT2 device repeatedly, eventually it will hit this error\n\n### Actual Behavior and Expected Behavior\n\nThe only interlock the test checks is that the bgpcfgd service is running in the bgp container before checking the syslog. It's not guaranteed that the process has reached the stage where it emits this syslog nor is it guaranteed that the write has flushed to the syslog file.\n\nWe should instead use a `wait_until` to give the bgp process some time for the syslog to show up.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27839,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27839",
+    "title": "`bgp/test_prefix_list_suppress.py` add `wait_until` for syslog",
+    "merged_at": "2026-09-28T21:06:57Z",
+    "description": "https://github.com/sonic-net/sonic-mgmt/issues/27837\n\n### Description of PR\nThe test `bgp/test_prefix_list_suppress.py::TestAnchorPrefixRegression::test_prefix_list_mgr_running_on_every_device` expects bgpcfgd to emit syslog 'AsPath Manager is enabled for'\nBut sometimes the assertion is seen before the syslog shows up (see https://github.com/sonic-net/sonic-mgmt/issues/27837)\nAdd a wait_until to give bgpcfgd a chance to emit the syslog\n\nSummary:\nFixes #27837\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\n### Tested branch\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n- 202605: Ran with latest built 202605 and stressed test 20 times, all pass\n\n### Approach\n#### What is the motivation for this PR?\nIf bgpcfgd is slower to emit the syslog we shouldn't cause the test to fail\n\n#### How did you do it?\nConvert syslog read and assert into a `wait_until`\n\n#### How did you verify/test it?\nRan the `bgp/test_prefix_list_suppress.py::TestAnchorPrefixRegression::test_prefix_list_mgr_running_on_every_device` against a UT2 20 times without failure\n\n#### Any platform specific information?\nN/A\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/bgp/test_prefix_list_suppress.py",
+        "additions": 4,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

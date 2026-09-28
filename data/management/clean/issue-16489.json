@@ -1,0 +1,43 @@
+{
+  "id": "management-16489",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 16489,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/16489",
+    "title": "[Bug]: Need make sure monit init ready before container stop test",
+    "created_at": "2025-01-13T08:28:09Z",
+    "closed_at": "2026-02-20T00:55:12Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\nTest case `container_checker/test_container_checker.py::test_container_checker` fail because the log `containers not running.*syncd.*` was recorded 10 mins after stop syncd\n\n### Results you see\n\n**Root cause**\n\nBase on the logic of test_container_checker,  the script will check if the tested container is running before the tested container stop. If the tested container is not running, it will execute config reload to recover the tested container\n\nWhen swss stop, the syncd also be stopped. So when run the syncd stop test, config reload will be executed firstly to recovery syncd. After config reload, the monit needs takes sometimes to init, which lead to generate message delay\n\n**Why the issue does not occur on other containers**\n\nIn others container stop test, the tested container in running status before the test, no need to do config load, monit no need to re-init, so the message can record in syslog immediately\n\n**Next action**\n\nAfter config reload, need use command `sudo monit summary` make sure monit init ready before do other operations\n\n```\nadmin@r-panther-03:~$ sudo monit summary\nMonit 5.20.0 uptime: 8h 26m\n Service Name                     Status                      Type\n r-panther-03                     Running                     System\n rsyslog                          Running                     Process\n root-overlay                     Accessible                  Filesystem\n var-log                          Accessible                  Filesystem\n routeCheck                       Status ok                   Program\n dualtorNeighborCheck             Status ok                   Program\n diskCheck                        Status ok                   Program\n container_checker                Status ok                   Program\n vnetRouteCheck                   Status ok                   Program\n memory_check                     Status ok                   Program\n arp_update_checker               Status ok                   Program\n controlPlaneDropCheck            Status ok                   Program\n container_memory_snmp            Status ok                   Program\n container_memory_gnmi            Status ok                   Program\n container_eventd                 Status ok                   Program\n container_memory_bmp             Status ok                   Program\n```\n\n### Results you expected to see\nCase always pass\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22421,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22421",
+    "title": "[container_checker] Wait for Monit readiness after config reload instead of hardcoded sleep",
+    "merged_at": "2026-02-20T00:55:11Z",
+    "description": "**Summary:**\nReplace `time.sleep(300)` with `wait_until()` polling for Monit service readiness in `test_container_checker` and `test_container_checker_telemetry`.\n\n**Context:** When the syncd container is stopped and needs recovery via `config_reload`, the test sleeps for a hardcoded 300 seconds (5 minutes) before proceeding. However, Monit initialization time varies depending on the platform and system load. If Monit takes longer than 300 seconds, the test proceeds before Monit is ready, causing it to miss alerting messages and fail. Conversely, when Monit initializes faster, the test wastes time sleeping.\n\n**Fix:** Use `wait_until(360, 10, 30, check_monit_running, duthost)` which:\n- Polls every 10 seconds for up to 360 seconds (6 min)\n- Waits 30 seconds initially for config reload to settle\n- Fails fast with a clear assertion if Monit never becomes ready\n- Succeeds as soon as Monit is confirmed running (no wasted time)\n\nThis reuses the existing `check_monit_running()` helper already defined in the same test file and follows the `wait_until` pattern used throughout the codebase.\n\nFixes #16489\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Test case improvement\n\n### Approach\n#### What is the motivation for this PR?\nTo fix intermittent `test_container_checker` failures caused by Monit not being fully initialized after `config_reload`.\n\n#### How did you do it?\nReplaced two instances of `time.sleep(300)` with `wait_until(360, 10, 30, check_monit_running, duthost)`:\n1. In `test_container_checker` \u2014 after config reload when container is not running\n2. In `test_container_checker_telemetry` \u2014 after config reload to restore the container\n\n#### How did you verify/test it?\n- The `check_monit_running()` function is already used in the `update_monit_service` fixture (line 119) with the same `wait_until` pattern\n- Code review confirms `wait_until` is the established pattern for polling service readiness (see `tests/common/utilities.py`)\n\n#### Any platform specific information?\nN/A \u2014 generic test fix.\n\n#### Supported testbed topology if it is a new test case?\nN/A \u2014 existing test fix.",
+    "files": [
+      {
+        "path": "tests/container_checker/test_container_checker.py",
+        "additions": 15,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-24442",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24442,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24442",
+    "title": "[snappi][bgp] unordered list of duthosts could cause incorrect ordering of uplink LC, Downlink LC, Supervisor in the bgp_outbound_helper file.",
+    "created_at": "2026-05-07T19:12:54Z",
+    "closed_at": "2026-05-08T16:46:46Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nThe bgp_outbound_helper file builds a 'duthosts', in which it wants order as Upper LC, downlink LC and supervisor(optional).\n\nFollowing is the [code](https://github.com/sonic-net/sonic-mgmt/blob/670e0fa5bb75f2964f73beb25ce8b85a7005cdd9/tests/snappi_tests/bgp/files/bgp_outbound_helper.py#L109):\n```\nduthost1 = snappi_extra_params.multi_dut_params.duthost1\nduthost2 = snappi_extra_params.multi_dut_params.duthost2\n# Build unique duthosts list, filtering None values\nduthosts = list({dut for dut in [duthost1, duthost2] if dut is not None})\n```\nHowever, a set does not define iteration order, so duthosts[0] / duthosts[1] are not guaranteed to be uplink LC (duthost1) then downlink LC (duthost2).\n\nThis is issue for downstream code which expects that duthosts[0] is uplink LC and duthosts[1] is downlink LC.\n\n[Down-stream code:](https://github.com/sonic-net/sonic-mgmt/blob/670e0fa5bb75f2964f73beb25ce8b85a7005cdd9/tests/snappi_tests/bgp/files/bgp_outbound_helper.py#L455)\nExample:\n```\n        for asic_value, portchannel_info in uplink_portchannel_members.items():\n            for portchannel, portchannel_members in portchannel_info.items():\n                for index, mem_port in enumerate(portchannel_members, 1):\n                    if snappi_test_port['peer_port'] == mem_port and \\\n                       snappi_test_port['peer_device'] == duthosts[0].hostname:\n```\n\nOther [code](https://github.com/sonic-net/sonic-mgmt/blob/670e0fa5bb75f2964f73beb25ce8b85a7005cdd9/tests/snappi_tests/bgp/files/bgp_outbound_helper.py#L438).\n```\n    for snappi_port in snappi_ports:\n        for port in t1_variable_ports:\n            if snappi_port['peer_device'] == t1_hostname and snappi_port['peer_port'] == port:\n                snappi_t1_ports.append(snappi_port)\n        for port in t2_variable_ports:\n            if snappi_port['peer_device'] == duthosts[0].hostname and snappi_port['peer_port'] == port:\n                snappi_t2_ports.append(snappi_port)\n```\n\nExample:\nSince the duthosts[0] points to incorrect downlink LC, the snappi_t2_ports could be empty and will assert in the later code.\n\n### Steps to Reproduce\n\nThere is no definitive steps to reproduce this but once in a while in an indeterministic way, the order of devices in duthosts list will be incorrect.\n\n### Actual Behavior and Expected Behavior\n\nExpected behavior - is that there is consistent way to order the devices in the duthosts list, so that the test runs consistently.\n\nActual behavior - Once in a while, we can end up hitting an assert because the devices are in incorrect order.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24445,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24445",
+    "title": "[snappi][bgp] Consistent ordering of duts in duthosts list in bgp_outbound_helper",
+    "merged_at": "2026-05-08T16:46:45Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #24442\n\n### Type of change\n\n- [X] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [X] 202511\n\n### Approach\n#### What is the motivation for this PR?\nSeveral helpers built duthosts with list({duthost1, duthost2, ...}). A set does not define iteration order, so duthosts[0] / duthosts[1] are not guaranteed to be uplink LC (duthost1) then downlink LC (duthost2). Anything that assumed index 0 = upper/uplink and index 1 = lower/downlink could behave inconsistently across runs or environments.\n\n```\nduthost1 = snappi_extra_params.multi_dut_params.duthost1\nduthost2 = snappi_extra_params.multi_dut_params.duthost2\n# Build unique duthosts list, filtering None values\nduthosts = list({dut for dut in [duthost1, duthost2] if dut is not None})\n\n# Same anti-pattern with three hosts:\n# duthosts = list({dut for dut in [duthost1, duthost2, duthost3] if dut is not None})\n```\n\n#### How did you do it?\nIntroduce build_ordered_multi_duthosts(*duts) to walk arguments in a fixed order, skip None, and dedupe without reordering earlier entries. Call sites use build_ordered_multi_duthosts(duthost1, duthost2) or (..., duthost3) so duthosts[0] is always uplink when present, then downlink, then supervisor when the test wired duthost1 / duthost2 / duthost3 that way.\n\n```\ndef build_ordered_multi_duthosts(*duts):\n    \"\"\"\n    Stable DUT list in the same order as arguments (typically duthost1 uplink LC,\n    duthost2 downlink LC, optional duthost3 supervisor). Skips None; drops\n    duplicates without reordering earlier entries.\n    \"\"\"\n    duthosts = []\n    for dut in duts:\n        if dut is not None and dut not in duthosts:\n            duthosts.append(dut)\n    return duthosts\n```\nThis function is called wherever the duthosts list is created.\n\nNote - Stable indices still depend on tests assigning duthost1 = uplink and duthost2 = downlink correctly in snappi_extra_params (for example from device_hostnames[1] / [2]); this fix only makes the derived list match that assignment order every time. However, most of the testcases has the info correctly set.\n\n#### How did you verify/test it?\nRan the test on the local branch.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/snappi_tests/bgp/files/bgp_outbound_helper.py",
+        "additions": 18,
+        "deletions": 5
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

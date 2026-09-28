@@ -1,0 +1,106 @@
+{
+  "number": 1641,
+  "title": "vrf test could leave system in broken state and hard to recover",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/1641",
+  "createdAt": "2020-05-05T16:06:46Z",
+  "closedAt": "2020-08-27T03:24:02Z",
+  "author": "yxieca",
+  "labels": [
+    "Bug :bug:",
+    "Pytest :snake:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "**Description**\r\n\r\n**Steps to reproduce the issue:**\r\n1. run vrf test\r\n2.\r\n3.\r\n\r\n**Describe the results you received:**\r\ntest pass or fail, but leave dut in healthy state (or the state test case entered with)\r\n\r\n**Describe the results you expected:**\r\nwhen test fails, the system is broken. interfaces/lag/bgp are down. config reload will cause management IP to disappear too.\r\n\r\nFollowing code was the culprit. Looks like vrf test backed up the good config_db.json, but if the test failed between the first line and second line of the grep result, the system will be left with a config_db intended for test but not the healthy original config_db.json.\r\n\r\ntests/test_vrf.py:    duthost.shell(\"mv /etc/sonic/config_db.json /etc/sonic/config_db.json.bak\")\r\ntests/test_vrf.py:    duthost.shell(\"cp /etc/sonic/config_db.json.bak /etc/sonic/config_db.json\")\r\ntests/test_vrf.py:    duthost.shell(\"rm /etc/sonic/config_db.json.bak\")\r\n\r\nTest author need to add protection code to restore system no matter what exiting path the test takes.",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2020-05-06T15:37:38Z",
+      "body": "@dawnbeauty can you look into this issue please?"
+    },
+    {
+      "author": "daall",
+      "createdAt": "2020-05-13T18:04:44Z",
+      "body": "@yxieca is this addressed with your auto-recovery improvements or do we still need action from @dawnbeauty?"
+    },
+    {
+      "author": "dawnbeauty",
+      "createdAt": "2020-05-14T01:52:41Z",
+      "body": "@yxieca vrf tests is intend to cleanup vrf cfg, no matter whether the case pass or fail. \r\nIt is done by fixture `setup_vrf`(include teardown code).  Note that if an exception happens during the setup code (before the yield keyword), the teardown code (after the yield) will not be called.\r\nSo i think maybe something goes wrong when setup_vrf but not test failed.\r\n\r\nCould you show me your detail test results?  Or use option --setup-show to check if the setup_vrf works during SETUP.  For example:\r\n```\r\nroot@sonic-mgmt:/var/root/sonic-mgmt-vrf/tests# py.test  -vvv --inventory veos --host-pattern all --user admin --testbed vms-t0 --testbed_file testbed.csv  --duration=0 --log-cli-level INFO --setup-show --show-capture=stdout  --vrf_capacity 1000 --vrf_test_count 100 test_vrf.py::TestVrfCapacity\r\n============================ test session starts ==========================================\r\n...<omitted outputs>\r\n                                                                                                            \r\ntest_vrf.py::TestVrfCapacity::test_ping \r\nSETUP    S localhost\r\n------------------------------ live log setup -----------------------------------------------\r\nINFO     root:conftest.py:102 <SubRequest 'localhost' for <Function test_ping>> used time: 0.09s\r\n\r\nSETUP    S testbedINFO     root:conftest.py:102 <SubRequest 'testbed' for <Function test_ping>> used time: 0.00s\r\n    SETUP    M ansible_adhocINFO     root:conftest.py:102 <SubRequest 'ansible_adhoc' for <Function test_ping>> used time: 0.00s\r\n    SETUP    M duthost (fixtures used: ansible_adhoc, testbed)INFO     root:conftest.py:102 <SubRequest 'duthost' for <Function test_ping>> used time: 0.01s\r\n    SETUP    M ptfhost (fixtures used: ansible_adhoc, testbed)INFO     root:conftest.py:102 <SubRequest 'ptfhost' for <Function test_ping>> used time: 0.01s\r\n    SETUP    M host_facts (fixtures used: duthost)INFO     root:conftest.py:102 <SubRequest 'host_facts' for <Function test_ping>> used time: 0.93s\r\n>>>>>    SETUP    M setup_vrf (fixtures used: duthost, host_facts, ptfhost, testbed)INFO     root:conftest.py:102 <SubRequest 'setup_vrf' for <Function test_ping>> used time: 12.25s\r\n    SETUP    M cfg_facts (fixtures used: duthost)INFO     root:conftest.py:102 <SubRequest 'cfg_facts' for <Function test_ping>> used time: 0.50s\r\n      SETUP    C vrf_countINFO     root:conftest.py:102 <SubRequest 'vrf_count' for <Function test_ping>> used time: 0.00s\r\n      SETUP    C random_vrf_list (fixtures used: vrf_count)INFO     root:conftest.py:102 <SubRequest 'random_vrf_list' for <Function test_ping>> used time: 0.00s\r\n      SETUP    C setup_vrf_capacity (fixtures used: cfg_facts, duthost, ptfhost, random_vrf_list, vrf_count)INFO     root:conftest.py:102 <SubRequest 'setup_vrf_capacity' for <Function test_ping>> used time: 382.70s\r\n        test_vrf.py::TestVrfCapacity::test_ping (fixtures used: ansible_adhoc, cfg_facts, duthost, host_facts, localhost, ptfhost, random_vrf_list, setup_vrf, setup_vrf_capacity, testbed, vrf_count)PASSED\r\n        test_vrf.py::TestVrfCapacity::test_ip_fwd (fixtures used: ansible_adhoc, cfg_facts, duthost, host_facts, localhost, ptfhost, random_vrf_list, setup_vrf, setup_vrf_capacity, testbed, vrf_count)PASSED\r\n      TEARDOWN C setup_vrf_capacity\r\n      TEARDOWN C random_vrf_list\r\n      TEARDOWN C vrf_count\r\n    TEARDOWN M cfg_facts\r\n>>>>>>    TEARDOWN M setup_vrf\r\n...<omitted outputs>\r\n```\r\n\r\nAn alternative option for executing the teardown code is to use the `addfinalizer` method of the `request-context` object to register finalization functions.  Of course, if an exception happens before the `addfinalizer` then it will not be executed.\r\n\r\nSo, I think we should figure out the root cause before we change the code. After that, we could choose a better way to cleanup."
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2020-05-21T17:20:19Z",
+      "body": "@dawnbeauty sure. will do."
+    },
+    {
+      "author": "wangxin",
+      "createdAt": "2020-06-05T08:03:04Z",
+      "body": "@dawnbeauty I investigated the issue and found that the setup_vrf fixture was executed. The problem is that setup_vrf fixture need to reboot the SONiC device with a new /etc/sonic/config_db.json which has vrf configurations. However, because the reboot function called by setup_vrf has issue, the SONiC device was not actually rebooted.\r\n\r\nThe detailed steps of how the issue happens:\r\n\r\n* The setup_vrf fixture calls setup_vrf_cfg function.\r\n* The setup_vrf_cfg function executes these major steps:\r\n```\r\n    # backup config_db.json\r\n    duthost.shell(\"mv /etc/sonic/config_db.json /etc/sonic/config_db.json.bak\")\r\n\r\n    duthost.template(src=\"vrf/vrf_config_db.j2\", dest=\"/tmp/config_db_vrf.json\")\r\n    duthost.shell(\"cp /tmp/config_db_vrf.json /etc/sonic/config_db.json\")\r\n\r\n    # FIXME use a better way to load config\r\n    reboot(duthost, localhost)\r\n```\r\n\r\n* The last step is to reboot the SONiC device. However, the reboot function has issue and the SONiC device would not be actually rebooted.\r\n* Then setup_vrf tries to get some data from the running config, assuming that the running config contains vrf related configurations. But indeed the running config is still the original one and does not contain vrf related configurations. Consequently below code in setup_vrf will fail with `KeyError: 'vrf_name'`\r\n\r\n```\r\ng_vars['vlan_peer_ips'], g_vars['vlan_peer_vrf2ns_map'] = setup_vlan_peer(duthost, ptfhost, cfg_facts)\r\n```\r\n\r\n* Because the exception in setup_vrf is raised before the `yield` statement, all the code after `yield` will not be executed. The /etc/sonic/config_db.json fill will still the one that has vrf configuration.\r\n\r\nTo fix the issue, I suggest you to use `common/reboot.py::reboot` to reboot the SONiC device."
+    },
+    {
+      "author": "dawnbeauty",
+      "createdAt": "2020-06-15T04:24:01Z",
+      "body": "@wangxin, thanks for the info. I'll double check the reboot function."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 2053,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/2053",
+      "title": "Update the VRF test to restore config_db in a more robust way",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2020-08-27T03:24:02Z",
+      "createdAt": "2020-08-06T12:51:14Z",
+      "author": "wangxin",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background contaxt?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes https://github.com/Azure/sonic-mgmt/issues/1641\r\n\r\nEnhanced the setup teardown code to ensure that the original config_db should always be restored if setup or test failed.\r\n\r\nNow this test won't break the DUT. However, not all test cases can pass at this point. Those failures can be addressed in separate PRs.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThe test_vrf.py script could left the system in a broken state. This PR is to fix issue https://github.com/Azure/sonic-mgmt/issues/1641\r\n\r\n#### How did you do it?\r\n\r\nChanges:\r\n* Update the setup/teardown code to ensure that config_db is always restored.\r\n* Replace the reboot function with tests.common.reboot.\r\n* Change topology from 'any' to 't0'.\r\n* Move the scripts from tests to 'tests/vrf'.\r\n\r\n#### How did you verify/test it?\r\nTest run the script.  The DUT is restored with its original config_db.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/vrf/test_vrf.py",
+          "additions": 67,
+          "deletions": 87
+        },
+        {
+          "path": "tests/vrf/test_vrf_attr.py",
+          "additions": 10,
+          "deletions": 12
+        }
+      ],
+      "comments": [
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-08-06T13:03:56Z",
+          "body": "This pull request **introduces 6 alerts** and **fixes 6** when merging dc19fcf4ad870ffd71f884e9f5cc1970c52a0765 into e434e357078f03af998cb140bbe2fe576639bf02 - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-edbe62776e9ce5b9302c1d25196f588919fcc24b)\n\n**new alerts:**\n\n* 5 for Unused import\n* 1 for Except block handles &#39;BaseException&#39;\n\n**fixed alerts:**\n\n* 5 for Unused import\n* 1 for Except block handles &#39;BaseException&#39;"
+        },
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-08-10T02:05:10Z",
+          "body": "This pull request **introduces 5 alerts** and **fixes 6** when merging ef936b7641ffac5e513332960004ef17585ea9e7 into 73c2113b8a2c4f1633f6f767916ef40fa36ad9a4 - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-41296220f809054730a130ea11995fada7da6ae6)\n\n**new alerts:**\n\n* 5 for Unused import\n\n**fixed alerts:**\n\n* 5 for Unused import\n* 1 for Except block handles &#39;BaseException&#39;"
+        },
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-08-11T12:08:49Z",
+          "body": "This pull request **introduces 5 alerts** and **fixes 6** when merging 9378b4aeaaee7ed610a5654b3884c3c8d0ab09e5 into 62af5c8d3dee1a65e7aed6912ef30c12f87a26cb - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-15dbf778d78c24a2654a5dd6eba9b8c6501640b5)\n\n**new alerts:**\n\n* 5 for Unused import\n\n**fixed alerts:**\n\n* 5 for Unused import\n* 1 for Except block handles &#39;BaseException&#39;"
+        },
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-08-13T10:44:30Z",
+          "body": "This pull request **introduces 5 alerts** and **fixes 6** when merging 02ac78158725a17b2a006fcd2bb24d047fc2d3c5 into d31cc1d55bf5bb6beef71d80428ad504ae3778ff - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-25d2bdbb1de35a14d8951b33550242c367cd1243)\n\n**new alerts:**\n\n* 5 for Unused import\n\n**fixed alerts:**\n\n* 5 for Unused import\n* 1 for Except block handles &#39;BaseException&#39;"
+        },
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-08-17T02:53:05Z",
+          "body": "This pull request **introduces 5 alerts** and **fixes 6** when merging 879daa955ed05a7894fa02fe794179798891a1e7 into 190fc53a55bd2cfe71a7c9374299c4396d0449b5 - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-badf8ec37fe3684e186581d6e447f2b342dd710b)\n\n**new alerts:**\n\n* 5 for Unused import\n\n**fixed alerts:**\n\n* 5 for Unused import\n* 1 for Except block handles &#39;BaseException&#39;"
+        },
+        {
+          "author": "lgtm-com",
+          "createdAt": "2020-08-20T14:06:44Z",
+          "body": "This pull request **introduces 3 alerts** and **fixes 4** when merging 071e0b556f147fe24dc591671c27c29ff280732c into 47fc3a286b506e7ce157ce68e642024c7823df0a - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-092420c190baa5ee74180bdf7f0921c5e008057e)\n\n**new alerts:**\n\n* 3 for Unused import\n\n**fixed alerts:**\n\n* 3 for Unused import\n* 1 for Except block handles &#39;BaseException&#39;"
+        }
+      ]
+    }
+  ]
+}

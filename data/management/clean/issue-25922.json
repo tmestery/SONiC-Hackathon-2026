@@ -1,0 +1,48 @@
+{
+  "id": "management-25922",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25922,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25922",
+    "title": "[arp] test_dut_arping_learns_mac is flaky: arps wrong PTF port (wrong MAC asserted)",
+    "created_at": "2026-07-06T17:28:55Z",
+    "closed_at": "2026-07-08T18:54:18Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Description\n\n`arp/test_arp_update.py::test_dut_arping_learns_mac` is intermittently flaky: it FAILs with `FDB did not learn PTF MAC after DUT arping` and then PASSes on re-run.\n\n### Root cause (test bug: arps the wrong port)\n\nThe test asserts that the MAC of **its** PTF port (`ptf_interface_info`, e.g. `eth1`) is learned in the DUT FDB after the DUT arpings a PTF responder IP:\n\n```python\nvlan_name, ipv4_base, _, ip_offset = setup_vlan_arp_responder\nptf_responder_ip = str(ipv4_base.ip + ip_offset)\n...\ndut_info['host'].shell(f\"arping -c 1 -I {dut_info['vlan_name']} {ptf_responder_ip}\")\npt_assert(\n    wait_until(10, 1, 0, fdb_has_mac, dut_info['host'], ptf_info['mac']),\n    \"FDB did not learn PTF MAC after DUT arping\"\n)\n```\n\nBut `setup_vlan_arp_responder` configures the ARP responder for **every** VLAN member, giving each PTF port `eth{idx}` its own responder IP (`ipv4_base.ip + idx + 1`), and it `yield`s the `ip_offset` of the **last** member it iterated (e.g. `eth24` \u2192 `.26`):\n\n```python\nip_offset = 0\nfor port in vlan_members:\n    ptf_index = dut_to_ptf_port_map[port]\n    ip_offset = ptf_index + 1\n    arp_responder_cfg['eth{}'.format(ptf_index)] = [str(ipv4_base.ip + ip_offset), ...]\n...\nyield vlan, ipv4_base, ipv6_base, ip_offset\n```\n\nSo the DUT arpings the **last** member's IP (`.26`), which the responder answers with **`eth24`'s** MAC \u2014 not `ptf_info['mac']` (the `eth1` MAC the test checks). The arping alone therefore can **never** satisfy the assertion.\n\n### Why it's intermittent\n\nThe case passes **only** when `eth1`'s MAC happens to already be in the DUT FDB \u2014 as leftover from the preceding `test_ptf_arp_learns_mac` (which does arp from `eth1`), or relearned via background traffic within the 10 s window (the PTF port is a bond slave, so the bond can relearn it). When the entry is fully purged and nothing relearns it in time \u2192 FAIL. A neighbor-image rebase (or any change to FDB/traffic timing) can tip the same broken assertion to fail without any behavioral change \u2014 it **exposes** the bug, it doesn't cause it.\n\nIt is platform / neighbor-type agnostic: the same wrong-target math is equally fragile on cEOS CI, which just wins the coin flip more often. Introduced by #22148 (\"Verify MAC relearning after fdbclear\"), which added both this test and the responder-IP arithmetic.\n\n### Proposed fix\n\nBuild the arped responder IP from the **port under test** (`ipv4_base.ip + ptf_info['index'] + 1`) so the ARP reply carries the exact MAC the test asserts. The stimulus then deterministically produces the expected FDB entry. Test-only change.\n\n### Component\n\nsonic-mgmt / tests / arp"
+  },
+  "resolution": {
+    "pr_number": 25923,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25923",
+    "title": "[arp] Fix flaky test_dut_arping_learns_mac: arp the port whose MAC is asserted",
+    "merged_at": "2026-07-08T18:54:17Z",
+    "description": "### Description of PR\n\nFixes #25922\n\nDe-flake `arp/test_arp_update.py::test_dut_arping_learns_mac`.\n\n**Bug:** the test asserts the MAC of its port under test (`ptf_interface_info`, e.g. `eth1`) lands in the DUT FDB after the DUT arpings a responder IP \u2014 but it arped the IP built from `ip_offset`, which `setup_vlan_arp_responder` only sets to the **last** iterated VLAN member (e.g. `eth24`). So the responder answered with the wrong port's MAC; the assertion could only pass on leftover/relearned FDB state (bond-slave background traffic within the 10 s window). Purge + no relearn \u2192 FAIL, then PASS on re-run. A neighbor-image rebase shifts FDB timing and **exposes** this; it doesn't cause it.\n\n**Fix:** `setup_vlan_arp_responder` already builds `arp_responder_cfg` (`eth<idx> -> [ipv4, ipv6]`, each member's own responder IP). Yield that map (as `ArpResponderInfo(vlan, responder_cfg)`) instead of the scalar `ipv4_base/ipv6_base/ip_offset` \u2014 `ip_offset` only ever carried the last member's offset. The test now looks up its own port (`ptf_info['interface']`) in `responder_cfg` and arps that IP, so the reply carries `ptf_info['mac']`. Deterministic.\n\nTest-only; platform / neighbor-type agnostic (same wrong-target math, cEOS just wins the coin flip more often). Introduced by #22148.\n\n### Type of change\n- [x] Bug fix\n- [ ] Testbed and Framework (new/improvement)\n- [ ] Test case (new/improvement)\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] Others\n\n### Approach\n\n**Motivation:** `test_dut_arping_learns_mac` is intermittently flaky (`FDB did not learn PTF MAC after DUT arping`) \u2014 it arps the last VLAN member's responder IP while asserting a different port's MAC, so it only passes on lucky FDB state.\n\n**How:**\n- `setup_vlan_arp_responder` yields `ArpResponderInfo(vlan, responder_cfg)` (single source of truth) instead of `vlan, ipv4_base, ipv6_base, ip_offset`.\n- `test_dut_arping_learns_mac` looks up its port under test in `responder_cfg` and arps that exact IP; `pt_assert` guards a non-member selection.\n- `test_kernel_asic_mac_mismatch` updated for the new return type (reads vlan + last member from the same map; behavior unchanged).\n\n**Verify:** `py_compile` + `flake8 --max-line-length=120` clean. `responder_cfg[ptf_info['interface']][0]` is by construction the IP whose responder MAC equals `ptf_info['mac']`, making the assertion deterministic.\n\n### Note: unrelated Python 3.12 lint fix included\n\nStatic Analysis (`flake8`) flags **pre-existing** f-string lines this change doesn't functionally touch: under Python 3.12 (PEP 701) `pycodestyle` tokenizes f-string internals, so colons/semicolons inside string literals (Redis keys `NEIGH_TABLE:{vlan}:{ip}`, MAC `<IPV6>`, shell separator `;`) trip `E231`/`E702`. They can't take real whitespace without changing the keys/MAC/command, so I added `# noqa` suppressions per existing repo convention and split one line to stay under 120 chars.",
+    "files": [
+      {
+        "path": "tests/arp/test_arp_update.py",
+        "additions": 33,
+        "deletions": 17
+      },
+      {
+        "path": "tests/common/fixtures/ptfhost_utils.py",
+        "additions": 7,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

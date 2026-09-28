@@ -1,0 +1,75 @@
+{
+  "number": 16167,
+  "title": "[Bug]: `qos/test_qos_sai.py::TestQosSai::testQosSaiPgSharedWatermark` fails with `multi_asic` and `multi_dut` variants",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16167",
+  "createdAt": "2024-12-19T20:29:40Z",
+  "closedAt": "2025-01-08T18:51:15Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\n\nFailure seen:\r\n```\r\ndst_port_id: 47, src_port_id: 34 src_port_vlan: None\r\nactual dst_port_id: 47\r\nInitial watermark:[112, 0, 0, 0, 256, 0, 0, 0]\r\nReceived packets: 0\r\nInit pkts num sent: 0, min: 0, actual watermark value to start: 0\r\nFilled PG min\r\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\r\n|               | Pfc3TxPkt | InDiscard | InDropPkt | OutDiscard | OutDropPkt | OutUcPkt | InUcPkt | InNonUcPkt | OutNonUcPkt | OutQlen | Ing Pg3 Pkt | Ing Pg3 Share Wm |\r\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\r\n| base src port |  3159299  |  2821770  |     0     |     0      |     0      |    4     | 5839385 |    2442    |     1248    |    0    |    837638   |        0         |\r\n|      src port |  3159299  |  2821770  |     0     |     0      |     0      |    4     | 5839385 |    2443    |     1249    |    0    |    837638   |        0         |\r\n| base dst port |     0     |     3     |     0     |     0      |     0      |  422261  |   5177  |    1224    |      88     |    0    |      0      |        0         |\r\n|      dst port |     0     |     3     |     0     |     0      |     0      |  422261  |   5177  |    1224    |      88     |    0    |      0      |        0         |\r\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\r\npkts num to send: 41, total pkts: 41, pg shared: 415271\r\nCompensate 2176538 packets to port 34, and retry 1 times\r\nReceived packets: 418930\r\nTo fill PG share pool, send 41 pkt\r\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\r\n|               | Pfc3TxPkt | InDiscard | InDropPkt | OutDiscard | OutDropPkt | OutUcPkt | InUcPkt | InNonUcPkt | OutNonUcPkt | OutQlen | Ing Pg3 Pkt | Ing Pg3 Share Wm |\r\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\r\n| base src port |  3159299  |  2821770  |     0     |     0      |     0      |    4     | 5839385 |    2442    |     1248    |    0    |    837638   |        0         |\r\n|      src port |  5555195  |  4576881  |     0     |     0      |     0      |    4     | 8013426 |    2493    |     1274    |    0    |   1256568   |     46510464     |\r\n| base dst port |     0     |     3     |     0     |     0      |     0      |  422261  |   5177  |    1224    |      88     |    0    |      0      |        0         |\r\n|      dst port |     0     |     3     |     0     |     0      |     0      |  422408  |   5227  |    1250    |      88     |    0    |      0      |        0         |\r\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\r\nlower bound: 167936, actual value: 46510464, upper bound (+40): 9072\r\n> /root/saitests/py3/sai_qos_tests.py(4624)runTest()\r\n```\r\n```\r\n======================================================================\r\nFAIL: sai_qos_tests.PGSharedWatermarkTest\r\n----------------------------------------------------------------------\r\nTraceback (most recent call last):\r\n  File \"saitests/py3/sai_qos_tests.py\", line 4623, in runTest\r\n    * (packet_length + internal_hdr_size)))\r\nAssertionError\r\n\r\n----------------------------------------------------------------------\r\nRan 1 test in 934.434s\r\n```\r\n\r\nThe issue appears to be during the `dynamically_compensate_leakout`\r\n`Compensate 2176538 packets to port 34, and retry 1 times`\r\nWe can see this is sending far too many packets `2176538`.\r\n\r\nThis function compares the `TX_OK` value before and after sending the 41 packets.\r\nHere is where it stores the counts before the packets are sent:\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/202405/tests/saitests/py3/sai_qos_tests.py#L4464\r\n```\r\n             xmit_counters_history, _ = sai_thrift_read_port_counters(\r\n                 self.dst_client, asic_type, port_list['dst'][dst_port_id])\r\n```\r\n\r\nAnd within `dynamically_compensate_leakout` here is where they are read:\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/202405/tests/saitests/py3/sai_qos_tests.py#L454\r\n```\r\n    curr, _ = counter_checker(thrift_client, asic_type, check_port)\r\n    leakout_num = curr[check_field] - prev[check_field]\r\n```\r\n\r\nThe problem here is the call to `dynamically_compensate_leakout` is passed `self.src_client` as the `thrift_client` argument but is operating on a port in the `self.dst_client`:\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/202405/tests/saitests/py3/sai_qos_tests.py#L4551\r\n```\r\n                    dynamically_compensate_leakout(self.src_client, asic_type, sai_thrift_read_port_counters,\r\n                                                   port_list['dst'][dst_port_id], TRANSMITTED_PKTS,\r\n                                                   xmit_counters_history, self, src_port_id, pkt, 40)\r\n```\r\n\r\nIn this failure case I can see that the `dst_port_id` value is used on both asics:\r\n```\r\n(Pdb) port_list['src'][32]\r\n4294967297\r\n(Pdb) port_list['dst'][dst_port_id]\r\n4294967297\r\n```\r\n\r\nIf I dump the `TX_OK` of port 32 on the src asic I get:\r\n```\r\n(Pdb) sai_thrift_read_port_counters(self.src_client, asic_type, port_list['dst'][dst_port_id])[0][TRANSMITTED_PKTS]\r\n2598800\r\n```\r\nOn the dst asic I get:\r\n```\r\n(Pdb) sai_thrift_read_port_counters(self.dst_client, asic_type, port_list['dst'][dst_port_id])[0][TRANSMITTED_PKTS]\r\n422409\r\n```\r\nThis is where the massive compensate packet number comes from:\r\n```\r\n(Pdb) xmit_counters_history[TRANSMITTED_PKTS]\r\n422261\r\n```\r\n```\r\n2598800 - 422261 = 2176539\r\n```\n\n### Results you see\n\nWe poll the incorrect asic/dut client in `dynamically_compensate_leakout`\n\n### Results you expected to see\n\nWe should poll the same asic/dut client in `dynamically_compensate_leakout` as the port we're referencing\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "arista-nwolfe",
+      "createdAt": "2024-12-19T22:07:01Z",
+      "body": "@arlakshm @vmittal-msft "
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2025-01-08T16:44:41Z",
+      "body": "@arlakshm looks like there is a fix open for this issue? can you review?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16169,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16169",
+      "title": "Correcting client arguments to `dynamically_compensate_leakout` in `PGSharedWatermarkTest`",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-08T18:51:14Z",
+      "createdAt": "2024-12-19T23:18:30Z",
+      "author": "arista-nwolfe",
+      "body": "In https://github.com/sonic-net/sonic-mgmt/pull/8149 the `multi-asic` and `multi-dut` variants were added to `test_qos_sai.py`.\r\nThis required updating calls to `dynamically_compensate_leakout` to specify either the `src_client` or dst_client` but a couple calls in `PGSharedWatermarkTest` passed the wrong client.\r\n\r\nFor more details on the failure this causes see https://github.com/sonic-net/sonic-mgmt/issues/16167\r\n\r\nSummary:\r\nFixes #16167 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n",
+      "files": [
+        {
+          "path": "tests/saitests/py3/sai_qos_tests.py",
+          "additions": 2,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-19T23:18:33Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-12-19T23:18:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2025-01-08T18:52:50Z",
+          "body": "@bingwang-ms  - this code is common to t0/t1, please see if you'd like to cherry-pick to 202405."
+        },
+        {
+          "author": "bingwang-ms",
+          "createdAt": "2025-01-08T19:14:43Z",
+          "body": "> @bingwang-ms - this code is common to t0/t1, please see if you'd like to cherry-pick to 202405.\r\n\r\nThanks @rlhui. The `src_client` and `dst_client` are actually the same item in single ASIC. So pizza box is not impacted. I would skip this change for T0/T1."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-06-16T22:15:07Z",
+          "body": "Cherry-pick PR to msft-202503: https://github.com/Azure/sonic-mgmt.msft/pull/407"
+        }
+      ]
+    }
+  ]
+}

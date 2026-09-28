@@ -1,0 +1,216 @@
+{
+  "number": 27036,
+  "title": "Bug: [DHCP_SERVER][COMMON] dhcp_server module teardown disables feature but leaves it in critical services, breaking later config_reload",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27036",
+  "createdAt": "2026-08-13T12:22:58Z",
+  "closedAt": "2026-08-27T11:43:29Z",
+  "author": "Doxakis1",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe `tests/dhcp_server` suite on mx platforms reported many pytest **errors on fixture teardown** for `sonic-relay-agent` parametrizations. The DHCP **test bodies passed**; failures occurred when cleaning up the `enable_sonic_dhcpv4_relay_agent` fixture and restoring relay state.\n\nAfter sonic-mgmt PR **#26284** refactored `restart_dhcp_service()` to use explicit `relay_types`, teardown always waited for legacy ISC supervisord programs (`isc-dhcpv4-relay-*`, `dhcpmon-*`) to be **RUNNING**. With the **dhcp_server** feature enabled (required by these tests), **dhcprelayd intentionally keeps those programs STOPPED** and runs standalone **`dhcrelay`** toward the Kea container instead.\n\nA second issue left **`dhcp_server` disabled** in saved config after the module while pytest could still track it as a **critical service**, causing later suites that call `config_reload` to wait indefinitely for a container that will not start.\n\n\n### Steps to Reproduce\n\n1. Use a testbed with topology **`mx`**, dhcp_server feature present (e.g. Nokia 7215-A1), image with dhcp_server + dhcp_relay containers.\n2. Run the dhcp_server suite\n3. Observe teardown errors on all or most **`[sonic-relay-agent]`** cases in `test_dhcp_server.py` and `test_dhcp_server_stress.py`.\n4. Run any subsequent test module that performs **`config_reload`** / `wait_critical_processes` on the same DUT without re-enabling dhcp_server or refreshing the critical-services list.\n\n\n### Actual Behavior and Expected Behavior\n\n## Expected behavior\n\n| Area | Expected |\n|------|----------|\n| **Test call** | Client receives DHCP offer/ack from Kea via relay (ISC or sonic agent); assertions pass. |\n| **Sonic-relay teardown** | Remove `has_sonic_dhcpv4_relay`, restart `dhcp_relay`, wait only for states valid when **dhcp_server is enabled** (`dhcprelayd` RUNNING; ISC/dhcpmon supervisord entries may stay STOPPED). |\n| **Fixture order** | `DHCP_SERVER_IPV4` CONFIG cleanup runs **before** relay restoration on teardown. |\n| **Module teardown** | `dhcp_server` feature remains **enabled** on platforms that ship it; pytest `critical_services` list matches CONFIG_DB. |\n| **Downstream tests** | `config_reload` does not hang waiting for `dhcp_server` when the feature is disabled. |\n\n---\n\n## Actual behavior (before fix)\n\n### A. Teardown readiness mismatch (PR #26284 regression)\n\n- **Symptom:** `Failed: dhcp_relay is not ready (relay_types=['isc'] ...)`\n- **Supervisor state:** `dhcprelayd` RUNNING, `isc-dhcpv4-relay-Vlan1000` STOPPED, `dhcpmon-Vlan1000` STOPPED.\n- **Scope:** 20/40 errors in `test_dhcp_server.py` (all `sonic-relay-agent`); 1 error in stress; 0 assertion failures in test bodies.\n- **Cause:** `sonic_dhcpv4_flag_config_and_unconfig(duthost, False)` called `restart_dhcp_service(duthost, ['isc'])`, which is incompatible with dhcp_server + dhcprelayd design.\n\n### B. Wrong teardown order (without PR #26732)\n\n- `enable_sonic_dhcpv4_relay_agent` teardown could run **before** `clean_dhcp_server_config()`, making relay restoration harder while `DHCP_SERVER_IPV4` entries were still present.\n\n### C. dhcp_server left disabled + stale critical services\n\n- Module fixture `dhcp_server_setup_teardown` enabled dhcp_server when it was off at module start, then on teardown ran:\n\n  ```text\n  config feature state dhcp_server disabled\n  docker rm dhcp_server\n  ```\n\n- Pytest\u2019s in-memory **`critical_services`** list could still include **`dhcp_server`** (populated when the feature was enabled mid-module).\n- Later **`config_reload`** refreshed config but waited for critical services including **`dhcp_server`** while the feature/container could not start \u2192 **timeouts in unrelated suites**.\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\nSONiC Software Version: SONiC.HEAD.1609120-202605-4323ab96\nSONiC OS Version: 13\nDistribution: Debian 13.6\nKernel: 6.12.41+deb13-sonic-arm64\nBuild commit: 4323ab96\nBuild date: Thu Aug  6 18:09:13 UTC 2026\nBuilt by: gitlab-runner@sonic-armv45\n\nPlatform: arm64-nokia_ixs7215_52xb-r0\nHwSKU: Nokia-7215-A1\nASIC: marvell-prestera\nASIC Count: 1\nSerial Number: NK1240800025\nModel Number: 3HE18723AARA01\nHardware Revision: 0\nUptime: 12:09:59 up 1 day,  2:46,  1 user,  load average: 0.17, 0.47, 0.57\nDate: Thu 13 Aug 2026 12:09:59\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "Doxakis1",
+      "createdAt": "2026-08-14T13:43:35Z",
+      "body": "Nokia team has identified a potential fix, which is validated internally and a PR will be opened as soon as fix is validated."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27228,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27228",
+      "title": "[DHCP_SERVER] Fix sonic-relay teardown readiness on topologies with dhcp_server enabled",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-27T11:43:27Z",
+      "createdAt": "2026-08-21T14:53:42Z",
+      "author": "Doxakis1",
+      "body": "Signed-off-by: Michail-Nektarios Karatzidis <michail-nektarios.karatzidis@nokia.com>\r\n\r\n FIXES: #27036 \r\n  ### Description of PR\r\n  Fixes teardown errors and downstream testbed breakage in `tests/dhcp_server/` on mx platforms when running\r\n  `[sonic-relay-agent]` parametrizations.\r\n  After PR #26284, `sonic_dhcpv4_flag_config_and_unconfig(..., False)` always waited for `relay_types=['isc']`, requiring\r\n  every `isc-dhcpv4-relay-*` and `dhcpmon-*` supervisord entry to be RUNNING. With the **dhcp_server** feature enabled\r\n  (required by this suite), **dhcprelayd** intentionally keeps those programs STOPPED and manages v4 relay via standalone\r\n  `dhcrelay`. The test bodies passed; only fixture teardown failed.\r\n  This change also:\r\n  - Ensures `DHCP_SERVER_IPV4` cleanup runs **before** sonic relay restoration (same intent as #26732).\r\n  - Stops disabling `dhcp_server` at module teardown while pytest may still track it as a critical service, which caused\r\n  later `config_reload` / `critical_services_fully_started` waits to hang.\r\n  **Reviewer start:** `tests/common/dhcp_relay_utils.py` (`_relay_types_after_sonic_disable`, new `orchestrator` relay\r\n  type), then `tests/dhcp_server/conftest.py` (fixture order + module teardown).\r\n  **Dependencies:** None. Complements the relay readiness refactor in #26284; does not require image changes.\r\n  Summary:\r\n  Fixes #<issue>\r\n  ### Type of change\r\n  - [ ] Bug fix\r\n  - [x] Testbed and Framework(new/improvement)\r\n  - [ ] New Test case\r\n      - [ ] Skipped for non-supported platforms\r\n  - [ ] Test case improvement\r\n  ### Back port request\r\n  - [ ] 202311\r\n  - [ ] 202405\r\n  - [ ] 202411\r\n  - [ ] 202505\r\n  - [ ] 202511\r\n  - [ ] 202512\r\n  - [x] 202605\r\n  Tracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\n  <!-- e.g. ADO: https://dev.azure.com/... or Fixes #12345 -->\r\n  Failure type: regression (exposed by #26284 explicit `relay_types=['isc']` on sonic-relay disable; dhcp_server suite not\r\n  covered in that PR\u2019s validation)\r\n  ### Tested branch\r\n  - [x] master\r\n  - [ ] 202311\r\n  - [ ] 202405\r\n  - [ ] 202411\r\n  - [ ] 202505\r\n  - [ ] 202511\r\n  - [ ] 202512\r\n  - [x] 202605\r\n  - [ ] N/A\r\n  ### Test result\r\n  **TOPOLOGY:** `mx`,\r\n  **Image:** `SONiC.HEAD.1609120-202605-4323ab96`\r\n  **Before fix (master, same image):**\r\n  - 20/40 errors in `test_dhcp_server.py` \u2014 all `[sonic-relay-agent]` teardown: `dhcp_relay is not ready\r\n  (relay_types=['isc'] ... isc-dhcpv4-relay-Vlan1000': 'STOPPED')`\r\n  - Test call assertions passed; failures were fixture teardown only\r\n  **Regression:** `tests/dhcp_relay/` sonic-relay cases still use `['isc']` on disable when dhcp_server is not enabled\r\n  **After the fix:**\r\n Majority of the testcases are passing with some failing due to another open issue: #24868 \r\n  ### Approach\r\n  #### What is the motivation for this PR?\r\n  PR #26284 correctly made DHCP relay readiness explicit via `relay_types`, but `sonic_dhcpv4_flag_config_and_unconfig()`\r\n  still assumed that disabling sonic relay implies legacy ISC supervisord helpers must be RUNNING. That contract is\r\n  invalid when **dhcp_server** is enabled: dhcprelayd stops `isc-dhcpv4-relay-*` / `dhcpmon-*` by design.\r\n  Separately, `dhcp_server_setup_teardown` disabled the dhcp_server feature at module exit after temporarily enabling it,\r\n  while pytest could still list `dhcp_server` in `critical_services`, breaking subsequent modules on the same DUT.\r\n  #### How did you do it?\r\n  1. **`tests/common/dhcp_relay_utils.py`**\r\n     - Add `orchestrator` relay type (only `dhcprelayd` RUNNING required).\r\n     - Add `_dhcp_server_feature_enabled()` and `_relay_types_after_sonic_disable()`.\r\n     - On sonic disable: use `['orchestrator']` when dhcp_server is enabled, else `['isc']`.\r\n  2. **`tests/dhcp_server/conftest.py`**\r\n     - Tie `clean_dhcp_server_config_after_test` to `enable_sonic_dhcpv4_relay_agent` so teardown order is: clean\r\n  `DHCP_SERVER_IPV4*` \u2192 restore relay.\r\n     - Module teardown: leave dhcp_server **enabled** and call `critical_services_tracking_list()` instead of `disabled` +\r\n  `docker rm dhcp_server`.\r\n  #### How did you verify/test it?\r\n  - Ran full `tests/dhcp_server/` on MX topology, including all `[sonic-relay-agent]` and `[isc-relay-agent]`\r\n  parametrizations, on **master** and **202605** with image `HEAD.1609120-202605-4323ab96`.\r\n  - Confirmed on DUT after sonic-relay cases: `dhcprelayd` RUNNING, `dhcrelay` present, `isc-dhcpv4-relay-*` STOPPED\r\n  (expected with dhcp_server on), `has_sonic_dhcpv4_relay` unset after teardown.\r\n  - Verified downstream suites no longer hang on `config_reload` waiting for a disabled `dhcp_server` critical service.\r\n  #### Any platform specific information?\r\n  Observed on **mx** topology with **dhcp_server** feature enabled. The readiness mismatch applies\r\n  whenever dhcp_server + sonic-relay-agent tests run together; fix is gated on FEATURE state, not hard-coded to a\r\n  platform.\r\n  Pure `tests/dhcp_relay/` paths with dhcp_server disabled still use `['isc']` on sonic disable.\r\n  #### Supported testbed topology if it's a new test case?\r\n  N/A \u2014 no new test cases.\r\n  ### Documentation\r\n  N/A \u2014 test harness / fixture fix only; inline comments and `restart_dhcp_service` docstring updated for `orchestrator`\r\n  relay type.",
+      "files": [
+        {
+          "path": "tests/common/dhcp_relay_utils.py",
+          "additions": 30,
+          "deletions": 2
+        },
+        {
+          "path": "tests/dhcp_server/conftest.py",
+          "additions": 16,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-21T14:53:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-21T14:53:51Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-21T14:54:08Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-21T14:58:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-21T14:59:13Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "augusdn",
+          "createdAt": "2026-08-24T23:43:40Z",
+          "body": "Independent validation from the Microsoft SONiC MGFX side \u2014 **this fixes the teardown cluster on our hardware.**\n\nWe cherry-picked this PR onto our internal `202605` branch and ran the dhcp_server suite on a **Nokia 7215-A1-MGX** (marvell-prestera, arm64) testbed against a 202605 image, with **retries disabled** so nothing is masked by a passing rerun.\n\n| | 202605 nightly, without this PR | With this PR |\n|---|---:|---:|\n| Errors | ~20 | **0** |\n| `dhcp_server` failing case-instances | 68 | 12 |\n| `dhcp_server_stress` | failing | **fully passing** |\n| Totals | \u2014 | 118 tests, 90 passed, 12 failed, 0 errors |\n\nEvery `Failed: dhcp_relay is not ready (relay_types=['isc'] ... 'isc-dhcpv4-relay-Vlan1000': 'STOPPED')` teardown error is gone, and the error column is zero. That is the #27036 signature eliminated.\n\nTwo further data points that may help the review:\n\n1. **The 202605 backport applies cleanly.** The patch applied to our 202605-based branch with a plain `git apply` \u2014 no conflicts, no manual fixup. `tests/common/dhcp_relay_utils.py` has diverged between `master` and `202605`, but not in the regions this PR touches.\n\n2. **The 12 residual failures are all #24868**, exactly as called out in the PR description \u2014 `Failed: state db doesnt have lease info for client <MAC>`, concentrated in `test_dhcp_server_port_based_assigenment_single_ip_mac_move`, `..._mac_swap`, `test_dhcp_server_config_vlan_intf_change` and `test_dhcp_server_config_change_dhcp_interface`, on both `isc-relay-agent` and `sonic-relay-agent`. Nothing in the residual belongs to this PR.\n\nFor context on why this matters to us: on our two mx qualification lanes this cluster is roughly two-thirds of everything failing, so this PR is the single biggest lever on our remaining gap. We would very much like to see it merged and backported to 202605.\n\nHappy to share the full run data or re-run on a different 7215 variant if that would help."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T08:37:41Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/27458"
+        }
+      ]
+    },
+    {
+      "number": 26525,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26525",
+      "title": "[dhcp_relay]: Model external and internal relay readiness",
+      "state": "OPEN",
+      "merged": false,
+      "mergedAt": null,
+      "createdAt": "2026-07-23T15:31:13Z",
+      "author": "Xichen96",
+      "body": "### Description of PR\n\nSummary:\n\nReplace merged https://github.com/sonic-net/sonic-mgmt/pull/27228 with precise, observable DHCP relay readiness contracts while retaining every required regression fix and restoring the DUT's original `dhcp_server` feature state.\n\nThis PR deliberately keeps four commits so reviewers can see the replacement structure:\n\n1. `737c312c2` \u2014 exact revert of #27228.\n2. `9989ac881` \u2014 explicit external ISC, active/idle internal ISC, SONiC, and IPv6 readiness contracts.\n3. `cf75da58a` \u2014 the separately reviewed https://github.com/sonic-net/sonic-mgmt/pull/26658 fixture fix, preserved as one patch-identical commit.\n4. `5182a573c` \u2014 the focused two-line critical-service synchronization split from https://github.com/sonic-net/sonic-mgmt/pull/26526.\n\nThe commit separation is intentional. A normal root PR contributes one commit, but the exact revert and each independently reviewed replacement unit remain visible here to show that #27228 is removed before its behavior is rebuilt without a regression window.\n\nADO records remain separate and are retained:\n\n- Root readiness replacement: https://msazure.visualstudio.com/One/_workitems/edit/39301045\n- Fixture restoration originally reviewed in #26658: https://msazure.visualstudio.com/One/_workitems/edit/39301044\n- Broader transition hardening that remains in #26526: https://msazure.visualstudio.com/One/_workitems/edit/39301051\n\n#### Why revert #27228?\n\n#27228 fixed the immediate SONiC-relay teardown error by introducing an `orchestrator` readiness mode. When `dhcp_server` was enabled, that mode required only `dhcprelayd` to be RUNNING.\n\nThat proxy is too weak. `dhcprelayd` can already be RUNNING while the actual IPv4 layout is still wrong or stale. It does not distinguish:\n\n- external per-VLAN ISC relay processes;\n- one active internal `dhcrelay -iu docker0` process;\n- the intentional internal-idle state with no IPv4 relay process;\n- the supervisor-owned SONiC `dhcp4relay` process.\n\n#27228 also forced DHCP-server cleanup to precede relay restoration and, when the feature started disabled, left `dhcp_server` enabled after the module. The first dependency is unnecessary when teardown selects the live state; the second fails to restore the DUT's original feature state.\n\n#### How is regression avoided?\n\n| #27228 behavior | Replacement in this PR |\n|---|---|\n| Avoid false external-ISC readiness after disabling SONiC | Explicit readiness modes plus the #26658 fixture commit select the live ISC target. |\n| Ensure relay restoration sees a valid DHCP-server state | `get_isc_relay_type()` handles external, active-internal, and idle-internal states, so restoration is independent of cleanup ordering. |\n| Prevent stale `dhcp_server` critical-service tracking | Refresh the tracking list after temporarily enabling the feature and again after restoring disabled state. |\n| Keep later suites from waiting for a disabled service | The post-disable refresh removes `dhcp_server` from pytest's expected critical services before container removal. |\n| Preserve the original DUT state | Initially enabled remains enabled; initially disabled is enabled only for this module and restored disabled afterward. |\n\nThe remaining #26526 code is intentionally not included. Its per-transition waits, failure-preserving cleanup, force-removal checks, and five-file helper plumbing are broader hardening rather than requirements for replacing #27228 without regression. #26526 remains a separate draft PR on top of this combined head.\n\nThe originally captured regression was:\n\n`tests/dhcp_server/test_dhcp_server.py::test_dhcp_server_port_based_assignment_single_ip_tc1[gcu-sonic-relay-agent]`\n\nThe test body passed; fixture teardown failed while waiting for an incompatible external ISC supervisor layout. The same shared fixture path serves 16 DHCP-server test functions across:\n\n- `tests/dhcp_server/test_dhcp_server.py` \u2014 13 functions;\n- `tests/dhcp_server/test_dhcp_server_multi_vlans.py` \u2014 2 functions;\n- `tests/dhcp_server/test_dhcp_server_stress.py` \u2014 1 function.\n\nThe explicit flag-helper contract also updates `tests/dhcp_relay/test_dhcpv4_relay.py::test_dhcpv4_feature_flag_validation`.\n\nFixes https://github.com/sonic-net/sonic-mgmt/issues/27036\n\n### Type of change\n\n- [x] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): https://msazure.visualstudio.com/One/_workitems/edit/39301045\nFailure type: regression\n\nPublic 202605 does not contain the exact #27228 commit, so the leading revert is intentionally empty in the public backport and the three replacement commits are the release payload. The branch-matched internal-202605 validation base already carries equivalent generic `orchestrator` and leave-enabled lifecycle behavior through downstream content; the validation-only conflict resolution removes that equivalent behavior before applying the replacements. This distinction does not add the revert to the public 202605 payload.\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n- Current combined head: `5182a573cacd011277b0152131d09a6e3da5cffa`.\n- Static validation passed for the four-commit stack: `git diff --check`, Python compilation, targeted pre-commit, exact #27228 revert verification, #26658 tree/patch equality, and focused critical-service transition probes.\n- Fresh 202605 MX validation passed: pretest 11 passed/3 expected skips; five isolated DHCP-server invocations passed 20/20 parameterizations; an initially-disabled lifecycle invocation passed 4/4 and verified disabled-state restoration. [Detailed evidence](https://github.com/sonic-net/sonic-mgmt/pull/26525#issuecomment-5483903442).\\n- Fresh master MX validation passed: pretest 11 passed/4 expected skips; five forced-disabled DHCP-server invocations passed 20/20 parameterizations with a successful disabled-state/container-absent assertion after every teardown. [Detailed evidence](https://github.com/sonic-net/sonic-mgmt/pull/26525#issuecomment-5485840640).\\n- Exact-head CI is fully classified across identical-input builds `1207991` and `1208099`: every impacted-area lane has an exact-merge-SHA pass. The remaining red aggregate check is an environment-wide t0 BGP link-local failure seen across unrelated plans; the original identical-input build passed t0. [Detailed CI evidence](https://github.com/sonic-net/sonic-mgmt/pull/26525#issuecomment-5486664536).\n\n### Approach\n#### What is the motivation for this PR?\n\nReadiness must prove the relay process layout selected by the test, not infer intent from one feature flag or accept orchestrator liveness as a substitute. The replacement must also preserve the teardown fixes that users already rely on without leaking a changed `dhcp_server` feature state into later modules.\n\n#### How did you do it?\n\n- Revert the generic #27228 implementation exactly.\n- Add strict readiness modes for `isc`, `isc-internal`, `isc-internal-idle`, `sonic`, and `v6`.\n- Require flag-switch callers to provide the expected readiness mode.\n- During shared SONiC fixture teardown, remove SONiC relay configuration, derive the live ISC target from feature and `DHCP_SERVER_IPV4` state, then clear the flag.\n- Keep that restoration independent of DHCP-server cleanup fixture ordering.\n- Refresh pytest's critical-service list after both temporary feature enablement and restoration to disabled.\n\n#### How did you verify/test it?\n\nStatic validation and fresh branch-matched physical validation on both master and 202605 passed and are linked above. Two identical-input exact-head Azure runs provide a pass for every impacted-area lane; the sole remaining red aggregate result is the classified environment-wide t0 BGP link-local failure linked above.\n\n#### Any platform specific information?\n\nThe internal active/idle layouts apply to MX DHCP-server tests. External ISC and SONiC readiness remain shared across supported DHCP-relay topologies.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 no new test case.\n\n### Xichen review\n\nThe explicit readiness implementation was reviewed through #26525 `v4.3`. The fixture replacement was reviewed separately through #26658 `v2.6` and then squashed tree-identically into commit `cf75da58a`. Xichen approved splitting the focused two-line critical-service synchronization from #26526 and directed the combined PR to proceed through validation and 202605 backport preparation.\n\n### Documentation\n\nNo external documentation update is required; the PR description records the readiness state model and replacement rationale.",
+      "files": [
+        {
+          "path": "tests/common/dhcp_relay_utils.py",
+          "additions": 98,
+          "deletions": 78
+        },
+        {
+          "path": "tests/dhcp_relay/test_dhcpv4_relay.py",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "tests/dhcp_server/conftest.py",
+          "additions": 8,
+          "deletions": 14
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T15:31:22Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T15:31:23Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T15:31:40Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T15:39:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T15:39:37Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T16:14:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T16:14:43Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T16:54:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T16:55:02Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T21:40:24Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T21:40:39Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-24T05:16:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-24T05:17:00Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T06:33:18Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Xichen96",
+          "createdAt": "2026-07-31T06:35:46Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T06:35:48Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T06:35:52Z",
+          "body": "Retrying failed(or canceled) stages in build 1173622:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-multi-asic-t1 by Elastictest: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-03T07:33:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-03T07:33:27Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-04T05:22:02Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

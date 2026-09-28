@@ -1,0 +1,101 @@
+{
+  "number": 22548,
+  "title": "Bug:memozy_utilization fixture is affected by routeCheck process",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22548",
+  "createdAt": "2026-02-23T16:16:26Z",
+  "closedAt": "2026-03-10T22:00:59Z",
+  "author": "illia-kotvitskyi",
+  "labels": [
+    "Bug :bug:",
+    "Pending Triage :medical_symbol:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nWe see test failures in the `memory_utilization` fixture during RAM usage comparison for the zebra process.\nThese failures are caused by the routeCheck process running in the background every 5 minutes.\n\nIf the routeCheck is executing at the same time as we measure the memory usage, it will affect the calculations.\n\nWe can await until routeCheck is finished before measuring the memory usage or retry the measurement if the routeCheck is a reason of exceeding the expectations.\n\n### Steps to Reproduce\n\n- Have a big number of routes(~500k)\n- Measure zebra memory usage\n- Trigger routeCheck\n- Measure zebra memory usage again\n\n### Actual Behavior and Expected Behavior\n\nWe see that routeCheck affects measurement dramatically, while we expect to have similar results for stable conditions\n\n### Relevant log output\n\n```shell\n===== 2026-02-19T02:52:30+00:00 =====\nSystem allocator statistics:\n  Total heap allocated:  34 MiB\n  Holding block headers: 31 MiB\n  Used small blocks:     0 bytes\n  Used ordinary blocks:  16 MiB\n\nBuffer data                   :        1   4120        4120    20227  83335352\n\n\nto\n\n\n===== 2026-02-19T02:52:30+00:00 =====\nSystem allocator statistics:\n  Total heap allocated:  102 MiB\n  Holding block headers: 31 MiB\n  Used small blocks:     0 bytes\n  Used ordinary blocks:  95 MiB\n\nBuffer data                   :    20068   4120    82680256    20227  83335352\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "bpar9",
+      "createdAt": "2026-03-04T16:55:29Z",
+      "body": "@illia-kotvitskyi are you working on a PR to address this issue?"
+    },
+    {
+      "author": "illia-kotvitskyi",
+      "createdAt": "2026-03-04T17:08:06Z",
+      "body": "@bpar9 I didn't plan it\n\n@nhe-NV should we provide a fix for this issue?"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22786,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22786",
+      "title": "[memory_utilization] Add two-tier threshold for frr_zebra memory monitoring",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-10T22:00:58Z",
+      "createdAt": "2026-03-07T01:04:53Z",
+      "author": "yxieca",
+      "body": "### Description of PR\n\nSummary:\nIntroduce a two-tier memory increase threshold system for the `memory_utilization` plugin to handle transient memory spikes (e.g., from `route_check.py`) without failing tests.\n\nFixes #22548\n\n### Type of change\n\n- [ ] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\nThe `route_check.py` script (run by monit every 5 minutes) causes temporary zebra memory spikes (~34 MB \u2192 ~102 MB, a ~68 MB increase). The existing `memory_increase_threshold` for `frr_zebra` is max(50%, 64 MB), so a 68 MB spike exceeds it and fails tests \u2014 even though this is a transient spike, not a real memory leak.\n\nThe original approach (PR v1) tried to wait for `route_check.py` to finish before measuring memory, but this had issues:\n1. **Performance**: 120s wait timeout per test \u00d7 setup + teardown = 240s overhead per test, causing CI timeouts\n2. **Race condition**: `route_check.py` could start between the wait and memory collection\n3. **Self-matching bug**: Ansible shell module wraps commands in `/bin/sh -c \"...\"`, causing `pgrep` to match the wrapper process\n\n#### How did you do it?\n\nReplaced the wait-based approach with a two-tier threshold system:\n\n- **`memory_increase_threshold`** (existing): now acts as a **warning** level \u2014 logs a warning but does NOT fail the test\n- **`memory_increase_fail_threshold`** (new): a higher **fail** level \u2014 stores an error and fails the test\n\nWhen `memory_increase_fail_threshold` is not configured, the existing `memory_increase_threshold` acts as the fail level (fully backward compatible).\n\nFor `frr_zebra`:\n- Warning at max(50%, 64 MB) \u2014 catches spikes for visibility\n- Fail at 128 MB \u2014 only real memory leaks trigger test failure\n\n#### How did you verify/test it?\n\n1. Local KVM test runs on both master and fix branch confirmed identical test results (no regressions)\n2. Verified via Ansible that the `pgrep` self-matching bug exists (Ansible shell module uses `/bin/sh -c`, not `bash`)\n3. Confirmed route_check.py spike (~68 MB) falls between warning (64 MB) and fail (128 MB) thresholds\n\n#### Any platform specific information?\n\nNone \u2014 the two-tier threshold is generic and can be applied to any monitor. Only `frr_zebra` uses it in this PR.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A (framework change)\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "tests/common/plugins/memory_utilization/memory_utilization.py",
+          "additions": 50,
+          "deletions": 6
+        },
+        {
+          "path": "tests/common/plugins/memory_utilization/memory_utilization_dependence.json",
+          "additions": 4,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-07T01:05:01Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-07T01:05:02Z",
+          "body": "\ud83e\udd16 This PR was generated by an AI agent based on issue #22548.\n\n**What this does:** Adds a wait-for-routeCheck helper before memory measurements to avoid false alarms caused by the routeCheck process temporarily inflating zebra memory usage.\n\n**How it works:**\n- Before collecting memory baselines (pre-test) and final measurements (post-test), polls `pgrep -f routeCheck` \n- Waits up to 120s with 5s polling interval for routeCheck to finish\n- Gracefully proceeds if routeCheck can't be detected or timeout expires\n\n**Risk:** Low \u2014 only adds a wait before existing measurement logic. No changes to threshold calculation or alarm logic."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-07T01:05:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-08T02:34:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-08T02:35:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-08T02:45:56Z",
+          "body": "## Local KVM Test Results (commit 313e38d07)\n\n**Fix**: `pgrep -f routeCheck` always matched the Ansible bash wrapper process (`bash -c \"pgrep -f routeCheck\"` contains \"routeCheck\" in its own cmdline), causing `_wait_for_routecheck_to_finish` to wait the full 120s timeout on every call \u2014 240s overhead per test (setup + teardown).\n\n**Changes in this commit:**\n- Replace `pgrep -f routeCheck` with `pgrep -f route_check.py -l | grep -v bash` to filter out the bash wrapper\n- Replace hand-rolled `while/time.sleep` loop with `wait_until()` from `tests/common/utilities`\n- Remove unused `import time`\n\n**Test**: `ssh/test_ssh_ciphers.py` on KVM T0 (vms-kvm-t0, vlab-01)\n\n```\n===== 8 passed, 13 xfailed, 21 xpassed, 551 warnings in 410.53s (0:06:50) =====\n```\n\n42 test cases completed in ~7 minutes. Before the fix, this module would timeout at ~137 minutes in CI due to 240s dead wait per test (42 \u00d7 240s = 168 min).\n\n**Verification on DUT:**\n```bash\n# Direct SSH \u2014 correct (no wrapper)\nadmin@vlab-01:~$ pgrep -f routeCheck; echo $?\n1\n\n# Via bash -c \u2014 broken (simulates Ansible shell module)\nadmin@vlab-01:~$ bash -c \"pgrep -f routeCheck\"; echo $?\n0   # Always matches the wrapper!\n\n# Fixed pattern \u2014 correct via bash -c\nadmin@vlab-01:~$ bash -c \"pgrep -f route_check.py -l | grep -v bash\"; echo $?\n1   # Correctly filters wrapper when route_check.py not running\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-09T06:02:12Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-09T06:02:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-09T06:24:09Z",
+          "body": "## Local KVM Test Results (commit a8a2e0aa4 \u2014 two-tier threshold approach)\n\n**Test**: `everflow/test_everflow_testbed.py::TestEverflowV4IngressAclIngressMirror::test_everflow_dscp_with_policer`\n**Host**: ThinkStation P520 (62GB RAM, 12 CPUs)\n\n| Branch | Result | Duration |\n|--------|--------|----------|\n| master | 2 passed, 2 skipped | 4m11s (251s) |\n| fix/memory-util-routecheck | 2 passed, 2 skipped | 4m05s (245s) |\n\n**Key findings:**\n- \u2705 Zero overhead vs master (6s faster)\n- \u2705 No routeCheck false positive warnings\n- \u2705 All `_wait_for_routecheck` code removed \u2014 no more 120s timeout risk\n- \u2705 Two-tier threshold: warning at max(50%, 64MB), fail at 128MB for frr_zebra\n- \u2705 Backward compatible \u2014 monitors without `memory_increase_fail_threshold` behave as before"
+        }
+      ]
+    }
+  ]
+}

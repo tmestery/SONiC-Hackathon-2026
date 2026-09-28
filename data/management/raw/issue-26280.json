@@ -1,0 +1,81 @@
+{
+  "number": 26280,
+  "title": "Bug: Auto cherry-pick should skip changes already included in the target branch",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26280",
+  "createdAt": "2026-07-17T03:48:38Z",
+  "closedAt": "2026-08-28T07:49:43Z",
+  "author": "StormLiangMS",
+  "labels": [
+    "Bug :bug:",
+    "Pending Triage :medical_symbol:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Is it platform specific\n\nGeneric\n\n## Importance or Severity\n\nMedium\n\n## Description of the bug\n\nThe backport/cherry-pick automation can add or retain request labels and attempt a cherry-pick even when the PR's change is already present in the target branch. This can happen when:\n\n- the release branch was cut after the original PR was merged;\n- the change was manually cherry-picked using a different SHA;\n- the same patch was included through another PR or a squash; or\n- an `Included in <branch> branch` state already exists but the checkbox-to-label automation runs again.\n\nPR #25083 demonstrates the inconsistent label state: it currently has `Request for msft-202608 branch`, `Approved for msft-202608 Branch`, and `Included in msft-202608 branch` at the same time.\n\nThe current pre-step only trusts labels before attempting the cherry-pick:\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/.github/workflows/pr_cherrypick_prestep.yml#L67-L105\n\nIt also treats every failed `git cherry-pick` as a conflict. An already-applied patch can produce an empty cherry-pick, which should be classified as already included rather than `Cherry Pick Conflict_<branch>`.\n\nThe post-step adds `Included in <branch> branch` and removes only `Created PR to <branch> branch`, leaving stale request/approval labels:\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/.github/workflows/pr_cherrypick_poststep.yml#L43-L49\n\n## Steps to Reproduce\n\n1. Merge a PR into `master`.\n2. Ensure the same change is already present in a target release branch through branch creation, a manual cherry-pick, squash, or another PR.\n3. Select the backport checkbox or add the request/approval label for that target branch.\n4. Observe that the automation can add/retain the request label and attempt another cherry-pick because it does not verify the target branch contents.\n\n## Actual Behavior and Expected Behavior\n\n**Actual:**\n\n- Redundant `Request for ...` and `Approved for ...` labels can remain alongside `Included in ...`.\n- The automation may create an unnecessary cherry-pick PR.\n- An empty cherry-pick may be reported as a conflict.\n\n**Expected:**\n\nBefore adding a request label or creating a cherry-pick PR, verify whether the change is already present in the target branch. If it is present:\n\n- do not add/re-add `Request for <branch> branch`;\n- do not create a cherry-pick PR;\n- add/retain `Included in <branch> branch`; and\n- remove stale request, approval, created-PR, and conflict labels for that branch.\n\n## Suggested implementation\n\n1. Check exact history first, for example with `git merge-base --is-ancestor` when the original commit is reachable from the target branch.\n2. Also handle different SHAs by checking patch equivalence for the PR commits, or by distinguishing an empty `git cherry-pick --no-commit` result from a real merge conflict.\n3. Update the checkbox-to-label logic to skip the request label when `Included in <branch> branch` is already present.\n4. Update `pr_cherrypick_poststep.yml` to remove the corresponding request and approval labels after inclusion.\n\n## Acceptance criteria\n\n- Exact commit already in target branch: no request label or cherry-pick PR.\n- Patch-equivalent commit with a different SHA: no request label or cherry-pick PR.\n- Real conflict: existing conflict behavior remains unchanged.\n- Successful inclusion: only the final `Included in <branch> branch` state remains; stale workflow labels are removed.\n\n## Relevant log output\n\nN/A\n\n## Output of `show version`\n\nN/A \u2014 GitHub automation issue.",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2026-08-19T15:49:45Z",
+      "body": "@StormLiangMS this sounds like automation issue that should be tracked in the automation repo?"
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2026-08-19T15:50:07Z",
+      "body": "@yijingyan2 can you help triage?"
+    },
+    {
+      "author": "yijingyan2",
+      "createdAt": "2026-08-24T03:53:04Z",
+      "body": "Hi @StormLiangMS, by design, when a cherry-pick PR merged into the target branch, we only remove the `Created PR to <branch> Branch` label while keeping the `requested for` and `Approved for ` label. \nwould you prefer to remove these two labels as well from the origin PR when adding the `included in ` label?\nCurrently, the auto cherry-pick skips the changes already included in the target branch, for example: https://github.com/sonic-net/sonic-mgmt/pull/26926#issuecomment-5350394304\nwhen there is nothing to cherry-pick, the automation would not create a cherry-pick PR\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27305,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27305",
+      "title": "[cherry-pick]: Handle empty cherry-picks as already included",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-28T07:49:42Z",
+      "createdAt": "2026-08-25T04:08:55Z",
+      "author": "yijingyan2",
+      "body": "\u2026 target branch\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nHandle empty cherry-pick results in the pre-cherry-pick workflow as changes that are already present in the target branch, rather than reporting them as conflicts.\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/26280\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nWhen all changes from a PR are already present in a target release branch, `git cherry-pick` reports that the cherry-pick is empty. The workflow previously handled this as a cherry-pick conflict, which added a misleading conflict label.\r\n#### How did you do it?\r\nDetect the `cherry-pick is now empty` result and handle it separately by:\r\n\r\n- Aborting the empty cherry-pick and verifying that the working tree is clean.\r\n- Removing any existing `Cherry Pick Conflict_<branch>` label.\r\n- Adding the `Included in <branch> branch` label.\r\n- Posting a comment explaining that no cherry-pick PR is required.\r\n- Returning successfully without creating a cherry-pick PR.\r\n\r\nOther cherry-pick failures continue to use the existing conflict-handling flow.\r\n\r\n#### How did you verify/test it?\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\nVerified the workflow logic for these outcomes:\r\n\r\n- An empty cherry-pick is recognized as already included.\r\n- The repository is returned to a clean state.\r\n- The included label and explanatory comment are added.\r\n- A cherry-pick PR is not created.\r\n- Non-empty cherry-pick failures still follow the conflict path.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": ".github/workflows/pr_cherrypick_prestep.yml",
+          "additions": 11,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T04:09:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T04:09:04Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T04:09:11Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\n1 pipeline(s) were filtered out due to trigger conditions.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-27T07:57:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-27T07:57:11Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\n1 pipeline(s) were filtered out due to trigger conditions.<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

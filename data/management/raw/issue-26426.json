@@ -1,0 +1,125 @@
+{
+  "number": 26426,
+  "title": "[iface_namingmode] PR #24258 skip logic makes assertions unreachable (dead code)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26426",
+  "createdAt": "2026-07-21T17:23:49Z",
+  "closedAt": "2026-08-12T20:39:13Z",
+  "author": "prabhataravind",
+  "labels": [],
+  "assignees": [
+    "rameshraghupathy"
+  ],
+  "milestone": null,
+  "body": "### Description\n\nPR #24258 (merged) fixes `test_show_interfaces_counter` and `test_show_queue_counters` failures on SmartSwitch platforms where internal Dpc (backplane) ports appear in CLI output but aren't in the test setup's port mappings.\n\nHowever, the fix adds `if item not in ...: continue` immediately before the `assert item in ...` check, making the assertion dead code - if the item isn't in the list it skips, and if it is, the assert always passes.\n\n### Current code (after PR #24258):\n```\nfor item in interfaces:\n    if mode == 'alias':\n        if item not in setup['port_alias']:\n            continue\n        assert item in setup['port_alias'], ...  # always True here - dead code\n```\n\n### Suggested improvement:\nFilter unknown interfaces upfront and assert that at least some known interfaces were validated:\n\n```\nknown_interfaces = [item for item in interfaces if item in setup['port_alias']]\nassert len(known_interfaces) > 0, 'No known testbed interfaces found in output'\nfor item in known_interfaces:\n    # actual validation logic here\n```\n\nThis preserves the skip behavior for internal ports while keeping the test meaningful.\n\n### Context\n- Affects: `tests/iface_namingmode/test_iface_namingmode.py`\n- Root cause: Cisco-8102-28FH-DPU-O uses JSON path in `port_alias` module which correctly excludes Dpc role ports from test setup (to avoid renaming backplane aliases and disrupting DPU connectivity), but CLI/CONFIG_DB still shows them\n- Related PRs: #24258, #25735\n",
+  "comments": [
+    {
+      "author": "rameshraghupathy",
+      "createdAt": "2026-07-21T18:34:04Z",
+      "body": "@prabhataravind  Created https://github.com/sonic-net/sonic-mgmt/pull/26429  to address this.\n"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26429,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26429",
+      "title": "iface_namingmode: require validation of at least one frontend interface in show interfaces counter",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-12T20:39:12Z",
+      "createdAt": "2026-07-21T18:33:13Z",
+      "author": "rameshraghupathy",
+      "body": "### Description of PR\r\nFix test_show_interfaces_counter to properly handle SmartSwitch internal interfaces while ensuring the test still validates frontend interface naming.\r\n\r\nFixes #26426\r\n\r\n### Type of change\r\n\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\n### Tested branch\r\n- [x] 202511\r\n\r\n### Test result\r\n202511: Validated on a SmartSwitch testbed.\r\nConfirmed test_show_interfaces_counter passes when show interfaces counter includes SmartSwitch internal/backplane interfaces that are not part of the frontend port mappings.\r\nConfirmed the test still requires at least one expected frontend interface to be present, preventing false-positive passes when all parsed interfaces are skipped.\r\nApproach\r\nWhat is the motivation for this PR?\r\n\r\nA previous change ignored interfaces that are not part of the frontend interface mappings (for example, SmartSwitch internal backplane interfaces). However, the associated assertions became unreachable, allowing the test to pass even when no expected frontend interfaces were validated.\r\n\r\nHow did you do it?\r\n\r\nUpdated test_show_interfaces_counter to:\r\n\r\nContinue ignoring interfaces that are not present in the frontend port mappings.\r\nRequire that at least one expected frontend interface is found in the CLI output.\r\nRemove the unreachable per-interface assertions introduced by the previous implementation.\r\nHow did you verify/test it?\r\n\r\nExecuted the iface_namingmode test on a SmartSwitch platform and verified that:\r\n\r\nInternal SmartSwitch interfaces no longer cause the test to fail.\r\nThe test succeeds when expected frontend interfaces are present.\r\nThe test would fail if no expected frontend interfaces are found, preventing false-positive results.\r\nAny platform specific information?\r\n\r\nYes. This change is primarily intended for SmartSwitch platforms, where show interfaces counter includes internal backplane interfaces that are not part of the frontend port mappings. The change is generic and preserves existing behavior on non-SmartSwitch platforms.",
+      "files": [
+        {
+          "path": "tests/iface_namingmode/test_iface_namingmode.py",
+          "additions": 44,
+          "deletions": 26
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T18:33:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T18:33:22Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T18:33:39Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T00:15:07Z",
+          "body": "This PR has backport request for branch(es): 202511,202605.<br>Added label(s) for branch(es) 202511,202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T00:15:10Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202511. Added label(s): Tested for 202511 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T00:15:12Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T22:27:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-22T22:27:54Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-07-24T14:48:24Z",
+          "body": "@rameshraghupathy please verify the test on non-smartswitch as well to make sure there are no regressions for other platforms."
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-08-12T18:32:46Z",
+          "body": "@StormLiangMS @bingwang-ms please review/merge."
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-08-14T19:28:10Z",
+          "body": "@StormLiangMS this is needed on 202605 as well. Please help add the label."
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-08-16T23:59:10Z",
+          "body": "@rameshraghupathy \u2014 this 202605 backport request is not approval-ready yet. Please update the PR description with:\n\n- check 202605 under **Tested branch**\n- the tested 202605 image/commit and test result or log link\n\nThis information needs to be in the backport/test sections so the request is traceable and BuildBot can validate it.\n\n<!-- copilot-202605-backport-reminder -->"
+        },
+        {
+          "author": "rameshraghupathy",
+          "createdAt": "2026-08-28T18:50:41Z",
+          "body": "@StormLiangMS Please find attached the test result on the 202605 branch.\r\n[ut-log-26429-202605.pdf](https://github.com/user-attachments/files/31565580/ut-log-26429-202605.pdf)\r\n"
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-08-28T18:54:28Z",
+          "body": "@StormLiangMS please help merge."
+        },
+        {
+          "author": "prabhataravind",
+          "createdAt": "2026-09-08T20:48:41Z",
+          "body": "@StormLiangMS gentle ping on this."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-20T06:53:51Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/28033"
+        }
+      ]
+    }
+  ]
+}

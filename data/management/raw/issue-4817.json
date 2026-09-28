@@ -1,0 +1,125 @@
+{
+  "number": 4817,
+  "title": "test_reboot.py validation issue for the warmboot_finalizer activating state",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/4817",
+  "createdAt": "2021-12-06T14:46:46Z",
+  "closedAt": "2022-02-09T01:57:34Z",
+  "author": "vikneels",
+  "labels": [],
+  "assignees": [
+    "vaibhavhd"
+  ],
+  "milestone": null,
+  "body": "This is with respect to the below PR that went in \r\nhttps://github.com/Azure/sonic-mgmt/pull/4706\r\n\r\nThe above PR adds check to validate the warmboot finalizer state with below\r\nif reboot_type == 'warm':\r\n        logger.info('waiting for warmboot-finalizer service to become activating on {}'.format(hostname))\r\n        # Check if finalizer state reaches \"activating\" before the \"wait\" period,\r\n        # the default wait is 90s since issue of warm-reboot).\r\n        # If the finalizer state is activating, however time passed is greater than \"wait\",\r\n        # then fail the testcase. Start with empty value to verify time passed before\r\n        # checking finalizer state for the first time.\r\n        finalizer_state = ''\r\n        while finalizer_state != 'activating':\r\n            dut_datetime_after_ssh = duthost.get_now_time()\r\n            time_passed = float(dut_datetime_after_ssh.strftime(\"%s\")) - float(dut_datetime.strftime(\"%s\"))\r\n            if time_passed > wait:\r\n                raise Exception('warmboot-finalizer never reached state \"activating\" on {}'.format(hostname))\r\n            time.sleep(1)\r\n            finalizer_state = get_warmboot_finalizer_state(duthost)\r\n\r\nThis was done to make sure we dont allow the false positive (first time we get warmboot finalizer state it might be more than 90s and the script used to let it go through before).\r\n\r\nHowever the above change causes failure to valid case:\r\n\r\nt0 - > warmboot was issued\r\nt0+50sec -> warmboot finalizer state became activating \r\nt0+91sec -> script checks the warmboot finalizer state and thinks that 90sec has passed and fails the case. This is not really valid since warmboot finalizer state did become activating below 90s and just that ssh to device to validate took long.\r\nSince the test case is about validating \"When warmboot finalizer state became activating\", the check that was added causes right case to fail and we might have to address that.\r\n\r\n",
+  "comments": [
+    {
+      "author": "liat-grozovik",
+      "createdAt": "2021-12-14T19:24:06Z",
+      "body": "@yxieca could you please help to triage this issue?"
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2021-12-19T18:50:27Z",
+      "body": "@vaibhavhd do we need to adjust the wait time?\r\n\r\n@liat-grozovik , if we spent 90 seconds waiting for finalizer to become activating, would that imply we missed LAG 90 seconds limit already?"
+    },
+    {
+      "author": "vaibhavhd",
+      "createdAt": "2021-12-20T04:19:42Z",
+      "body": "@vikneels I don't understand the failure case that you mentioned:\r\n```\r\nt0 - > warmboot was issued\r\nt0+50sec -> warmboot finalizer state became activating\r\nt0+91sec -> script checks the warmboot finalizer state and thinks that 90sec has passed and fails the case. This is not really valid since warmboot finalizer state did become activating below 90s and just that ssh to device to validate took long.\r\nSince the test case is about validating \"When warmboot finalizer state became activating\", the check that was added causes right case to fail and we might have to address that.\r\n```\r\n\r\nIn this example, if warmboot finalizer state becomes activating in t0 + 50s, we do not wait for the remaining of 90s in the checks following that.\r\nSpecifically, after warmboot state reaches activating within 90s, we then wait for 300s for the state to become NOT activating.\r\n\r\nAlso, the part `just that ssh to device to validate took long` is also incorrect. The SSH started working when we detected the state to be `activating`.\r\n\r\nThe timeouts:\r\nTo reach IN `activating` state: https://github.com/Azure/sonic-mgmt/blob/4db6018c1f2f67c8433a4cfbb4bcd8c733874a07/tests/common/reboot.py#L67\r\nhttps://github.com/Azure/sonic-mgmt/blob/4db6018c1f2f67c8433a4cfbb4bcd8c733874a07/tests/common/reboot.py#L186\r\n\r\nTo come OUT of `activating` state: https://github.com/Azure/sonic-mgmt/blob/4db6018c1f2f67c8433a4cfbb4bcd8c733874a07/tests/common/reboot.py#L66\r\nhttps://github.com/Azure/sonic-mgmt/blob/4db6018c1f2f67c8433a4cfbb4bcd8c733874a07/tests/common/reboot.py#L198\r\n\r\n"
+    },
+    {
+      "author": "vaibhavhd",
+      "createdAt": "2021-12-20T05:53:43Z",
+      "body": "Regarding the case where SSH took too long (>90s), and then warmboot finalizer has already reached and crossed `activating` state, then it it should also be a valid failure case.\r\n\r\nIt should be noted that the 90s check is not only to test `When warmboot finalizer state became activating`.\r\nThe 90s wait time is actually for the control plane downtime period. The present checks are in fact a little too lenient.\r\nSome changes that I think should be incorporated into test:\r\n\r\n1. Do not start the 90s timeout at the time of issuing the warmboot command.\r\n   1.1. Start the T0 when the control plane goes down OR when the teamd is stopped gracefully.\r\n2. Do not end the 90s timeout based on when FINALIZER state has reached activating.\r\n   2.1 End the 90s timeout when control plane is back up OR when the teamd starts again.\r\n\r\nI think we can move these checks into `test_advance_reboot::test_warm_reboot` instead of this testcase (test_reboot::test_warm_reboot).\r\nThe reason is that log_analyzer is already enabled in advanced_reboot cases."
+    },
+    {
+      "author": "vikneels",
+      "createdAt": "2021-12-20T18:32:02Z",
+      "body": "Regarding the case where SSH took too long (>90s), and then warmboot finalizer has already reached and crossed activating state, then it it should also be a valid failure case.\r\n>> usually from our platform we do some checks before we let the login happen. however the activating state before that. So what you are saying is even dut ssh should happen before 90sec? that was not explicit from test case. hence wanted the clarification. if thats the case, I will check how i can let the ssh happen before 90s. is there is any separate requirement for ssh timeout? if so let me know."
+    },
+    {
+      "author": "vikneels",
+      "createdAt": "2022-01-10T18:39:29Z",
+      "body": "Hello.. can you please respond to this?\r\nusually from our platform we do some checks before we let the login happen. however the activating state before that. So what you are saying is even dut ssh should happen before 90sec? that was not explicit from test case. hence wanted the clarification. if thats the case, I will check how i can let the ssh happen before 90s. is there is any separate requirement for ssh timeout? if so let me know.\r\nThanks.."
+    },
+    {
+      "author": "vaibhavhd",
+      "createdAt": "2022-01-10T19:38:03Z",
+      "body": "Hi @vikneels,\r\nTo clarify about the significance of 90s time expectation:\r\n\r\n1. It is NOT for SSH to work within 90s per-se.\r\n2. It is for LAGs to be back up in 90s.\r\n\r\n90s is the default lacp timeout - the amount of time that a port-channel interface waits for a LACPDU from the remote system before terminating the LACP session.\r\n\r\nThe whole confusion about SSH and finalizer timeout arises due to not-so-precise timers in the test. We rely on SSH in the test as we want to check the state of warmboot-finalizer, and for that we would need the DUT's SSH to work. This mechanism of verifying LACP-timeout can be improved without involving SSH and finalizer.\r\nThe placement of start and end timer for 90s should be fixed by the changes I mentioned in https://github.com/Azure/sonic-mgmt/issues/4817#issuecomment-997618414.\r\n\r\nI will target making these changes this week.\r\n\r\nDoes this answer your concerns?"
+    },
+    {
+      "author": "vikneels",
+      "createdAt": "2022-01-10T21:26:03Z",
+      "body": "Thanks. It sounds good . As long as we dont assume things based on ssh I am fine.\r\n\r\nPlease share the PR once its out. Thanks!"
+    },
+    {
+      "author": "sachinv-msft",
+      "createdAt": "2022-02-01T23:06:55Z",
+      "body": "@vaibhavhd any update on this issue?"
+    },
+    {
+      "author": "vaibhavhd",
+      "createdAt": "2022-02-07T20:08:20Z",
+      "body": "Sorry this took a while to be addressed. Added a fix for this at PR 5083. Please review the PR."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 5083,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/5083",
+      "title": "[advanced-reboot] Verify LACP session timeout after warmboot",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2022-02-09T01:57:34Z",
+      "createdAt": "2022-02-07T19:44:49Z",
+      "author": "vaibhavhd",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary: Improve LAG flap  detection - measure LACP session wait time during warmboot.\r\n\r\nFix https://github.com/Azure/sonic-mgmt/issues/4817\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [x] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 201911\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nThe present test_reboot.py::test_warm_reboot has inaccurate mechanism to verify 90s timeout for control plane downtime.\r\n\r\nProblem with present code in test_reboot.py:\r\n\r\n1. Start anchor for 90s timeout is at the time of issuing the warmboot command.\r\n2. End anchor for 90s timeout is when FINALIZER state has reached `activating` state.\r\n\r\nThis leads to false positives as the timer starts much earlier than last LACP PDU is sent, and the timer ends much later than when first LACP PDU is received.\r\n\r\n#### How did you do it?\r\n\r\nFix this issues by:\r\n\r\n1. Do not run a timer.\r\n2. Catch the timestamp of last LACPDU sent by DUT (t0) to neighbors (t1) before warmboot kexec.\r\n3. Catch the timestamp of first LACPDU after warmboot.\r\n4. Measure the time difference between two LACPDUs from each T1, and verify if they are under 90s.\r\n5. If the difference is >=90s, then the neighbors will initiate LACP session teardown, causing to LAGs flap.\r\n\r\nSince these checks involve interacting with neighbors and do advanced checks, moving this check from `test_reboot.py` to `test_advanced_reboot.py`.\r\n\r\n#### How did you verify/test it?\r\nTested on  physical DUTs.\r\n\r\nNow if the LACPDUs are sent too late, test fails with:\r\n```\r\n2022-02-06 08:07:23 : --------------------------------------------------\r\n2022-02-06 08:07:23 : Fails:\r\n2022-02-06 08:07:23 : --------------------------------------------------\r\n2022-02-06 08:07:23 : FAILED:172.16.142.127:bgp ipv4 graceful restart is not enabled\r\n2022-02-06 08:07:23 : FAILED:172.16.142.127:bgp graceful restart timeout is less then 120 seconds\r\n2022-02-06 08:07:23 : FAILED:172.16.142.126:bgp ipv4 graceful restart is not enabled\r\n2022-02-06 08:07:23 : FAILED:172.16.142.126:bgp graceful restart timeout is less then 120 seconds\r\n2022-02-06 08:07:23 : FAILED:172.16.142.125:bgp ipv4 graceful restart is not enabled\r\n2022-02-06 08:07:23 : FAILED:172.16.142.125:bgp graceful restart timeout is less then 120 seconds\r\n2022-02-06 08:07:23 : FAILED:172.16.142.124:bgp ipv4 graceful restart is not enabled\r\n2022-02-06 08:07:23 : FAILED:172.16.142.124:bgp graceful restart timeout is less then 120 seconds\r\n2022-02-06 08:07:23 : FAILED:dut:LACP session terminated by Neighbor (172.16.142.126) post-reboot lacpdu came after 91.9960591793s of lacpdu pre-boot\r\n2022-02-06 08:07:23 : FAILED:dut:LACP session terminated by Neighbor (172.16.142.124) post-reboot lacpdu came after 91.710517168s of lacpdu pre-boot\r\n2022-02-06 08:07:23 : FAILED:dut:LACP session terminated by Neighbor (172.16.142.127) post-reboot lacpdu came after 92.1095261574s of lacpdu pre-boot\r\n2022-02-06 08:07:23 : FAILED:dut:LACP session terminated by Neighbor (172.16.142.125) post-reboot lacpdu came after 91.9090697765s of lacpdu pre-boot\r\n2022-02-06 08:07:23 : ==================================================\r\n```\r\nAlso this is captured in the timing data reporT:\r\n```\r\n{\r\n\t\"controlplane\": {\r\n\t\t\"arp_ping\": \"\",\r\n\t\t\"downtime\": \"82.739583\"\r\n\t},\r\n\t\"lacp_sessions\": {\r\n\t\t\"172.16.142.127\": 92.10952615737915,\r\n\t\t\"172.16.142.126\": 91.99605917930603,\r\n\t\t\"172.16.142.125\": 91.90906977653503,\r\n\t\t\"172.16.142.124\": 91.71051716804504\r\n\t},\r\n\t\"dataplane\": {\r\n\t\t\"lost_packets\": \"0\",\r\n\t\t\"downtime\": \"0.0\"\r\n\t}\r\n}\r\n```\r\n\r\n\r\nOtherwise, if PDUs are received in time, the timing is captured in the test report:\r\n```\r\n    \"lacp_sessions\": {\r\n        \"172.16.142.127\": 83.43812203407288,\r\n        \"172.16.142.126\": 83.38292264938354,\r\n        \"172.16.142.125\": 83.26467967033386,\r\n        \"172.16.142.124\": 83.12556576728821\r\n    },\r\n    \"dataplane\": {\r\n        \"lost_packets\": \"0\",\r\n        \"downtime\": \"0.0\"\r\n    },\r\n    \"controlplane\": {\r\n        \"arp_ping\": \"\",\r\n        \"downtime\": \"74.469363\"\r\n    },\r\n```\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/ptftests/advanced-reboot.py",
+          "additions": 28,
+          "deletions": 3
+        },
+        {
+          "path": "ansible/roles/test/files/ptftests/arista.py",
+          "additions": 68,
+          "deletions": 3
+        },
+        {
+          "path": "tests/common/reboot.py",
+          "additions": 1,
+          "deletions": 38
+        },
+        {
+          "path": "tests/platform_tests/conftest.py",
+          "additions": 10,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "lgtm-com",
+          "createdAt": "2022-02-07T20:10:40Z",
+          "body": "This pull request **introduces 1 alert** when merging 5cca9c4bd27463cba0df4e87cd017b76b64047b8 into d1411e37e737e93d07a9871b4ff8bf1cadf733fc - [view on LGTM.com](https://lgtm.com/projects/g/Azure/sonic-mgmt/rev/pr-2f49d4a53e6f03ffd0d21237a19bf8a0de2c0a78)\n\n**new alerts:**\n\n* 1 for Unused import"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2022-02-08T16:39:04Z",
+          "body": "@vaibhavhd Thanks for making this change!  Just want to note one thing here: this mechanism, as you stated in the PR comments, has dependency on the EOS neighbor. If we move to use SONiC neighbors, then this information will be unavailable. We need to think how we get the information from sonic neighbor too."
+        },
+        {
+          "author": "vaibhavhd",
+          "createdAt": "2022-02-08T21:14:56Z",
+          "body": "> @vaibhavhd Thanks for making this change! Just want to note one thing here: this mechanism, as you stated in the PR comments, has dependency on the EOS neighbor. If we move to use SONiC neighbors, then this information will be unavailable. We need to think how we get the information from sonic neighbor too.\r\n\r\nYou are right, and sonic-neighbor compatibility will be needed for other checks too - graceful restart check, bgp state check, etc.\r\n\r\nChanges should be straightforward. This can be added when the need comes, or when we have a testbed to test such changes."
+        },
+        {
+          "author": "sachinv-msft",
+          "createdAt": "2022-02-16T00:30:03Z",
+          "body": "@vaibhavhd can we add the label to address this in 202012 branch?"
+        }
+      ]
+    }
+  ]
+}

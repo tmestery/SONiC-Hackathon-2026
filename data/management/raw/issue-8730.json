@@ -1,0 +1,68 @@
+{
+  "number": 8730,
+  "title": "FDB test fails on BSL setups on key error",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/8730",
+  "createdAt": "2023-06-27T03:15:50Z",
+  "closedAt": "2023-10-24T02:13:04Z",
+  "author": "congh-nvidia",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "<!--\r\nIf you are reporting a new issue, make sure that we do not have any duplicates\r\nalready open. You can ensure this by searching the issue list for this\r\nrepository. If there is a duplicate, please close your issue and add a comment\r\nto the existing issue instead.\r\n\r\nIf you suspect your issue is a bug, please edit your issue description to\r\ninclude the BUG REPORT INFORMATION shown below. If you fail to provide this\r\ninformation within 7 days, we cannot debug your issue and will close it. We\r\nwill, however, reopen it if you later provide the information.\r\n\r\nFor more information about reporting issues, see\r\nhttps://github.com/sonic-net/SONiC/wiki#report-issues\r\n\r\n---------------------------------------------------\r\nGENERAL SUPPORT INFORMATION\r\n---------------------------------------------------\r\n\r\nThe GitHub issue tracker is for bug reports and feature requests.\r\nGeneral support can be found at the following locations:\r\n\r\n- SONiC Support Forums - https://groups.google.com/forum/#!forum/sonicproject\r\n\r\n---------------------------------------------------\r\nBUG REPORT INFORMATION\r\n---------------------------------------------------\r\nUse the commands below to provide key information from your environment:\r\nYou do NOT have to include this information if this is a FEATURE REQUEST\r\n-->\r\n\r\n**Description**\r\n\r\n<!--\r\nBriefly describe the problem you are having in a few paragraphs.\r\n-->\r\n\r\n**Steps to reproduce the issue:**\r\n1. configure L2 on dut (https://github.com/Azure/SONiC/wiki/L2-Switch-mode)\r\n2. run the fdb/test_fdb.py script on the dut\r\n\r\n**Describe the results you received:**\r\n```\r\nduthosts = [<MultiAsicSonicHost arc-switch1004>]\r\nrand_one_dut_hostname = 'arc-switch1004'\r\ntbinfo = {'comment': 'Mellanox MTR testbed', 'conf-name': 'arc-switch1004-t0', 'duts': ['arc-switch1004'], 'duts_map': {'arc-switch1004': 0}, ...}\r\n\r\n    @pytest.fixture(scope=\"module\")\r\n    def utils_vlan_intfs_dict_orig(duthosts, rand_one_dut_hostname, tbinfo):\r\n        '''A module level fixture to record duthost's original vlan info\r\n    \r\n        Args:\r\n            duthosts: All DUTs belong to the testbed.\r\n            rand_one_dut_hostname: hostname of a random chosen dut to run test.\r\n            tbinfo: A fixture to gather information about the testbed.\r\n    \r\n        Returns:\r\n            VLAN info dict with original VLAN info\r\n            Example:\r\n                \"Vlan1000\": {\r\n                    \"fc02:1000::1/64\": {},\r\n                    \"grat_arp\": \"enabled\",\r\n                    \"proxy_arp\": \"enabled\",\r\n                    \"192.168.0.1/21\": {}\r\n                }\r\n        '''\r\n        duthost = duthosts[rand_one_dut_hostname]\r\n        cfg_facts = duthost.config_facts(host=duthost.hostname, source=\"persistent\")['ansible_facts']\r\n        vlan_intfs_dict = {}\r\n        for k, v in list(cfg_facts['VLAN'].items()):\r\n            vlanid = v['vlanid']\r\n>           for addr in cfg_facts['VLAN_INTERFACE']['Vlan'+vlanid]:\r\nE           KeyError: 'VLAN_INTERFACE'\r\n\r\ncfg_facts  = {'AUTO_TECHSUPPORT': {'GLOBAL': {'available_mem_threshold': '10.0', 'max_core_limit': '5.0', 'max_techsupport_limit': ...'Ethernet100': {'brkout_mode': '1x100G[50G,40G,25G,10G]'}, 'Ethernet104': {'brkout_mode': '2x50G[25G,10G]'}, ...}, ...}\r\nduthost    = <MultiAsicSonicHost arc-switch1004>\r\nduthosts   = [<MultiAsicSonicHost arc-switch1004>]\r\nk          = 'Vlan1000'\r\nrand_one_dut_hostname = 'arc-switch1004'\r\ntbinfo     = {'comment': 'Mellanox MTR testbed', 'conf-name': 'arc-switch1004-t0', 'duts': ['arc-switch1004'], 'duts_map': {'arc-switch1004': 0}, ...}\r\nv          = {'vlanid': '1000'}\r\nvlan_intfs_dict = {}\r\nvlanid     = '1000'\r\n\r\ncommon/fixtures/duthost_utils.py:359: KeyError\r\n```\r\nThis issue is similar to https://github.com/sonic-net/sonic-mgmt/issues/4742.\r\n\r\n**Describe the results you expected:**\r\nThe test should not have any tests issues when running on BSL setups.\r\n\r\n**Additional information you deem important:**\r\n<!--\r\nsoftware/ASIC/Hardware Flatform version and info\r\n-->\r\n    **Output of `show version`:**\r\n\r\n    ```\r\n    (paste your output here)\r\n    ```\r\n\r\n    **Attach debug file `sudo generate_dump`:**\r\n\r\n    ```\r\n    (paste your output here)\r\n    ```\r\n",
+  "comments": [
+    {
+      "author": "qiluo-msft",
+      "createdAt": "2023-08-02T05:14:00Z",
+      "body": "Is it on a specific HwSKU, or a general issue for all HwSKU of one vendor?"
+    },
+    {
+      "author": "bpar9",
+      "createdAt": "2023-08-03T04:14:09Z",
+      "body": "> Is it on a specific HwSKU, or a general issue for all HwSKU of one vendor?\r\n\r\nWe see this with other HWSKU of other vendors also. On additional debugging, here is the analysis on this issue:\r\n\r\n- We analyzed that the problem is happening in BSL setup stage when we try to convert the system to L2 mode using\r\n./testbed-cli.sh set-l2 ${{ parameters.TESTBED_NAME }} password.txt\r\n \r\n- above utility gets the L2 related config on DUT using below command \u2013 \u201csonic-cfggen -H -k {{ hwsku }} -p --preset l2 > /tmp/init_l2_config.json\u201d\r\n  Complete flow of the script is located at\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/ansible/testbed_set_l2_mode.yml\r\n \r\n- after the above utility is run, we observed that the following config is missing in the converted config_db.json\r\n \r\n\"VLAN_INTERFACE\": {\r\n        \"Vlan1000|192.168.0.1/21\": {}, \r\n        \"Vlan1000\": {}, \r\n        \"Vlan1000|fc02:1000::1/64\": {}\r\n    },\r\n \r\n- we went ahead and separately updated this config and we no longer see the KEY error and we are able to proceed further in the script execution\r\n- on further analysis we see that the above script utilizes the following template to generate the L2 config\r\n https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-config-engine/data/l2switch.j2\r\n \r\nand this file is missing the VLAN_INTERFACE section. All copies of l2switch.j2 on the system are missing this section."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 9254,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/9254",
+      "title": "Fix bsl test",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2023-08-03T11:04:05Z",
+      "createdAt": "2023-08-03T06:14:18Z",
+      "author": "ganglyu",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #8730\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 201911\r\n- [ ] 202012\r\n- [ ] 202205\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nBSL test failed for key error.\r\n\r\n#### How did you do it?\r\nUpdate related test for BSL mode.\r\n\r\n#### How did you verify/test it?\r\nRun related test.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/fixtures/duthost_utils.py",
+          "additions": 2,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/helpers/portchannel_to_vlan.py",
+          "additions": 7,
+          "deletions": 0
+        },
+        {
+          "path": "tests/fdb/test_fdb.py",
+          "additions": 8,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-04T07:38:20Z",
+          "body": "@ganglyu PR conflicts with 202205 branch"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2023-08-04T07:38:26Z",
+          "body": "Cherry-pick PR to 202305: https://github.com/sonic-net/sonic-mgmt/pull/9285"
+        }
+      ]
+    }
+  ]
+}

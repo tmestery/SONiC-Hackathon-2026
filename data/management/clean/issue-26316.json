@@ -1,0 +1,43 @@
+{
+  "id": "management-26316",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26316,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26316",
+    "title": "Bug: test_vlan_ping fails on dualtor-120 with AssertionError: Did not receive expected packet on any of ports [] for device 0.",
+    "created_at": "2026-07-18T19:55:50Z",
+    "closed_at": "2026-07-30T03:20:09Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n vlan/test_vlan_ping.py selects Port-Channel2 for the lower ToR only when the\n  topology name contains \"dualtor-aa\".\n\n  On dualtor-120 lower-ToR runs, the test still uses Port-Channel1 VM data while\n  matching against the lower-ToR minigraph. The minigraph lookup does not find the\n  expected uplink ports, leaving vmhost_info[\"port_index_list\"] empty.\n\n  The test then fails packet verification because it expects the packet on an\n  empty port list.\n\n### Steps to Reproduce\n\n1. Use a dualtor-120 testbed.\n2. Select the lower ToR as the DUT under test.\n3. Run:\n\n`     pytest vlan/test_vlan_ping.py::test_vlan_ping`\n\n  4. Observe that vlan_ping_setup builds vmhost_info with an empty\n     port_index_list.\n\n### Actual Behavior and Expected Behavior\n\n **Actual behavior:**\n\n  The test fails with packet verification against an empty expected port list:\n\n  AssertionError: Did not receive expected packet on any of ports [] for device 0.\n\n  or:\n\n  AssertionError: Received expected packet on port <port> for device 0, but it\n  should have arrived on one of these ports: [].\n\n  **Expected behavior**:\n\n  For any dualtor topology, when the selected DUT is the lower ToR, the setup\n  should use the lower-ToR Port-Channel2 VM path. vmhost_info[\"port_index_list\"]\n  should contain the expected PTF port indices, and packet verification should\n  use those ports.\n\n### Relevant log output\n\n```shell\nvlan_ping_setup = ({\n    'ipv4': IPv4Address('<IP>'),\n    'ipv6': IPv6Address('fc00::72'),\n    'mac': '<IPV6>',\n    'port_index_list': []\n  }, ...)\n\n  tbinfo = {'conf-name': 'dt120', ...}\n  rand_one_dut_hostname = 'gd272'\n  duthost = <MultiAsicSonicHost gd272>\n\n  AssertionError: Did not receive expected packet on any of ports [] for device 0.\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 26317,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26317",
+    "title": "vlan: fix lower ToR path for dualtor topologies",
+    "merged_at": "2026-07-30T03:20:08Z",
+    "description": "### Description of PR\n\ntest_vlan_ping selects Port-Channel2 for the lower ToR only when the topology name contains dualtor-aa.\n\nOn dualtor-120 lower-ToR runs, the test still uses Port-Channel1 VM data while matching against the lower-ToR minigraph. The expected PTF port list can be empty, causing packet verification to fail.\n\nUse the lower-ToR Port-Channel2 path for all dualtor topology names.\nSummary:\nFixes #26316\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: day-one issue\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n **202605**\n***Fail***\n[test_vlan_ping_20260705_failed.log](https://github.com/user-attachments/files/30156558/test_vlan_ping_20260705_failed.log)\n[test_vlan_ping_20260705_failed.xml](https://github.com/user-attachments/files/30156562/test_vlan_ping_20260705_failed.xml)\n[test_vlan_ping_force_gd272_failed.log](https://github.com/user-attachments/files/30156563/test_vlan_ping_force_gd272_failed.log)\n[test_vlan_ping_force_gd272_failed.xml](https://github.com/user-attachments/files/30156564/test_vlan_ping_force_gd272_failed.xml)\n\n***Pass***\n[test_vlan_ping_fix_gd272_pass.xml](https://github.com/user-attachments/files/30156552/test_vlan_ping_fix_gd272_pass.xml)\n\n[test_vlan_ping_fix_gd272_pass.log](https://github.com/user-attachments/files/30156548/test_vlan_ping_fix_gd272_pass.log)\n\n### Approach\n\n#### What is the motivation for this PR?\ntest_vlan_ping can fail on lower-ToR runs for dualtor topologies other\n  than dualtor-aa, such as dualtor-120.\n\nThe test already has lower-ToR handling, but the condition is too narrow.\nIt only applies when the topology name contains dualtor-aa.\n\n#### How did you do it?\nChanged the lower-ToR VM interface selection condition from dualtor-aa\n  only to all topology names containing dualtor.\nThis preserves existing behavior for dualtor-aa and extends the same\n  lower-ToR path to other dualtor topologies.\n\n#### How did you verify/test it?\n\nVerified on a dualtor-120 testbed.\n\n  **Before the fix, lower-ToR runs produced:**\n `  vmhost_info[\"port_index_list\"] = []`\n      and packet verification failed.\n\n  **After the fix, the same test passed.**\n\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation",
+    "files": [
+      {
+        "path": "tests/vlan/test_vlan_ping.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

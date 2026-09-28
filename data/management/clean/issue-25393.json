@@ -1,0 +1,48 @@
+{
+  "id": "management-25393",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25393,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25393",
+    "title": "Bug:[dhcpmon] tx_first_relay_reply profile misclassifies outbound DHCP replies as Ignored in dualtor topology",
+    "created_at": "2026-06-16T09:52:34Z",
+    "closed_at": "2026-07-02T11:00:46Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nThe tx_first_relay_reply check profile in src/dhcp_check_profile_relay.cpp includes a DHCP_CHECK_SRC_IP condition that requires src_ip == giaddr_ip. In dualtor mode, giaddr_ip is set to the Loopback0 IP (e.g. <IP>) per dhcp_devman.cpp:262. However, both ISC relay and dhcp4relay correctly use the Vlan SVI (e.g. <IP>) as the L3 source of outbound DHCP replies. These are semantically independent fields: giaddr identifies the relay for routing; src_ip is the packet's L3 source for client-side ARP and routing.\n\nBecause src_ip != giaddr_ip on every outbound Offer/Ack/Nak in dualtor, the profile check fails and packet_handler.cpp increments IGNORED instead of the actual message type. This was introduced by commit 57036c7 (PR #62, \"Add DHCPv6 monitoring support\") and does not affect branch 202511.\n\n### Steps to Reproduce\n\n1. Set up a dualtor testbed running a build that includes PR #62 (master).\n2. Generate DHCP traffic through either ISC relay or dhcp4relay on a Vlan interface.\n3. Check dhcpmon counters:\n\n    sonic-db-cli COUNTERS_DB hgetall \"DHCPV4_COUNTER_TABLE:Vlan1000\"\n4. Observe TX:Offer = 0 despite relays forwarding correctly.\n\n### Actual Behavior and Expected Behavior\n\n**Current behaviour**\nTest failure:\nWARNING | Warning for comparing Vlan1000 counters and Vlan1000 from pkts counters, hostname:ld209.\nDHCP counter TX Offer: actual value 0, expected value 2754, the actual value is not equal to the expected value\nRaw Redis counter from DHCPV4_COUNTER_TABLE:Vlan1000 (written by dhcpmon, read by the test and CLI):\n\nRX: {'Discover':'2781','Offer':'0','Request':'0','Ack':'0','Nak':'0','Ignored':'0',...}\nTX: {'Discover':'0',  'Offer':'0', 'Request':'0','Ack':'0','Nak':'0','Ignored':'2785',...}\nEvery outbound Offer is mis-classified as Ignored. show dhcp_relay ipv4 counters shows no Offers/Acks.\n\n**Expected behaviour:**\nOutbound DHCP replies are classified by message type. TX:Offer = N matches the number of forwarded Offers. TX:Ignored is 0 for normal traffic.\n\n### Relevant log output\n\n```shell\nTest failure (line 15972 of test_dhcp_counter_stress.log):\n\n06/05/2026 <IPV6> dhcp_relay_utils.compare_dhcp_counters_w L0098 WARNING|\nWarning for comparing Vlan1000 counters and Vlan1000 from pkts counters, hostname:ld209.\nDHCP counter TX Offer: actual value 0, expected value 2754, the actual value is not equal to the expected value\nRaw Redis counter at time of failure \u2014 DHCPV4_COUNTER_TABLE:Vlan1000 (dhcpmon's table, which the test reads):\n\nsonic-db-cli COUNTERS_DB hgetall \"DHCPV4_COUNTER_TABLE:Vlan1000\"\n\nRX: {'Discover':'2781','Offer':'0','Request':'0','Ack':'0','Nak':'0','Ignored':'0',...}\nTX: {'Discover':'0',  'Offer':'0', 'Request':'0','Ack':'0','Nak':'0','Ignored':'0',...}\n\ncaught in debugging\nredis-cli -n 2 HGETALL \"DHCPV4_COUNTER_TABLE:Vlan1000\"\n1) \"TX\"\n2) \"{'Unknown':'0','Discover':'0','Offer':'0','Request':'0','Decline':'0','Ack':'0','Nak':'0',\n    'Release':'0','Inform':'0','Bootp':'0','Malformed':'0','Ignored':'2785'}\"\n```\n\n### Output of `show version`\n\n```shell\nSONiC Software Version: branch.master-ars.be52d747-buildimage.origin.master-nightly-2026.05.04.03.02\nDistribution: Debian 13.4\nKernel: 6.12.41+deb13\nBuild commit: bd5c3fe00\nBuild date: Mon May  4 <IPV6> UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-38521\nPlatform: x86_64-arista_7050cx3_32s\nHwSKU: Arista-7050CX3-32S-C32\nASIC: broadcom\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 81,
+    "repository": "sonic-net/sonic-dhcpmon",
+    "url": "https://github.com/sonic-net/sonic-dhcpmon/pull/81",
+    "title": "Fix tx_first_relay_reply src_ip check for dualtor topology",
+    "merged_at": "2026-07-02T11:00:44Z",
+    "description": "Description of the bug\nThe tx_first_relay_reply check profile in src/dhcp_check_profile_relay.cpp includes a DHCP_CHECK_SRC_IP condition that requires src_ip == giaddr_ip. In dualtor mode, giaddr_ip is set to the Loopback0 IP (e.g. <IP>) per dhcp_devman.cpp:262. However, both ISC relay and dhcp4relay correctly use the Vlan SVI (e.g. <IP>) as the L3 source of outbound DHCP replies. These are semantically independent fields: giaddr identifies the relay for routing; src_ip is the packet's L3 source for client-side ARP and routing.\n\nBecause src_ip != giaddr_ip on every outbound Offer/Ack/Nak in dualtor, the profile check fails and packet_handler.cpp increments IGNORED instead of the actual message type. This was introduced by commit 57036c7 (PR https://github.com/sonic-net/sonic-mgmt/pull/62, \"Add DHCPv6 monitoring support\") and does not affect branch 202511.\nFixes : https://github.com/sonic-net/sonic-mgmt/issues/25393\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n-\n**Approach**\n\nSet up a dualtor testbed running a build that includes PR https://github.com/sonic-net/sonic-mgmt/pull/62 (master).\n\nGenerate DHCP traffic through either ISC relay or dhcp4relay on a Vlan interface.\n\nCheck dhcpmon counters:\n\nsonic-db-cli COUNTERS_DB hgetall \"DHCPV4_COUNTER_TABLE:Vlan1000\"\n\nObserve TX:Offer = 0 despite relays forwarding correctly.\n\nActual Behavior and Expected Behavior\nCurrent behaviour\nTest failure:\nWARNING | Warning for comparing Vlan1000 counters and Vlan1000 from pkts counters, hostname:ld209.\nDHCP counter TX Offer: actual value 0, expected value 2754, the actual value is not equal to the expected value\nRaw Redis counter from DHCPV4_COUNTER_TABLE:Vlan1000 (written by dhcpmon, read by the test and CLI):\n\nRX: {'Discover':'2781','Offer':'0','Request':'0','Ack':'0','Nak':'0','Ignored':'0',...}\nTX: {'Discover':'0', 'Offer':'0', 'Request':'0','Ack':'0','Nak':'0','Ignored':'2785',...}\nEvery outbound Offer is mis-classified as Ignored. show dhcp_relay ipv4 counters shows no Offers/Acks.\n\nExpected behaviour:\nOutbound DHCP replies are classified by message type. TX:Offer = N matches the number of forwarded Offers. TX:Ignored is 0 for normal traffic.\n#### How did you do it?\nSet up a dualtor testbed running a build that includes PR https://github.com/sonic-net/sonic-mgmt/pull/62 (master).\n\nGenerate DHCP traffic through either ISC relay or dhcp4relay on a Vlan interface.\n\nCheck dhcpmon counters:\n\nsonic-db-cli COUNTERS_DB hgetall \"DHCPV4_COUNTER_TABLE:Vlan1000\"\n\nObserve TX:Offer = 0 despite relays forwarding correctly.\n\nFix:\nchange giaddr_ip to vlan_ip for DHCP_CHECK_SRC_IP\n\n#### How did you verify it?\nRan the test_dhcp_counter_stress test on both dtAA and t0 topologies and the test passed\nvalidated the counters\n#### Any platform specific information?\nNA\n\n#### Supported testbed topology if it's a new test case?\nNA\n### Documentation",
+    "files": [
+      {
+        "path": "src/dhcp_check_profile_relay.cpp",
+        "additions": 5,
+        "deletions": 4
+      },
+      {
+        "path": "src/dhcp_devman.cpp",
+        "additions": 2,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

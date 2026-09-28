@@ -1,0 +1,71 @@
+{
+  "number": 23049,
+  "title": "Bug: test_voq_counter: Credit-WD-Del counter does not increment on DNX/Q3D single-ASIC platforms",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23049",
+  "createdAt": "2026-03-17T18:58:01Z",
+  "closedAt": "2026-03-20T03:42:58Z",
+  "author": "darius-nexthop",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [
+    "darius-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe `tests/voq/test_voq_counter.py::test_voq_drop_counter` test checks the\nCredit-WD-Del counter but does not observe any counter increments on\nDNX/Q3D single-ASIC platforms, even when the Credit Watchdog feature is\nworking correctly.\n\nThe current test logic makes several assumptions that are not valid on\nthese platforms:\n\n* It assumes the presence of fabric/SFI ports and uses\n  `port enable sfi <true/false>` to trigger Credit Watchdog deletes.\n  DNX/Q3D single-ASIC platforms have no fabric ports, so this has no\n  effect on Credit Watchdog.\n* It parses Credit-WD-Del counters from VOQ0 for Ethernet-IB links.\n  On DNX/Q3D single-ASIC platforms there may be no Ethernet-IB links,\n  and traffic accumulates in a different VOQ index (e.g. VOQ7), so the\n  test is looking at the wrong counters.\n* It always uses `bcmcmd -n`, which is only applicable to multi-ASIC\n  systems, not single-ASIC DNX/Q3D.\n\nAs a result, the test either fails or reports zero Credit-WD-Del packets\non DNX/Q3D single-ASIC platforms, even though Credit Watchdog is actually\ndeleting packets as expected.\n\n### Steps to Reproduce\n\n1. Set up a DNX/Q3D-based single-ASIC DUT with a VOQ topology supported\n   by `sonic-mgmt`.\n2. Deploy a SONiC image where Credit Watchdog is enabled and operational\n   on the device.\n3. From the `sonic-mgmt` test environment, run test voq/test_voq_counter.py::test_voq_drop_counter\n4. Observe the behavior of the `Credit-WD-Del` counters that the test\n   parses, and the final test result.\n\n\n\n### Actual Behavior and Expected Behavior\n\n**Actual behavior**\n\nOn DNX/Q3D single-ASIC platforms:\n\n* Running `tests/voq/test_voq_counter.py::test_voq_drop_counter` does\n  not cause the parsed `Credit-WD-Del` counters to increment, because:\n  * `port enable sfi <true/false>` is a no-op (no fabric ports).\n  * The test parses counters from VOQ0 for Ethernet-IB links, which do\n    not exist on this platform and are not where traffic accumulates.\n  * The test always uses `bcmcmd -n`, which is not applicable to\n    single-ASIC systems.\n\nDepending on environment and expectations, this can cause the test to\nfail or to report zero Credit-WD-Del packets even when Credit Watchdog\nis active and deleting packets.\n\n**Expected behavior**\n\n* The test should induce Credit Watchdog deletes in a way that is valid\n  for DNX/Q3D single-ASIC platforms (e.g. by using\n  `setreg SCH_SCHEDULER_CONFIGURATION_REGISTER DISABLE_FABRIC_MSGS` to\n  starve the central scheduler).\n* It should parse Credit-WD-Del counters from the VOQ indices where\n  traffic actually queues on these platforms (e.g. VOQ7), rather than\n  assuming VOQ0 for Ethernet-IB.\n* It should avoid `bcmcmd -n` on single-ASIC systems, while preserving\n  the existing multi-ASIC path.\n\nWith these adjustments, the test should:\n* increment the relevant `Credit-WD-Del` counters on DNX/Q3D single-ASIC\n  platforms when Credit Watchdog deletes occur, and\n* pass when the feature is working correctly.\n\n### Relevant log output\n\n```shell\ndef test_voq_queue_counter(duthosts, enum_rand_one_per_hwsku_frontend_hostname):\n        \"\"\"\n        This test implicitly verifies that queue counters --voq (i.e. Credit-WD-Del/pkts)\n        are working as expected by disabling the fabric ports\n        \"\"\"\n        duthost = duthosts[enum_rand_one_per_hwsku_frontend_hostname]\n        bcm_changes = False\n        # Ensure the device is a Broadcom device\n        pytest_require((duthost.facts.get('platform_asic') == \"broadcom-dnx\"),\n                       \"The Test Case is only supported on Broadcom-dnx ASIC\")\n    \n        cmd_bcmcmd_false = \"'port enable sfi false'\"\n        cmd_bcmcmd_true = \"'port enable sfi true'\"\n        cmd = \"show queue counters --voq --nonzero| grep -i '{}' |grep -i '{}' |awk '{{print $7}}'\".format(\"Ethernet-IB\",\n                                                                                                           \"VOQ0\")\n        try:\n            bcm_changes = True\n            for asic in duthost.asics:\n                bcmcmd = \"bcmcmd {} \".format(\"-n \" + str(asic.asic_index)) + cmd_bcmcmd_false\n                res = duthost.shell(bcmcmd, module_ignore_errors=True)\n                if not res[\"stderr\"] == \"polling socket timeout: Success\" and res[\"failed\"]:\n                    pytest.fail(\"BCMCMD Failed\")\n    \n            def queue_counter_assertion():\n                out = duthost.shell(cmd)['stdout'].split('\\n')\n                integers = [int(item.replace(',', '')) for item in out if item.replace(',', '').strip().isdigit()]\n                return any(num > 0 for num in integers)\n    \n>           pytest_assert(wait_until(300, 0, 0, queue_counter_assertion),\n                          \"Credit-WD-Del/pkts is not increasing \"\n                          \"Ref: https://github.com/sonic-net/sonic-buildimage/issues/21098\")\nE                         Failed: Credit-WD-Del/pkts is not increasing Ref: https://github.com/sonic-net/sonic-buildimage/issues/21098\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23047,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23047",
+      "title": "voq/test_voq_counter: fix Credit-WD-Del counter verification",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-20T03:42:56Z",
+      "createdAt": "2026-03-17T18:34:25Z",
+      "author": "darius-nexthop",
+      "body": "\r\n### Description of PR\r\n\r\nSummary:\r\nFix verification of the Credit-WD-Del counter in `tests/voq/test_voq_counter.py` on DNX/Q3D single-ASIC systems.\r\n\r\nFixes #23049\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework (new/improvement)\r\n- [ ] New test case\r\n  - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nThe test `tests/voq/test_voq_counter.py::test_voq_drop_counter` checks the Credit-WD-Del counter but shows no increments on DNX/Q3D single-ASIC platforms, even when the Credit Watchdog feature is working. This is due to assumptions in the test about fabric ports, specific VOQ indices, and the availability of `bcmcmd -n` that do not hold on these systems.\r\n\r\n#### How did you do it?\r\n\r\nThis change updates the test logic to better match DNX/Q3D single-ASIC behavior while preserving existing multi-ASIC behavior:\r\n\r\n1. On platforms without fabric ports, `port enable sfi [true/false]` does not apply and cannot be used to trigger Credit Watchdog deletes. Instead, the test now uses:\r\n   ```text\r\n   setreg SCH_SCHEDULER_CONFIGURATION_REGISTER DISABLE_FABRIC_MSGS\r\n   ```\r\n   to induce credit starvation on the central scheduler, causing VOQs that are holding traffic to be cleared by the Credit Watchdog.\r\n\r\n2. The original test parsed Credit-WD-Del counters from VOQ0 for Ethernet-IB links. On DNX/Q3D single-ASIC systems, traffic accumulates in a different VOQ index (e.g. VOQ7), and there may be no Ethernet-IB links. The test is updated to check the appropriate VOQ\u2019s Credit-WD-Del counters for the platform under test instead of assuming VOQ0 on Ethernet-IB.\r\n\r\n3. The `bcmcmd -n` flag is only applicable on multi-ASIC systems. The test now has separate paths:\r\n   - multi-ASIC: continue using `bcmcmd -n` as before,\r\n   - single-ASIC: avoid `-n` and use a single-ASIC-safe command sequence.\r\n\r\n#### How did you verify/test it?\r\n\r\nThe updated test was run on a DNX/Q3D single-ASIC platform and now passes: the Credit-WD-Del counter increments as expected when Credit Watchdog deletes occur, and the test completes successfully.\r\n\r\nExisting multi-ASIC logic is preserved and continues to be exercised via the multi-ASIC path in the test.\r\n\r\n### Any platform specific information?\r\n\r\nThe changes primarily affect DNX/Q3D single-ASIC platforms and are gated so that existing multi-ASIC and chassis behavior remains unchanged.\r\n\r\n### Supported testbed topology if it's a new test case?\r\n\r\nNot applicable; this is a change to an existing test case.\r\n\r\n### Documentation\r\n\r\nNot applicable; this is a test bug fix and does not introduce a new feature or test case.\r\n",
+      "files": [
+        {
+          "path": "tests/voq/test_voq_counter.py",
+          "additions": 56,
+          "deletions": 22
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-17T18:34:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-03-17T18:34:36Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: darius-nexthop / name: Darius Grassi (e8c7c1e192813f131ad8e20e84733cc1f99a9ff9)</li></ul>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-17T18:34:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-18T14:05:53Z",
+          "body": "AI agent on behalf of Ying.\n\nIssues found:\n- Found 'test_' prefix in paths; avoid test_ for fixtures"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-03-19T19:36:22Z",
+          "body": "Apologies for the duplicate review/comment noise earlier. We've fixed the automation to prevent repeat approvals/comments and cleaned up extras where possible.\n\nAI agent on behalf of Ying.\n<!-- AI_AGENT_APOLOGY:20260319 -->"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-20T05:18:29Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/23159"
+        }
+      ]
+    }
+  ]
+}

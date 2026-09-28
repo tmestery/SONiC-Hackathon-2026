@@ -1,0 +1,75 @@
+{
+  "number": 25992,
+  "title": "Bug: incorrect trim drop counter assertion",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25992",
+  "createdAt": "2026-07-08T22:57:52Z",
+  "closedAt": "2026-08-05T15:49:04Z",
+  "author": "rgarofano-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nWe started seeing failures on 202511 for our packet_trimming tests due to https://github.com/sonic-net/sonic-mgmt/pull/22807. This PR assumes that the trim drop counter will decrease after the data queue is unblocked. This is not the case for Broadcom. The only time a counter should decrease is if it gets explicitly cleared (and also if trimming is disabled due to brcm sai implementation).\n\n### Steps to Reproduce\n\nrun `packet_trimming/test_packet_trimming_symmetric.py::TestPacketTrimmingSymmetric::test_trimming_counters` or `packet_trimming/test_packet_trimming_asymmetric.py::TestPacketTrimmingAsymmetric::test_trimming_counters` and observe assertion error \"trim counter did not stabilize to 0\".\n\n### Actual Behavior and Expected Behavior\n\nTrim drop counters for broadcom (and likely other platforms) should not decrease while the feature is enabled. The test should not fail because the trim drop counter didn't go down to zero.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "thisptr-sh",
+      "createdAt": "2026-07-13T21:35:27Z",
+      "body": "Hi @rgarofano-arista , thanks for the fix for this issue! As discussed in the comments of the PR put out, we will only need this fix in 202511 as the failures caused by PR: https://github.com/sonic-net/sonic-mgmt/pull/22807 are removed by https://github.com/sonic-net/sonic-mgmt/pull/24578/changes#diff-bb6c84ee68b3a29ce48f8f3407a28bafba8c19c640d850eaec6dd525fca00ab3L427-L434 and no longer exist on master, hence the best path forward is landing this fix on 202511 branch , and closing the master PR"
+    },
+    {
+      "author": "thisptr-sh",
+      "createdAt": "2026-07-13T21:47:06Z",
+      "body": "@rgarofano-arista created 202511 only PR of the fix: https://github.com/sonic-net/sonic-mgmt/pull/26141, can you please help review it so we can close this bug?"
+    },
+    {
+      "author": "yxieca",
+      "createdAt": "2026-08-05T15:49:04Z",
+      "body": "fix went in already."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26141,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26141",
+      "title": "[202511] Fix packet trimming regression related to trim drop counter",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-14T22:02:18Z",
+      "createdAt": "2026-07-13T21:46:06Z",
+      "author": "thisptr-sh",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nManual pick of fix provided by Arista: Fixes packet trimming regression related to the `TRIM_DRP_PKTS` (trim drop) counter in the `test_trimming_counters` test case, on the 202511 branch only.\r\n\r\nThe original counter-stabilization logic was introduced by #22807. On master, that code path was later removed/reworked by #24578 (\"Update trimming case to support queue-level TrimSent and TrimDrop counters\"), so master no longer needs this fix. However, 202511 does not include #24578, so the regression still exists there and must be fixed independently on 202511.\r\n\r\nThis PR ports the fix from #24137 to 202511: it makes the post-test cleanup differentiate between Mellanox and non-Mellanox devices when validating the trim drop counter after restoring the blocked trim queue.\r\n\r\nThis is a **202511-only** change and is intentionally not applicable to master.\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request:\r\nFailure type: regression\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n`TRIM_DRP_PKTS` is a calculated counter (`TRIM_PKTS - TRIM_TX_PKTS`) rather than a real hardware counter. After the blocked trim queue is restored during cleanup in `test_trimming_counters`, queued packets drain out and the counter behaves differently across platforms:\r\n- On Mellanox devices it gradually decreases back to 0.\r\n- On non-Mellanox devices it simply stops increasing.\r\n\r\nThe previous logic asserted the counter must stabilize to 0 for all platforms, which caused false failures on non-Mellanox devices. This regression is present on 202511 because 202511 does not have the counter rework from #24578 that is already on master.\r\n\r\n#### How did you do it?\r\n- Added a new helper `is_trim_drop_counter_stable()` in `tests/packet_trimming/packet_trimming_helper.py` that polls `TRIM_DRP_PKTS` and returns `True` once the counter stops increasing.\r\n- Updated the `finally` block of `test_trimming_counters` in  `tests/packet_trimming/base_packet_trimming.py` to branch by device type after restoring the queue:\r\n  - Mellanox: wait for the counter to stabilize to 0 (`check_trim_drop_counter_zero`).\r\n  - Non-Mellanox: verify the counter is no longer increasing (`is_trim_drop_counter_stable`).\r\n- Collected any validation errors and asserted after the loop so that all ports get unblocked before the assertion runs.\r\n\r\n#### How did you verify/test it?\r\nRan `test_trimming_counters` in the `packet_trimming` suite on the 202511 branch and confirmed the cleanup validation passes for both Mellanox and non-Mellanox devices.\r\n\r\n#### Any platform specific information?\r\nThe validation path differs by vendor: Mellanox expects the drop counter to return to 0, while other platforms only require the counter to stop increasing.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A (existing test case fix).\r\n\r\n### Documentation\r\nN/A",
+      "files": [
+        {
+          "path": "tests/packet_trimming/base_packet_trimming.py",
+          "additions": 14,
+          "deletions": 9
+        },
+        {
+          "path": "tests/packet_trimming/packet_trimming_helper.py",
+          "additions": 23,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-13T21:46:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-13T21:46:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "thisptr-sh",
+          "createdAt": "2026-07-13T21:53:56Z",
+          "body": "Hi @rgarofano-arista , please help take a look for 202511 only PR of https://github.com/sonic-net/sonic-mgmt/pull/24137 and we can get the bug closed, thanks!"
+        }
+      ]
+    }
+  ]
+}

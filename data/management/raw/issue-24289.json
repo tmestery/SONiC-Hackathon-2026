@@ -1,0 +1,148 @@
+{
+  "number": 24289,
+  "title": "Enhancement: sonic-mgmt reboot tests could cause DUT to be stuck at grub edit mode",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24289",
+  "createdAt": "2026-04-29T00:33:41Z",
+  "closedAt": "2026-05-27T21:32:00Z",
+  "author": "domingo-nexthop",
+  "labels": [
+    "Enhancement",
+    "Triaged"
+  ],
+  "assignees": [
+    "domingo-nexthop"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the enhancement\n\nMore robust way to establish and clean up console connection in sonic-mgmt tests for reboots. Graceful handling of cleanup if console connection is not established - only write `exit` if at SONiC prompt. \n\n### Current Behavior\n\nsonic-mgmt reboot tests sometimes cause DUT to enter GRUB edit mode (as seen in console) when the reboot is happening. However, this is not expected or handled the test framework. So, the DUT is stuck, and the test fails / cannot proceed with remaining test cases. Typically, the DUT has to be recovered by power cycling.\n\n\nAs part of the `netmiko` framework, the cleanup of `SSHConsoleConn` can be triggered by many ways. In my limited experience, this is typically triggered by an EOF exception during a console read while the reboot is happening. When the cleanup sends `exit` ([ref](https://github.com/sonic-net/sonic-mgmt/blob/99b28c4f2072cead6ba6fff48821395eae75eda6/tests/common/connections/ssh_console_conn.py#L192)) as part of the clean up, it happens to coincide with the GRUB menu (which is normal during bootup). Sending `e` then enters the GRUB edit mode unexpectedly. \n\nI think the cleanup is called correctly but should not blindly write `exit` to the console. In #24288 , the proposal is to first check that the console is likely at the SONiC prompt (which seems to be the original intent based on the comment there).\n\n\n### Proposed Behavior\n\nConsole connection is established as best effort and should not be the cause of a test failure. Using it (or not) should not cause unrelated failure for reboot tests.",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2026-04-29T15:11:08Z",
+      "body": "@domingo-nexthop , Curious how did the console connection caused the reboot to land in the GRUB menu and how did logout from the sonic session  helped? Was there any key stroke sent to the console unexpectedly during the boot up sequence caused the issue? Can you elaborate?\n"
+    },
+    {
+      "author": "domingo-nexthop",
+      "createdAt": "2026-04-30T23:39:06Z",
+      "body": "The cleanup of `SSHConsoleConn` ([ref](https://github.com/sonic-net/sonic-mgmt/blob/99b28c4f2072cead6ba6fff48821395eae75eda6/tests/common/connections/ssh_console_conn.py#L192)) writes `exit`. `e`, when written to at GRUB menu, enters the GRUB edit mode directly which is unexpected.\n\nAs part of the `netmiko` framework, the cleanup can be triggered by many ways. In my limited experience, this is typically triggered by an EOF exception during a console read while the reboot is happening. I think the cleanup is called correctly but should not blindly write `exit` to the console. In #24288 , the proposal is to first check that the console is likely at the SONiC prompt (which is the original intent based on the comment there).\n\n@yxieca I have added this to the PR description (and also in #24288). Thank you for checking."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 24288,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24288",
+      "title": "Improve console connection during sonic-mgmt reboot events",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-05-27T21:31:59Z",
+      "createdAt": "2026-04-29T00:28:34Z",
+      "author": "domingo-nexthop",
+      "body": "\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\n\r\n\r\nSummary: Improve establishing console connection in sonic-mgmt reboot test runs and avoid DUT console to be stuck at grub edit.\r\nFixes #24289\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nWe have observed DUT is stuck in GRUB edit mode during sonic-mgmt tests that involve reboots.\r\nThe sonic-mgmt tests that use the `tests/common/reboot.py` helper attempts to create a console connection ([ref](https://github.com/sonic-net/sonic-mgmt/blob/99b28c4f2072cead6ba6fff48821395eae75eda6/tests/common/reboot.py#L390)) during which any exception (for example, EOF from console reads) could trigger a cleanup of the console connection. At the same time, the DUT has already started reboot. The cleanup writes exit ([ref](https://github.com/sonic-net/sonic-mgmt/blob/99b28c4f2072cead6ba6fff48821395eae75eda6/tests/common/connections/ssh_console_conn.py#L192)) to the console while the DUT gets to the grub menu. `e` typically enters the grub edit mode, which is not expected or handled by the test framework. So the DUT is stuck, and the test fails / cannot proceed with remaining test cases.\r\n\r\nAs part of the `netmiko`, the cleanup can be triggered by many ways. In my limited experience, this is typically triggered by an EOF exception during a console read while the reboot is happening. I think the cleanup is called correctly but should not blindly write `exit` to the console. The proposal is to first check that the console is likely at the SONiC prompt (which is the original intent based on the comment there).\r\n\r\nAs an aside, the PR also improves the way to establish console connection in the first place. \r\n\r\nExample that causes a cleanup \r\n\r\n```\r\n   multiprocessing/pool.py worker\r\n    \u2514\u2500 reboot.py:730  collect_console_log()\r\n         \u2514\u2500 reboot.py:719  try_create_dut_console()\r\n              \u2514\u2500 dut_utils.py:525  create_duthost_console()\r\n                   \u2514\u2500 console_host.py:54  ConsoleHost()\r\n                        \u2514\u2500 ssh_console_conn.py:52  SSHConsoleConn.__init__()\r\n                             \u2514\u2500 base_console_conn.py:64  BaseConsoleConn.__init__()\r\n                                  \u2514\u2500 netmiko/base_connection.py:495  __init__()\r\n                                       \u2514\u2500 netmiko/base_connection.py:501  _open()\r\n                                            \u2514\u2500 netmiko/base_connection.py:999  _try_session_preparation()\r\n                                                 \u2502  <\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014 Exception raised here (channel EOF or ReadTimeout)\r\n                                                 \u2514\u2500 base_console_conn.py:112  disconnect()\r\n                                                      \u2514\u2500 netmiko/base_connection.py:2488  disconnect()\r\n                                                           \u2514\u2500 ssh_console_conn.py:218  cleanup()\r\n                                                                \u2514\u2500 send_command(\"exit\", expect_string=\"login:\")\r\n\r\n```\r\n\r\nWe observed at least 2 triggers for the exception\r\n1. sonic-mgmt's [login_stage_2](https://github.com/sonic-net/sonic-mgmt/blob/f84006b6d63568478b4d97b953ad054f6551418d/tests/common/connections/ssh_console_conn.py#L61) -> \"Socket is closed\" ([ref](https://github.com/paramiko/paramiko/blob/8697158113a3eab25ed1d1d541ebe2cad10169a7/paramiko/channel.py#L1196)). Here, login failed because the device is rebooting.\r\n2. sonic-mgmt [session_preparation](https://github.com/sonic-net/sonic-mgmt/blob/f84006b6d63568478b4d97b953ad054f6551418d/tests/common/connections/ssh_console_conn.py#L41) -> [ReadTimeout](https://github.com/ktbyers/netmiko/blob/develop/netmiko/base_connection.py#L812-L827) because it takes more than [20 seconds](https://github.com/ktbyers/netmiko/blob/eadebd7f59314708e11d8e5acd143957d9d74ebd/netmiko/base_connection.py#L1241) to go through BIOS and GRUB\r\n\r\n\r\nThe 20 second timeout became effective and surfaced the latent timing bug since https://github.com/sonic-net/sonic-buildimage/pull/24306/ when the new `netmiko` version has a much shorter timeout.\r\n\r\n#### How did you do it?\r\n\r\n-  Instead of a hard coded sleep, block on establishing a console connection , with a time out (in which case console cleanup is not attempted anymore). Console connection is established as best effort and should not be the cause of a test failure. \r\n- Attempt to clean up console connection only if at SONiC prompt. Before writing exit to console, make sure the console is already connected and is likely to be seeing the SONiC prompt.\r\n\r\n#### How did you verify/test it?\r\n\r\n\r\nRun these tests multiple times \r\n- tests/platform_tests/test_kdump.py\r\n- tests/platform_tests/test_power_off_reboot.py\r\n- tests/platform_tests/test_reboot.py\r\n\r\nSuccessful console connection is typically established after the first attempt\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/connections/ssh_console_conn.py",
+          "additions": 59,
+          "deletions": 4
+        },
+        {
+          "path": "tests/common/helpers/dut_utils.py",
+          "additions": 10,
+          "deletions": 12
+        },
+        {
+          "path": "tests/common/reboot.py",
+          "additions": 37,
+          "deletions": 24
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-29T00:28:42Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-29T00:28:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-07T02:41:36Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2026-05-07T23:34:41Z",
+          "body": "/Azp run "
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-07T23:34:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "saravanan-nexthop",
+          "createdAt": "2026-05-14T18:00:26Z",
+          "body": "@yxieca please let us know if you have some comments for this PR ?"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-05-17T02:25:29Z",
+          "body": "AI agent on behalf of Ying.\nConcern: reboot now waits up to ~90s for console connection (3 attempts, 15s backoff) before proceeding when console is down. Is that acceptable for test runtime, or should we shorten/guard it (e.g., skip wait if console is disabled or cap timeout)?\nOtherwise LGTM."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-18T22:43:46Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-18T22:44:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "domingo-nexthop",
+          "createdAt": "2026-05-18T22:44:06Z",
+          "body": "Thank you @yxieca  for pointing out the longer test runtime potentially. I have removed the backoff retry sleep entirely and replaced it with a max wait timeout that is more generous and flexible than the hard coded sleep. The motivation for the retries was to give it more time to create a successful console connection. The console connection is not mandatory for testing.\r\n\r\nBefore this PR, the console connection is established and retried asynchronously. Reboot command is then issued 5 seconds after. It's possible that a console connection fails to start during this time. Now that this part is synchronous with a max wait timeout, no console connection (and no cleanup path) would be attempted after reboot command is issued. So, the retry backoff logic is no longer required. I also tested this by running the 3 test suites."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-18T22:44:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-18T22:45:11Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-21T21:30:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-21T21:30:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "domingo-nexthop",
+          "createdAt": "2026-05-26T15:53:36Z",
+          "body": "Hi @yxieca @YatishSVC I have removed the backoff retry logic because it is not necessary anymore. The PR is ready for re-review. Could you please take another look? Thank you. "
+        },
+        {
+          "author": "domingo-nexthop",
+          "createdAt": "2026-05-27T17:43:01Z",
+          "body": "Thank you for the review @yxieca I agree with your comments. I plan to address them in a follow up PR if that's ok! Thank you again. "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-28T03:48:27Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/24915"
+        }
+      ]
+    }
+  ]
+}

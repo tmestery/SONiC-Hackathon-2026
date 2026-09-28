@@ -1,0 +1,43 @@
+{
+  "id": "management-26817",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26817,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26817",
+    "title": "Bug: run_traffic_and_collect_stats fails with FileNotFoundError when the stats log directory does not exist",
+    "created_at": "2026-08-05T21:44:24Z",
+    "closed_at": "2026-08-19T06:11:12Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`run_traffic_and_collect_stats()` in `tests/common/snappi_tests/traffic_generation.py` writes its per-run statistics to a path composed by the caller, but never creates the directory:\n\n```python\n# tests/common/snappi_tests/traffic_generation.py:1848-1849\nfname = fname + '-' + datetime.now().strftime('%Y-%m-%d-%H-%M')\nwith open(fname+'.txt', 'w') as f:\n```\n\nCallers pass nested log paths via `test_def['test_type']`. For example every test in `snappi_tests/pfcwd/test_pfcwd_actions.py` does:\n\n```python\n'test_type': 'logs/snappi_tests/pfcwd/One_Ingress_Egress_pfcwd_drop_uni_dist' + str(port_map[1]) + 'Gbps',\n```\n\nIf `logs/snappi_tests/pfcwd/` does not already exist, the `open()` raises `FileNotFoundError` and the test fails **after** traffic has run and all statistics have been collected \u2014 so a full ~5 minute traffic run is discarded on a directory that could have been created.\n\n`traffic_generation.py` does not import `os`, so there is no directory handling anywhere in the module. A later `df_t.to_csv(fname, index=False)` writes to the same directory, so a single `makedirs` before the first write covers both.\n\nThis only reproduces on a tree where that log directory has never been created \u2014 which is why it is easy to miss on a long-lived working copy where an earlier run happened to create it.\n\n### Steps to Reproduce\n\n1. On a fresh checkout (or after `rm -rf tests/logs/snappi_tests`), run any test from `snappi_tests/pfcwd/test_pfcwd_actions.py` on a snappi/TGEN testbed, e.g.:\n   `pytest snappi_tests/pfcwd/test_pfcwd_actions.py -k test_pfcwd_drop_uni`\n2. The test runs traffic to completion, then fails when writing its stats file.\n\n### Actual Behavior and Expected Behavior\n\n**Actual**\n\n```\nsnappi_tests/pfcwd/test_pfcwd_actions.py:317: in test_pfcwd_drop_uni\nsnappi_tests/pfcwd/files/pfcwd_actions_helper.py:293: in run_pfc_test\ncommon/snappi_tests/traffic_generation.py: FileNotFoundError\n\nE  FileNotFoundError: [Errno 2] No such file or directory:\n   'logs/snappi_tests/pfcwd/One_Ingress_Egress_pfcwd_drop_uni_dist400Gbps_ixia_dut_tb_1024B-2026-08-05-19-55.txt'\n```\n\n**Expected** \u2014 the statistics file is written, creating any missing parent directories, and the test proceeds to its actual assertions.\n\n### Relevant log output\n\n```shell\nFileNotFoundError: [Errno 2] No such file or directory: 'logs/snappi_tests/pfcwd/One_Ingress_Egress_pfcwd_drop_uni_dist400Gbps_ixia_dut_tb_1024B-2026-08-05-19-55.txt'\ncommon/snappi_tests/traffic_generation.py: FileNotFoundError\n```\n\n### Output of `show version`\n\nNot applicable \u2014 the failure is in sonic-mgmt test-framework file handling and is independent of the image under test.\n\n### Attach files (if any)\n\nSuggested fix (verified locally \u2014 the stats `.txt` and `.csv` are then both written and the affected tests proceed past this point):\n\n```python\nimport os\n...\n    fname = fname + '-' + datetime.now().strftime('%Y-%m-%d-%H-%M')\n    dirname = os.path.dirname(fname)\n    if dirname:\n        os.makedirs(dirname, exist_ok=True)\n    with open(fname+'.txt', 'w') as f:\n```\n\nHappy to raise a PR for this if the approach looks right."
+  },
+  "resolution": {
+    "pr_number": 26819,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26819",
+    "title": "snappi: create the stats log directory before writing to it",
+    "merged_at": "2026-08-19T06:11:11Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #26817\n\n`run_traffic_and_collect_stats()` writes its per-run statistics to a path composed by the caller, but never creates the directory. Callers embed a relative directory in `test_def['test_type']` \u2014 every test in `snappi_tests/pfcwd/test_pfcwd_actions.py` uses paths like `logs/snappi_tests/pfcwd/One_Ingress_Egress_pfcwd_drop_uni_dist400Gbps`. If that directory does not exist, `open()` raises `FileNotFoundError` **after** the traffic run has completed and stats have been collected, discarding the run.\n\nThis creates the parent directory before the write. The later `df_t.to_csv(fname)` targets the same directory, so one `mkdir` covers both.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\nNo backport requested.\n\nFailure type: day-one issue\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\nBroadcom DNX (400G), image `202511.Nexthop.137667`, running `snappi_tests/pfcwd/test_pfcwd_actions.py` with `tests/logs/snappi_tests/` removed beforehand.\n\nBefore: every test reaching the stats write failed with `FileNotFoundError`. After: the directory is created, both artifacts are written, and the tests proceed to their own assertions.\n\nflake8 clean; module parses.\n\n### Approach\n\n#### What is the motivation for this PR?\n\nTests fail on a fresh tree at the stats write, discarding a completed traffic run.\n\n#### How did you do it?\n\n```python\n# Callers compose fname from nested log dirs that may not exist yet.\nPath(fname).parent.mkdir(parents=True, exist_ok=True)\n```\n\n`pathlib` avoids the `os.path.dirname` + `os.makedirs` pair and its empty-dirname guard, since `Path('foo').parent` is `Path('.')`. `os` is not referenced elsewhere in the module, so no `import os` is added.\n\n#### How did you verify/test it?\n\nSee **Test result**.\n\n#### Any platform specific information?\n\nNone \u2014 shared snappi helper, platform independent.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A \u2014 existing helper fix.\n\n### Documentation\n\nNo documentation change.",
+    "files": [
+      {
+        "path": "tests/common/snappi_tests/traffic_generation.py",
+        "additions": 3,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

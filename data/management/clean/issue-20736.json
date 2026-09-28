@@ -1,0 +1,85 @@
+{
+  "id": "management-20736",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 20736,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/20736",
+    "title": "[TSA/TSB] Bug: Intermittent TSA/TSB test failures caused by FRR config apply latency",
+    "created_at": "2025-09-18T19:58:37Z",
+    "closed_at": "2025-10-29T07:22:10Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [
+      "master"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nMost test cases in the TSA/TSB suite check the Traffic shift state by issuing TSC immediately after a TSA/TSB operation. However, due to some delay in the application of FRR config, TSC can report that the DUT is in inconsistent state leading to intermittent test failures.\n\nErrors noticed when TSC is issued after TSB.\n``` python\n# code\nlinecard.shell('TSB')\nlinecard.shell('sudo config save -y')\n# Ensure that the DUT is not in maintenance already before start of the test\npytest_assert(TS_NORMAL == get_traffic_shift_state(linecard, cmd='TSC no-stats'),\n                          \"DUT is not in normal state\")\n```\n``` bash\n# Error logs\n>       pytest.fail(\"{} return unexpected state {}\".format(cmd, \"ERROR\"))\nE       Failed: TSC no-stats return unexpected state ERROR\n\ncmd        = 'TSC no-stats'\nhost       = <MultiAsicSonicHost ixre-egl-board202>\noutputs    = ['BGP0 : System Mode: Maintenance', 'BGP1 : System Mode: Normal']\n```\nSimilar Errors when TSC is issued after TSA\n``` python\n# code\nlc.shell('TSA')\nlc.shell('sudo config save -y')\n# Ensure that the DUT is in maintenance state\npytest_assert(TS_MAINTENANCE == get_traffic_shift_state(lc, cmd='TSC no-stats'),\n                      \"DUT is not in maintenance state\")\n```\n``` bash\n# Error logs\n>       pytest.fail(\"{} return unexpected state {}\".format(cmd, \"ERROR\"))\nE       Failed: TSC no-stats return unexpected state ERROR\n\ncmd        = 'TSC no-stats'\nhost       = <MultiAsicSonicHost ixre-egl-board202>\noutputs    = ['BGP0 : System Mode: Not consistent', 'BGP1 : System Mode: Maintenance']\n```\n\n### Steps to Reproduce\n\nThe following script [test.sh](https://github.com/user-attachments/files/22413608/test.sh) runs TSA-TSC-TSB-TSC in a loop.\nAfter running the script for 50 iterations, TSC reported incorrect state 2/5 times.\n\nAdding a small delay(5s) between issuing TSA/TSB and TSC resolved the issue.\n\n### Actual Behavior and Expected Behavior\n\nTSC after TSB\nExpected behavior:\n```\n['BGP0 : System Mode: Normal', 'BGP1 : System Mode: Normal']\n```\n\nActual Behavior (Intermittent):\n```\n['BGP0 : System Mode: Maintenance', 'BGP1 : System Mode: Normal']\n```\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\nmaster\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 21047,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/21047",
+    "title": "add wait_until for TSC",
+    "merged_at": "2025-10-29T07:22:09Z",
+    "description": "### Description of PR\n\n- Wrap the TSC call in a `wait_until` function\n- Remove `pytest_fail` inside `get_traffic_shift_state` function\n\nSummary:\nFixes #20736\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n\n### Approach\n#### What is the motivation for this PR?\nMost test cases in the TSA/TSB suite check the Traffic shift state by issuing TSC immediately after a TSA/TSB operation. However, due to some delay in the application of FRR config, TSC can report that the DUT is in inconsistent state if we read the config before it is fully applied, leading to intermittent test failures.\n#### How did you do it?\nI've modified the code to add retry mechanism to the TSC check.\n#### How did you verify/test it?\nRan the TSA/TSB tests on a T2 topology.\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/bgp/bgp_helpers.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/bgp/constants.py",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "tests/bgp/reliable_tsa/test_reliable_tsa_flaky.py",
+        "additions": 27,
+        "deletions": 21
+      },
+      {
+        "path": "tests/bgp/reliable_tsa/test_reliable_tsa_stable.py",
+        "additions": 24,
+        "deletions": 23
+      },
+      {
+        "path": "tests/bgp/test_startup_tsa_tsb_service.py",
+        "additions": 26,
+        "deletions": 22
+      },
+      {
+        "path": "tests/bgp/test_traffic_shift.py",
+        "additions": 11,
+        "deletions": 11
+      },
+      {
+        "path": "tests/bgp/test_traffic_shift_lc.py",
+        "additions": 27,
+        "deletions": 11
+      },
+      {
+        "path": "tests/bgp/test_traffic_shift_sup.py",
+        "additions": 2,
+        "deletions": 1
+      },
+      {
+        "path": "tests/bgp/traffic_checker.py",
+        "additions": 6,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-15813",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 15813,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/15813",
+    "title": "[Bug]: Some log lost during the place_marker_to_syslog in loganalyzer ",
+    "created_at": "2024-11-30T13:02:56Z",
+    "closed_at": "2026-02-27T16:12:44Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\nIn the place_marker_to_syslog,  when the flush_rsyslogd() is called, sometimes it will have some log lost since \"sudo kill -HUP {}\".format(pid)\"\n\nThis is a known issue This is a known issue: https://serverfault.com/questions/813871/proper-way-to-reload-rsyslog-with-a-config-file-for-a-custom-application\n\n![image](https://github.com/user-attachments/assets/4dba82e7-dbe9-4dd2-9d2e-1e4775851dc5)\n\n```\ndef place_marker_to_syslog(self, marker):\n        syslogger = self.init_sys_logger()\n        syslogger.info(marker)\n        syslogger.info('\\n')\n        self.flush_rsyslogd()\n\ndef flush_rsyslogd(self):\n        '''\n        @summary: flush all remaining buffer in rsyslogd to disk\n\n        rsyslog.service - System Logging Service\n            Loaded: loaded (/lib/systemd/system/rsyslog.service; enabled; vendor preset: enabled)\n            Active: active (running) since Fri 2021-09-03 <IPV6> UTC; 14h ago\n        TriggeredBy: syslog.socket\n            Docs: man:rsyslogd(8)\n             https://www.rsyslog.com/doc/\n         Main PID: 17516 (rsyslogd)\n         Tasks: 5 (limit: 3402)\n         Memory: 3.3M\n         CGroup: /system.slice/rsyslog.service\n              17516 /usr/sbin/rsyslogd -n\n        '''\n        pid = None\n        out = str(subprocess.check_output(\"systemctl status rsyslog\", shell=True))\n        for msgs in out.split('\\n'):\n            m = re.search(re_rsyslog_pid, msgs)\n            if m:\n                pid = int(m.group(1))\n                break\n\n        if pid:\n            os.system(\"sudo kill -HUP {}\".format(pid))\n```\n\n### Results you see\n\nSometimes, there will be log lost when run loganalyzer\n\nWhen run place_marker_to_syslog, sometimes there will be timeout exception:\n[ INFO] (proxy_ssh_engine.py:622) Traceback (most recent call last):\n\nFile \"/tmp/loganalyzer.py\", line 870, in <module>\n\nmain(sys.argv[1:])\n\nFile \"/tmp/loganalyzer.py\", line 851, in main\n\nanalyzer.place_marker(\n\nFile \"/tmp/loganalyzer.py\", line 262, in place_marker\n\nraise RuntimeError(\n\nRuntimeError: cannot find marker end-LogAnalyzer-test_check_errors_in_log_during_deploy_sonic_image in /var/log/syslog\n\n**The timeout is due to could not find the mark in the syslog.**\n\n### Results you expected to see\nplace_marker_to_syslog could always pass and No log lost\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n```shell\nit could happen to any version\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22447,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22447",
+    "title": "[loganalyzer] Replace kill -HUP with systemctl reload to prevent syslog message loss",
+    "merged_at": "2026-02-27T16:12:43Z",
+    "description": "Fixes #15813.\n\nThe loganalyzer's flush_rsyslogd() used 'kill -HUP <pid>' to flush rsyslog\nbuffers to disk. This causes rsyslog to close and reopen all log files,\ncreating a race window where in-flight syslog messages can be lost. This\nmanifests as intermittent 'cannot find marker' failures in loganalyzer.\n\nReplace the manual PID lookup + kill -HUP with 'systemctl reload rsyslog',\nwhich performs a cleaner configuration reload. Add a 0.5s sleep after reload\nto give rsyslog time to flush internal queues.\n\nAlso remove the now-unused re_rsyslog_pid regex and subprocess import.\n\nSigned-off-by: Rustiqly <<EMAIL>>\nSigned-off-by: Sonicly1G <<EMAIL>>\n\nRe-submitted from rustiqly (closes #22426). Fixes #15813.",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/tools/loganalyzer/loganalyzer.py",
+        "additions": 11,
+        "deletions": 23
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

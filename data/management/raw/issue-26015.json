@@ -1,0 +1,167 @@
+{
+  "number": 26015,
+  "title": "Enhancement: Add native pygnmi MgmtGnmic client and migrate gNMI tests",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26015",
+  "createdAt": "2026-07-09T06:58:09Z",
+  "closedAt": "2026-08-11T06:47:18Z",
+  "author": "liang-nexthop",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n\nDescription\n\nToday, gNMI/gNOI integration tests in sonic-mgmt drive the DUT through the  gnmic  CLI binary shelled out from  docker-ptf  (via  py_gnmicli.py  and grpcurl-style wrappers). That approach has two problems:\n\ngnmic  is being removed from  docker-ptf  (tracked in #24328), which will break every test that depends on it.\nThe CLI-shell path is hard to extend (limited subscribe support, brittle output parsing, no typed error handling) and has had IPv6-mgmt-only gaps (#20395, #20892).\nThis enhancement adds a native, in-process pygnmi client that talks gRPC directly to the DUT's gNMI server from the sonic-mgmt orchestrator, removing the dependency on the external  gnmic  binary.\n\nCurrent Behavior\n\ngNMI tests depend on the  gnmic  binary in  docker-ptf  and on  py_gnmicli.py .\nSubscribe coverage is limited; POLL/ONCE modes are effectively unavailable.\nOutput is parsed from CLI text; errors are not typed.\nIPv6-mgmt-only setups required test skips.\nProposed Behavior\n\nIntroduce  tests/common/pygnmi_client.py  ( PygnmiClient ) plus integration tests in  tests/gnmi/test_pygnmi_client.py :\n\nUnary RPCs \u2014  capabilities() ,  get() ,  set()  return pygnmi's native dict shapes verbatim.\nSubscribe \u2014 bounded  subscribe()  supporting  STREAM  (with  count / collect_seconds  bounds),  POLL  ( poll_count / poll_interval ), and  ONCE  (drains to  sync_response ). It yields notifications lazily so callers can process or break early; every other pygnmi subscribe option is forwarded verbatim.\nTransport/auth \u2014 mTLS (CA + client cert/key) or plaintext; per-call gRPC deadlines.\nTyped errors \u2014  PygnmiClientConnectionError ,  PygnmiClientTimeoutError ,  PygnmiClientCallError  map low-level grpc/pygnmi exceptions into a stable taxonomy.\nFork-safety \u2014 each call opens and closes its own channel, since gRPC C-core threads are not fork-safe and sonic-mgmt helpers (e.g. loganalyzer  parallel_run ) fork between calls.\nEnables removing the now-unnecessary  is_mgmt_ipv6_only==True  skips, since the native client handles IPv6 targets.\nValue\n\nUnblocks the removal of  gnmic  from  docker-ptf  (#24328).\nGives tests a maintainable, typed gNMI client with full subscribe-mode coverage.\nRemoves IPv6-mgmt-only skips.\nRelated issues\n\nRelated to #24328 (gnmic removal from docker-ptf)\nRelated to #20395, #20892 (IPv6-mgmt-only gNMI gaps)\nRelated to #22396 (broader gNMI test modernization)\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26013,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26013",
+      "title": "Add native pygnmi MgmtGnmic client and migrate gNMI tests",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-11T06:47:16Z",
+      "createdAt": "2026-07-09T06:30:23Z",
+      "author": "liang-nexthop",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nReplaces the gnmic-CLI-on-PTF wrapper (`PtfGnmic`) with `PygnmiClient`, a native\r\n[pygnmi](https://github.com/akarneliuk/pygnmi)-based gNMI client that runs in-process in the\r\nsonic-mgmt orchestrator and talks gRPC directly to the DUT's gNMI server. This removes the\r\nSSH/CLI round-trip of shelling out to `gnmic` on docker-ptf, drops the dependency on the\r\n`gnmic` binary (which is being removed from docker-ptf to reduce attack surface), and unlocks\r\n`POLL`/`ONCE` subscriptions that the `gnmic` CLI only exposed via an interactive TUI.\r\n\r\nFixes #26015\r\nRelated: #24328 (gnmic binary removal from docker-ptf)\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [x] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [x] 202505\r\n- [x] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request:\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Tested branch\r\n- [x] master\r\n- [x] 202505\r\n- [x] 202511\r\n- [x] 202605\r\n\r\n### Test result\r\nValidation method for the release branches: install a DUT with an image built from that branch, then run this PR's `tests/gnmi/test_pygnmi_client.py` (20 tests) against it.\r\n\r\n| Branch | Result | DUT image (sonic-buildimage base commit) | Hardware / topology | Run date |\r\n|---|---|---|---|---|\r\n| master | PASS (Elastictest kvmtest, all topology jobs green) | PR CI (virtual) | KVM | \u2014 |\r\n| 202505 | **20/20 PASS** | [`fc4955b61268`](https://github.com/sonic-net/sonic-buildimage/commit/fc4955b61268f916465797a2a1ddad3680965b5f) (2026-06-24) + vendor platform patches | physical Broadcom switch, `t0` | 2026-07-29 |\r\n| 202511 | **20/20 PASS** | [`d58ef239ed06`](https://github.com/sonic-net/sonic-buildimage/commit/d58ef239ed064316ba0b6964e21525203ebfdef7) (2026-07-11) + vendor platform patches | physical Broadcom switch, `t0` | 2026-07-29 |\r\n| 202605 | **20/20 PASS** | [`eaf24f49a4c0`](https://github.com/sonic-net/sonic-buildimage/commit/eaf24f49a4c0d6832c902b3bc2941e2f13ffffdf) (2026-07-01) + vendor platform patches | physical Broadcom switch, `t1` | 2026-07-29 |\r\n\r\nPer-test breakdowns (click to expand):\r\n<details>\r\n<summary>Click to expand: 202505 full results \u2014 all 20 tests in tests/gnmi/test_pygnmi_client.py, each with status and duration</summary>\r\n\r\n| Test | Result | Time (s) |\r\n|---|---|---|\r\n| `test_pygnmi_capabilities[vrf_default_1]` | PASS | 63.360 |\r\n| `test_pygnmi_get_interface_mtu[vrf_default_1]` | PASS | 26.108 |\r\n| `test_pygnmi_get_interface_counters[vrf_default_1]` | PASS | 24.957 |\r\n| `test_pygnmi_get_empty_paths_raises[vrf_default_1]` | PASS | 23.983 |\r\n| `test_pygnmi_subscribe_sample_queue_counters[vrf_default_1]` | PASS | 31.606 |\r\n| `test_pygnmi_subscribe_stream_count[vrf_default_1]` | PASS | 27.364 |\r\n| `test_pygnmi_subscribe_early_break[vrf_default_1]` | PASS | 26.314 |\r\n| `test_pygnmi_subscribe_poll[vrf_default_1]` | PASS | 24.938 |\r\n| `test_pygnmi_subscribe_once[vrf_default_1]` | PASS | 24.461 |\r\n| `test_build_subscribe_request_passthrough[vrf_default_1]` | PASS | 25.028 |\r\n| `test_build_subscribe_request_per_path_dict[vrf_default_1]` | PASS | 25.430 |\r\n| `test_build_subscribe_request_poll_drops_stream_keys[vrf_default_1]` | PASS | 25.071 |\r\n| `test_subscribe_requires_paths[vrf_default_1]` | PASS | 24.929 |\r\n| `test_subscribe_poll_rejects_negative_interval[vrf_default_1]` | PASS | 25.569 |\r\n| `test_subscribe_poll_rejects_non_positive_count[vrf_default_1]` | PASS | 26.208 |\r\n| `test_get_requires_paths[vrf_default_1]` | PASS | 26.149 |\r\n| `test_subscribe_closes_receiver_without_unhandled_exception[vrf_default_1-StatusCode.CANCELLED-Channel closed!]` | PASS | 25.512 |\r\n| `test_subscribe_closes_receiver_without_unhandled_exception[vrf_default_1-StatusCode.INVALID_ARGUMENT-queue: disposed]` | PASS | 25.221 |\r\n| `test_subscribe_reports_unexpected_receiver_exception[vrf_default_1-error0]` | PASS | 25.024 |\r\n| `test_subscribe_reports_unexpected_receiver_exception[vrf_default_1-error1]` | PASS | 36.617 |\r\n\r\n</details>\r\n<details>\r\n<summary>Click to expand: 202511 full results \u2014 all 20 tests in tests/gnmi/test_pygnmi_client.py, each with status and duration</summary>\r\n\r\n| Test | Result | Time (s) |\r\n|---|---|---|\r\n| `test_pygnmi_capabilities[vrf_default_1]` | PASS | 66.989 |\r\n| `test_pygnmi_get_interface_mtu[vrf_default_1]` | PASS | 26.652 |\r\n| `test_pygnmi_get_interface_counters[vrf_default_1]` | PASS | 25.357 |\r\n| `test_pygnmi_get_empty_paths_raises[vrf_default_1]` | PASS | 26.776 |\r\n| `test_pygnmi_subscribe_sample_queue_counters[vrf_default_1]` | PASS | 31.679 |\r\n| `test_pygnmi_subscribe_stream_count[vrf_default_1]` | PASS | 29.398 |\r\n| `test_pygnmi_subscribe_early_break[vrf_default_1]` | PASS | 27.516 |\r\n| `test_pygnmi_subscribe_poll[vrf_default_1]` | PASS | 26.289 |\r\n| `test_pygnmi_subscribe_once[vrf_default_1]` | PASS | 26.194 |\r\n| `test_build_subscribe_request_passthrough[vrf_default_1]` | PASS | 26.271 |\r\n| `test_build_subscribe_request_per_path_dict[vrf_default_1]` | PASS | 26.179 |\r\n| `test_build_subscribe_request_poll_drops_stream_keys[vrf_default_1]` | PASS | 25.097 |\r\n| `test_subscribe_requires_paths[vrf_default_1]` | PASS | 25.375 |\r\n| `test_subscribe_poll_rejects_negative_interval[vrf_default_1]` | PASS | 26.253 |\r\n| `test_subscribe_poll_rejects_non_positive_count[vrf_default_1]` | PASS | 25.802 |\r\n| `test_get_requires_paths[vrf_default_1]` | PASS | 26.792 |\r\n| `test_subscribe_closes_receiver_without_unhandled_exception[vrf_default_1-StatusCode.CANCELLED-Channel closed!]` | PASS | 24.902 |\r\n| `test_subscribe_closes_receiver_without_unhandled_exception[vrf_default_1-StatusCode.INVALID_ARGUMENT-queue: disposed]` | PASS | 25.173 |\r\n| `test_subscribe_reports_unexpected_receiver_exception[vrf_default_1-error0]` | PASS | 25.714 |\r\n| `test_subscribe_reports_unexpected_receiver_exception[vrf_default_1-error1]` | PASS | 39.935 |\r\n\r\n</details>\r\n<details>\r\n<summary>Click to expand: 202605 full results \u2014 all 20 tests in tests/gnmi/test_pygnmi_client.py, each with status and duration</summary>\r\n\r\n| Test | Result | Time (s) |\r\n|---|---|---|\r\n| `test_pygnmi_capabilities[vrf_default_1]` | PASS | 64.877 |\r\n| `test_pygnmi_get_interface_mtu[vrf_default_1]` | PASS | 27.508 |\r\n| `test_pygnmi_get_interface_counters[vrf_default_1]` | PASS | 26.379 |\r\n| `test_pygnmi_get_empty_paths_raises[vrf_default_1]` | PASS | 25.036 |\r\n| `test_pygnmi_subscribe_sample_queue_counters[vrf_default_1]` | PASS | 32.311 |\r\n| `test_pygnmi_subscribe_stream_count[vrf_default_1]` | PASS | 27.589 |\r\n| `test_pygnmi_subscribe_early_break[vrf_default_1]` | PASS | 26.984 |\r\n| `test_pygnmi_subscribe_poll[vrf_default_1]` | PASS | 26.712 |\r\n| `test_pygnmi_subscribe_once[vrf_default_1]` | PASS | 26.225 |\r\n| `test_build_subscribe_request_passthrough[vrf_default_1]` | PASS | 26.523 |\r\n| `test_build_subscribe_request_per_path_dict[vrf_default_1]` | PASS | 25.208 |\r\n| `test_build_subscribe_request_poll_drops_stream_keys[vrf_default_1]` | PASS | 25.086 |\r\n| `test_subscribe_requires_paths[vrf_default_1]` | PASS | 26.425 |\r\n| `test_subscribe_poll_rejects_negative_interval[vrf_default_1]` | PASS | 25.513 |\r\n| `test_subscribe_poll_rejects_non_positive_count[vrf_default_1]` | PASS | 27.559 |\r\n| `test_get_requires_paths[vrf_default_1]` | PASS | 25.395 |\r\n| `test_subscribe_closes_receiver_without_unhandled_exception[vrf_default_1-StatusCode.CANCELLED-Channel closed!]` | PASS | 25.562 |\r\n| `test_subscribe_closes_receiver_without_unhandled_exception[vrf_default_1-StatusCode.INVALID_ARGUMENT-queue: disposed]` | PASS | 25.389 |\r\n| `test_subscribe_reports_unexpected_receiver_exception[vrf_default_1-error0]` | PASS | 26.804 |\r\n| `test_subscribe_reports_unexpected_receiver_exception[vrf_default_1-error1]` | PASS | 42.150 |\r\n\r\n</details>\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n- The legacy `PtfGnmic` shells out to the `gnmic` CLI inside docker-ptf. That adds SSH/CLI\r\n  overhead, couples the tests to a binary that is being removed for security hardening, and\r\n  cannot drive `POLL`/`ONCE` subscriptions non-interactively.\r\n- `gnmi/test_gnmic.py` was consequently skipped via `conditional_mark`, leaving the gNMI\r\n  client path untested.\r\n\r\n#### How did you do it?\r\n- Added `tests/common/pygnmi_client.py` \u2014 the `PygnmiClient` client (wraps `pygnmi.gNMIclient`):\r\n  - `capabilities()` / `get()` / `set()` return pygnmi's native dict shapes (thin passthrough;\r\n    no custom result objects).\r\n  - `subscribe()` adds the only things pygnmi leaves to the caller: connection/cert binding and\r\n    bounded collection \u2014 `STREAM` (count / `collect_seconds` timeout race), `POLL`\r\n    (poll_count / poll_interval), and `ONCE` (drain to `sync_response`) \u2014 yielding notifications\r\n    incrementally. All other pygnmi subscribe options are forwarded verbatim.\r\n  - Normalized-but-string-compatible params via `StrEnum` (`SubscribeMode`, `StreamMode`,\r\n    `GetDataType`, `Encoding`); fully type-hinted public API; context-manager support with\r\n    eager-by-default connect (`connect=True`).\r\n  - Error mapping to a typed exception hierarchy: `PygnmiClientError` base with\r\n    `PygnmiClientConnectionError` / `PygnmiClientTimeoutError` / `PygnmiClientCallError`.\r\n  - Note: STREAM+SAMPLE no longer requires a non-zero `sample_interval` \u2014 per gNMI spec\r\n    \u00a73.5.1.5.2, `0` means \"lowest interval possible\", and pygnmi defaults a missing interval to 0.\r\n  - Each RPC opens and closes its own gNMIclient channel so no gRPC C-core threads survive\r\n    into forking helpers (e.g. loganalyzer's parallel_run).\r\n- Wired `PygnmiClient` into the `gnmi_tls` (mTLS) and `gnmi_plaintext` fixtures\r\n  (`grpc_fixtures.py`) via a new `GnmiFixture.pygnmi_client` attribute, pointing it at the\r\n  orchestrator-local certs in `cert_dir` instead of the PTF-side copies.\r\n- Removed the legacy path: deleted `tests/common/ptf_gnmic.py` and `tests/gnmi/test_gnmic.py`.\r\n- Added `tests/gnmi/test_pygnmi_client.py` \u2014 DUT-based integration tests (capabilities; get MTU\r\n  cross-checked against CONFIG_DB, get counters; subscribe in STREAM/count, early-break, POLL,\r\n  ONCE) plus offline unit tests for request-building/validation that need no DUT.\r\n- Added per-test `conditional_mark` skip entries in `tests_mark_conditions.yaml` for the\r\n  DUT-dependent tests (`'bmc' in topo_type`), matching the existing gNMI suite; the offline\r\n  unit tests remain unconditional so they run everywhere.\r\n\r\n#### How did you verify/test it?\r\n- `flake8 --max-line-length=120` and `py_compile` clean on all changed files.\r\n- Offline unit tests (no DUT):\r\n  `pytest tests/gnmi/test_pygnmi_client.py -k \"build_subscribe or requires_paths\"`.\r\n- Ran the DUT-based tests over the `gnmi_tls` fixture: capabilities, get (interface MTU\r\n  cross-checked against CONFIG_DB, counters), and subscribe in STREAM/POLL/ONCE modes.\r\n\r\n#### Any platform specific information?\r\nThe DUT-dependent tests are skipped on unsupported setups via `tests_mark_conditions.yaml`:\r\n`'bmc' in topo_type` (no front-panel ports / COUNTERS_DB). Otherwise the suite is\r\n`topology('any')` and reads values from the DUT at runtime (no hardcoded platform assumptions).\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n`any`, subject to the skip conditions above.\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\nUpdated `docs/testplan/gnmi-uds-transport-design.md` (added the `pygnmi_client.py` entry to the\r\ndirectory tree and updated `pygnmi_client` references). The new client is also fully documented\r\nin-module with Google-style `Args:`/`Returns:`/`Raises:` docstrings on public and private methods.\r\n\r\n\r\n\r\n\r\n\r\n\n\n\n",
+      "files": [
+        {
+          "path": "docs/testplan/gnmi-uds-transport-design.md",
+          "additions": 8,
+          "deletions": 8
+        },
+        {
+          "path": "tests/common/fixtures/grpc_fixtures.py",
+          "additions": 45,
+          "deletions": 26
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 9,
+          "deletions": 6
+        },
+        {
+          "path": "tests/common/ptf_gnmic.py",
+          "additions": 0,
+          "deletions": 142
+        },
+        {
+          "path": "tests/common/pygnmi_client.py",
+          "additions": 706,
+          "deletions": 0
+        },
+        {
+          "path": "tests/gnmi/test_gnmic.py",
+          "additions": 0,
+          "deletions": 32
+        },
+        {
+          "path": "tests/gnmi/test_pygnmi_client.py",
+          "additions": 464,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T06:30:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "github-actions",
+          "createdAt": "2026-07-09T06:30:45Z",
+          "body": "<!-- skip-expiry-conditional-mark-review-note -->\n@StormLiangMS @wangxin @yxieca A user wants to merge changes to the conditional mark files into `master`. Please review."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-09T06:30:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T07:34:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-09T07:34:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T11:14:42Z",
+          "body": "This PR has backport request for branch(es): 202505,202511,202512,202605.<br>Added label(s) for branch(es) 202505,202511,msft-202512,202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-09T11:21:41Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-10T11:15:58Z",
+          "body": "The backport request for branch(es) msft-202512 has been removed from PR description. Removed label(s)....\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-14T17:42:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-14T17:42:50Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-07-21T00:00:16Z",
+          "body": "@liang-nexthop can you take a look at the pipeline failure?"
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-07-21T01:52:01Z",
+          "body": "I pushed the tested shutdown fix as a one-commit stacked draft: https://github.com/hdwhdw/sonic-mgmt/pull/8 (base mirrors this PR head exactly). GitHub would not allow me to target the `nexthop-ai` fork branch directly. Three final local-KVM runs passed 18/18 with no subscription thread warnings."
+        },
+        {
+          "author": "hdwhdw",
+          "createdAt": "2026-07-21T02:14:08Z",
+          "body": "Superseding the fork-only share link with upstream draft #26387 so SONiC CI can run. It contains this PR head unchanged plus the one shutdown-fix commit, and is explicitly marked CI-only/not independently mergeable."
+        },
+        {
+          "author": "liang-nexthop",
+          "createdAt": "2026-07-22T01:06:12Z",
+          "body": "> ### \ud83d\udcca Overview\r\n> **Files Changed**: 5 (+1067 \u221228)\r\n> \r\n> Replaces the `gnmic`-CLI-on-PTF wrapper (`PtfGnmic`) with `PygnmiClient`, a native in-process pygnmi client, wires it into the `gnmi_tls`/`gnmi_plaintext` fixtures, deletes the old `test_gnmic.py`, and adds `test_pygnmi_client.py` plus offline unit tests. Strong direction \u2014 dropping the SSH/CLI round-trip and the `gnmic` binary (attack-surface reduction, #24328) and unlocking non-interactive POLL/ONCE is clearly the right move, and the client itself is well-documented and thoughtfully structured (typed enums, bounded subscribe generator, error taxonomy, fork-safe per-call channels).\r\n> \r\n> ### \u2705 Strengths\r\n> * Clean passthrough design: `capabilities()/get()/set()` return pygnmi's native shapes; `subscribe()` only adds what pygnmi leaves to the caller (connection/cert binding + bounded collection). Good restraint.\r\n> * Per-call open/close of the gNMIclient channel to avoid gRPC C-core threads surviving into forking helpers (loganalyzer `parallel_run`) \u2014 correct and a subtle trap avoided.\r\n> * Typed error hierarchy with sensible gRPC status \u2192 exception mapping.\r\n> \r\n> ### \ud83d\udcdd Review Findings\r\n> #### \u26a0\ufe0f Major (should fix before merge)\r\n> 1. **`StrEnum` requires Python 3.10+, repo declares `>=3.7`** (@donghaolicd, `pygnmi_client.py:31`). This is the blocking one, and it's amplified by the **202505/202511/202605 backport labels** on this PR \u2014 those branches' orchestrator envs may well run <3.10, in which case this module fails at _import_ time (every gNMI test errors, not skips). Please either drop to `(str, Enum)` mixin enums (3.7-safe, same `str`-compatibility you rely on) or confirm+raise the minimum Python across all targeted branches. Given the backports, mixin-enum is the safer path.\r\n> 2. **Multi-ASIC / supervisor namespace handling in the new tests** (copilot threads on `test_pygnmi_client.py:117,164,189,204,222,242`). `target=\"COUNTERS_DB\"` without a per-ASIC namespace suffix will likely fail on multi-ASIC platforms, and several tests assume `Ethernet0` exists \u2014 which it doesn't on supervisor nodes. The `'bmc' in topo_type` skips don't cover multi-ASIC/supervisor. Either add namespace-aware DB access + supervisor/multi-asic skips (matching the rest of the gNMI suite), or scope these tests to single-ASIC topologies explicitly. These are currently unaddressed.\r\n> 3. **`test_pygnmi_get_interface_mtu` reads CONFIG_DB via the standalone `duthost` fixture while the gNMI target DUT is chosen inside `gnmi_tls`** (`:117`). On multi-DUT runs this can cross-compare MTU from a _different_ DUT than the one queried over gNMI \u2192 flaky/false failures. Pull the compared value from the same DUT the fixture selected.\r\n> \r\n> #### \ud83d\udcdd Minor\r\n> * **Stale/unaddressed reviewer suggestions still open**: @ronan-nexthop asked whether the per-testlet skips could collapse to a single module-level `test_pygnmi_client.py` bmc skip (`:3036`), and flagged the warm-reboot skip as possibly unrelated (`:3100`). The copilot bot raised the same **unrelated `test_gnoi_system_reboot_warm` platform skip** (`tests_mark_conditions.yaml:3034`) \u2014 that `x86_64-nexthop_` condition is out of scope for a gnmic\u2192pygnmi migration and complicates the 3 backports. Please split it out or justify it in the description.\r\n> * **Docstring drift**: `_ensure_client` says the channel is \"reused across calls,\" but every public RPC closes it in `finally`, so it never outlives one call (`pygnmi_client.py:199`). Fix the docstring to avoid misleading future readers about lifetime/fork-safety.\r\n> * **`transport` comment outdated** (`grpc_fixtures.py:170`): now also set to `\"plaintext\"`, so the inline note is stale for tests branching on `transport`.\r\n> * **CodeQL \"use `with`\"** on the `finally`-close in `grpc_fixtures.py:378` \u2014 minor; either adopt the context manager (`PygnmiClient` already supports it) or dismiss with justification.\r\n> \r\n> ### \ud83e\uddea Testing\r\n> Good coverage split (DUT integration for capabilities/get/subscribe STREAM/POLL/ONCE + offline request-building/validation that runs everywhere). But per Major #2/#3 the DUT tests aren't safe on multi-ASIC/supervisor/multi-DUT yet, and per Major #1 the whole module may not import on the backport branches \u2014 so I'd want CI green on a multi-ASIC and a supervisor-containing testbed (and confirmation of the interpreter version on 202505/202511/202605) before merge.\r\n> \r\n> ### Recommendations\r\n> 1. Replace `StrEnum` with a 3.7-safe `(str, Enum)` mixin (or raise+verify min Python on all backport targets).\r\n> 2. Add namespace-aware DB access and supervisor/multi-asic skips to the new tests, and fix the cross-DUT MTU comparison.\r\n> 3. Split out or justify the unrelated `test_gnoi_system_reboot_warm` skip.\r\n> 4. Fix the `_ensure_client` and `transport` docstrings/comments; address the open ronan-nexthop/copilot threads.\r\n> \r\n> ### Status\r\n> \ud83d\udea8 Changes requested \u2014 excellent direction and a genuinely nice client, but the `StrEnum`/Python-version issue (blocking on the labeled backports) plus the unaddressed multi-ASIC/supervisor/cross-DUT test assumptions need to land before this is safe to merge.\r\n\r\nThanks for the thorough review. All items addressed:\r\n1. StrEnum/py3.7 \u2014 replaced with (str, Enum) mixin enums; module now imports on all backport targets.\r\n2. Multi-ASIC/supervisor \u2014 adopted the coverage fix from #26387: port/DB tests skip on multi-ASIC/T2/BMC until namespace-aware targeting lands (planned follow-up).\r\n3. Cross-DUT MTU comparison \u2014 the test now reads CONFIG_DB from the DUT selected by the gnmi_tls fixture.\r\n4. Unrelated warm-reboot skip \u2014 removed (cherry-pick churn from our internal branch).\r\n5. Docstring/comment drift and open threads \u2014 _ensure_client docstring and transport comment fixed; ronan's and Copilot's threads answered inline.\r\n"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-07-22T01:48:16Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: hdwhdw / name: Dawei Huang (35a2e5c08fab0215c3a979cf74a2f7dce702476b, 5aa5b1e1c58534836e82fcde23da72c785778e02)</li><li>:white_check_mark: login: liang-nexthop / name: Liang Chen (c1db1b9109f2be2559b00e648c9942b577637970)</li><li>:white_check_mark: login: liang-nexthop / name: liang-nexthop (5f8aae7f6b10895c240d96180b3e615d636835de)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T01:53:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-22T01:54:07Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T01:56:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-22T01:56:33Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T02:01:35Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

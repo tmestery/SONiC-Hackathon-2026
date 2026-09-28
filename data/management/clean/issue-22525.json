@@ -1,0 +1,43 @@
+{
+  "id": "management-22525",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22525,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22525",
+    "title": "ceos_topo_converger: LACP channel-group not updated for converged peers on LAG topologies",
+    "created_at": "2026-02-21T05:36:25Z",
+    "closed_at": "2026-02-24T05:33:03Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\nWhen using `use_converged_peers: true` on LAG topologies (e.g., t1-lag), the `ceos_topo_converger.py` does not update the `lacp` (channel-group) field when remapping Ethernet interfaces for converged peers. All interfaces end up in `channel-group 1` instead of being distributed across Port-Channels.\n\n## Root Cause\n\nIn `ceos_topo_converger.py` around line 165, when building VRF interface configs:\n\n```python\nvrf[eth_intf] = deepcopy(peer_intfs[intf])\n```\n\nThe `lacp` field is copied as-is from the original peer config. Each original peer has `Ethernet1: lacp=1, Ethernet2: lacp=1` (channel-group 1 \u2192 Po1). After convergence, all 16 Ethernet interfaces (from 8 spines) retain `lacp=1`, so all end up in `channel-group 1` on the cEOS container.\n\n## Observed Behavior\n\nOn the spine cEOS container after `add-topo`:\n- `show running-config | section channel-group`: all 16 Ethernet interfaces have `channel-group 1`\n- Port-Channel1 has 16 members (only 2 can actually bundle via LACP)\n- Port-Channel2 through Port-Channel8 have zero members\n- On the DUT, only 1 of 8 PortChannels comes up (whichever happens to match)\n\n## Expected Behavior\n\n- Et1,Et2 \u2192 channel-group 1 (Po1)\n- Et3,Et4 \u2192 channel-group 2 (Po2)\n- ...\n- Et15,Et16 \u2192 channel-group 8 (Po8)\n\nAll 8 PortChannels should come up with 2 members each.\n\n## Fix\n\nAdd LACP channel-group update after the `deepcopy`:\n\n```python\nvrf[eth_intf] = deepcopy(peer_intfs[intf])\n# Update lacp channel-group to match the new Port-Channel index\nif \"lacp\" in vrf[eth_intf] and \"Port-Channel1\" in peer_intfs:\n    vrf[eth_intf][\"lacp\"] = intf_index\n```\n\nThis has been validated locally \u2014 all 8 PortChannels come up with correct 2-member distribution, and all 24 BGP sessions establish.\n\n## Environment\n\n- Topology: t1-lag with `use_converged_peers: true`\n- cEOS: `ceosimage:4.32.5M`\n- Testbed: KVM virtual switch\n\n## Related\n\n- #22524 (converged peers: topo_is_multi_vrf not set for tests)"
+  },
+  "resolution": {
+    "pr_number": 22527,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22527",
+    "title": "Fix LACP channel-group assignment in ceos_topo_converger for converged peers",
+    "merged_at": "2026-02-24T05:33:02Z",
+    "description": "## Description\n\nFix a bug in `ceos_topo_converger.py` where the LACP channel-group number is not updated when remapping Ethernet interfaces for converged peers on LAG topologies.\n\n### What is the motivation for this PR?\n\nWhen using `use_converged_peers: true` on LAG topologies (e.g., t1-lag), the converger copies interface configs via `deepcopy` but retains the original `lacp` value (always `1`). This causes all Ethernet interfaces in the converged cEOS container to join `channel-group 1` instead of being distributed across separate Port-Channels.\n\n**Before fix (t1-lag, 8 spines converged into 1 cEOS):**\n- All 16 Ethernet interfaces \u2192 `channel-group 1` (Po1)\n- Po1 has 16 members (only 2 can LACP bundle), Po2-Po8 have zero members\n- Only 1 of 8 PortChannels comes up on the DUT\n\n**After fix:**\n- Et1,Et2 \u2192 channel-group 1; Et3,Et4 \u2192 channel-group 2; ... Et15,Et16 \u2192 channel-group 8\n- All 8 PortChannels come up with correct 2-member distribution\n- All 24 BGP sessions establish\n\n### How did you do it?\n\nAfter the `deepcopy` of the peer interface config, update the `lacp` field to match the new Port-Channel index (`intf_index`):\n\n```python\nvrf[eth_intf] = deepcopy(peer_intfs[intf])\nif \"lacp\" in vrf[eth_intf] and \"Port-Channel1\" in peer_intfs:\n    vrf[eth_intf][\"lacp\"] = intf_index\n```\n\n### How did you verify/test it?\n\nValidated on a KVM testbed with t1-lag topology and `use_converged_peers: true`:\n- Verified `show running-config | section channel-group` on spine cEOS shows correct distribution\n- All 8 PortChannels up with 2 members each on DUT\n- All 24/24 BGP sessions established (8 T2 spines + 16 T0 ToRs)\n\nFixes #22525",
+    "files": [
+      {
+        "path": "ansible/ceos_topo_converger.py",
+        "additions": 3,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

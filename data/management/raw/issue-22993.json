@@ -1,0 +1,84 @@
+{
+  "number": 22993,
+  "title": "Bug: Pytest hangs while running test_default_route.py",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22993",
+  "createdAt": "2026-03-16T09:29:18Z",
+  "closedAt": "2026-03-18T08:38:35Z",
+  "author": "vimal-nokia",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nPytest hangs while running test_default_route.py. After going through scripts, could observe that one thread is in while loop forever.\n\n### Steps to Reproduce\n\npython3 -m pytest route/test_default_route.py\n\n\n### Actual Behavior and Expected Behavior\n\nTestcase should pass/fail. Below thread is running for ever in few scenarios. \n\n```\ndef monitor_memory(process_name, initial_memory, interval):\n    while True:\n        memory_usage = get_memory_usage(process_name)\n        logging.info(\"Monitor Memory usage for {}: {} bytes\".format(process_name, memory_usage))\n        if memory_usage >= 2 * initial_memory:\n            pytest_assert(False,\n                          \"{} exceeded double the initial memory usage: {} bytes\".format(process_name, initial_memory))\n        time.sleep(interval)\n\n```\n\n### Relevant log output\n\n```shell\ntest_default_route.py::test_default_route_with_bgp_flap\n-------------------------------- live log setup --------------------------------\nINFO     root:init.py:53 Completeness level not set during test execution. Setting to default level: 1\nINFO     root:init.py:151 Test has no defined levels. Continue without test completeness checks\nINFO     root:init.py:31 logrotate called on blrsonic-d4-oc1-dut\nINFO     tests.common.helpers.parallel:parallel.py:147 process analyzer_logrotate-- terminated with exit code None\nINFO     tests.common.helpers.parallel:parallel.py:234 Force read exception regardless of whether the process exited normally.\nINFO     tests.common.helpers.parallel:parallel.py:296 Completed running processes for target \"analyzer_logrotate\" in 0:00:04.754809 seconds\nINFO     root:loganalyzer.py:244 Loaded extend ignore config: []\nINFO     root:init.py:43 add marker called on blrsonic-d4-oc1-dut\nINFO     root:init.py:45 Add start marker into DUT syslog for host blrsonic-d4-oc1-dut\nINFO     tests.common.helpers.parallel:parallel.py:147 process analyzer_add_marker-- terminated with exit code None\nINFO     tests.common.helpers.parallel:parallel.py:234 Force read exception regardless of whether the process exited normally.\nINFO     tests.common.helpers.parallel:parallel.py:296 Completed running processes for target \"analyzer_add_marker\" in 0:00:06.728601 seconds\nINFO     tests.common.devices.sonic:sonic.py:1872 asic: td4\nINFO     tests.common.plugins.memory_utilization:init.py:130 Memory utilization monitoring is disabled\nINFO     root:init.py:69 -------------------- fixture ignore_expected_loganalyzer_exception setup starts --------------------\nINFO     root:init.py:76 -------------------- fixture ignore_expected_loganalyzer_exception setup ends --------------------\nINFO     root:conftest.py:3773 skip setup dualtor mux cables on non-dualtor testbed\n-------------------------------- live log call ---------------------------------\nINFO     root:test_default_route.py:240 Monitor Memory usage for openbmpd: 0 bytes\nINFO     root:test_default_route.py:240 Monitor Memory usage for bgpd: 0 bytes << Test hangs here\n```\n\n### Output of `show version`\n\n```shell\n202511\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23066,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23066",
+      "title": "Fix infinite loop in monitor_memory causing pytest hang (#22993)",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-18T08:38:34Z",
+      "createdAt": "2026-03-18T04:42:44Z",
+      "author": "Sumalatha-G-ML",
+      "body": "### Description of PR\r\n\r\nThe `monitor_memory()` function had an infinite `while True` loop with no exit condition. When `test_default_route_with_bgp_flap()` tried to join the monitoring threads in the finally block, it would hang indefinitely because the threads never terminated.\r\n\r\nThis fix adds a `threading.Event` to signal when monitoring should stop:\r\n- Added `stop_event` parameter to `monitor_memory()`\r\n- Changed `while True` to `while not stop_event.is_set()`\r\n- Create `stop_event` in `test_default_route_with_bgp_flap()`\r\n- Pass `stop_event` to all monitoring threads\r\n- Set `stop_event` before joining threads in finally block\r\n\r\nThis allows the threads to exit gracefully and prevents pytest from hanging.\r\n\r\nSummary:\r\nFixes #22993\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nPytest hangs indefinitely while running `test_default_route.py`. The test creates monitoring threads that run in an infinite loop with no exit condition. When the monitored processes (openbmpd, bgpd) are not running, their initial memory is 0 bytes, and the condition `memory_usage >= 2 * initial_memory` is never True, causing the threads to loop forever.\r\n\r\n#### How did you do it?\r\n\r\nImplemented a graceful thread termination mechanism using `threading.Event`:\r\n1. Modified `monitor_memory()` to accept a `stop_event` parameter\r\n2. Changed the infinite loop from `while True` to `while not stop_event.is_set()`\r\n3. Created a `stop_event` in the test function\r\n4. Passed the `stop_event` to all monitoring threads\r\n5. Set the `stop_event` in the finally block before joining threads\r\n\r\n#### How did you verify/test it?\r\n\r\n- Verified the fix prevents infinite loops when processes have 0 initial memory\r\n- Confirmed threads terminate gracefully when `stop_event` is set\r\n- Test can now complete successfully without hanging\r\n\r\n#### Any platform specific information?\r\n\r\nGeneric - affects all platforms\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nN/A - This is a bug fix for existing test case\r\n\r\n### Documentation\r\n\r\nN/A - Bug fix only, no new features or test cases added",
+      "files": [
+        {
+          "path": "tests/route/test_default_route.py",
+          "additions": 11,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-18T04:42:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-18T04:43:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-03-18T05:05:57Z",
+          "body": "@Sumalatha-G-ML  could you check the pre SA failure?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-18T05:08:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-18T05:08:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-18T05:13:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-18T05:13:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Sumalatha-G-ML",
+          "createdAt": "2026-03-18T05:20:14Z",
+          "body": "> @Sumalatha-G-ML could you check the pre SA failure?\r\n\r\nSure"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-18T08:39:18Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/23082"
+        }
+      ]
+    }
+  ]
+}

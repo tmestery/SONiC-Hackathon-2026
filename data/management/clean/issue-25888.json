@@ -1,0 +1,43 @@
+{
+  "id": "management-25888",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25888,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25888",
+    "title": "Bug: Adaptive recovery during sanity_check_full when \"var-log\": \"Resource limit matched\" triggers reboot",
+    "created_at": "2026-07-03T17:23:06Z",
+    "closed_at": "2026-08-05T15:35:01Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nAdaptive recovery will simply reboot the dut for `monit` sanity check failures, but for var-log disk space this  masks the true problem because\n\n/etc/monit/conf.d/sonic-host contains the following:\n```\ncheck filesystem var-log with path /var/log\n    if space usage > 90% for 10 times within 20 cycles then alert repeat every 1 cycles\n```\nand so on reboot the 10 times for 20 cycles must be repeated for monit to register the issue again 10 miniutes later.\nMeaning the sanity check will seem stable without having recovered.\n\n### Steps to Reproduce\n\n1. run `df -h /var/log` to see the space used and available\n2. run `sudo fallocate -l <XYZ>M /var/log/dummy.log` to fill more than 90% of the space\n3. verify with `df -h /var/log`\n\nDo this before a test is running, wait 10 minutes.\n\n4. run `sudo monit status rsyslog` to verify that monit is catching the problem\n5. Now run the test and sanity check will spot the problem.\n\nSome tests like linkflap stress tests on max topologies will sometimes fill up the var/log space as well but that is less reliable for reproducing.\n\n### Actual Behavior and Expected Behavior\n\nActual behaviour: dut reboots\nExpected behaviour: var/log storage is recovered\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25889,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25889",
+    "title": "Rotate syslog on `monit var-log` sanity check failure, instead of reboot",
+    "merged_at": "2026-08-05T15:35:00Z",
+    "description": "https://github.com/sonic-net/sonic-mgmt/issues/25888\n\n### Description of PR\n\nSummary:\nFixes #25888\n\nAdaptive recovery triggered during sanity_check_full when \"var-log\": \"Resource limit matched\"\nbut monit does not have any specific path for recovery and defaults to reboot\n\nThis masks the true problem because\n/etc/monit/conf.d/sonic-host contains the following\n\n```\ncheck filesystem var-log with path /var/log\n    if space usage > 90% for 10 times within 20 cycles then alert repeat every 1 cycles\n```\non reboot the 10 times for 20 cycles must be repeated for monit to register the issue again.\n\nmy fix is to rotate var log instead of reboot.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request:\nFailure type:\n\n### Approach\n#### What is the motivation for this PR?\nSpeed up tests by not fruitlessly rebooting, and replace the recovery that only masks the problem with one that works.\n\n#### How did you do it?\nadd a monit path for recovery, specifically var-log. call logrotate on the dut.\n\n#### How did you verify/test it?\nverified that with the recovery, the dut no longer reboots and that /var/log empties\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n#### Which release branch to backport (provide reason below if selected)\n\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [x] 202605\n\n#### Tested branch\n\n- [x] master\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] 202608\n- [ ] N/A\n\n#### Test result\nRecovery of var log over usage no longer results in an unecessary reboot. Var log resources are freed.",
+    "files": [
+      {
+        "path": "tests/common/plugins/sanity_check/recover.py",
+        "additions": 12,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "number": 26166,
+  "title": "Bug: [upgrade_path] critical_services_fully_started failure after boot_into_base_image because old critical_services_tracking_list is used",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26166",
+  "createdAt": "2026-07-14T20:31:33Z",
+  "closedAt": "2026-08-04T13:44:48Z",
+  "author": "markx-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nAfter we recently enabled bmp on 202605, test_upgrade_path failed critical_services_fully_started check after boot_into_base_image which boots into 202511 image.\nWe found that critical_services_tracking_list() builds the service list from self.facts['features'], which is cached at pytest session start and never refreshed. After booting into a different image, the cached feature table still reflects the original image, so services absent from the base image remain in the tracking list. The check then waits indefinitely for containers that will never start.\n\n### Steps to Reproduce\n\nEnable bmp on new image, then run test_upgrade_path on base image without bmp enabled.\n\n### Actual Behavior and Expected Behavior\n\nCritical service check should be based on running config instead of cached value from when the pytest session start.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "markx-arista",
+      "createdAt": "2026-07-16T21:07:30Z",
+      "body": "This is caused by https://github.com/sonic-net/sonic-mgmt/pull/21442, which replaced config_facts with self.facts.\nThis PR https://github.com/sonic-net/sonic-mgmt/pull/18136 added critical_services_tracking_list in reboot(), which correctly resets the critical service list after reboot.\nReverting https://github.com/sonic-net/sonic-mgmt/pull/21442 can fix the issue.\n@wangxin @Ryangwaite FYI"
+    },
+    {
+      "author": "Ryangwaite",
+      "createdAt": "2026-07-17T00:34:33Z",
+      "body": "Hi @markx-arista, I don't think we should revert PR https://github.com/sonic-net/sonic-mgmt/pull/21442 to fix this. That PR is a performance improvement benefitting the majority of the test suite and it is reasonable that cache invalidation is required following a sonic version change during the test. We have a few sign posted [places](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/fixtures/advanced_reboot.py#L661) by call to `self.duthost.meta(\"clear_facts\")` where that should be done. Ideally, we would add a new `SonicHost.refresh_facts()` which blows away the entire cache and refetches it and call it at those sites. That is a bugfix + enhancement though. You may wish to do that or something similar otherwise the pure bugfix in https://github.com/sonic-net/sonic-mgmt/pull/26167 lgtm."
+    },
+    {
+      "author": "markx-arista",
+      "createdAt": "2026-07-17T03:14:24Z",
+      "body": "> Hi [@markx-arista](https://github.com/markx-arista), I don't think we should revert PR [#21442](https://github.com/sonic-net/sonic-mgmt/pull/21442) to fix this. That PR is a performance improvement benefitting the majority of the test suite and it is reasonable that cache invalidation is required following a sonic version change during the test. We have a few sign posted [places](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/fixtures/advanced_reboot.py#L661) by call to `self.duthost.meta(\"clear_facts\")` where that should be done. Ideally, we would add a new `SonicHost.refresh_facts()` which blows away the entire cache and refetches it and call it at those sites. That is a bugfix + enhancement though. You may wish to do that or something similar otherwise the pure bugfix in [#26167](https://github.com/sonic-net/sonic-mgmt/pull/26167) lgtm.\n\nThanks for the reply. I closed #26167 because we just found that it caused a regression in test_mgmt_ipv6_only.py. The test switches mgmt IP from v4 to v6 and runs duthost.reset() in the middle, which calls `critical_services_tracking_list` including the newly added `show feature status` command, but it still uses old v4 mgmt IP to run the command and so it caused a bad file descriptor error.\n\nI agree that we should refresh the facts during upgrade test, and probably config reload as well? I will take a look.\n\nBy the way, duthost.meta(\"clear_facts\") is already called during `boot_into_base_image` in [reboot() ](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/reboot.py#L438), but I think it only clears Ansible\u2019s fact cache, not the facts stored in `SonicHost`."
+    },
+    {
+      "author": "markx-arista",
+      "createdAt": "2026-07-20T18:19:05Z",
+      "body": "> Hi [@markx-arista](https://github.com/markx-arista), I don't think we should revert PR [#21442](https://github.com/sonic-net/sonic-mgmt/pull/21442) to fix this. That PR is a performance improvement benefitting the majority of the test suite and it is reasonable that cache invalidation is required following a sonic version change during the test. We have a few sign posted [places](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/fixtures/advanced_reboot.py#L661) by call to `self.duthost.meta(\"clear_facts\")` where that should be done. Ideally, we would add a new `SonicHost.refresh_facts()` which blows away the entire cache and refetches it and call it at those sites. That is a bugfix + enhancement though. You may wish to do that or something similar otherwise the pure bugfix in [#26167](https://github.com/sonic-net/sonic-mgmt/pull/26167) lgtm.\n\nI did a partial revert of #21442 in critical_services_tracking_list:\nhttps://github.com/sonic-net/sonic-mgmt/pull/26372\n\nIt restores config_facts in `critical_services_tracking_list`. The function is called when `MultiAsicSonicHost` is first constructed or during config_reload/reboot to update critical service list, so I believe it should query the live features instead of the one cached in facts.\n\nHowever,  like my previous PR https://github.com/sonic-net/sonic-mgmt/pull/26167, it still leads to failure in `test_mgmt_ipv6_only.py`. Using config_facts in `critical_services_tracking_list` had no issue on 202511, but it has issue on 202605 due to new ansible version. We will have another PR to fix that."
+    },
+    {
+      "author": "markx-arista",
+      "createdAt": "2026-07-23T02:57:15Z",
+      "body": "Hi @Ryangwaite, I also include test_mgmt_ipv6_only.py fix in https://github.com/sonic-net/sonic-mgmt/pull/26167, could you help review? Thanks."
+    },
+    {
+      "author": "Ryangwaite",
+      "createdAt": "2026-07-23T05:10:01Z",
+      "body": "> Hi [@Ryangwaite](https://github.com/Ryangwaite), I also include test_mgmt_ipv6_only.py fix in [#26167](https://github.com/sonic-net/sonic-mgmt/pull/26167), could you help review? Thanks.\n\nHi @markx-arista , https://github.com/sonic-net/sonic-mgmt/pull/26167 is closed and I don't see the test_mgmt_ipv6_only.py fix in there. Is that the right PR?"
+    },
+    {
+      "author": "markx-arista",
+      "createdAt": "2026-07-23T07:09:15Z",
+      "body": "> > Hi [@Ryangwaite](https://github.com/Ryangwaite), I also include test_mgmt_ipv6_only.py fix in [#26167](https://github.com/sonic-net/sonic-mgmt/pull/26167), could you help review? Thanks.\n> \n> Hi [@markx-arista](https://github.com/markx-arista) , [#26167](https://github.com/sonic-net/sonic-mgmt/pull/26167) is closed and I don't see the test_mgmt_ipv6_only.py fix in there. Is that the right PR?\n\nSorry, should be this one https://github.com/sonic-net/sonic-mgmt/pull/26372"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 26372,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26372",
+      "title": "Restore config_facts in critical_services_tracking_list",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-04T13:44:46Z",
+      "createdAt": "2026-07-20T18:11:22Z",
+      "author": "markx-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nAfter boot_into_base_image, critical_services_fully_started fails because services like bmp that exist on the original image but not on the base image remain in the list.\r\n#21442 changed critical_services_tracking_list to read feature state from self.facts, which is gathered once at init time. This causes stale feature data after reboot/upgrade/config reload, breaking critical service checks. Revert to querying config_facts live each time.\r\nFor newer Ansible, reset only the connection in test_mgmt_ipv6_only.py to prevent config_facts from reusing a stale IPv4 connection.\r\n\r\nFixes #26166 \r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\ntest_upgrade_path.py and test_mgmt_ipv6_only.py on 202605 sonic-mgmt passed\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\ntest_upgrade_path failed after boot_into_base_image because cached critical_services_tracking_list from the original image is used.\r\n\r\n#### How did you do it?\r\nRestore config_facts in critical_services_tracking_list to query live features\r\nAlso replace duthosts.reset() with duthosts.meta(\"reset_connection\") to prevent critical_services_tracking_list() from gathering config_facts over a stale IPv4 connection with newer Ansible in test_mgmt_ipv6_only.py.\r\n\r\n#### How did you verify/test it?\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\ntest_upgrade_path.py and test_mgmt_ipv6_only.py on 202605 sonic-mgmt passed\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/devices/multi_asic.py",
+          "additions": 12,
+          "deletions": 10
+        },
+        {
+          "path": "tests/common/fixtures/duthost_utils.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T18:11:30Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T18:11:30Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T18:11:47Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-20T21:03:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T21:03:09Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-20T21:03:25Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T04:27:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T04:27:30Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T04:55:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T04:56:01Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T06:43:16Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T06:43:20Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T17:08:15Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-21T17:08:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-21T17:09:09Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T02:56:11Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T02:56:27Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T07:10:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T07:10:09Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-28T03:35:52Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

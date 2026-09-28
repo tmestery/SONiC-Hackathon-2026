@@ -1,0 +1,48 @@
+{
+  "id": "management-25925",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25925,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25925",
+    "title": "Bug: Generic fwutil tests skip with BMC-specific message on non-BMC platforms",
+    "created_at": "2026-07-06T17:57:41Z",
+    "closed_at": "2026-08-05T16:48:44Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n A BMC presence check was added to the shared `fw_pkg` fixture in\n  `tests/platform_tests/conftest.py`:\n\n ```\n if not bmc.is_bmc_exists(duthost):\n      pytest.skip(\"BMC is not present, skipping BMC platform API tests\")\n\n```\n\n  Because fw_pkg is shared by the generic fwutil tests, the generic fwutil suite\n  inherits this BMC-specific skip on platforms without BMC support.\n\n  Affected tests include:\n\n  - platform_tests/fwutil/test_fwutil.py::test_fwutil_install_file\n  - platform_tests/fwutil/test_fwutil.py::test_fwutil_install_url\n  - platform_tests/fwutil/test_fwutil.py::test_fwutil_update_current\n  - platform_tests/fwutil/test_fwutil.py::test_fwutil_update_next\n  - platform_tests/fwutil/test_fwutil.py::test_fwutil_auto\n\n  These tests are not BMC API tests and should not skip just because BMC is absent.\n  The BMC presence requirement should be scoped to BMC-specific tests such as\n  platform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update.\n\n  The regression appears related to:\n  https://github.com/sonic-net/sonic-mgmt/pull/24950\n\n### Steps to Reproduce\n\n Run generic fwutil tests on a platform without BMC support.\n\n  Example:\n\n ```\n sudo ./run_tests.sh -n dt -m individual -r \\\n    -t any,util,dualtor,t0 \\\n    -p logs_fwutil_non_bmc \\\n    -f ../ansible/testbed.yaml -u \\\n    -e \"--ignore-conditional-mark\" \\\n    -c \"platform_tests/fwutil/test_fwutil.py::test_fwutil_install_url\"\n```\n\n### Actual Behavior and Expected Behavior\n\n **Actual Behavior and Expected Behavior**\n\n  ***Actual behavior:***\n\n  Generic fwutil tests skip with a BMC API-specific reason:\n\n  `SKIPPED (BMC is not present, skipping BMC platform API tests)`\n\n  ***Expected behavior:***\n\n  Generic fwutil tests should not inherit BMC API gating. They should continue to\n  their own fwutil/platform handling.\n\n  For example, with no firmware package supplied:\n\n  `SKIPPED (No fw package specified.)`\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 25927,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25927",
+    "title": "Keep fw_pkg fixture BMC agnostic",
+    "merged_at": "2026-08-05T16:48:42Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #25925\n\nFailure type: regression\nRelevant PR : https://github.com/sonic-net/sonic-mgmt/pull/24950\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nFailure type: regression caused by https://github.com/sonic-net/sonic-mgmt/pull/24950\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test results\n202605-specific image/test result evidence\nTesting done on Non BMC Platform\n\n**1. fwutil tests are skipped with correct reason**\n```\nAzDevOps@bc5dcbfe4254:/data/tests$ sudo ./run_tests.sh -n dtAA -m individual -r \\\n   -t any,util,dualtor,t0 \\\n   -p logs_fwutil_non_bmc \\\n   -f ../ansible/testbed.yaml -u \\\n   -e \"--ignore-conditional-mark\" \\\n   -c \"platform_tests/fwutil/test_fwutil.py::test_fwutil_install_url\"\n```\n\n```\nplatform_tests/fwutil/test_fwutil.py::test_fwutil_install_url[CPLD-None] SKIPPED (No fw package specified.)                                                                                                                                                                            [ 25%]\nplatform_tests/fwutil/test_fwutil.py::test_fwutil_install_url[ONIE-None] SKIPPED (No fw package specified.)                                                                                                   [ 50%]\nplatform_tests/fwutil/test_fwutil.py::test_fwutil_install_url[BIOS-None] SKIPPED (No fw package specified.)                                                                                                   [ 75%]\nplatform_tests/fwutil/test_fwutil.py::test_fwutil_install_url[FPGA-None] SKIPPED (No fw package specified.)                                                                                                   [100%]\n```\n**Logs**\n[test_fwutil.py::test_fwutil_install_url.log](https://github.com/user-attachments/files/30922326/test_fwutil.py.test_fwutil_install_url.log)\n[test_fwutil.py::test_fwutil_install_url.xml](https://github.com/user-attachments/files/30922328/test_fwutil.py.test_fwutil_install_url.xml)\n\n**2. bmc tests are skipped with right reason**\n```\nsudo ./run_tests.sh -n dtAA -m individual -r \\\n   -t any,util,dualtor,t0 \\\n   -p logs_fwutil_non_bmc \\\n   -f ../ansible/testbed.yaml -u \\\n   -c \"platform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update\"\n```\n\n```\nplatform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update[install-None-ld209] SKIPPED (BMC is not present, skipping BMC platform API tests)                                                        [ 25%]\nplatform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update[update-None-ld209] SKIPPED (BMC is not present, skipping BMC platform API tests)                                                         [ 50%]\nplatform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update[install-None-ldp204] SKIPPED (BMC is not present, skipping BMC platform API tests)                                                       [ 75%]\nplatform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update[update-None-ldp204] SKIPPED (BMC is not present, skipping BMC platform API tests)                                                        [100%]\n```\n**Logs :**\n[test_bmc.py::TestBMCApi::test_bmc_firmware_update.log](https://github.com/user-attachments/files/30922312/test_bmc.py.TestBMCApi.test_bmc_firmware_update.log)\n[test_bmc.py::TestBMCApi::test_bmc_firmware_update.xml](https://github.com/user-attachments/files/30922314/test_bmc.py.TestBMCApi.test_bmc_firmware_update.xml)\n\n### Approach\n\n#### What is the motivation for this PR?\n\nGeneric fwutil tests should not be gated by BMC presence. On platforms\n without BMC support, they should run or skip for their own fwutil/platform\n reasons instead of using a BMC API-specific skip reason.\n\n#### How did you do it?\n\nRemoved the BMC presence check from the shared `fw_pkg` fixture and added\n a BMC-specific `bmc_fw_pkg` fixture in `api/test_bmc.py`.\n\nUpdated `test_bmc_firmware_update` to use `bmc_fw_pkg`, preserving the BMC\npresence check for the BMC firmware update path only.\n\n#### How did you verify/test it?\n\n**Scenario 1:**\n\nBMC API test on a non-BMC DUT still skips with the BMC-specific message:\n\n  platform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update[install-ldp205]\n  SKIPPED (BMC is not present, skipping BMC platform API tests)\n\n  platform_tests/api/test_bmc.py::TestBMCApi::test_bmc_firmware_update[update-ldp205]\n  SKIPPED (BMC is not present, skipping BMC platform API tests)\n\n  **Scenario 2:**\n\nGeneric fwutil test no longer BMC-skips and reaches generic fw_pkg handling:\n\n  platform_tests/fwutil/test_fwutil.py::test_fwutil_install_url[ONIE-None]\n  SKIPPED (No fw package specified.)\n\n  platform_tests/fwutil/test_fwutil.py::test_fwutil_install_url[BIOS-None]\n  SKIPPED (No fw package specified.)\n\n  platform_tests/fwutil/test_fwutil.py::test_fwutil_install_url[FPGA-None]\n  SKIPPED (No fw package specified.)\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/platform_tests/api/test_bmc.py",
+        "additions": 14,
+        "deletions": 4
+      },
+      {
+        "path": "tests/platform_tests/conftest.py",
+        "additions": 1,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

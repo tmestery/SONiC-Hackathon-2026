@@ -1,0 +1,74 @@
+{
+  "number": 21946,
+  "title": "Bug: [dualtor][faulty y-cable] UnboundLocalError: 'y_cable_simulated_path' referenced before assignment",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/21946",
+  "createdAt": "2026-01-15T19:18:37Z",
+  "closedAt": "2026-02-03T01:40:07Z",
+  "author": "pdam-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nMultiple tests in dualtor/test_switchover_faulty_ycable.py failed as searching for the file y_cable_simulated.py in the container pmon resulted in find getting warnings like \n```shell\n_\"find: '/proc/153727': No such file or directory find: '/proc/153728': No such file or directory\"_\n```\n\nThese are the short lived process started by xcvrd  in the form of some polling  which  are exiting and  appearing as warning when find / command is run \n```shell\n/bin/sh -c sonic-db-cli STATE_DB hget \"FAST_RESTART_ENABLE_TABLE|system\" enable  \nsonic-db-cli STATE_DB hget FAST_RESTART_ENABLE_TABLE|system enable\n```\nThis occurs in \nhttps://github.com/sonic-net/sonic-mgmt/blob/202511/tests/dualtor/test_switchover_faulty_ycable.py#L60 \n\n\n### Steps to Reproduce\n\nRun  tests in dualtor/test_switchover_faulty_ycable.py\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behaviour** \n\nfind_path_res = duthost.shell(\"docker exec pmon find / -name y_cable_simulated.py\")[\"stdout\"]\ngives\n```shell\n/usr/local/lib/python3.11/dist-packages/sonic_y_cable/microsoft/y_cable_simulated.py\nfind: '/proc/153727': No such file or directory\nfind: '/proc/153728': No such file or directory\n```\n**Expected Behaviour** \nfind_path_res = duthost.shell(\"docker exec pmon find / -name y_cable_simulated.py\")[\"stdout\"]\ngives\n```shell\n/usr/local/lib/python3.11/dist-packages/sonic_y_cable/microsoft/y_cable_simulated.py\n```\n### Relevant log output\n\n```shell\nCommand:\ndocker exec pmon find / -name y_cable_simulated.py\n\nAnsible result:\nrc = 1\nfailed = True\nchanged = True\nmsg = non-zero return code\n\n/usr/local/lib/python3.11/dist-packages/sonic_y_cable/microsoft/y_cable_simulated.py\nfind: '/proc/153727': No such file or directory\nfind: '/proc/153728': No such file or directory\n\n```\n\n### Output of `show version`\n\n```shell\nSONiC Software Version: SONiC.branch.202511-ars.b83a7149-buildimage.origin.202511-nightly-2026.01.08.03.51\nSONiC OS Version: 12\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22193,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22193",
+      "title": "Fix test_switchover_faulty_ycable find flakiness",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-03T01:40:06Z",
+      "createdAt": "2026-01-30T10:39:31Z",
+      "author": "pdam-arista",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n\r\n### Description of PR\r\n\r\nThe test uses the `docker exec pmon find /` command, which can exit with rc=1 due to transient `/proc` entries disappearing during the search \u2014 even when `y_cable_simulated.py` is found and printed to stdout.  \r\nThis causes `RunAnsibleModuleFail` before the path is assigned, leading to `UnboundLocalError: local variable 'y_cable_simulated_path' referenced before assignment` in the `finally` block during cleanup.\r\n\r\n**Fix**:  \r\n- Suppress stderr warnings with `2>/dev/null`  \r\n- Ignore non-zero exit codes via `module_ignore_errors=True` to make the lookup reliable\r\n\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/21946\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix  \r\n- [ ] Testbed and Framework (new/improvement)  \r\n- [ ] New Test case  \r\n- [ ] Skipped for non-supported platforms  \r\n- [ ] Test case improvement  \r\n\r\n### Back port request\r\n\r\n- [ ] 202205  \r\n- [ ] 202305  \r\n- [ ] 202311  \r\n- [ ] 202405  \r\n- [ ] 202411  \r\n- [ ] 202505  \r\n- [x] 202511  \r\n\r\n### Approach\r\n\r\n#### What is the motivation for this PR?\r\n\r\nThis change eliminates a flaky failure in `test_switchover_faulty_ycable.py` observed on dual-TOR testbeds.  \r\nThe failure is intermittent (~10\u201330% rate depending on system load) because the `find /` command traverses `/` and encounters transient `/proc/<pid>` directories that disappear mid-execution. This causes `find` to exit with rc=1 even when the target file path is correctly printed to stdout.  \r\nThe test code does not tolerate this non-zero return code \u2192 `RunAnsibleModuleFail` is raised before path assignment \u2192 `UnboundLocalError` during teardown/cleanup.\r\n\r\n#### How did you do it?\r\n\r\n- Added `2>/dev/null` to the `find` command to suppress the noisy `/proc/... No such file or directory` warnings on stderr  \r\n- Added `module_ignore_errors=True` to the `duthost.shell()` call so that a non-zero return code does not raise `RunAnsibleModuleFail` when stdout still contains the expected path  \r\n\r\n#### How did you verify/test it?\r\n\r\n- Ran test_switchover_faulty_ycable.py  in a loop (20+ consecutive runs) on a  dual-TOR testbed  \r\n- Verified in test logs that `/proc` warnings no longer appear and cleanup executes cleanly without exceptions\r\n\r\n#### Any platform specific information?\r\n\r\nPrimarily reproducible on multi-ASIC SONiC platforms using the `pmon` container\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nN/A (robustness improvement to existing dual-TOR test)\r\n\r\n### Documentation\r\n\r\nN/A \u2013 no new feature or new test case. This is a targeted fix for test reliability.\r\n",
+      "files": [
+        {
+          "path": "tests/dualtor/test_switchover_faulty_ycable.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-01-30T10:39:39Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: pdam-arista / name: Pratik Dam (8ac87640546982b16d335cd3bcfe15e4d82afad5)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-01-30T10:39:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-01-30T10:39:54Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "pdam-arista",
+          "createdAt": "2026-02-02T14:07:09Z",
+          "body": "@theasianpianist @lolyu @xwjiang-ms \r\nThe change is minimal and low-risk. Please review when you have a moment. Thanks!"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-02-03T01:25:51Z",
+          "body": "Hi @StormLiangMS, could you please help review/merge this one?"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-02-03T01:40:30Z",
+          "body": "hi @vmittal-msft bug fix, need 202511 cherrypick. "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-05T19:38:40Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/22261"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-27006",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27006,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27006",
+    "title": "Bug: lldp/lldp_test_syncd failure due to wait_until_lldp_populated not waiting for all interfaces",
+    "created_at": "2026-08-12T17:15:41Z",
+    "closed_at": "2026-09-25T21:14:12Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nwait_until_lldp_populated function does not wait for all interfaces to come up, instead it waits for cli and DB to match. This can result in an early return before all interfaces come up, causing the test to fail without waiting for enough time. It should instead check if cli, db, and expected interfaces all match.\n\nUsing pdb I confirmed the cli and db do match shortly after assertion failure.\n\n### Steps to Reproduce\n\nRun\n`lldp/test_lldp_syncd.py::test_lldp_entry_table_after_syncd_orchagent`\nIntermittently will fail due to early return of `wait_until_lldp_populated`\n\nConfirm using PDB or on DUT that the db and cli agree on lldp entries, but do not actually have the missing entries given by the failure\n\n### Actual Behavior and Expected Behavior\n\nExpect passed, get failed\n\n### Relevant log output\n\n```shell\nlldp/test_lldp_syncd.py::test_lldp_entry_table_after_syncd_orchagent[ctn201] FAILED                                                                                                       [ 73%]\n...\nlldp/test_lldp_syncd.py:488:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nlldp/test_lldp_syncd.py:410: in verify_all_interfaces_lldp_content\n    assert_lldp_interfaces(\n        db_instance = [<tests.common.helpers.sonic_db.SonicDbCli object at 0x7f0c997a8f50>]\n        lldp_entry_keys = ['Ethernet76', 'Ethernet64', 'Ethernet48', 'eth0', 'Ethernet0']\n        lldpctl_interfaces = [{'eth0': {'via': 'LLDP', 'rid': '1', 'age': '0 day, <IPV6>', 'chassis': {'dm5-rack53-tor48.sjc.aristanetworks.com':...(engineering build) running on an Arista cEOSLab', 'mgmt-ip': '<IP>', 'mgmt-iface': '999000', ...}}, ...}}, ...]\n        lldpctl_output = {'lldp': {'interface': [{'eth0': {'via': 'LLDP', 'rid': '1', 'age': '0 day, <IPV6>', 'chassis': {'dm5-rack53-tor48.s....}}, {'Ethernet84': {'via': 'LLDP', 'rid': '13', 'age': '0 day, <IPV6>', 'chassis': {'VM07LT2': {...}}, ...}}, ...]}}\n        show_lldp_table_int_list = ['Ethernet0', 'Ethernet28', 'Ethernet48', 'Ethernet64', 'Ethernet76', 'Ethernet84', ...]\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\nlldp_entry_keys = ['Ethernet76', 'Ethernet64', 'Ethernet48', 'eth0', 'Ethernet0']\nshow_lldp_table_int_list = ['Ethernet0', 'Ethernet28', 'Ethernet48', 'Ethernet64', 'Ethernet76', 'Ethernet84', ...]\nlldpctl_interface = [{'eth0': {'via': 'LLDP', 'rid': '1', 'age': '0 day, <IPV6>', 'chassis': {'dm5-rack53-tor48.sjc.aristanetworks.com':...(engineering build) running on an Arista cEOSLab', 'mgmt-ip': '<IP>', 'mgmt-iface': '999000', ...}}, ...}}, ...]\n\n    def assert_lldp_interfaces(\n        lldp_entry_keys, show_lldp_table_int_list, lldpctl_interface\n    ):\n        \"\"\"\n        Assert that LLDP_ENTRY_TABLE keys match show lldp table output and lldpctl output\n        \"\"\"\n        db_set = set(lldp_entry_keys)\n        cli_set = set(show_lldp_table_int_list)\n>       pytest_assert(\n            db_set == cli_set,\n            \"LLDP_ENTRY_TABLE keys do not match 'show lldp table' output. \"\n            \"In DB but not in CLI: {}. In CLI but not in DB: {}\".format(\n                db_set - cli_set, cli_set - db_set\n            ),\n        )\nE       Failed: LLDP_ENTRY_TABLE keys do not match 'show lldp table' output. In DB but not in CLI: set(). In CLI but not in DB: {'Ethernet84', 'Ethernet28'}\n\ncli_set    = {'Ethernet0', 'Ethernet28', 'Ethernet48', 'Ethernet64', 'Ethernet76', 'Ethernet84', ...}\ndb_set     = {'Ethernet0', 'Ethernet48', 'Ethernet64', 'Ethernet76', 'eth0'}\nlldp_entry_keys = ['Ethernet76', 'Ethernet64', 'Ethernet48', 'eth0', 'Ethernet0']\nlldpctl_interface = [{'eth0': {'via': 'LLDP', 'rid': '1', 'age': '0 day, <IPV6>', 'chassis': {'dm5-rack53-tor48.sjc.aristanetworks.com':...(engineering build) running on an Arista cEOSLab', 'mgmt-ip': '<IP>', 'mgmt-iface': '999000', ...}}, ...}}, ...]\nshow_lldp_table_int_list = ['Ethernet0', 'Ethernet28', 'Ethernet48', 'Ethernet64', 'Ethernet76', 'Ethernet84', ...]\n\nlldp/test_lldp_syncd.py:256: Failed\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 27009,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27009",
+    "title": "Fix wait_until_lldp_populate early return",
+    "merged_at": "2026-09-25T21:14:11Z",
+    "description": "for lldp/test_lldp_syncd add a check for if all interfaces are up rather than just checking if the db and cli agree on the lldp interfaces up. This prevents an early return on\nwait_until_lldp_populated\n\n### Description of PR\n\nSummary:\nFixes #27006 (issue)\nRelated to #25177\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type:\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n### Approach\n#### What is the motivation for this PR?\nThis helper function `wait_until_lldp_populate` returns early due to checking db and cli matches.\n\n#### How did you do it?\nFix the early return by also adding a list of expected interfaces.\n\n#### How did you verify/test it?\n\nRe-ran test on 202605 Citrine\nRe-ran all of lldp/ aswell",
+    "files": [
+      {
+        "path": "tests/lldp/test_lldp_syncd.py",
+        "additions": 17,
+        "deletions": 11
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

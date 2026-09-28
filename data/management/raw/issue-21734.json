@@ -1,0 +1,64 @@
+{
+  "number": 21734,
+  "title": "[Snappi]: Incorrect behavior in port-selection infra if similar ports from different LCs or DUTs are used in the test.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/21734",
+  "createdAt": "2025-12-17T15:44:06Z",
+  "closedAt": "2026-02-17T05:47:57Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nIf similar interfaces from two different LCs are selected for the test, then most of the port-selection function fail because there is no check on hostname.\n\nExample:\nIf user has Ethernet144 on LC1 and Ethernet144 on LC2, then most of the infra-code fails.\n\nCode:\nsnappi_fixtures.py has function setup_dut_ports which has following sub-functions to select ports from snappi_ports:\n- __vlan_intf_config\n- __portchannel_intf_config\n- __intf_config_multidut\n- __l3_intf_config\n\nEach of these functions, then go through the snappi_ports to select the port for the test. However, it ONLY check if the port-name matches and does not check if the port belongs to the right duthost.\n\nExample:\nfor '__portchannel_intf_config':\n```\nmember_port_ids = [i for i, sp in enumerate(snappi_ports) for m in members if sp['peer_port'] == m]\n```\n\nfor '__l3_intf_config':\n```\nport_ids = [i for i, sp in enumerate(snappi_ports) if sp['peer_port'] == intf]\n```\nThe above will fail if the same interface names from two different duthosts are used. \n\nThere should be a check to ensure that interfaces from right duthost are selected.\n\n### Steps to Reproduce\n\nSelect two similar port-names from two different duthosts. Example Ethernet144 on LC1 and LC2 for test.\n\nEnsure that either '__l3_intf_config' or '__portchannel_intf_config' is used for port selection.\n\nCheck the port_config_list in function 'setup_dut_ports' function once the ports are selected. The port_config_list will select the same port from same DUT as Tx and Rx.\n\n### Actual Behavior and Expected Behavior\n\nThe test ends up selecting same port from same DUT as Tx and Rx port. \n\nThere should be check for duthost hostname when the port from snappi_port is selected.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22435,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22435",
+      "title": "[Snappi] Fix issue to additionally use peer duthost-name to select right snappi_port",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-17T05:47:56Z",
+      "createdAt": "2026-02-16T16:10:38Z",
+      "author": "amitpawar12",
+      "body": "\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\nSnappi has infra file snappi_fixtures.py and function setup_dut_ports to populate port_config_list for selecting right Rx and Tx ports for the test.\r\n\r\nIt iterates through the VLAN interfaces, Portchannels, L3 interfaces in that order to select the ports. However, in port-channel and l3_interfaces, it goes through the snappi_ports only based on the names (say Ethernet144) to select the ports.\r\n\r\nThis is an issue if test has two or more LCs with same port names in the test. Example - LC1 has Ethernet144 and so does LC2.\r\n\r\nIn this case, a code like this, will cause same port to be selected:\r\nmember_port_ids = [i for i, sp in enumerate(snappi_ports) for m in members if sp['peer_port'] == m]\r\n\r\nThe snappi_ports will have LC1-Ethernet144 and LC2-Ethernet144, causing member_port_ids to match ONLY the first port-name Ethernet144 of LC1 everytime.\r\n\r\nThis PR addresses the issue by checking dut-hostname as well, thus ensuring that same port does not get selected twice.\r\n\r\nFixes are present in function - __portchannel_intf_config and __l3_intf_config.\r\n\r\nSummary:\r\nSummary:\r\nFixes #21734 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [X] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [X] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [X] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThe selection of same port on two different LCs will cause same snappi_port to be selected every time as Rx and Tx.\r\n\r\n#### How did you do it?\r\nIncluded duthost.hostname + peer_port to be used as key instead of just peer_port.\r\n\r\nIn this case, the right port from different DUT will be selected, even though port-names are same.\r\n\r\n#### How did you verify/test it?\r\nRan the test locally to determine the fix.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/snappi_fixtures.py",
+          "additions": 18,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-16T16:10:45Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-16T16:11:01Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-02-16T16:12:33Z",
+          "body": "@sdszhang @rawal01 @rraghav-cisco @selldinesh for viz."
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-05-25T16:00:32Z",
+          "body": "changed the code only impact snappi and for bug fix, cherrypick to 202511 approved. "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-25T16:00:33Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/24847"
+        }
+      ]
+    }
+  ]
+}

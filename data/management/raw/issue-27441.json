@@ -1,0 +1,104 @@
+{
+  "number": 27441,
+  "title": "[bmp] test_restart_bmp_docker fails on DUTs without BMP feature: \"Unit bmp.service not found\"",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27441",
+  "createdAt": "2026-08-28T00:28:58Z",
+  "closedAt": "2026-08-31T03:20:33Z",
+  "author": "ediwibowo-msft",
+  "labels": [
+    "Triage"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Description\n\n`bmp/test_docker_restart.py::test_restart_bmp_docker` fails on testbeds where the BMP feature is not enabled/installed. The test unconditionally calls `asichost.restart_service(\"bmp\")`, which runs `sudo systemctl start bmp`. On a DUT without the BMP service the command returns rc=5 with `Failed to start bmp.service: Unit bmp.service not found.`, failing the test instead of skipping.\n\nObserved on testbed with a BMC DUT.\n\n### Steps to reproduce\n\n```\npython3 -m pytest bmp/test_docker_restart.py \\\n    --inventory=../ansible/veos,../ansible/str4 --host-pattern=all \\\n    --testbed=<bmc_testbed> --testbed_file=../ansible/testbed.yaml \\\n    --topology bmc,any\n```\n\n### Actual result\n\n```\ntests.common.errors.RunAnsibleModuleFail: run module command failed, Ansible Results =>\nfailed = True\nrc = 5\ncmd = ['sudo', 'systemctl', 'start', 'bmp']\nstderr = Failed to start bmp.service: Unit bmp.service not found.\n```\n\nTraceback:\n```\nFile \".../tests/bmp/test_docker_restart.py\", line 21, in test_restart_bmp_docker\n    asichost.restart_service(\"bmp\")\nFile \".../tests/common/devices/sonic_asic.py\", line 249, in restart_service\n    return self.sonichost.restart_service(service_name, docker_name)\nFile \".../tests/common/devices/sonic.py\", line 2341, in restart_service\n    self.command(\"sudo systemctl start {}\".format(service_name))\n```\n\n### Expected result\n\nThe test should not hard-fail on DUTs/platforms where the BMP feature/service is not present. It should either:\n- Skip (`pytest.skip`) when the BMP image/feature is unavailable (consistent with `BMPEnvironment` in `tests/common/helpers/bmp_utils.py`, which checks `docker images | grep -w sonic-bmp` and `docker ps | grep -w bmp`), or\n- Enable the BMP feature first (`sudo config feature state bmp enabled`, as in `bmp/helper.py:enable_bmp_feature`) and only skip if BMP is not supported at all.\n\n### Additional context\n\n- Test file: `tests/bmp/test_docker_restart.py`\n- Related helpers: `tests/bmp/helper.py` (`enable_bmp_feature`), `tests/common/helpers/bmp_utils.py` (`BMPEnvironment`)\n- Other BMP tests (`test_bmp_configdb.py`, `test_bmp_statedb.py`) enable BMP tables but likewise assume the BMP container is present.\n\n### Type of issue\n- [x] Test case bug / test infrastructure improvement",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27442,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27442",
+      "title": "[bmc][bmp]: Skip test_restart_bmp_docker on bmc topology",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-31T03:20:31Z",
+      "createdAt": "2026-08-28T01:30:49Z",
+      "author": "ediwibowo-msft",
+      "body": "### Description of PR\r\nSummary:\r\nFixes #27441\r\n\r\n`bmp/test_docker_restart.py::test_restart_bmp_docker` calls `asichost.restart_service(\"bmp\")`, which runs `sudo systemctl start bmp`. On `bmc` topology the BMP service is not present, so this fails with `Failed to start bmp.service: Unit bmp.service not found.` (rc=5) instead of being skipped.\r\n\r\nThis PR skips the test on `bmc` topology using the `conditional_mark` plugin (no in-code changes to the test).\r\n\r\n### Type of change\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [x] 202608\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThe test hard-fails on `bmc` topology testbeds (e.g. `str4-Nokia-7220-Th6p-1-bmc` on `vms77-bmc-7220-1`), producing false negatives because the BMP service is not present there.\r\n\r\n#### How did you do it?\r\nAdded a `conditional_mark` entry in `tests/common/plugins/conditional_mark/tests_mark_conditions.yaml` that skips `bmp/test_docker_restart.py::test_restart_bmp_docker` when `topo_type in ['bmc']`. This keeps the skip policy in the central conditions file and leaves the test body unchanged.\r\n\r\n#### How did you verify/test it?\r\n- Verified the YAML parses and the new key resolves to the expected skip condition.\r\n- On a `bmc` topology, the test is marked skipped; on other topologies it runs as before.\r\n\r\n#### Any platform specific information?\r\nSkips on `bmc` topology.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A \u2014 existing test.\r\n\r\n### Documentation\r\nN/A",
+      "files": [
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 6,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-28T01:30:59Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T01:31:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-28T01:31:20Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T01:35:33Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-28T01:35:50Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T01:38:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-28T01:39:08Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-28T01:56:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "github-actions",
+          "createdAt": "2026-08-28T01:56:55Z",
+          "body": "<!-- skip-expiry-conditional-mark-review-note -->\n@StormLiangMS @wangxin @yxieca A user wants to merge changes to the conditional mark files into `master`. Please review."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-28T01:57:01Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2026-08-28T16:34:38Z",
+          "body": "LGTM @ediwibowo-msft  can you scan  if there are other bmp tests that gets run "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T03:53:55Z",
+          "body": "Cherry-pick PR to msft-202608: https://github.com/Azure/sonic-mgmt.msft/pull/1396"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T06:15:53Z",
+          "body": "This PR has backport request label(s) for branch(es): msft-202608, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202608: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

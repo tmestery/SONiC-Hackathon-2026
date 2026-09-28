@@ -1,0 +1,56 @@
+{
+  "number": 15858,
+  "title": "[Bug][T2]: `test_voq_fabric_isolation.py` fails with `Failed: auto_isolated state for port 91 should be 0`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/15858",
+  "createdAt": "2024-12-03T22:54:07Z",
+  "closedAt": "2024-12-09T19:57:43Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [
+    "arista-nwolfe"
+  ],
+  "milestone": null,
+  "body": "### Issue Description\n\n```\r\n            cmd = \"sonic-db-cli {} STATE_DB hset 'FABRIC_PORT_TABLE|PORT{}' TEST_CRC_ERRORS 0\".format(asicName, port)\r\n            cmd_output = duthost.shell(cmd, module_ignore_errors=True)[\"stdout\"].split(\"\\n\")\r\n            cmd = \"sonic-db-cli {} STATE_DB hset 'FABRIC_PORT_TABLE|PORT{}' TEST_CODE_ERRORS 0\".format(asicName, port)\r\n            cmd_output = duthost.shell(cmd, module_ignore_errors=True)[\"stdout\"].split(\"\\n\")\r\n            cmd = \"sonic-db-cli {} STATE_DB hset 'FABRIC_PORT_TABLE|PORT{}' TEST 'TEST'\".format(asicName, port)\r\n            cmd_output = duthost.shell(cmd, module_ignore_errors=True)[\"stdout\"].split(\"\\n\")\r\n\r\n>           pytest_assert(wait_until(600, 60, 0, check_fabric_link_status, duthost, asicName, port, '0'),\r\n                          \"auto_isolated state for port {} should be 0\".format(port))\r\nE                         Failed: auto_isolated state for port 91 should be 0\r\n\r\nasic       = 0\r\nasicName   = '-n asic0'\r\ncmd        = \"sonic-db-cli -n asic0 STATE_DB hset 'FABRIC_PORT_TABLE|PORT91' TEST 'product'\"\r\ncmd_output = ['0']\r\nduthost    = <MultiAsicSonicHost cmp214-5>\r\nduthosts   = [<MultiAsicSonicHost cmp214-5>, <MultiAsicSonicHost cmp214-6>, <MultiAsicSonicHost cmp214>]\r\nenum_frontend_dut_hostname = 'cmp214-5'\r\nlnkStatus  = 'up'\r\nnum_asics  = 2\r\nport       = 91\r\n\r\nvoq/test_voq_fabric_isolation.py:66: Failed\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> entering PDB >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n\r\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> PDB post_mortem (IO-capturing turned off) >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\r\n> /data/tests/voq/test_voq_fabric_isolation.py(66)test_voq_fabric_isolation_status()\r\n-> pytest_assert(wait_until(600, 60, 0, check_fabric_link_status, duthost, asicName, port, '0'),\r\n```\r\n\r\nThe problem is the `FABRIC_PORT_TABLE|PORT` doesn't have the attribute `AUTO_ISOLATED` by default, it only shows up the first time the fabric port becomes isolated:\r\nhttps://github.com/sonic-net/sonic-swss/blob/202405/orchagent/fabricportsorch.cpp#L855\r\n```\r\n            if (autoIsolated == 0 && (consecutivePollsWithErrors >= isolationPollsCfg\r\n                                   || consecutivePollsWithFecErrs >= fecIsolatedPolls))\r\n            {\r\n                // Link needs to be isolated.\r\n                SWSS_LOG_INFO(\"port %s auto isolated\", key.c_str());\r\n                autoIsolated = 1;\r\n                updateStateDbTable(m_stateTable, key, \"AUTO_ISOLATED\", autoIsolated);\r\n                SWSS_LOG_NOTICE(\"port %s set AUTO_ISOLATED %d\", key.c_str(), autoIsolated);\r\n            }\r\n            else if (autoIsolated == 1 && consecutivePollsWithNoErrors >= recoveryPollsCfg\r\n                  && consecutivePollsWithNoFecErrs >= fecUnisolatePolls)\r\n            {\r\n                // Link is isolated, but no longer needs to be.\r\n                SWSS_LOG_INFO(\"port %s healthy again\", key.c_str());\r\n                autoIsolated = 0;\r\n                updateStateDbTable(m_stateTable, key, \"AUTO_ISOLATED\", autoIsolated);\r\n                SWSS_LOG_NOTICE(\"port %s set AUTO_ISOLATED %d\", key.c_str(), autoIsolated);\r\n            }\r\n```\r\n\r\nIn the test it first checks that `AUTO_ISOLATED=0` which will fail if the port hasn't even been isolated:\r\n```\r\npytest_assert(wait_until(600, 60, 0, check_fabric_link_status, duthost, asicName, port, '0'),\r\n              \"auto_isolated state for port {} should be 0\".format(port))\r\n```\n\n### Results you see\n\n`FABRIC_PORT_TABLE|PORT` is missing the `AUTO_ISOLATED` attribute\n\n### Results you expected to see\n\nThe test should probably just treat a `FABRIC_PORT_TABLE|PORT` entry with no `AUTO_ISOLATED` the same as `AUTO_ISOLATED=0`\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 15859,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/15859",
+      "title": "Handle AUTO_ISOLATED attribute missing from table",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-12-09T19:57:42Z",
+      "createdAt": "2024-12-03T22:54:43Z",
+      "author": "arista-nwolfe",
+      "body": "AUTO_ISOLATED is only added to the FABRIC_PORT_TABLE once the fabric port has been isolated once, so we should treat this attribute missing from this table the same as AUTO_ISOLATED=0\r\n\r\nSummary:\r\nFixes #15858 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n",
+      "files": [
+        {
+          "path": "tests/voq/test_voq_fabric_isolation.py",
+          "additions": 4,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-03T22:56:01Z",
+          "body": "The [pre-commit](http://pre-commit.com/) check detected issues in the files touched by this pull request.\nThe pre-commit check is a mandatory check, please fix detected issues.\n\nDetailed pre-commit check results:\n<samp>trim trailing whitespace.................................................Passed<br/>fix end of files.........................................................Passed<br/>check yaml...........................................(no files to check)Skipped<br/>check for added large files..............................................Passed<br/>check python ast.........................................................Passed<br/>flake8...................................................................Failed<br/>- hook id: flake8<br/>- exit code: 1<br/><br/>tests/voq/test_voq_fabric_isolation.py:113:121: E501 line too long (133 > 120 characters)<br/><br/>flake8...............................................(no files to check)Skipped<br/>check conditional mark sort..........................(no files to check)Skipped<br/></samp>\n\nTo run the pre-commit checks locally, you can follow below steps:\n1. Ensure that default python is python3. In sonic-mgmt docker container, default python is python2. You can run\n   the check by activating the python3 virtual environment in sonic-mgmt docker container or outside of sonic-mgmt\n   docker container.\n2. Ensure that the `pre-commit` package is installed:\n```\nsudo pip install pre-commit\n```\n3. Go to repository root folder\n4. Install the pre-commit hooks:\n```\npre-commit install\n```\n5. Use pre-commit to check staged file:\n```\npre-commit\n```\n6. Alternatively, you can check committed files using:\n```\npre-commit run --from-ref <commit_id> --to-ref <commit_id>\n```"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-11T23:13:06Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-mgmt/pull/16027"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-05-15T08:24:35Z",
+          "body": "Cherry-pick PR to msft-202503: https://github.com/Azure/sonic-mgmt.msft/pull/285"
+        }
+      ]
+    }
+  ]
+}

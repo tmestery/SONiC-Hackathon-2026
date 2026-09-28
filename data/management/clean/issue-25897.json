@@ -1,0 +1,50 @@
+{
+  "id": "management-25897",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25897,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25897",
+    "title": "[cSONiC] exabgp route-injector is iBGP and collides with DUT peer in PEER_V4 (neighbor advertises 0 routes)",
+    "created_at": "2026-07-05T04:53:15Z",
+    "closed_at": "2026-07-09T06:35:22Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "csonic"
+    ]
+  },
+  "failure": {
+    "body": "### Summary\n\nOn cSONiC (`docker-sonic-vs`) virtual neighbors, some T1 neighbors intermittently advertise **0 routes** to the DUT because the **exabgp route-injector peer is provisioned as iBGP** and then collides with the eBGP DUT peer inside the shared `PEER_V4`/`PEER_V6` peer-group.\n\n### Affected component\n\n`sonic-mgmt` cSONiC virtual-neighbor provisioning (`--neighbor_type csonic`, `vm_type=csonic`).\n\n### Root cause\n\n- The exabgp injector peer (`nhipv4`/`nhipv6`, e.g. `<IP>` / `fc0a::ff`) is created in the neighbor's `CONFIG_DB` `BGP_NEIGHBOR` table with `asn = <neighbor's own bgp_asn>`, i.e. **iBGP** (`ansible/roles/sonic/templates/configdb-csonic.j2`). exabgp itself is also started with `local_asn = peer_asn = <neighbor bgp_asn>` (`ansible/roles/vm_set/tasks/announce_routes.yml`).\n- SONiC bgpcfgd's **generic** `dockers/docker-fpm-frr/frr/bgpd/templates/general/instance.conf.j2` unconditionally binds **every** `BGP_NEIGHBOR` entry into the eBGP `PEER_V4`/`PEER_V6` peer-group.\n- `PEER_V4`/`PEER_V6` have **no explicit `remote-as`**, so their internal/external type is fixed by the **first member** bgpcfgd applies. Both the eBGP DUT peer (`remote-as 65100`) and the iBGP injector (`remote-as == own AS`) land in that same group.\n- Whichever is applied first wins the group type; FRR then rejects the other:\n  ```\n  % Peer-group members must be all internal or all external.\n  ```\n- When the **iBGP injector wins** this nondeterministic apply race, the **eBGP DUT peer is refused**, never activated in the ipv4/ipv6 AF, and the neighbor advertises **0 prefixes** to the DUT.\n\n### Symptom / evidence\n\nOn a live cSONiC t0 testbed, 2 of 4 T1 neighbors were broken (nondeterministically) \u2014 DUT `show ip bgp summary`:\n\n```\n<IP>  ARISTA01T1(VM0100)  PfxRcd=0       <-- injector won race -> broken\n<IP>  ARISTA02T1(VM0101)  PfxRcd=0       <-- injector won race -> broken\n<IP>  ARISTA03T1(VM0102)  PfxRcd=6399    <-- DUT peer won race -> OK\n<IP>  ARISTA04T1(VM0103)  PfxRcd=6399    <-- DUT peer won race -> OK\n```\n\nOn a broken neighbor the injector is in `PEER_V4` and the DUT peer is unbound (`(Policy)`); on a working neighbor the injector is not in `PEER_V4` and the DUT peer is bound. Confirmed deterministic (reproduces on a fresh bgpcfgd reconcile), not a timing flake.\n\n### Test impact\n\nSurfaces as flaky/failing tests that require multiple T1 neighbors to advertise, e.g. `bgp/test_bgp_route_neigh_learning.py::test_bgp_neighbor_route_learnning` (it originates a route on the first two T1s and expects both nexthops on the DUT).\n\n### Why cEOS is not affected\n\ncEOS also configures the injector as iBGP (`remote-as {{ host['bgp']['asn'] }}` in `ansible/roles/eos/templates/c0-c1.j2`) but does **not** force the injector and the DUT peer into one shared peer-group, so there is no group-type collision. This is a cSONiC-specific consequence of bgpcfgd's shared-peer-group binding.\n\n### Proposed fix\n\nMake the cSONiC exabgp injector **eBGP** (distinct ASN) so `PEER_V4`/`PEER_V6` stay uniformly external and the DUT peer always binds, regardless of apply order. cSONiC-scoped; no change to the shared FRR/bgpcfgd templates and no change to non-cSONiC neighbor behavior. PR to follow."
+  },
+  "resolution": {
+    "pr_number": 25898,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25898",
+    "title": "[cSONiC] Fix flaky \"0 routes to DUT\": stop exabgp injector poisoning the eBGP peer-group",
+    "merged_at": "2026-07-09T06:35:21Z",
+    "description": "Fixes #25897\n\n### Problem\n\nOn a cSONiC (`docker-sonic-vs`) neighbor, the exabgp route-injector and the\nreal DUT peer both land in bgpcfgd's shared `PEER_V4`/`PEER_V6` peer-group.\nThat group carries no explicit `remote-as`, so the **first member to bind sets\nthe group's type** (internal vs external), and FRR then rejects any later\nmember of the other type **at bind time**:\n\n```\n% Peer-group members must be all internal or all external.\n```\n\nThe injector is iBGP (its remote-as == the neighbor's own `bgp_asn`) and the\nDUT peer is eBGP, so one of them is always rejected. Apply order is\nnondeterministic, which makes it **flaky**:\n\n- **DUT peer binds first** \u2192 group external \u2192 the later **iBGP injector** is\n  rejected. The test only needs the DUT peer, which is up \u2192 pass.\n- **Injector binds first** \u2192 group internal \u2192 the later **eBGP DUT peer** is\n  rejected \u2192 the DUT peer never activates \u2192 0 prefixes advertised to the DUT\n  \u2192 fail.\n\nThis is the root cause behind intermittent \"cSONiC neighbor advertises 0 routes\nto the DUT\" failures. Full writeup in the linked issue.\n\n### Fix\n\nMove the exabgp injector out of the shared eBGP peer-group and into a separate\n`BGP_INTERNAL_NEIGHBOR` entry, which bgpcfgd renders into its own\n`INTERNAL_PEER_V4`/`V6` peer-group. The injector (iBGP) and the DUT peer (eBGP)\nthen live in two homogeneous peer-groups and never trip the FRR homogeneity\ncheck, regardless of apply order.\n\nThe injector stays iBGP, which is the intended topology: the DUT never peers\nwith exabgp \u2014 it only learns the routes the neighbor re-originates, exactly\nlike a cEOS neighbor.\n\n### Changes (cSONiC-scoped)\n\n- `ansible/roles/sonic/templates/configdb-csonic.j2`:\n  - Move the exabgp injector from `BGP_NEIGHBOR` into a new\n    `BGP_INTERNAL_NEIGHBOR` table (iBGP, `asn` = the neighbor's own `bgp_asn`).\n  - Add a synthetic **`Loopback4096`** (reusing the neighbor's `Loopback0`\n    addresses): bgpcfgd's internal-peer manager hard-requires it. Its\n    `update-source` use is chassis-gated and inert on a non-chassis VS neighbor.\n  - Set `local_addr` on the injector to the neighbor's `Loopback0` address.\n- `ansible/roles/sonic/templates/tests/test_configdb_csonic.py`: update\n  assertions for the new placement.\n\nNon-cSONiC (cEOS/vEOS/\u2026) neighbors are unaffected \u2014 this template is\ncSONiC-only.\n\n### Verification\n\n- **Unit tests** (updated in this PR): 9/9 pass \u2014 the injector renders into\n  `BGP_INTERNAL_NEIGHBOR`, `Loopback4096` is present, and `BGP_NEIGHBOR` holds\n  only the real eBGP peers.\n- **Live cSONiC neighbor:** injector Established as iBGP in `INTERNAL_PEER_V4`\n  (6399 prefixes accepted); the eBGP DUT peer Established in `PEER_V4`\n  (6401 prefixes sent); and from the DUT's own view it peers **only** with the\n  neighbor VMs \u2014 exabgp (`10.10.246.x`) is not a DUT peer. Routes flow\n  exabgp \u2192 injector (iBGP) \u2192 neighbor \u2192 DUT (eBGP).\n\n### How to test\n\n```\n./run_tests.sh -n vms-kvm-t0-csonic -d vlab-01 \\\n  -c bgp/test_bgp_route_neigh_learning.py \\\n  -f vtestbed.yaml -i ../ansible/veos_vtb -u \\\n  -e \"--neighbor_type csonic\" -e --skip_sanity\n```\n(after re-deploying the cSONiC neighbors so the new injector config is applied)",
+    "files": [
+      {
+        "path": "ansible/roles/sonic/templates/configdb-csonic.j2",
+        "additions": 48,
+        "deletions": 4
+      },
+      {
+        "path": "ansible/roles/sonic/templates/tests/test_configdb_csonic.py",
+        "additions": 29,
+        "deletions": 9
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

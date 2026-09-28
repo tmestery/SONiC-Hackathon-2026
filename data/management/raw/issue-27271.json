@@ -1,0 +1,149 @@
+{
+  "number": 27271,
+  "title": "[autorestart] test_container_autorestart errors on BMC: is_hiting_start_limit raises on missing bgp.service",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27271",
+  "createdAt": "2026-08-24T05:13:42Z",
+  "closedAt": "2026-09-11T04:58:32Z",
+  "author": "ediwibowo-msft",
+  "labels": [
+    "bug"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Description\n\n`autorestart/test_container_autorestart.py::test_containers_autorestart` fails on a **BMC** topology for every non-skipped container. All failures share the same root cause: an unguarded `duthost.shell(...)` in `is_hiting_start_limit` raises when the queried systemd unit does not exist on the device.\n\n### Testbed / Environment\n\n- Testbed: Nokia-7220-Th6p with `bmc` topology\n- Command:\n  ```\n  python3 -m pytest autorestart/test_container_autorestart.py \\\n    --testbed=<bmc-testbed> --topology bmc,any ...\n  ```\n- Result: `5 failed, 10 skipped` \u2014 failing cases: `gnmi`, `lldp`, `pmon`, `redfish`, `telemetry`.\n\n### Root cause\n\nDuring post-check, `postcheck_critical_processes_status()` iterates over every feature in `feature_autorestart_states` and calls `is_hiting_start_limit()`. On this BMC the feature set still includes `bgp`, so it hits:\n\n```python\n# tests/autorestart/test_container_autorestart.py:409\ndef is_hiting_start_limit(duthost, service_name):\n    service_status = duthost.shell(\n        \"sudo systemctl status {}.service | grep 'Active'\".format(service_name))\n    ...\n```\n\nBMC devices (`router_type == 'NetworkBmc'`) have no front-side ASIC and therefore no `bgp` container/service. `systemctl status bgp.service` exits non-zero (`Unit bgp.service could not be found.`) and `grep` matches nothing, so the whole pipeline returns `rc=1`. Because `duthost.shell()` is called **without** `module_ignore_errors=True`, it raises `RunAnsibleModuleFail` and the test errors out.\n\nNote this is also a latent, platform-agnostic fragility: `systemctl status <svc> | grep 'Active'` returns non-zero whenever `grep` finds no match, so `is_hiting_start_limit` can raise instead of returning a clean `True/False`.\n\n### Traceback (representative)\n\n```\nFile \".../autorestart/test_container_autorestart.py\", line 545, in postcheck_critical_processes_status\n    if is_hiting_start_limit(duthost, feature_name):\nFile \".../autorestart/test_container_autorestart.py\", line 409, in is_hiting_start_limit\n    service_status = duthost.shell(\"sudo systemctl status {}.service | grep 'Active'\".format(service_name))\n...\ntests.common.errors.RunAnsibleModuleFail: run module shell failed, Ansible Results =>\nrc = 1\ncmd = sudo systemctl status bgp.service | grep 'Active'\nmsg = non-zero return code\nstderr =\nUnit bgp.service could not be found.\n```\n\n### Expected behavior\n\nThe autorestart test should run cleanly on BMC topologies. A missing service unit (e.g. `bgp` on BMC) should not cause `is_hiting_start_limit` to raise.\n\n### Suggested fix\n\n1. Make `is_hiting_start_limit` resilient (root cause): call `duthost.shell(..., module_ignore_errors=True)` and treat a non-existent unit / no-match as \"not hitting start limit\" (return `False`). This fixes the crash regardless of platform.\n2. Make the post-check BMC-aware: skip `bgp`/BGP-only features on BMC in the `postcheck_critical_processes_status` feature loop, consistent with the existing `is_bmc()` pattern in `tests/common/config_reload.py` and `tests/common/devices/multi_asic.py`.\n\n### Related\n\nPR #27269 makes the BGP pre-check / post-check / `wait_for_bgp` reload BMC-aware",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27281,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27281",
+      "title": "[autorestart][conftest]: Filter enum_dut_feature to only enabled features",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-11T04:58:30Z",
+      "createdAt": "2026-08-24T08:01:06Z",
+      "author": "ediwibowo-msft",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nFilters `generate_dut_feature_list` in `tests/conftest.py` to only enumerate **enabled** features, matching the existing convention used in `generate_dut_container_list` (`if \"disabled\" in val[\"features\"][feature]: continue`).\r\n\r\nThis is an alternative to #27269.\r\n\r\nOn a BMC, `enum_dut_feature` drops from 15 params to 5:\r\n\r\n| Before | After |\r\n| --- | --- |\r\n| acms, bgp, dhcp_relay, gnmi, lldp, macsec, mux, otel, pmon, profiler, redfish, swss, syncd, teamd, telemetry | acms, gnmi, lldp, pmon, redfish, telemetry |\r\n\r\nThis removes the source of the `Unit bgp.service could not be found` crash and also skips other never-installed units. It's platform-agnostic \u2014 on a normal NPU those features are enabled so nothing changes.\r\n\r\nAdditionally, `postcheck_critical_processes_status` in `tests/autorestart/test_container_autorestart.py` iterated over all features in `feature_autorestart_states`, including disabled ones, calling `is_hiting_start_limit` on never-installed units. This now skips containers returned by `get_disabled_container_list`, matching the convention already used in `run_test_on_single_container`.\r\n\r\nFixes #27271\r\n\r\n### Type of change\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [x] 202608\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nOn BMC platforms, `enum_dut_feature` enumerated features that are never installed as systemd units (e.g. `bgp`, `swss`, `syncd`, `teamd`). Tests parametrized over these features crashed with `Unit bgp.service could not be found`. The same class of failure occurred in `postcheck_critical_processes_status`, which iterated over disabled features.\r\n\r\n#### How did you do it?\r\n\r\n- Added a `\"disabled\" not in meta[a_dut][\"features\"][a_feature]` guard to both the ASIC and non-ASIC branches of `generate_dut_feature_list`, mirroring the existing disabled-feature filter already used by `generate_dut_container_list`.\r\n- Added a `if feature_name in disabled_containers: continue` guard to `postcheck_critical_processes_status`, using `get_disabled_container_list`, matching `run_test_on_single_container`.\r\n\r\n#### How did you verify/test it?\r\n\r\nConfirmed `tests/conftest.py` and `tests/autorestart/test_container_autorestart.py` compile cleanly. On a BMC the `enum_dut_feature` parametrization drops from 15 to 5 enabled features, removing the never-installed units that caused the crash. On a normal NPU the affected features are enabled, so the enumerated list is unchanged.\r\n\r\nAdded unit tests in `tests/common/unit_tests/fixtures/unit_test_generate_dut_feature_list.py` covering disabled-feature filtering (with and without asics), `skip_feature_list` exclusion, enabled/always_enabled inclusion, `None` metadata, DUTs without a `features` key, and per-asic / per-DUT expansion. All 8 pass against the real conftest source:\r\n\r\n```\r\nPASS test_disabled_features_filtered_with_asics\r\nPASS test_disabled_features_filtered_without_asics\r\nPASS test_dut_without_features_key\r\nPASS test_enabled_variants_included\r\nPASS test_meta_none_returns_empty\r\nPASS test_multiple_asics_expand_features\r\nPASS test_multiple_duts\r\nPASS test_skip_feature_list_excluded\r\n\r\n8/8 passed\r\n```\r\n\r\nRun with:\r\n```bash\r\npython3 -m pytest --noconftest \\\r\n  tests/common/unit_tests/fixtures/unit_test_generate_dut_feature_list.py -v\r\n```\r\n\r\n#### Any platform specific information?\r\n\r\nPlatform-agnostic. Only affects platforms (such as BMC) where some features are marked `disabled` in testbed metadata.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nN/A\r\n\r\n### Documentation\r\n\r\nN/A",
+      "files": [
+        {
+          "path": "tests/autorestart/test_container_autorestart.py",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/unit_tests/fixtures/unit_test_generate_dut_feature_list.py",
+          "additions": 139,
+          "deletions": 0
+        },
+        {
+          "path": "tests/conftest.py",
+          "additions": 4,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-08-24T08:01:12Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: Copilot / name: Copilot (df7c80fa68fb437ebe3ddc764bc96c886ace0e4d)</li><li>:white_check_mark: login: ediwibowo-msft / name: Edi Wibowo (df7c80fa68fb437ebe3ddc764bc96c886ace0e4d)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T08:01:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-24T08:01:15Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-24T08:01:34Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T08:03:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-24T08:03:57Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T09:07:18Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-24T09:07:36Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T09:12:33Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-24T09:12:50Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T09:15:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-24T09:15:49Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-24T09:16:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-24T09:16:35Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "ediwibowo-msft",
+          "createdAt": "2026-08-25T05:57:47Z",
+          "body": "> https://github.com/sonic-net/sonic-mgmt/blob/ce379a3f7b6c006d7ca61697a0a656940dd82cf3/tests/common/devices/sonic.py#L133-L138\r\n\r\n`autorestart/test_container_autorestart.py` does not use `self.DEFAULT_ASIC_SERVICES`.\r\nInstead it uses `generate_dut_feature_list` in tests/conftest.py which uses metadata of DUT.\r\n\r\n```\r\n...\r\nmeta = get_testbed_metadata(request)  #  Load JSON metadata\r\nfor a_feature in list(meta[a_dut][\"features\"].keys()):  # Iterate metadata\r\n    if a_feature not in skip_feature_list:\r\n        tuple_list.append((a_dut, a_asic, a_feature))\r\n...\r\n```\r\n\r\n\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T06:29:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T06:30:17Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T06:37:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-25T06:37:31Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T06:14:24Z",
+          "body": "This PR has backport request for branch(es): 202608.<br>Added label(s) for branch(es) msft-202608.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

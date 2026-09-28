@@ -1,0 +1,53 @@
+{
+  "id": "management-24289",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24289,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24289",
+    "title": "Enhancement: sonic-mgmt reboot tests could cause DUT to be stuck at grub edit mode",
+    "created_at": "2026-04-29T00:33:41Z",
+    "closed_at": "2026-05-27T21:32:00Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "enhancement",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the enhancement\n\nMore robust way to establish and clean up console connection in sonic-mgmt tests for reboots. Graceful handling of cleanup if console connection is not established - only write `exit` if at SONiC prompt.\n\n### Current Behavior\n\nsonic-mgmt reboot tests sometimes cause DUT to enter GRUB edit mode (as seen in console) when the reboot is happening. However, this is not expected or handled the test framework. So, the DUT is stuck, and the test fails / cannot proceed with remaining test cases. Typically, the DUT has to be recovered by power cycling.\n\nAs part of the `netmiko` framework, the cleanup of `SSHConsoleConn` can be triggered by many ways. In my limited experience, this is typically triggered by an EOF exception during a console read while the reboot is happening. When the cleanup sends `exit` ([ref](https://github.com/sonic-net/sonic-mgmt/blob/99b28c4f2072cead6ba6fff48821395eae75eda6/tests/common/connections/ssh_console_conn.py#L192)) as part of the clean up, it happens to coincide with the GRUB menu (which is normal during bootup). Sending `e` then enters the GRUB edit mode unexpectedly.\n\nI think the cleanup is called correctly but should not blindly write `exit` to the console. In #24288 , the proposal is to first check that the console is likely at the SONiC prompt (which seems to be the original intent based on the comment there).\n\n### Proposed Behavior\n\nConsole connection is established as best effort and should not be the cause of a test failure. Using it (or not) should not cause unrelated failure for reboot tests."
+  },
+  "resolution": {
+    "pr_number": 24288,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24288",
+    "title": "Improve console connection during sonic-mgmt reboot events",
+    "merged_at": "2026-05-27T21:31:59Z",
+    "description": "### Description of PR\n\nSummary: Improve establishing console connection in sonic-mgmt reboot test runs and avoid DUT console to be stuck at grub edit.\nFixes #24289\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\nWe have observed DUT is stuck in GRUB edit mode during sonic-mgmt tests that involve reboots.\nThe sonic-mgmt tests that use the `tests/common/reboot.py` helper attempts to create a console connection ([ref](https://github.com/sonic-net/sonic-mgmt/blob/99b28c4f2072cead6ba6fff48821395eae75eda6/tests/common/reboot.py#L390)) during which any exception (for example, EOF from console reads) could trigger a cleanup of the console connection. At the same time, the DUT has already started reboot. The cleanup writes exit ([ref](https://github.com/sonic-net/sonic-mgmt/blob/99b28c4f2072cead6ba6fff48821395eae75eda6/tests/common/connections/ssh_console_conn.py#L192)) to the console while the DUT gets to the grub menu. `e` typically enters the grub edit mode, which is not expected or handled by the test framework. So the DUT is stuck, and the test fails / cannot proceed with remaining test cases.\n\nAs part of the `netmiko`, the cleanup can be triggered by many ways. In my limited experience, this is typically triggered by an EOF exception during a console read while the reboot is happening. I think the cleanup is called correctly but should not blindly write `exit` to the console. The proposal is to first check that the console is likely at the SONiC prompt (which is the original intent based on the comment there).\n\nAs an aside, the PR also improves the way to establish console connection in the first place.\n\nExample that causes a cleanup\n\n```\n   multiprocessing/pool.py worker\n    \u2514\u2500 reboot.py:730  collect_console_log()\n         \u2514\u2500 reboot.py:719  try_create_dut_console()\n              \u2514\u2500 dut_utils.py:525  create_duthost_console()\n                   \u2514\u2500 console_host.py:54  ConsoleHost()\n                        \u2514\u2500 ssh_console_conn.py:52  SSHConsoleConn.__init__()\n                             \u2514\u2500 base_console_conn.py:64  BaseConsoleConn.__init__()\n                                  \u2514\u2500 netmiko/base_connection.py:495  __init__()\n                                       \u2514\u2500 netmiko/base_connection.py:501  _open()\n                                            \u2514\u2500 netmiko/base_connection.py:999  _try_session_preparation()\n                                                 \u2502  <\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014 Exception raised here (channel EOF or ReadTimeout)\n                                                 \u2514\u2500 base_console_conn.py:112  disconnect()\n                                                      \u2514\u2500 netmiko/base_connection.py:2488  disconnect()\n                                                           \u2514\u2500 ssh_console_conn.py:218  cleanup()\n                                                                \u2514\u2500 send_command(\"exit\", expect_string=\"login:\")\n\n```\n\nWe observed at least 2 triggers for the exception\n1. sonic-mgmt's [login_stage_2](https://github.com/sonic-net/sonic-mgmt/blob/f84006b6d63568478b4d97b953ad054f6551418d/tests/common/connections/ssh_console_conn.py#L61) -> \"Socket is closed\" ([ref](https://github.com/paramiko/paramiko/blob/8697158113a3eab25ed1d1d541ebe2cad10169a7/paramiko/channel.py#L1196)). Here, login failed because the device is rebooting.\n2. sonic-mgmt [session_preparation](https://github.com/sonic-net/sonic-mgmt/blob/f84006b6d63568478b4d97b953ad054f6551418d/tests/common/connections/ssh_console_conn.py#L41) -> [ReadTimeout](https://github.com/ktbyers/netmiko/blob/develop/netmiko/base_connection.py#L812-L827) because it takes more than [20 seconds](https://github.com/ktbyers/netmiko/blob/eadebd7f59314708e11d8e5acd143957d9d74ebd/netmiko/base_connection.py#L1241) to go through BIOS and GRUB\n\nThe 20 second timeout became effective and surfaced the latent timing bug since https://github.com/sonic-net/sonic-buildimage/pull/24306/ when the new `netmiko` version has a much shorter timeout.\n\n#### How did you do it?\n\n-  Instead of a hard coded sleep, block on establishing a console connection , with a time out (in which case console cleanup is not attempted anymore). Console connection is established as best effort and should not be the cause of a test failure.\n- Attempt to clean up console connection only if at SONiC prompt. Before writing exit to console, make sure the console is already connected and is likely to be seeing the SONiC prompt.\n\n#### How did you verify/test it?\n\nRun these tests multiple times\n- tests/platform_tests/test_kdump.py\n- tests/platform_tests/test_power_off_reboot.py\n- tests/platform_tests/test_reboot.py\n\nSuccessful console connection is typically established after the first attempt\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/connections/ssh_console_conn.py",
+        "additions": 59,
+        "deletions": 4
+      },
+      {
+        "path": "tests/common/helpers/dut_utils.py",
+        "additions": 10,
+        "deletions": 12
+      },
+      {
+        "path": "tests/common/reboot.py",
+        "additions": 37,
+        "deletions": 24
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

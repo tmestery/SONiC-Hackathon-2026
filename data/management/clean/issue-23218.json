@@ -1,0 +1,43 @@
+{
+  "id": "management-23218",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 23218,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/23218",
+    "title": "Bug: test_liquid_cooling_leakage: Liquid cooling tests are not platform-agnostic",
+    "created_at": "2026-03-23T21:10:44Z",
+    "closed_at": "2026-03-24T02:30:09Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n`test_liquid_cooling_leakage.py` is supposed to test the SONiC platform API for liquid cooling, which is a vendor-neutral API. However, the test file couples the test to Mellanox-specific internals, with no path for other platforms that support liquid cooling.\n\nExample:\n```\n  from tests.common.mellanox_data import get_platform_data\n  ...\n  platform_data = get_platform_data(duthost)\n```\n\nThe get_platform_data API is a NVIDIA/Mellanox specific API:\n```\ndef get_platform_data(dut):\n      dut_platform = dut.facts[\"platform\"]\n      return SWITCH_MODELS[dut_platform]\n```\n\nThis raises KeyError on all other devices:\n`KeyError: 'x86_64-arista_7280r4k_32qf_32df'`\n\nThe HLD (https://github.com/sonic-net/sonic-mgmt/blob/master/docs/testplan/bmc/Liquid-Cooling-leakage-detection-test-plan.md#test-case-7-platfform-api-get_num_leak_sensors) describing the test plan states that the tests should be sourcing the static information about leak detection sensors from platform.json however, this is not respected in the implementation of the test.\n\nFurthermore, these tests should be clever enough to skip on devices that do not support liquid cooling instead of running into errors. In general liquid cooling is a platform agnostic feature and hence these tests should remain platform agnostic.\n\n### Steps to Reproduce\n\nRun the `platform_tests/api/test_liquid_cooling_leakage.py::TestLiquidCoolingLeakage` on any non-mellanox devices.\n\n### Actual Behavior and Expected Behavior\n\nActual behaviour:\n`KeyError: 'x86_64-arista_7280r4k_32qf_32df'`\n\nExpected behaviour:\nSkip on SKUs that do not support liquid cooling AND run on SKUs that do support it. This behaviour should be platform agnostic.\n\n### Relevant log output\n\n```shell\n==================================================\n\t E       KeyError: 'x86_64-arista_7280r4k_32qf_32df'\n--------------------------------------------------\n\t platform_tests 5\n--------------------------------------------------\n\t 2026-03-22 <IPV6>: [error] platform_tests/api/test_liquid_cooling_leakage.py::TestLiquidCoolingLeakage::test_get_name[ctn101]\n\t 2026-03-22 <IPV6>: [error] platform_tests/api/test_liquid_cooling_leakage.py::TestLiquidCoolingLeakage::test_is_leak[ctn101]\n\t 2026-03-22 <IPV6>: [error] platform_tests/api/test_liquid_cooling_leakage.py::TestLiquidCoolingLeakage::test_get_leak_sensor_status[ctn101]\n\t 2026-03-22 <IPV6>: [error] platform_tests/api/test_liquid_cooling_leakage.py::TestLiquidCoolingLeakage::test_get_num_leak_sensors[ctn101]\n\t 2026-03-22 <IPV6>: [error] platform_tests/api/test_liquid_cooling_leakage.py::TestLiquidCoolingLeakage::test_get_all_leak_sensors[ctn101]\n```\n\n### Output of `show version`\n\n```shell\nSONiC Software Version: SONiC.branch.202511-ars.e1493cc4-buildimage.origin.202511-nightly-2026.03.18.22.25\nSONiC OS Version: 13\nDistribution: Debian 13.4\nKernel: 6.12.41+deb13-sonic-amd64\nBuild commit: 99b2f7cf1\nBuild date: Thu Mar 19 <IPV6> UTC 2026\nBuilt by: jenkins@jenkins-arsonic-k8s-18700-s3mq5-p2cjq\n\nPlatform: x86_64-arista_7280r4k_32qf_32df\nHwSKU: Arista-7280R4K-32QF-32DF-64O\nASIC: broadcom\nASIC Count: 1\nSerial Number: SSN25392015\nModel Number: DCS-7280R4K-32QF-32DF\nHardware Revision: 01.00\nUptime: <IPV6> up 1 day,  2:50,  1 user,  load average: 0.77, 0.81, 1.03\nDate: Mon 23 Mar 2026 <IPV6>\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 23219,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/23219",
+    "title": "Fetch leak sensors data from platform.json in test_liquid_cooling_leakage.py",
+    "merged_at": "2026-03-24T02:30:08Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #23218\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\nAccording to the test plan HLD the number of leak sensors should be defined in the platform.json for the respective SKU. Instead of using mellanox specific APIs to fetch this data we should be using the duthost facts data structure which is populated using the platform.json file across all vendors.\n\n#### How did you do it?\nReplaced platform specific mellanox calls with generic `duthost.facts.get` calls\n\nGate the test on platform.json / DUT facts (e.g., presence of leak_sensors.number), which is platform-agnostic and consistent with the intended design:\n\n```\n  self.leak_sensors_num = duthost.facts.get(\"leak_sensors\", {}).get(\"number\")\n  if self.leak_sensors_num is None:\n      pytest.skip(\"Platform does not declare liquid cooling support in platform.json\")\n```\n\nThis allows any vendor that correctly implements the SONiC platform API for liquid cooling to be covered by the test.\n\n#### How did you verify/test it?\nRan the test on a Arista SKU to make sure the tests were skipped.\n\n```\n============================================ short test summary info ============================================\nSKIPPED [1] platform_tests/api/test_liquid_cooling_leakage.py:34: No liquid cooling system supported on this platform\nSKIPPED [1] platform_tests/api/test_liquid_cooling_leakage.py:45: No liquid cooling system supported on this platform\nSKIPPED [1] platform_tests/api/test_liquid_cooling_leakage.py:56: No liquid cooling system supported on this platform\nSKIPPED [1] platform_tests/api/test_liquid_cooling_leakage.py:62: No liquid cooling system supported on this platform\nSKIPPED [1] platform_tests/api/test_liquid_cooling_leakage.py:70: No liquid cooling system supported on this platform\n================================= 5 skipped, 187 warnings in 156.15s (<IPV6>) ==================================\n```\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\nThis is a newly added test case.\n\n### Documentation\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/docs/testplan/bmc/Liquid-Cooling-leakage-detection-test-plan.md#test-case-7-platfform-api-get_num_leak_sensors",
+    "files": [
+      {
+        "path": "tests/platform_tests/api/test_liquid_cooling_leakage.py",
+        "additions": 12,
+        "deletions": 6
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

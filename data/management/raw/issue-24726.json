@@ -1,0 +1,193 @@
+{
+  "number": 24726,
+  "title": "Bug: wait_until does not properly handle exceptions raised by failed pytest_assert",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24726",
+  "createdAt": "2026-05-19T21:27:49Z",
+  "closedAt": "2026-06-18T18:25:06Z",
+  "author": "wrideout-arista",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "wrideout-arista"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nFound while debugging a different issue:\n\n  - pytest_assert (tests/common/helpers/assertions.py) calls pytest.fail() on\n    failure.\n  - pytest.fail() raises _pytest.outcomes.Failed, which inherits from\n    OutcomeException -> BaseException (NOT Exception).\n  - wait_until (tests/common/utilities.py:125) catches only `except Exception`,\n    so Failed propagates straight through and aborts the test on the first\n    attempt.\n  - The wait_until window is therefore effectively dead for mismatch cases.\n    Only genuine Exception subclasses are handled correctly and get retried.\n\nThe fix appears to be to use a more targeted try/except handler here: \n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/utilities.py#L151\n\n### Steps to Reproduce\n\nThis was found while debugging generic_config_updater/test_dynamic_acl.py.  In the case I was investigating, the status output of `show acl table DYNAMIC_ACL` was initially reported as \"NA\".  This was causing the wait_until wrapping the check to be skipped and the test to be failed outright.\n\nLib in question is here:\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/master/tests/common/gu_utils.py#L531\n\n### Actual Behavior and Expected Behavior\n\nFailures due to pytest_assert invoked from within a wait_until should not cause an immediate test failure (as they do today).  The exception should be handled and the retry mechanism continued.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "rbpittman",
+      "createdAt": "2026-05-20T16:39:23Z",
+      "body": "Seems to me that some use-cases expect failures to occur (this issue's use-case), whereas others do not expect exceptions. In these latter use-cases I mention (QOS-related), an exception in the function passed to wait_until really needs to be reported, and can mask bad issues. Wonder if it's appropriate to extend wait_until to support skipping the exception checker too. "
+    },
+    {
+      "author": "wrideout-arista",
+      "createdAt": "2026-05-20T17:03:32Z",
+      "body": "Instead of skipping the try/except, we could allow wait_until to raise an exception once the iteration/time condition is met and achieve the same thing, no?"
+    },
+    {
+      "author": "wrideout-arista",
+      "createdAt": "2026-05-20T17:24:50Z",
+      "body": "> Instead of skipping the try/except, we could allow wait_until to raise an exception once the iteration/time condition is met and achieve the same thing, no?\n\nI take that back: in the overwhelming majority of cases raising an exception will break the common pattern of using wait_until inside an enclosing pytest_assert.\n\nOn it's face, it appears to me that the above is als true if the exception handling is skipped.  In that case maybe a new method, \"wait_until_and_raise_exception\" or similar is more appropriate?"
+    },
+    {
+      "author": "rbpittman",
+      "createdAt": "2026-05-20T17:39:33Z",
+      "body": "Sure, or alternatively a parameter \"raise_exception\" that defaults to False, and can be overridden to true. \n\nBut yes that's somewhat tangential to your issue, sounds appropriate to properly catch all exceptions since that's the expectation in most cases. "
+    },
+    {
+      "author": "davidm-arista",
+      "createdAt": "2026-05-27T15:22:57Z",
+      "body": "For reference the wait_until was added in https://github.com/sonic-net/sonic-mgmt/pull/17634/changes"
+    },
+    {
+      "author": "davidm-arista",
+      "createdAt": "2026-05-27T15:26:19Z",
+      "body": "PR for fix https://github.com/sonic-net/sonic-mgmt/pull/24816/changes"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 24902,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24902",
+      "title": "Handle pytest.fail.Exception in wait_until",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-18T18:25:05Z",
+      "createdAt": "2026-05-27T17:07:54Z",
+      "author": "wrideout-arista",
+      "body": "Allow pytest_assert to trigger wait_until retries.\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #24726\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nwait_until already handles Exception, and multiple places in the code assume pytest.fail.Exception is handled as well.  pytest.fail.Exception actually derives from BaseException, which means it is currently unhandled by wait_until, and so will not trigger retries (and immediately fail tests).\r\n\r\n#### How did you do it?\r\nAdded pytest.fail.Exception to the list of handled exception classes in wait_until.\r\n\r\n#### How did you verify/test it?\r\nManual test run.\r\n\r\n#### Any platform specific information?\r\nN/A\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n\r\n### Documentation\r\nN/A\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/bmp/test_frr_bmp_sanity.py",
+          "additions": 3,
+          "deletions": 1
+        },
+        {
+          "path": "tests/common/helpers/monit.py",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/utilities.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/monit/test_monit_status.py",
+          "additions": 2,
+          "deletions": 1
+        },
+        {
+          "path": "tests/show_techsupport/test_techsupport.py",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-27T17:08:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-27T17:08:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "wrideout-arista",
+          "createdAt": "2026-05-27T20:42:44Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-27T20:42:46Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-27T20:42:49Z",
+          "body": "Retrying failed(or canceled) stages in build 1124024:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-multi-asic-t1 by Elastictest: retried."
+        },
+        {
+          "author": "wrideout-arista",
+          "createdAt": "2026-06-01T14:03:05Z",
+          "body": "@wangxin @lolyu @yutongzhang-microsoft can I get eyes on this please?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-03T11:17:04Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "bhouse-nexthop",
+          "createdAt": "2026-06-10T19:09:56Z",
+          "body": "Review notes (seeking a second opinion): the fix is correct \u2014 `pytest.fail.Exception` derives from `BaseException`, so it escapes the current `except Exception` in `wait_until`. But this changes `wait_until` behavior **repo-wide**: a `pytest_assert`/`pytest.fail` raised inside any `wait_until` condition is now swallowed and retried until timeout instead of failing fast. That's the intended fix, but it could change behavior for existing call sites that relied on fast-fail. Given the blast radius on a shared helper, we'd like a common-infra maintainer's sign-off \u2014 @wangxin @lolyu, could one of you weigh in on the `wait_until` semantics change? (Also: title typo, \"Exeption\".)"
+        },
+        {
+          "author": "wrideout-arista",
+          "createdAt": "2026-06-10T19:21:19Z",
+          "body": "> Review notes (seeking a second opinion): the fix is correct \u2014 `pytest.fail.Exception` derives from `BaseException`, so it escapes the current `except Exception` in `wait_until`. But this changes `wait_until` behavior **repo-wide**: a `pytest_assert`/`pytest.fail` raised inside any `wait_until` condition is now swallowed and retried until timeout instead of failing fast. That's the intended fix, but it could change behavior for existing call sites that relied on fast-fail. Given the blast radius on a shared helper, we'd like a common-infra maintainer's sign-off \u2014 @wangxin @lolyu, could one of you weigh in on the `wait_until` semantics change? (Also: title typo, \"Exeption\".)\r\n\r\nYeah I 100% agree-- given how prevalent this is we want as many eyes on this as possible."
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-06-10T23:07:22Z",
+          "body": "Building on @bhouse-nexthop's blast-radius question, I ran a repo-wide audit, since the failure-mode flip only matters for `wait_until` conditions that can actually raise `pytest.fail.Exception`. I resolved each `wait_until` condition to its definition (local def first, then imports) and checked whether it calls `pytest_assert`/`pytest.fail`.\n\nOf ~1,570 `wait_until` call sites, the large majority pass a bool-returning condition and are unaffected \u2014 including the high-frequency ones (`critical_services_fully_started`, `check_bgp_session_state`, `is_service_fully_started`, ...), none of which assert. About 22 sites pass a condition that asserts internally, and for those the deciding factor is whether the call site uses `wait_until`'s return:\n\n- Return asserted (`pytest_assert(wait_until(...), msg)`): after this change a failing inner assert still fails the test, just with a vaguer message after the full timeout \u2014 and a transient guard-trip (DB row not populated yet, a `docker exec` hiccup during a restart) now retries through instead of fast-failing. That is the improvement this PR is after, and it covers most of the 22. No concern.\n- Return ignored (bare `wait_until(...)`): today the inner assert is the only failure mechanism. After this change it is swallowed, retried, and the `False` return is discarded \u2014 so the check becomes a silent no-op that can never fail. These are the ones worth fixing alongside this change.\n\nThe return-ignored sites I found \u2014 3 functions, 4 call sites:\n\n| call site | condition | effect after this PR |\n|-----------|-----------|----------------------|\n| `tests/common/gu_utils.py` (`check_table`) | returns False until the ACL table populates, then `pytest_assert`s its content | a GCU ACL content mismatch is silently ignored instead of failing |\n| `tests/monit/test_monit_status.py` + `tests/bmp/test_frr_bmp_sanity.py` (`check_monit_expected_container_logging`) | body is only `pytest_assert(...)`, returns None | both calls become ~180s no-ops that can never fail |\n| `tests/show_techsupport/test_techsupport.py` (`execute_command`) | `pytest.fail`s on a techsupport failure, return discarded; the next line reads `pytest.tar_stdout` | a real failure is swallowed (and the expensive command retried for the full 300s), then downstream hits stale/unset `pytest.tar_stdout` |\n\nSuggestion: the `wait_until` change is the right direction \u2014 keep it, but land it together with converting those 4 sites so they no longer rely on the assert escaping (have the condition return a bool and assert `wait_until`'s result, e.g. wrap the asserting helper). Re-raising from `wait_until` on final timeout would be an alternative, but that changes the contract for the ~1000 callers that rely on the `False`-on-timeout return, so per-site fixes look safer.\n\nHappy to share the full call-site list or the script I used.\n\n*\u2014 anders-bot (AI-assisted, on behalf of @anders-nexthop)*\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T17:22:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T17:22:21Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T17:23:39Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T17:23:55Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T18:18:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T18:18:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "wrideout-arista",
+          "createdAt": "2026-06-15T21:19:14Z",
+          "body": "/azp retry"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-15T21:19:21Z",
+          "body": "<samp>\nCommand 'retry' is not supported by Azure Pipelines.<br>\r\n<br>\r\n<b>Supported commands</b><br>\r\n<ul type=\"none\"><li><b>help:</b></li><ul type=\"none\"><li>Get descriptions, examples and documentation about supported commands</li><li><b>Example: </b>help \"command_name\"</li></ul><li><b>list:</b></li><ul type=\"none\"><li>List all pipelines for this repository using a comment.</li><li><b>Example: </b>\"list\"</li></ul><li><b>run:</b></li><ul type=\"none\"><li>Run all pipelines or specific pipelines for this repository using a comment. Use this command by itself to trigger all related pipelines, or specify specific pipelines to run.</li><li><b>Example: </b>\"run\" or \"run pipeline_name, pipeline_name, pipeline_name\"</li></ul><li><b>where:</b></li><ul type=\"none\"><li>Report back the Azure DevOps orgs that are related to this repository and org</li><li><b>Example: </b>\"where\"</li></ul></ul><br>\r\nSee <a href=\"https://go.microsoft.com/fwlink/?linkid=2056279\">additional documentation.</a>\n</samp>"
+        },
+        {
+          "author": "wrideout-arista",
+          "createdAt": "2026-06-15T21:20:07Z",
+          "body": "/azpw retry"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-15T21:43:06Z",
+          "body": "Retrying failed(or canceled) jobs..."
+        }
+      ]
+    }
+  ]
+}

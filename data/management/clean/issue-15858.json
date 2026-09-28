@@ -1,0 +1,43 @@
+{
+  "id": "management-15858",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 15858,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/15858",
+    "title": "[Bug][T2]: `test_voq_fabric_isolation.py` fails with `Failed: auto_isolated state for port 91 should be 0`",
+    "created_at": "2024-12-03T22:54:07Z",
+    "closed_at": "2024-12-09T19:57:43Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\n```\n            cmd = \"sonic-db-cli {} STATE_DB hset 'FABRIC_PORT_TABLE|PORT{}' TEST_CRC_ERRORS 0\".format(asicName, port)\n            cmd_output = duthost.shell(cmd, module_ignore_errors=True)[\"stdout\"].split(\"\\n\")\n            cmd = \"sonic-db-cli {} STATE_DB hset 'FABRIC_PORT_TABLE|PORT{}' TEST_CODE_ERRORS 0\".format(asicName, port)\n            cmd_output = duthost.shell(cmd, module_ignore_errors=True)[\"stdout\"].split(\"\\n\")\n            cmd = \"sonic-db-cli {} STATE_DB hset 'FABRIC_PORT_TABLE|PORT{}' TEST 'TEST'\".format(asicName, port)\n            cmd_output = duthost.shell(cmd, module_ignore_errors=True)[\"stdout\"].split(\"\\n\")\n\n>           pytest_assert(wait_until(600, 60, 0, check_fabric_link_status, duthost, asicName, port, '0'),\n                          \"auto_isolated state for port {} should be 0\".format(port))\nE                         Failed: auto_isolated state for port 91 should be 0\n\nasic       = 0\nasicName   = '-n asic0'\ncmd        = \"sonic-db-cli -n asic0 STATE_DB hset 'FABRIC_PORT_TABLE|PORT91' TEST 'product'\"\ncmd_output = ['0']\nduthost    = <MultiAsicSonicHost cmp214-5>\nduthosts   = [<MultiAsicSonicHost cmp214-5>, <MultiAsicSonicHost cmp214-6>, <MultiAsicSonicHost cmp214>]\nenum_frontend_dut_hostname = 'cmp214-5'\nlnkStatus  = 'up'\nnum_asics  = 2\nport       = 91\n\nvoq/test_voq_fabric_isolation.py:66: Failed\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> entering PDB >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> PDB post_mortem (IO-capturing turned off) >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n> /data/tests/voq/test_voq_fabric_isolation.py(66)test_voq_fabric_isolation_status()\n-> pytest_assert(wait_until(600, 60, 0, check_fabric_link_status, duthost, asicName, port, '0'),\n```\n\nThe problem is the `FABRIC_PORT_TABLE|PORT` doesn't have the attribute `AUTO_ISOLATED` by default, it only shows up the first time the fabric port becomes isolated:\nhttps://github.com/sonic-net/sonic-swss/blob/202405/orchagent/fabricportsorch.cpp#L855\n```\n            if (autoIsolated == 0 && (consecutivePollsWithErrors >= isolationPollsCfg\n                                   || consecutivePollsWithFecErrs >= fecIsolatedPolls))\n            {\n                // Link needs to be isolated.\n                SWSS_LOG_INFO(\"port %s auto isolated\", key.c_str());\n                autoIsolated = 1;\n                updateStateDbTable(m_stateTable, key, \"AUTO_ISOLATED\", autoIsolated);\n                SWSS_LOG_NOTICE(\"port %s set AUTO_ISOLATED %d\", key.c_str(), autoIsolated);\n            }\n            else if (autoIsolated == 1 && consecutivePollsWithNoErrors >= recoveryPollsCfg\n                  && consecutivePollsWithNoFecErrs >= fecUnisolatePolls)\n            {\n                // Link is isolated, but no longer needs to be.\n                SWSS_LOG_INFO(\"port %s healthy again\", key.c_str());\n                autoIsolated = 0;\n                updateStateDbTable(m_stateTable, key, \"AUTO_ISOLATED\", autoIsolated);\n                SWSS_LOG_NOTICE(\"port %s set AUTO_ISOLATED %d\", key.c_str(), autoIsolated);\n            }\n```\n\nIn the test it first checks that `AUTO_ISOLATED=0` which will fail if the port hasn't even been isolated:\n```\npytest_assert(wait_until(600, 60, 0, check_fabric_link_status, duthost, asicName, port, '0'),\n              \"auto_isolated state for port {} should be 0\".format(port))\n```\n\n### Results you see\n\n`FABRIC_PORT_TABLE|PORT` is missing the `AUTO_ISOLATED` attribute\n\n### Results you expected to see\n\nThe test should probably just treat a `FABRIC_PORT_TABLE|PORT` entry with no `AUTO_ISOLATED` the same as `AUTO_ISOLATED=0`\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 15859,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/15859",
+    "title": "Handle AUTO_ISOLATED attribute missing from table",
+    "merged_at": "2024-12-09T19:57:42Z",
+    "description": "AUTO_ISOLATED is only added to the FABRIC_PORT_TABLE once the fabric port has been isolated once, so we should treat this attribute missing from this table the same as AUTO_ISOLATED=0\n\nSummary:\nFixes #15858\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [x] 202405",
+    "files": [
+      {
+        "path": "tests/voq/test_voq_fabric_isolation.py",
+        "additions": 4,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

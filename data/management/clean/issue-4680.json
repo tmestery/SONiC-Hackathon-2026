@@ -1,0 +1,45 @@
+{
+  "id": "management-4680",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 4680,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/4680",
+    "title": "Investigate test_vlan failures on backend T0",
+    "created_at": "2021-11-11T17:48:23Z",
+    "closed_at": "2021-11-17T10:05:01Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P0",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "backend"
+    ]
+  },
+  "failure": {
+    "body": "Failure seen on 11/10 run\n\n```\nrand_selected_dut = <MultiAsicSonicHost> str2-7050qx-32s-acs-02\ntbinfo = {'auto_recover': 'True', 'comment': 'topo_with_12_vms', 'conf-name': 'vms18-t0-7050qx-acs-02', 'duts': ['str2-7050qx-32s-acs-02'], ...}\ncfg_facts = {'ACL_TABLE': {'DATAACL': {'policy_desc': u'DATAACL', 'ports': [u'Ethernet80', u'Ethernet84', u'Ethernet88', u'Etherne...R_PROFILE|ingress_lossy_profile]'}, '3-4': {'profile': u'[BUFFER_PROFILE|pg_lossless_40000_300m_profile]'}}, ...}, ...}\nports_list = ['Ethernet8', 'Ethernet4', 'Ethernet108', 'Ethernet100', 'Ethernet104', 'Ethernet96', ...]\nvlan_ports_list = [{'dev': 'Ethernet8', 'permit_vlanid': [1000], 'port_index': [5], 'pvid': 0}, {'dev': 'Ethernet4', 'permit_vlanid': [1...0], 'port_index': [22], 'pvid': 0}, {'dev': 'Ethernet72', 'permit_vlanid': [1000], 'port_index': [21], 'pvid': 0}, ...]\nvlan_intfs_dict = {108: {'ip': '<IP>/24', 'orig': False}, 109: {'ip': '<IP>/24', 'orig': False}, 1000: {'ip': '<IP>/21', 'orig': True}}\npc_num = 2\n@pytest.fixture(scope=\"module\")\ndef work_vlan_ports_list(rand_selected_dut, tbinfo, cfg_facts, ports_list, vlan_ports_list, vlan_intfs_dict, pc_num=PORTCHANNELS_TEST_NUM):\nif tbinfo['topo']['name'] == 't0-56-po2vlan':\nreturn vlan_ports_list\nmg_facts = rand_selected_dut.get_extended_minigraph_facts(tbinfo)\nwork_vlan_ports_list = []\nconfig_ports = {k: v for k,v in cfg_facts['PORT'].items() if v.get('admin_status', 'down') == 'up'}\nconfig_portchannels = cfg_facts.get('PORTCHANNEL', {})\nconfig_port_indices = {k: v for k, v in mg_facts['minigraph_ptf_indices'].items() if k in config_ports}\n# For t0 topo, will add port to new VLAN, use 'orig' field to identify new VLAN.\nvlan_id_list = [k for k, v in vlan_intfs_dict.items() if v['orig'] == False]\npvid_cycle = itertools.cycle(vlan_id_list)\n# when running on t0 we can use the portchannel members\nif config_portchannels:\nportchannel_cnt = 0\nfor po in config_portchannels:\nvlan_port = {\n'dev' : po,\n'port_index' : [config_port_indices[member] for member in config_portchannels[po]['members']],\n'permit_vlanid' : []\n}\n# Add 2 portchannels for test\nif portchannel_cnt < pc_num:\nportchannel_cnt += 1\nvlan_port['pvid'] = pvid_cycle.next()\nvlan_port['permit_vlanid'] = vlan_id_list[:]\nif 'pvid' in vlan_port:\nwork_vlan_ports_list.append(vlan_port)\n>       assert portchannel_cnt == pc_num, 'Need 2 portchannels for test'\nE       UnboundLocalError: local variable 'portchannel_cnt' referenced before assignment\ncfg_facts  = {'ACL_TABLE': {'DATAACL': {'policy_desc': u'DATAACL', 'ports': [u'Ethernet80', u'Ethernet84', u'Ethernet88', u'Etherne...R_PROFILE|ingress_lossy_profile]'}, '3-4': {'profile': u'[BUFFER_PROFILE|pg_lossless_40000_300m_profile]'}}, ...}, ...}\nconfig_port_indices = {'Ethernet100': 28, 'Ethernet104': 29, 'Ethernet108': 30, 'Ethernet112': 31, ...}\nconfig_portchannels = {}\nconfig_ports = {'Ethernet100': {'admin_status': u'up', 'alias': u'Ethernet30', 'description': u'ARISTA06BT1:Ethernet1', 'index': u'30...2': {'admin_status': u'up', 'alias': u'Ethernet33', 'description': u'ARISTA09BT1:Ethernet1', 'index': u'33', ...}, ...}\nk          = 109\nmg_facts   = {'deployment_id': u'1', 'dhcp_servers': [u'<IP>', u'<IP>', u'<IP>', u'<IP>', u'<IP>', u'192.0...'<IP>/31', u'<IP>', u'<IP>/28', u'<IP>/31', u'<IP>', u'<IP>', ...], ...}\npc_num     = 2\nports_list = ['Ethernet8', 'Ethernet4', 'Ethernet108', 'Ethernet100', 'Ethernet104', 'Ethernet96', ...]\npvid_cycle = <itertools.cycle object at 0x7fcf2f7f1a00>\nrand_selected_dut = <MultiAsicSonicHost> str2-7050qx-32s-acs-02\ntbinfo     = {'auto_recover': 'True',\n```"
+  },
+  "resolution": {
+    "pr_number": 4715,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/4715",
+    "title": "[backend] Fix test_vlan",
+    "merged_at": "2021-11-17T10:05:01Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #4680\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n\n### Approach\n#### What is the motivation for this PR?\n`test_vlan` cases errored on `t0-backend` topo\n```\n>       assert portchannel_cnt == pc_num, 'Need 2 portchannels for test'\nE       UnboundLocalError: local variable 'portchannel_cnt' referenced before assignment\n```\n\n#### How did you do it?\n\n#### How did you verify/test it?\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/vlan/test_vlan.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

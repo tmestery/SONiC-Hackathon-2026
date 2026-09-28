@@ -1,0 +1,303 @@
+{
+  "id": "management-26065",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26065,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26065",
+    "title": "Bug: pycodestyle 2.10 (flake8 6.0.0) emits false-positive E231/E221 on f-strings under Python 3.12+",
+    "created_at": "2026-07-10T16:44:39Z",
+    "closed_at": "2026-07-10T22:41:48Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\ngeneric\n\n### Importance or Severity\nMedium\n\n### Description of the bug\nThe pre-commit static-analysis check produces false-positive pycodestyle errors (E231 \"missing whitespace after ':'\", E221 \"multiple spaces before operator\") on f-string expressions, blocking PRs on code the author never touched.\n\nExample from PR #25430, on a pre-existing line:\n```\ntests/cacl/test_cacl_application.py:...: E231 missing whitespace after ':'\nsrc_ip = f\"20.0.0.{1 + index}/32\" if index % 3 else f\"2001::{1 + index}/128\"\n```\n\nRoot cause: `.pre-commit-config.yaml` pins `flake8==6.0.0`, which bundles `pycodestyle==2.10.0`. pycodestyle 2.10 predates Python 3.12's f-string tokenizer change (PEP 701). Under Python < 3.12, f-strings were a single opaque STRING token, so no errors were emitted. Under Python 3.12+, the tokenizer exposes f-string internals (`{1 + index}`, `/32`, `::`), and pycodestyle 2.10 mis-tokenizes them, emitting bogus E231/E221. This was fixed in pycodestyle 2.11.0 (f-string aware handling).\n\nNothing in our repo config changed. The CI/dev image's Python was upgraded to 3.12+, which activated the latent incompatibility. Because pre-commit lints whole touched files (not just the diff), any PR that touches a file containing older f-strings inherits these false positives.\n\n### Steps to reproduce the issue:\n1. On Python 3.12+, install `flake8==6.0.0` (pulls `pycodestyle==2.10.0`).\n2. Run `pycodestyle --max-line-length=120 tests/cacl/test_cacl_application.py`.\n3. Observe E231/E221 flagged on f-string lines such as `f\"20.0.0.{1 + index}/32\"`.\n4. Repeat with `pycodestyle>=2.11` -> the errors disappear.\n\n### Describe the results you received:\nValid f-string code is flagged with E231/E221, causing the mandatory \"Pre_test Static Analysis\" pre-commit check to fail on PRs that merely touch (not modify) the affected lines. See PR #25430.\n\n### Describe the results you expected:\nNo lint errors on well-formed f-string expressions. The static-analysis check should only fail on genuine style violations.\n\n### Output of `show version`:\nN/A (tooling/CI issue, not switch runtime)\n\n### Attach files (if any)\nSuggested fix: bump the flake8 pre-commit hook in `.pre-commit-config.yaml` from `rev: 6.0.0` to `rev: 7.1.1` (pycodestyle 2.12.1), which resolves the f-string false positives.\n\nPrecaution: a full-repo pycodestyle 2.10-vs-2.12 comparison scan is being run before the bump to measure blast radius and confirm the upgrade removes the false positives without surfacing new legitimate lint failures that would unexpectedly block unrelated PRs."
+  },
+  "resolution": {
+    "pr_number": 26085,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26085",
+    "title": "Fix pycodestyle E231 comma findings surfaced by flake8 7.1.1 bump",
+    "merged_at": "2026-07-14T03:33:07Z",
+    "description": "### Description of PR\n\nClean up the pre-existing `E231` \"missing whitespace after ','\" findings that whole-file linting surfaces after the flake8 bump to 7.1.1 / pycodestyle 2.12 (#26072, merged; fixes #26065). This is the mechanical follow-up to the E721/E502 cleanup (#26073, merged).\n\nThese are not new false positives; they only surface when a PR touches the affected file (pre-commit lints whole files), so cleaning them up now unblocks unrelated future PRs that happen to touch these files.\n\nRelated: #26072 (flake8 bump), #26073 (E721/E502 cleanup), #26065 (root-cause issue).\n\n### Type of change\n\n- [ ] Bug fix\n- [x] Testbed and Framework (new/improved control, data plane infrastructure)\n- [ ] New Test case\n- [ ] Test case improvement\n- [ ] Documentation\n\n### Back port request\n\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n\n### Approach\n\n#### What is the motivation for this PR?\n\nAfter #26072 bumped flake8 to 7.1.1 (pycodestyle 2.12), whole-file linting surfaces pre-existing `E231` findings across the tree, mostly on line-continuation imports/statements written as `,\\` (comma immediately before a backslash). Fixing them proactively keeps unrelated future PRs that touch these files from being blocked.\n\n#### How did you do it?\n\n- E231 (254 sites across 86 files): added a single space after the comma. For the `,\\` line-continuation pattern, `,\\` -> `, \\` (space added, backslash kept \u2014 these statements are not inside brackets, so the backslash is required and must not be removed).\n- Co-located findings fixed so each touched file is fully clean under pycodestyle 2.12:\n  - `tests/common/macsec/__init__.py`: E306/E128/E501/E302/E303/E111/E117 (blank lines, continuation-line indent alignment, long-signature wrapping, `super()` indentation) \u2014 all cosmetic, behavior-preserving.\n  - `tests/saitests/py3/switch.py`, `tests/saitests/switch.py`: E275 `import*` -> `import *`.\n\nNo functional change (whitespace/indentation only). CRLF line endings preserved on `tests/vxlan/test_vxlan_vnet_bgp_subintf.py` (that file uses CRLF; only the single comma was changed).\n\n#### How did you verify/test it?\n\n- Ran `pycodestyle 2.12 --max-line-length=120` on all 86 touched files: zero findings.\n- Ran the pre-commit `flake8` hook (rev 7.1.1, matching CI) on all touched files: passes (pyflakes clean too).\n- Confirmed via `git diff --ignore-all-space` that the 83 non-structural files differ by whitespace only.\n\n#### Any platform specific information?\n\nNo. Lint cleanup, platform generic.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/linkstate/scripts/mlnx/fanout_listener.py",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/arptest.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/dir_bcast_test.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/fg_ecmp_test.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/inner_hash_test.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/ip_in_ip_tunnel_test.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/mtu_test.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/vlan_test.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/vnet_vxlan.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/voq.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/py3/vxlan-decap.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/bgp/conftest.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/common/helpers/thermal_control_test_helper.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/common/macsec/__init__.py",
+        "additions": 21,
+        "deletions": 17
+      },
+      {
+        "path": "tests/common/platform/transceiver_utils.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/configlet/util/base_test.py",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "tests/configlet/util/generic_patch.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/decap/test_subnet_decap.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/drop_packets/test_drop_counters.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/ecmp/inner_hashing/test_inner_hashing.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ecmp/inner_hashing/test_inner_hashing_lag.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ecmp/inner_hashing/test_wr_inner_hashing.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ecmp/inner_hashing/test_wr_inner_hashing_lag.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/generic_config_updater/test_dhcp_relay.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/generic_config_updater/test_static_route.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ixia/ecn/files/helper.py",
+        "additions": 5,
+        "deletions": 5
+      },
+      {
+        "path": "tests/ixia/ecn/test_dequeue_ecn.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ixia/ecn/test_red_accuracy.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ixia/pfc/files/helper.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/ixia/pfc/test_global_pause.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/ixia/pfc/test_pfc_pause_lossy.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/ixia/pfcwd/files/pfcwd_basic_helper.py",
+        "additions": 5,
+        "deletions": 5
+      },
+      {
+        "path": "tests/ixia/pfcwd/files/pfcwd_burst_storm_helper.py",
+        "additions": 4,
+        "deletions": 4
+      },
+      {
+        "path": "tests/ixia/pfcwd/files/pfcwd_multi_node_helper.py",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "tests/ixia/pfcwd/files/pfcwd_runtime_traffic_helper.py",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "tests/ixia/pfcwd/test_pfcwd_a2a.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/ixia/pfcwd/test_pfcwd_basic.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ixia/pfcwd/test_pfcwd_burst_storm.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ixia/pfcwd/test_pfcwd_m2o.py",
+        "additions": 2,
+        "deletions": 2
+      },
+      {
+        "path": "tests/ixia/pfcwd/test_pfcwd_runtime_traffic.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/ixia/test_ixia_traffic.py",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "tests/ixia/test_tgen.py",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "tests/macsec/test_controlplane.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/macsec/test_dataplane.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/macsec/test_per_interface_profile.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/override_config_table/test_override_config_table_masic.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/platform_tests/api/test_sfp.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/platform_tests/link_flap/test_cont_link_flap.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/platform_tests/test_chassis_reboot.py",
+        "additions": 3,
+        "deletions": 3
+      },
+      {
+        "path": "tests/platform_tests/test_cont_warm_reboot.py",
+        "additions": 2,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 26072,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26072",
+      "title": "Bump flake8 pre-commit hook 6.0.0 -> 7.1.1 to fix f-string false positives",
+      "merged": true
+    },
+    {
+      "pr_number": 26073,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26073",
+      "title": "Fix pycodestyle E721/E502 findings surfaced by flake8 7.1.1 bump",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

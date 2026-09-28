@@ -1,0 +1,167 @@
+{
+  "number": 24992,
+  "title": "Bug: Background flow loss assertion in m2o_fluctuating_lossless test uses incorrect expected value",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24992",
+  "createdAt": "2026-05-30T01:15:32Z",
+  "closedAt": "2026-06-10T10:38:56Z",
+  "author": "ediwibowo-msft",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "ediwibowo-msft"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nLow\n\n### Description of the bug\n\nIn `tests/snappi_tests/pfc/files/m2o_fluctuating_lossless_helper.py`, the `verify_m2o_fluctuating_lossless_result` function asserts that each Background Flow has an average of ~10% loss:\n\n```python\npytest_assert((abs(background_loss/4) - 10) < 1,\n              \"Each Background Flow must have an avg of 10% loss \")\n```\n\nThree issues with this assertion:\n\n1. **Operator-precedence bug (silently ineffective).** `abs()` is applied only to `background_loss/4`, not to the deviation from 10. The check is effectively `(avg_loss - 10) < 1`, which silently passes for any value below 11 \u2014 including 0% loss. A totally broken test (e.g., no background drops at all) would still pass.\n\n2. **Hardcoded `/4` divisor.** The divisor does not adapt if `background_flow_count` changes.\n\n3. **Expected value is assuming the same scheduler weithts.** The test configures 4 Background Flows at 20% line rate each plus Test Flows totaling 30% line rate. The oversubscription is:\n   - Total BG traffic at egress: `4 \u00d7 20% = 80%` of line rate\n   - Total lossless traffic (PFC-protected, cannot be dropped): `20% + 10% = 30%`\n   - Total demand: `110%` \u2192 only `100%` can exit\n   - Excess to be dropped: `10%` of line rate, entirely from lossy BG traffic\n\n   A naive \"perfectly uniform drop\" model gives `10%`, but that ignores how the egress scheduler actually allocates bandwidth. The real per-BG-flow loss is determined by the **per-queue DWRR scheduler weights** read from CONFIG_DB (`QUEUE` + `SCHEDULER`). Two examples from real DUTs:\n\n   | DUT Sample| Lossless Qs (Q3/Q4) | Lossy Qs (Q0/Q1/Q2/Q5/Q6) | Analytical per-BG loss | IxNetwork-measured |\n   | ------------------------- | ------------------- | ------------------------- | ---------------------- | ------------------ |\n   | DUT-1   | weight 15           | weight 14                 | ~11.27%                | 11.259%            |\n   | DUT-2          | weight 15           | weight 15                 | 10.0%                  | \u2014                  |\n\n   So `10%` is the wrong as static constant \u2014 the expected value must be derived from the actual scheduler weights on the egress port.\n\n### Error Messages\n\nNo runtime error \u2014 the bug silently makes the assertion ineffective. A regression that produces 0% background loss would still pass this check.\n\n### Impact\n\n- The assertion does not actually validate the intended behavior.\n- Regressions in PFC behavior on the lossy class could go undetected by this test.\n- On platforms whose DWRR weights produce a true loss outside the `< 11` window (e.g., > 11.27% on different weights), a corrected absolute-deviation check against a static constant would fail spuriously.\n\n### Steps to Reproduce\n\n```bash\ncd <sonic-mgmt repo>/tests && \\\npython3 -m pytest snappi_tests/pfc/test_m2o_fluctuating_lossless_with_snappi.py \\\n  --inventory=../ansible/veos,../ansible/ixia --host-pattern=all \\\n  --testbed=<testbed_name> \\\n  --testbed_file=../ansible/testbed.yaml \\\n  --topology tgen,any --skip_sanity\n```\n\n### Actual Behavior and Expected Behavior\n\n### Actual Behavior\n\nThe assertion `(abs(background_loss/4) - 10) < 1` passes for any average background loss `< 11%`, including 0%. The `/4` is hardcoded and the target (10%) does not match the analytical value, which is weight-dependent.\n\n### Expected Behavior\n\nThe assertion should:\n\n1. Compute `avg_loss = background_loss / background_flow_count` based on the actual number of background flows.\n2. Derive the **expected** per-Background-Flow loss at runtime from the egress port's DWRR scheduler weights (`QUEUE` + `SCHEDULER` in CONFIG_DB) and the test/background flow rates \u2014 not from a hard-coded constant.\n3. Compare the absolute deviation against a small tolerance: `abs(avg_loss - expected_bg_loss_percent) < TOLERANCE`.\n\n### Relevant log output\n\nN/A (silent assertion bug).\n\n### Output of `show version`\n\nN/A \u2014 bug is in the test framework, not platform-specific.\n\n### Attach files (if any)\n\nFlow statistics of sample DUT-1 with different weights (lossless 15 and lossy 14):\n<img width=\"920\" height=\"281\" alt=\"image\" src=\"https://github.com/user-attachments/assets/93c04607-c786-4c7a-9904-a1d46765ab79\" />",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 24993,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24993",
+      "title": "Fix test_m2o_fluctuating_lossless",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-10T10:38:55Z",
+      "createdAt": "2026-05-30T01:42:22Z",
+      "author": "ediwibowo-msft",
+      "body": "### Description of PR\r\nSummary:\r\nThe m2o_fluctuating_lossless test had a hard-coded background-loss expectation that started failing on DUTs whose egress DWRR scheduler weights differ (e.g. where lossless and lossy queues both run weight 15 and the analytical loss is ~10%, vs. ~11.27% on another DUT where lossless=15 / lossy=14). Instead of assuming the same queue/scheduler weights, derive the expected per-BG-flow loss at runtime from the DUT's QUEUE / SCHEDULER tables.\r\n\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/24992\r\n\r\n### Type of change\r\n- [x] Bug fix\r\n- [x] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n`test_m2o_fluctuating_lossless` asserts that each Background Flow sees a specific loss percentage at the egress congestion point. The previous expectation was a hard-coded constant tuned for one DUT's DWRR weights, so the test became fragile / broken on DUTs with different scheduler configurations. The expected loss is fully determined by:\r\n\r\n- the test/background flows' offered rates and target TCs, and\r\n- the egress port's per-queue DWRR weights.\r\n\r\nWe can compute it analytically rather than hard-coding it.\r\n\r\n#### How did you do it?\r\n1. **`tests/snappi_tests/pfc/files/m2o_fluctuating_lossless_helper.py`**\r\n   - New helper `get_expected_bg_loss_percent(...)` that:\r\n     - Reads `TC_TO_QUEUE_MAP` from `config_facts` (with `host`/`source`/`namespace` honoring `asic_value`).\r\n     - Reads per-queue DWRR weights via `get_queue_scheduler_weight_dict`, depending on `asic_value`, `port`, and `qos_map_profile`.\r\n     - Builds a `queue_demand` / `queue_weight` map from the test + background flows.\r\n     - Runs an iterative DWRR allocator (queues whose demand is under their weight share are satisfied first; the rest split the remainder by weight).\r\n     - Returns the average per-Background-Flow loss percent.\r\n   - `run_m2o_fluctuating_lossless_test` now calls this helper (passing `asic_value` and the egress `port`) and the result drives the assertion in `verify_m2o_fluctuating_lossless_result` with a `BG_LOSS_TOLERANCE_PERCENT = 1` tolerance \u2014 replacing the hard-coded value.\r\n   - `pytest_assert` guards on `bg_flow_rate_percent` (non-empty + all entries equal \u2014 current limitation, called out in a comment) and on the queue-weight lookup so the test fails fast with a clear message rather than `KeyError`/`ZeroDivisionError`.\r\n\r\n2. **`tests/common/snappi_tests/common_helpers.py`**\r\n   - New `get_queue_scheduler_weight_dict(host_ans, asic_value=None, port=None, qos_map_profile=None)` that joins `QUEUE` + `SCHEDULER` from config_facts and annotates each queue with one DSCP via `DSCP_TO_TC_MAP` + `TC_TO_QUEUE_MAP`.\r\n   - If a DUT has no `QUEUE`/`SCHEDULER` config, returns a default 8-queue equal-weight DWRR map (weight 15) so callers always get a usable structure.\r\n\r\n3. **Unit tests (no DUT / no Snappi required)**\r\n   - `tests/common/unit_tests/snappi_tests/unit_test_common_helpers.py` \u2014 covers `get_queue_scheduler_weight_dict` against a `CONFIG_FACTS` fixture mirroring real `ansible -m config_facts` output from a DUT, plus a defaults-when-unconfigured case.\r\n   - `tests/snappi_tests/unit_tests/pfc/unit_test_m2o_fluctuating_lossless_helper.py` \u2014 parametrized analytical-DWRR check of `get_expected_bg_loss_percent`:\r\n     - `mixed_weights_15_14` \u2192 expected ~11.27% (matches IxNetwork-measured 11.259% on a DUT with lossless 15 weight and lossy 14 weight.).\r\n     - `uniform_weights_15` \u2192 expected 10.0% (fair share).\r\n\r\n   - Each unit-test directory has a README documenting `--noconftest` invocation and the extraction mechanism.\r\n\r\n#### How did you verify/test it?\r\n- Unit tests pass:\r\n```\r\npython3 -m pytest --noconftest   \"tests/snappi_tests/unit_tests/pfc/unit_test_m2o_fluctuating_lossless_helper.py\"   -v\r\n====================================== test session starts =======================================\r\nplatform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0 -- /usr/bin/python3\r\ncachedir: .pytest_cache\r\nrootdir: /home/ediwibowo/workspace/sonic-mgmt-int/tests\r\nconfigfile: pytest.ini\r\ncollected 2 items                                                                                \r\n\r\ntests/snappi_tests/unit_tests/pfc/unit_test_m2o_fluctuating_lossless_helper.py::test_expected_bg_loss_matches_analytical_dwrr_split[mixed_weights_15_14-0-11.2676] PASSED [ 50%]\r\ntests/snappi_tests/unit_tests/pfc/unit_test_m2o_fluctuating_lossless_helper.py::test_expected_bg_loss_matches_analytical_dwrr_split[uniform_weights_15-1-10.0] PASSED [100%]\r\n```\r\n  Both files pass (4 tests total), including the analytical-DWRR cases that reproduce the IxNetwork-measured 11.259% on DUT with lossless 15 and lossy 14 within the 1% tolerance and 10.0% on a uniform-weight platform.\r\n- Integration/Snappi tests pass on DUT with with lossless 15 and lossy 14\r\n```\r\npython3 -m  pytest snappi_tests/pfc/test_m2o_fluctuating_lossless.py --inventory ../ansible/ixia,../ansible/veos --host-pattern <DUT>  --dpu-pattern None --testbed <testbed> --testbed_file ../ansible/testbed.yaml --log-cli-level warning --log-file-level debug --kube_master unset --showlocals --assert plain --show-capture no -rav --allow_recover --ignore=ptftests --ignore=acstests --ignore=saitests --ignore=scripts --ignore=k8s --ignore=sai_qualify --log-file logs/snappi_tests/pfc/focused_retry_check.log --junitxml=logs/snappi_tests/pfc/focused_retry_check.xml -s --trim_inv --skip_sanity --disable_loganalyzer --maxfail=1 \r\n...\r\nsnappi_tests/pfc/test_m2o_fluctuating_lossless.py::test_m2o_fluctuating_lossless[tgen_port_info0]  PASSED\r\n````\r\n\r\n#### Any platform specific information?\r\nThis change removes the platform-specific hard-coded loss expectation. The test should now self-adjust to any DUT whose `QUEUE`/`SCHEDULER` tables are readable via `config_facts`.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A \u2014 existing test, unchanged topology requirements.\r\n\r\n### Documentation\r\nTraffic flows of a DUT with lossless 15 weight and lossy 15 weight:\r\n<img width=\"635\" height=\"344\" alt=\"image\" src=\"https://github.com/user-attachments/assets/9ef76b58-67a2-41ed-98ad-d7e1584961ef\" />\r\n",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/common_helpers.py",
+          "additions": 79,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/unit_tests/snappi_tests/README.md",
+          "additions": 48,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/unit_tests/snappi_tests/unit_test_common_helpers.py",
+          "additions": 111,
+          "deletions": 0
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/m2o_fluctuating_lossless_helper.py",
+          "additions": 150,
+          "deletions": 4
+        },
+        {
+          "path": "tests/snappi_tests/unit_tests/pfc/README.md",
+          "additions": 83,
+          "deletions": 0
+        },
+        {
+          "path": "tests/snappi_tests/unit_tests/pfc/unit_test_m2o_fluctuating_lossless_helper.py",
+          "additions": 176,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-30T01:42:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-30T01:42:43Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "sdszhang",
+          "createdAt": "2026-05-30T02:07:13Z",
+          "body": "@amitpawar12  @selldinesh @kamalsahu0001  for review."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-30T11:14:12Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-06-03T13:44:51Z",
+          "body": "Hi @ediwibowo-msft,\r\n\r\nI think the scheduler configuration has DWRR lossy and lossless weights to 14 and 15 respectively. This is the output from VOQ chassis. \r\n\r\n```\r\n{\r\n  \"scheduler.0\": {\r\n    \"type\": \"DWRR\",\r\n    \"weight\": \"14\"\r\n  },\r\n  \"scheduler.1\": {\r\n    \"type\": \"DWRR\",\r\n    \"weight\": \"15\"\r\n  }\r\n}\r\n```\r\n\r\nPlease let me know.\r\n\r\nThanks"
+        },
+        {
+          "author": "kamalsahu0001",
+          "createdAt": "2026-06-03T18:25:12Z",
+          "body": "Hi @amitpawar12 @ediwibowo-msft .... For T0/T1, before running the test, we set same weights to both schedulers so that it will be uniform. Once we run with these changes, we observe 12.5% loss on lossy flows as explained by @ediwibowo-msft  "
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-04T09:51:20Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-04T09:51:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-05T01:43:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T01:44:08Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-05T02:31:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T02:31:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-05T03:22:36Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T03:22:51Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-05T03:46:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T03:46:23Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-05T05:54:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-05T05:54:17Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-06-08T23:37:42Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br >The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: ediwibowo-msft / name: Edi Wibowo (74189898bdca44c179c96523d8d1a8c2c96b283e)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-08T23:37:44Z",
+          "body": "/azp run"
+        }
+      ]
+    }
+  ]
+}

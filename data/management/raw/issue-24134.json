@@ -1,0 +1,158 @@
+{
+  "number": 24134,
+  "title": "Bug: Persistent failure in test_bgp_link_local for Physical testbeds",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24134",
+  "createdAt": "2026-04-22T19:05:43Z",
+  "closedAt": "2026-04-25T01:48:25Z",
+  "author": "anish-n",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "yxieca"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nI have observed that the test test_bgp_link_local does not appear to be passing on Physical testbeds, it fails at the stage where it is waiting for the unnumbered BGP session to come up between the T0 DUT and cEOS/vEOS T1. I have attempted the test run on T0 Cisco on 202505 and T0 Mellanox on 202511. \n\n\n\n\n### Steps to Reproduce\n\nRun ```bgp/test_bgp_link_local.py``` on physical T0 topology testbed\n\n### Actual Behavior and Expected Behavior\n\nTest fails, expected it to pass\n\n### Relevant log output\n\n```shell\nsetup_info = {'dut_asn': 65100, 'dut_ipv4': '10.0.0.56', 'dut_ipv6': 'FC00::71', 'dut_link_local': 'fe80::2048:23ff:fe27:33d8', ...}\nconfigure_unnumbered_bgp = {'eos_neighbor': 'fe80::2048:23ff:fe27:33d8', 'initial_prefixes': 0}\n\n    @pytest.mark.disable_loganalyzer\n    def test_bgp_link_local_ipv6(setup_info, configure_unnumbered_bgp):\n        \"\"\"\n        Test BGP peering over IPv6 link-local addresses (unnumbered).\n\n        Validates that:\n        1. Unnumbered BGP session can be established via a PortChannel interface\n        2. Routes are exchanged over the link-local session\n        3. The session uses IPv6 link-local addressing\n        \"\"\"\n        duthost = setup_info['duthost']\n        portchannel = setup_info['portchannel']\n        initial_prefixes = configure_unnumbered_bgp['initial_prefixes']\n\n        # Wait for BGP session to establish\n        logger.info(\"Waiting for unnumbered BGP session to establish (timeout=%ds)\",\n                    WAIT_TIMEOUT)\n        established = wait_until(WAIT_TIMEOUT, POLL_INTERVAL, 0,\n                                 bgp_unnumbered_established, duthost, portchannel)\n\n        if not established:\n            # Debug output before skipping\n            summary = duthost.shell(\"vtysh -c 'show bgp summary'\",\n                                    module_ignore_errors=True)\n            logger.error(\"BGP summary:\\n%s\", summary.get('stdout', ''))\n            detail = duthost.shell(\n                \"vtysh -c 'show bgp neighbors {}'\".format(portchannel),\n                module_ignore_errors=True)\n            logger.error(\"Neighbor detail:\\n%s\", detail.get('stdout', ''))\n            try:\n                neigh_host = setup_info['neigh_host']\n                eos_bgp = neigh_host.eos_command(\n                    commands=[\"show ip bgp summary\"])\n                eos_out = eos_bgp['stdout'][0] if isinstance(\n                    eos_bgp['stdout'], list) else eos_bgp['stdout']\n                logger.error(\"EOS BGP summary:\\n%s\", eos_out)\n            except Exception as e:\n                logger.error(\"Could not get EOS BGP summary: %s\", e)\n\n>           pytest.fail(\n                \"Unnumbered BGP session via {} did not establish within {}s. \"\n                \"This could indicate a neighbor compatibility issue \u2014 the peer \"\n                \"may not support BGP peering over IPv6 link-local addresses.\"\n                .format(portchannel, WAIT_TIMEOUT))\nE           Failed: Unnumbered BGP session via PortChannel101 did not establish within 120s. This could indicate a neighbor compatibility issue \u2014 the peer may not support BGP peering over IPv6 link-local addresses.\n\nconfigure_unnumbered_bgp = {'eos_neighbor': 'fe80::2048:23ff:fe27:33d8', 'initial_prefixes': 0}\ndetail     = {'changed': True, 'stdout': 'BGP neighbor on PortChannel101: 10.0.0.57, remote AS 64600, local AS 65100, external link...s', 'Read thread: off  Write thread: off  FD used: -1'], 'stderr_lines': [], '_ansible_no_log': False, 'failed': False}\nduthost    = <MultiAsicSonicHost vlab-01>\neos_bgp    = {'changed': False, 'stdout': ['BGP summary information for VRF default\\nRouter identifier 100.1.0.29, local AS number ...summary'], 'match': 'all', 'retries': 10, 'interval': 1, 'wait_for': None}}, '_ansible_no_log': False, 'failed': False}\neos_out    = 'BGP summary information for VRF default\\nRouter identifier 100.1.0.29, local AS number 64600\\nNeighbor Status Codes: ...xAcc\\n  exabgp_v4                10.10.246.254 4 64600           4244      1231    0    0 17:21:38 Estab   6399   6399'\nestablished = False\ninitial_prefixes = 0\nneigh_host = <EosHost VM0100>\nportchannel = 'PortChannel101'\nsetup_info = {'dut_asn': 65100, 'dut_ipv4': '10.0.0.56', 'dut_ipv6': 'FC00::71', 'dut_link_local': 'fe80::2048:23ff:fe27:33d8', ...}\nsummary    = {'changed': True, 'stdout': '\\nIPv4 Unicast Summary:\\nBGP router identifier 10.1.0.32, local AS number 65100 VRF defau... Idle        0 N/A', '', 'Total number of neighbors 4'], 'stderr_lines': [], '_ansible_no_log': False, 'failed': False}\n\nbgp/test_bgp_link_local.py:430: Failed\n```\n\n### Output of `show version`\n\n```shell\n202511 and 202505\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 24197,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24197",
+      "title": "Fix BGP unnumbered tests by addressing some cEOS and DUT configs, add additional test coverage for v4 advertisement over LLv6",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-25T01:48:24Z",
+      "createdAt": "2026-04-24T23:18:07Z",
+      "author": "anish-n",
+      "body": "\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFix BGP unnumbered tests by addressing some cEOS and DUT config gaps add additional test coverage for v4 advertisement over LLv6\r\nFixes #24134\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\n#### How did you do it?\r\n DUT side:\r\n\r\n   - Remove the VS/KVM skip \u2014 the test now runs on VS.\r\n   - Add v6only to neighbor <PortChannel> interface remote-as .... Without this, FRR picks the peer's IPv4 address off the /31 on the PortChannel (SONiC configures both IPv4 and IPv6 on inter-switch links) and opens a numbered IPv4 session instead of a link-local one\r\n\r\n  Neighbor (cEOS) side \u2014 full rewrite of the peering model:\r\n\r\n   - Replace neighbor <fe80::...> remote-as + update-source with an interface-based peer-group (LINK_LOCAL_PG) bound via neighbor interface <intf> peer-group, which is the supported form on modern EOS.\r\n   - Enable IPv6 RAs on the peer Port-Channel (no ipv6 nd ra disabled). cEOS defaults Port-Channels to RA-disabled; FRR unnumbered peering discovers the peer's link-local address via RAs, so without this the DUT stayed in (unspec) state and never opened TCP/179.\r\n   - Enable RFC 5549 extended next-hop on the EOS side:\r\n    - ip routing ipv6 interfaces (global)\r\n    - neighbor LINK_LOCAL_PG next-hop address-family ipv6 originate (under address-family ipv4)\r\n    Without these, cEOS passively accepts the capability from FRR but never advertises it back, then drops all outbound IPv4 updates because the TCP session has no IPv4 local address.\r\n   - Activate the peer-group under both address-family ipv4 and address-family ipv6.\r\n#### How did you verify/test it?\r\nLocally on KVM testbed and on 1 Physical Mellanox tesbed\r\n\r\n#### Any platform specific information?\r\nRequires cEOS/vEOS T1 neighbor\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/bgp/test_bgp_link_local.py",
+          "additions": 150,
+          "deletions": 42
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-24T23:18:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-24T23:18:27Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    },
+    {
+      "number": 24242,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24242",
+      "title": "Enhance BGP link-local test: Ethernet variant, VRF support, FRR isolation",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-06T01:52:14Z",
+      "createdAt": "2026-04-27T17:16:19Z",
+      "author": "yxieca",
+      "body": "### Description of PR\n\nSummary:\nEnhance `test_bgp_link_local` (from #24197) with Ethernet variant, VRF support for converged peers, FRR isolation variant, `configure replace` teardown, and EOS config session cleanup. Three parametrized variants test both the production CONFIG_DB path (skipped in CI) and FRR directly (runs in CI as regression guard).\n\nSupersedes #24135.\n\nFixes #18431\nFixes #24134\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\nPR #24197 (merged) added the initial `test_bgp_link_local_ipv6` test for PortChannel-only unnumbered BGP. This PR extends it with:\n\n1. **Ethernet variant** \u2014 breaks LAG, tests unnumbered BGP on plain Ethernet (requires `no switchport` + `ipv6 enable` on EOS after LAG removal)\n2. **VRF-aware LAG breakout** \u2014 detects VRF on Port-Channel before removal, assigns freed Ethernet to same VRF (required for converged peer topologies)\n3. **FRR isolation variant** (`portchannel-frrtest`) \u2014 stops bgpcfgd to test FRR directly, guards against FRR regressions\n4. **CONFIG_DB path for vanilla variants** \u2014 exercises production stack (CONFIG_DB \u2192 bgpcfgd \u2192 FRR), skipped in CI until sonic-buildimage#26960 is resolved\n5. **`configure replace` teardown** \u2014 saves EOS running-config before test, restores atomically (more robust than step-by-step teardown)\n6. **EOS config session cleanup** \u2014 clears stale pending sessions before setup and after teardown to prevent cEOS session pool exhaustion\n\n#### How did you do it?\n\n- **Three parametrized test variants** via `configure_unnumbered_bgp` fixture:\n  - `[portchannel]`: CONFIG_DB path on PortChannel \u2014 **skipped** (bgpcfgd can't configure unnumbered)\n  - `[ethernet]`: CONFIG_DB path on Ethernet (breaks LAG first) \u2014 **skipped** (same reason)\n  - `[portchannel-frrtest]`: Stops bgpcfgd, configures FRR via vtysh \u2014 **runs in CI**\n- **New helpers**: `break_lag_to_ethernet()`, `configure_unnumbered_eos()`, `save_eos_running_config()`, `restore_eos_full_config()`, `_cleanup_eos_sessions()`\n- **Conditional skip** via `tests_mark_conditions.yaml` referencing sonic-buildimage#26960\n\n#### How did you verify/test it?\n\nLocally verified on KVM T0 testbed (P520-1, converged 4 cEOS, FRR 10.5.1):\n\n**v32 (3-variant, CONFIG_DB for vanilla, after cEOS restart):**\n- `[portchannel]` FAILED (expected \u2014 CONFIG_DB can't express unnumbered neighbor)\n- `[ethernet]` FAILED (expected \u2014 same reason)\n- `[portchannel-frrtest]` PASSED \u2705 (bgpcfgd stopped, FRR configured directly)\n- 4/4 BGP Established post-test \u2705\n\nflake8 clean (max-line-length=120).\n\n#### Any platform specific information?\n\nRequires EOS/cEOS neighbors. Topology: t0.\n\n#### Supported testbed topology if it's a new test case?\n\nt0\n\n### Documentation\nN/A\n",
+      "files": [
+        {
+          "path": "tests/bgp/test_bgp_link_local.py",
+          "additions": 436,
+          "deletions": 210
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 12,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-27T17:16:28Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-27T17:16:30Z",
+          "body": "This PR was raised by an AI agent on behalf of Ying Xie.\n\nSupersedes #24135 (closed). Built on top of merged #24197 by @anish-n.\n\n**Local test results (v32):**\n| Variant | Result | Expected | Notes |\n|---|---|---|---|\n| `[portchannel]` | \u274c FAIL | \u274c FAIL | CONFIG_DB path \u2014 bgpcfgd lacks unnumbered support |\n| `[ethernet]` | \u274c FAIL | \u274c FAIL | CONFIG_DB path \u2014 same reason |\n| `[portchannel-frrtest]` | \u2705 PASS | \u2705 PASS | FRR direct via vtysh \u2014 regression guard |\n\nPost-test: 4/4 BGP sessions Established \u2705\n\nThe `[portchannel]` and `[ethernet]` variants are skipped in CI via conditional marks (sonic-buildimage#26960). Only `[portchannel-frrtest]` runs in CI."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-27T17:16:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-27T21:25:08Z",
+          "body": "> This PR was raised by an AI agent on behalf of Ying Xie.\r\n> \r\n> Supersedes #24135 (closed). Built on top of merged #24197 by @anish-n.\r\n> \r\n> **Local test results (v32):**\r\n> \r\n> Variant\tResult\tExpected\tNotes\r\n> `[portchannel]`\t\u274c FAIL\t\u274c FAIL\tCONFIG_DB path \u2014 bgpcfgd lacks unnumbered support\r\n> `[ethernet]`\t\u274c FAIL\t\u274c FAIL\tCONFIG_DB path \u2014 same reason\r\n> `[portchannel-frrtest]`\t\u2705 PASS\t\u2705 PASS\tFRR direct via vtysh \u2014 regression guard\r\n> Post-test: 4/4 BGP sessions Established \u2705\r\n> \r\n> The `[portchannel]` and `[ethernet]` variants are skipped in CI via conditional marks (sonic-buildimage#26960). Only `[portchannel-frrtest]` runs in CI.\r\n\r\n\r\n\r\n> This PR was raised by an AI agent on behalf of Ying Xie.\r\n> \r\n> Supersedes #24135 (closed). Built on top of merged #24197 by @anish-n.\r\n> \r\n> **Local test results (v32):**\r\n> \r\n> Variant\tResult\tExpected\tNotes\r\n> `[portchannel]`\t\u274c FAIL\t\u274c FAIL\tCONFIG_DB path \u2014 bgpcfgd lacks unnumbered support\r\n> `[ethernet]`\t\u274c FAIL\t\u274c FAIL\tCONFIG_DB path \u2014 same reason\r\n> `[portchannel-frrtest]`\t\u2705 PASS\t\u2705 PASS\tFRR direct via vtysh \u2014 regression guard\r\n> Post-test: 4/4 BGP sessions Established \u2705\r\n> \r\n> The `[portchannel]` and `[ethernet]` variants are skipped in CI via conditional marks (sonic-buildimage#26960). Only `[portchannel-frrtest]` runs in CI.\r\n\r\nThe failure is expected due to known bgpcfgd feature gap. In this version, the failed testcase are skipped on open issue."
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-04-29T02:05:18Z",
+          "body": "Review note (non-blocking):\n- Skip-test logic detected in this change. Please confirm policy compliance or remove it.\n\nAI agent on behalf of Ying.\n<!-- AI_AGENT_REVIEW:fbdce767fd0a3b212a7bae757fb7b590bda04c0d -->"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-05-05T20:23:36Z",
+          "body": "> Review note (non-blocking):\r\n> \r\n> * Skip-test logic detected in this change. Please confirm policy compliance or remove it.\r\n> \r\n> AI agent on behalf of Ying.\r\n\r\nGood to call this out. The test are failing due to known feature gap and skipped with the reference to feature gap issue. Skip the test to save about 15 minutes of PR test time. The third test is still running to catch any FRR regression."
+        },
+        {
+          "author": "deepak-singhal0408",
+          "createdAt": "2026-05-22T22:00:39Z",
+          "body": "Worth noting: the CONFIG_DB path (lines 614-617) assumes the schema proposed in [HLD: BGP unnumbered and multi-ASN](https://github.com/sonic-net/SONiC/pull/2342) \u2014 `BGP_NEIGHBOR|<interface>` with `asn` and `name` fields"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-29T18:37:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-29T18:37:58Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-29T18:38:03Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-29T18:38:19Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-30T23:18:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-06-30T23:19:00Z",
+          "body": "Thanks @deepak-singhal0408 \u2014 addressed in `6a5c18e45`.\n\n| # | Comment | Resolution |\n|---|---------|-----------|\n| 1 (line 627) | `ethernet` variant: `pytest_assert(result['rc'] == 0)` on IP-removal fails because `break_lag_to_ethernet()` already ran `config portchannel del <pc>` (clearing the PC's IPs), and `dut_intf` is the freed member Ethernet that never carried `dut_ipv4`/`dut_ipv6`. | **Fixed.** Guarded the whole IP-removal block with `if intf_type != 'ethernet'`. For the ethernet path the Port-Channel deletion already cleared those addresses, so we now log a skip note instead of issuing a remove that would non-zero-rc and trip the assert. The strict `rc == 0` check is kept for the `portchannel` variant where `dut_intf` is the Port-Channel that actually holds the IPs. |\n| 2 (line 323) | Minor/future-proofing: DUT member (`sorted(pc_members)[0]`) and EOS member (`sorted(active_ports)[0]`) are picked independently; on a multi-member-LAG topology the two `sorted()[0]` picks aren't guaranteed to be the same cable. | **Acknowledged \u2014 keeping as-is for now**, consistent with your \"OK as-is for t0\" note. Current scope is t0-only where each Port-Channel has a single member, so both sides resolve to the same physical link unambiguously. If/when this is extended to multi-member LAG, the correct generic fix is to resolve the EOS member from the chosen DUT member via LLDP (`show lldp neighbors <dut_member>`) / the topology link map rather than an independent sort. Left a path for that; happy to do it in a follow-up if you'd prefer it tracked now. |\n\n`flake8 --max-line-length=120` and `py_compile` clean. Only the conditional-skipped `ethernet` teardown path changes; the `portchannel` variant exercised by CI is unaffected.\n\n\ud83e\udd16 *This response was generated by an AI agent on behalf of @yxieca.*\n"
+        },
+        {
+          "author": "github-actions",
+          "createdAt": "2026-06-30T23:19:08Z",
+          "body": "<!-- skip-expiry-conditional-mark-review-note -->\n@StormLiangMS @wangxin @yxieca A user wants to merge changes to the conditional mark files into `master`. Please review."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-30T23:19:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-01T15:01:14Z",
+          "body": "CI triage \u2014 build 1153214 (commit `6a5c18e45`):\n\n**All impacted-area topologies where this test runs PASS**: t0, t1-lag, t1-lag-vpp, multi-asic-t1, t0-2vlans, t0-sonic, dpu, dualtor \u2705 \u2014 plus all pre-test / static-analysis / DCO / EasyCLA / Semgrep / CodeQL(Analyze python).\n\nThe sole red is the **t2** Elastictest job, which failed with:\n\n> `Test Module Timeout: bgp/test_prefix_list_suppress.py has been running for 150.01 minutes (configured timeout: 9000 seconds)` \u2192 `TEST_PLAN_TIMEOUT`\n\nThis is **unrelated to this PR**:\n- This PR's diff touches only `tests/bgp/test_bgp_link_local.py` (ethernet-variant teardown guard) and `tests_mark_conditions.yaml`. It does **not** modify `bgp/test_prefix_list_suppress.py`.\n- The BGP link-local test is t0-scoped and does not run on t2; the ethernet variant that changed is conditional-skipped in CI.\n- The failure is a test-plan/module hang on `test_prefix_list_suppress.py` (same recurring t2 timeout signature previously observed on unrelated PRs), not a functional failure introduced here.\n\nTreating the t2 result as a pre-existing infra/module-timeout flake. Not re-triggering `/azp run` for it, as the outcome is orthogonal to this change.\n\n\ud83e\udd16 *This response was generated by an AI agent on behalf of @yxieca.*\n"
+        }
+      ]
+    }
+  ]
+}

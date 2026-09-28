@@ -1,0 +1,105 @@
+{
+  "number": 26542,
+  "title": "Bug: BMC topo add-topo fails at PTF container creation: Docker network \"br0\" is never created (regression from #26405)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26542",
+  "createdAt": "2026-07-24T04:39:37Z",
+  "closedAt": "2026-09-16T02:43:12Z",
+  "author": "weiguo-nvidia",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nSince #26405 ([vm_set]: enable ptf_use_docker_network automatically for BMC topology), deploying a BMC topology (bmc-dual-mgmt) fails during add-topo at the \"Create ptf container\" step on VM servers that are provisioned with a Linux management bridge (the standard setup).\n\n#26405 unconditionally turns on ptf_use_docker_network for every topology whose name contains bmc. In that mode the PTF container is attached directly to a Docker network named after mgmt_bridge (e.g. br0). On a server that only has a Linux bridge called br0 (which is the normal management bridge), Docker cannot find a network of that name and the task fails.\n\nNote that a Linux bridge and a Docker network are two different namespaces: having a Linux bridge br0 does not provide a Docker network br0.\n\nError\n```\nTASK [vm_set : Create ptf container ptf_<vm_set_name>]\nfatal: [<vm_host>]: FAILED! =>\n  msg: \"Parameter error: network named br0 could not be found. Does it exist?\"\n```\nOrigin: ansible/roles/vm_set/tasks/add_topo.yml\n\n\n### Steps to Reproduce\n\nadd-topo for bmc-mgmt-dual\n\n### Actual Behavior and Expected Behavior\n\nadd-topo for bmc-mgmt-dual pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "weiguo-nvidia",
+      "createdAt": "2026-08-23T14:19:19Z",
+      "body": "Hi @judyjoseph ,\n\nThis change regresses BMC deployments on VM servers that use a Linux management bridge.\n\nptf_use_docker_network is now unconditionally forced on for any topology whose name contains bmc. In that mode the PTF container is attached to a Docker network named after mgmt_bridge. On a server whose mgmt_bridge is a plain Linux bridge (e.g. br0 in host_vars/<SERVER>.yml), no Docker network of that name exists, so add-topo fails:\n\nTASK [vm_set : Create ptf container ptf_xxx]\nfatal: [<vm_host>]: FAILED! =>\n  msg: \"Parameter error: network named br0 could not be found. Does it exist?\"\n\nA Linux bridge and a Docker network are separate namespaces \u2014 having a Linux bridge br0 does not give you a Docker network br0. Reported as #26542 (still open, no owner).\n\nThis also makes the Linux-bridge path added by #25586 unreachable. add_topo.yml still carries this comment right above the bind task:\n```\n# For bmc portless topo: the PTF container only needs its mgmt interface. On servers that use\n# the Docker network mode (ptf_use_docker_network) the PTF gets mgmt directly from the docker\n# network, so bind is skipped. On servers with a Linux mgmt bridge (default), bind must run so\n# add_mgmt_port_to_docker attaches a veth from the bridge into the PTF netns ...\nwhen: not enable_async and (\"bmc\" not in topo or not (ptf_use_docker_network | default(false)))\n```\n\nWith ptf_use_docker_network always true for bmc topologies, the notnch can never be taken, so the documented default path is dead code.\nThe gap described in #26398 (\"the bind operation ... is skipped for by #25586 three weeks earlier \u2014 BMC PTF mgmt works fine on\nLinux-bridge servers without the Docker network mode.\n\nEvidence from two BMC dual-mgmt deployments on the same VM server aly in whether this change is present:\n- without it: the Enable ptf_use_docker_network task is absent, PTF \"none\", PLAY RECAP failed=0, full deploy passes\n- with it: \"network_mode\": \"br0\", PLAY RECAP failed=1, add-topo abo\n\nSuggested fix \u2014 keep the auto-enable but make it server-aware, so b of the box and an explicit setting still wins:\n\n- name: Check whether a docker network named \"{{ mgmt_bridge }}\" exists\n  command: docker network inspect {{ mgmt_bridge }}\n  register: ptf_mgmt_docker_network\n  failed_when: false\n  changed_when: false\n  become: yes\n  when: \"'bmc' in topo and ptf_use_docker_network is not defined\"\n\n- name: Enable ptf_use_docker_network for BMC topology when that do\n  set_fact:\n    ptf_use_docker_network: true\n  when:\n    - \"'bmc' in topo\"\n    - ptf_use_docker_network is not defined\n    - ptf_mgmt_docker_network.rc | default(1) == 0\n\nThe same two blocks exist in renumber_topo.yml."
+    },
+    {
+      "author": "shreyansh-nexthop",
+      "createdAt": "2026-09-02T08:45:31Z",
+      "body": "Hi @weiguo-nvidia, @judyjoseph \n\nI am observing the same problem. Have raised https://github.com/sonic-net/sonic-mgmt/pull/27669 to fix it. Please have a look. I agree with the fix suggested by @weiguo-nvidia."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27669,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27669",
+      "title": "[vm_set]: Enable ptf_use_docker_network for BMC topology only when the docker network exists",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-16T02:43:11Z",
+      "createdAt": "2026-09-02T08:41:55Z",
+      "author": "shreyansh-nexthop",
+      "body": "### Description of PR\n\nSummary:\nFixes #26542\n\n#26405 sets `ptf_use_docker_network` to true for every BMC topology. In that mode the PTF container is created with `network_mode: {{ mgmt_bridge }}` plus a static IP on a docker network of that name, and the `Bind topology` step that would otherwise give the PTF a veth on the Linux management bridge is skipped. On servers whose `mgmt_bridge` is a Linux bridge there is no docker network of that name, so `add-topo` fails at `Create ptf container` with `Parameter error: network named br0 could not be found`.\n\nThis change probes for the docker network with `docker network inspect {{ mgmt_bridge }}` and enables the mode only when the network exists. Servers that have it keep the docker network path introduced by #23813 and #26405. Servers without it keep the Linux-bridge path, where the bind step attaches a veth into the PTF netns. An explicit `ptf_use_docker_network` setting from group_vars or host_vars still wins, since both new tasks skip when the variable is already defined.\n\n### Type of change\n\n- [x] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): #26542\nFailure type: regression\n\n### Tested branch\n- [x] master\n\n### Test result\n\n- master: `bmc-shared-mgmt` topology on a test server where `mgmt_bridge` is a Linux bridge and no docker network of that name exists. Before the change, `add-topo` fails at `Create ptf container` as reported in #26542. With the change, `Check whether a docker network named \"br0\" exists` returns rc 1, the enable task is skipped, `Create ptf container` and `Bind topology bmc-shared-mgmt to VMs` both report changed, and the play ends with `failed=0`.\n\n### Approach\n#### What is the motivation for this PR?\n\nRestore `add-topo` for BMC topologies on servers that use a Linux management bridge, which #26405 broke by assuming a docker network named after `mgmt_bridge` is present.\n\n#### How did you do it?\n\nIn `add_topo.yml` and `renumber_topo.yml`, replace the unconditional `set_fact: ptf_use_docker_network: true` for BMC topologies with a `docker network inspect {{ mgmt_bridge }}` probe (`failed_when: false`, `changed_when: false`) followed by the same `set_fact`, now conditioned on the probe returning rc 0. Both tasks run only when `'bmc' in topo` and `ptf_use_docker_network` is not already defined.\n\n#### How did you verify/test it?\n\nSee Test result. The probe-positive branch (docker network present, docker mode enabled) is the same code path #26405 exercised.\n\n#### Any platform specific information?\n\nApplies to BMC topologies only. No change for other topologies.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A\n",
+      "files": [
+        {
+          "path": "ansible/roles/vm_set/tasks/add_topo.yml",
+          "additions": 13,
+          "deletions": 2
+        },
+        {
+          "path": "ansible/roles/vm_set/tasks/renumber_topo.yml",
+          "additions": 13,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T08:42:05Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-02T08:42:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T08:42:32Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-02T08:44:02Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-15T14:05:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-15T14:06:12Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "judyjoseph",
+          "createdAt": "2026-09-15T19:58:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-15T19:58:56Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "weiguo-nvidia",
+          "createdAt": "2026-09-16T03:38:48Z",
+          "body": "Hi @shreyansh-nexthop ,\r\n\r\nThanks help fix the issue! Could you help cherry-pick to 202608 branch?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-16T05:37:11Z",
+          "body": "Cherry-pick PR to msft-202608: https://github.com/Azure/sonic-mgmt.msft/pull/1416"
+        }
+      ]
+    }
+  ]
+}

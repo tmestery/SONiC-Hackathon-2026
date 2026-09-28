@@ -1,0 +1,51 @@
+{
+  "id": "management-26312",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26312,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26312",
+    "title": "Bug: test_perf_multi_operation can exhaust ingress ACL table resources by creating two dataplane ACL tables",
+    "created_at": "2026-07-18T09:49:49Z",
+    "closed_at": "2026-08-07T01:22:10Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`generic_config_updater/test_apply_patch_perf.py::test_perf_multi_operation`  creates two ingress L3 dataplane ACL tables during setup.\n\n  The first table is needed for the test's port-list replace operation. The\n  second table is only used so the multi-op patch can remove a table.\n\n  On platforms with limited ingress ACL table resources, creating both tables\n  can exhaust dataplane ACL resources. This causes syncd/orchagent to emit\n  `SAI_STATUS_INSUFFICIENT_RESOURCES`, and the test fails during teardown\n  because loganalyzer catches the syslog errors.\n\n  The test can preserve the same multi-operation coverage while consuming fewer\n  dataplane ACL resources by keeping only the main table as ingress L3 and using\n  a CTRLPLANE ACL table for the removable table.\n\n### Steps to Reproduce\n\nRun the test  generic_config_updater/test_apply_patch_perf.py::test_perf_multi_operation  a broadcom ASIC Platform like x86_64-arista_7050cx3_32c\n\n### Actual Behavior and Expected Behavior\n\n  **Actual behavior:**\n\n  The test creates two ingress L3 dataplane ACL tables. On affected platforms,\n  ACL table creation hits resource exhaustion. The test then fails in teardown\n  because loganalyzer catches `SAI_STATUS_INSUFFICIENT_RESOURCES` messages.\n\n  **Expected behavior:**\n\n  The test should consume only the dataplane ACL table resources required for\n  the dataplane port-list replace coverage. The removable table should not\n  require another ingress dataplane ACL table if it is only used to validate\n  table removal behavior.\n\n  The test should:\n\n  - skip cleanly when the required dataplane ACL table resource is unavailable,\n  - use a CTRLPLANE ACL table for the removable table so table-remove coverage is\n    preserved without consuming another dataplane ACL table.\n\n### Relevant log output\n\n```shell\n2026 Jul 17 <IPV6>.459955 gd426 ERR syncd#syncd: [none] SAI_API_ACL:_brcm_sai_xgs_field_group_create:221 field group config create failed with bcm error No resources for operation (0xfffffff2).#012!!!\n  2026 Jul 17 <IPV6>.459970 gd426 ERR syncd#syncd: [none] SAI_API_ACL:_brcm_sai_acl_xgs_create_table:5102 field group create failed with error -4.\n  2026 Jul 17 <IPV6>.459978 gd426 ERR syncd#syncd: [none] SAI_API_ACL:_brcm_sai_create_acl_table_int:837 acl create table failed with error -4.\n  2026 Jul 17 <IPV6>.460004 gd426 ERR syncd#syncd: :- sendApiResponse: api SAI_COMMON_API_CREATE failed in syncd mode: SAI_STATUS_INSUFFICIENT_RESOURCES\n  2026 Jul 17 <IPV6>.460387 gd426 ERR syncd#syncd: :- processQuadEvent: attr: SAI_ACL_TABLE_ATTR_ACL_BIND_POINT_TYPE_LIST: 2:SAI_ACL_BIND_POINT_TYPE_PORT,SAI_ACL_BIND_POINT_TYPE_LAG\n  2026 Jul 17 <IPV6>.460512 gd426 ERR syncd#syncd: :- processQuadEvent: attr: SAI_ACL_TABLE_ATTR_ACL_STAGE: SAI_ACL_STAGE_INGRESS\n  2026 Jul 17 <IPV6>.460954 gd426 ERR swss#orchagent: :- create: create status: SAI_STATUS_INSUFFICIENT_RESOURCES\n  2026 Jul 17 <IPV6>.460988 gd426 ERR swss#orchagent: :- addAclTable: Failed to create ACL table GCU_PERF_b45df4_MULTI_A\n```\n\n### Output of `show version`\n\n```shell\nplatform: x86_64-arista_7050cx3_32c\nhwsku: Arista-7050CX3-32C-C32\nos_version: branch.202605-ars.3213bfab-buildimage.63f17ae505b85275482fef3274201014c07fed91-nightly-2026.07.15.21.40\n```\n\n### Attach files (if any)\n\n[test_apply_patch_perf.log](https://github.com/user-attachments/files/30149261/test_apply_patch_perf.log)\n[test_apply_patch_perf.xml](https://github.com/user-attachments/files/30149262/test_apply_patch_perf.xml)"
+  },
+  "resolution": {
+    "pr_number": 26313,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26313",
+    "title": "[gcu] Reduce multi-op ACL table footprint",
+    "merged_at": "2026-08-07T01:22:08Z",
+    "description": "### Description of PR\n\n**Summary:**\ntest_perf_multi_operation needs one ingress L3 ACL table with a large port\n list to exercise the port-list replace path. The second table only exists so\nthe same patch can remove a table.\n\nOn platforms with limited dataplane ACL resources, creating that removable\ntable as another ingress L3 table can fail with\n SAI_STATUS_INSUFFICIENT_RESOURCES.\n\nCheck CRM before setup for the required ingress dataplane ACL table.\nCreate the removable table as a CTRLPLANE ACL table using a free service, preserving\n  table-remove coverage without consuming another dataplane ACL table.\n\nFixes #26312\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\n**Evidence of failure on 202605**\n[test_apply_patch_perf.log](https://github.com/user-attachments/files/30149517/test_apply_patch_perf.log)\n[test_apply_patch_perf.xml](https://github.com/user-attachments/files/30149518/test_apply_patch_perf.xml)\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: day-one\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n**202605**\n***Failure***\n[test_apply_patch_perf.log](https://github.com/user-attachments/files/30149525/test_apply_patch_perf.log)\n[test_apply_patch_perf.xml](https://github.com/user-attachments/files/30149526/test_apply_patch_perf.xml)\n\n***After Fix (Pass )***\n[test_apply_patch_perf.py::test_perf_multi_operation.log](https://github.com/user-attachments/files/30149620/test_apply_patch_perf.py.test_perf_multi_operation.log)\n[test_apply_patch_perf.py::test_perf_multi_operation.xml](https://github.com/user-attachments/files/30149621/test_apply_patch_perf.py.test_perf_multi_operation.xml)\n\n**master**\n***Failure***\n[test_apply_patch_perf.log](https://github.com/user-attachments/files/30149613/test_apply_patch_perf.log)\n[test_apply_patch_perf.xml](https://github.com/user-attachments/files/30149614/test_apply_patch_perf.xml)\n\n### Approach\n\n#### What is the motivation for this PR?\n`test_perf_multi_operation`  can fail on platforms with limited ingress\n dataplane ACL table resources because it creates two ingress L3 ACL tables\n during setup. The first table is required to exercise the large port-list\n replace path. The second table only exists so the test can cover table\n removal.\n\n#### How did you do it?\nThe main ACL table remains an ingress L3 port-bound ACL table. The removable\n table is changed to a CTRLPLANE ACL table using a free service, so the test\n still covers table removal without consuming another dataplane ACL table.\n\nThe test also checks CRM before setup and skips when the required ingress\n  dataplane ACL table resource is unavailable.\n\n#### How did you verify/test it?\n\nRan the test 10 times on the platform where it was failing\n\n#### Any platform specific information?\n Failed  on  Arista-7050CX3-32C-C32 ,Arista-7260CX3-C64 , Arista-7050CX3-32S-C32\n\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/generic_config_updater/test_apply_patch_perf.py",
+        "additions": 48,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 26314,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26314",
+      "title": "tests/generic_config_updater: use CTRLPLANE table for removable table in test_perf_multi_operation",
+      "merged": false
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

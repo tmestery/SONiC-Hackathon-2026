@@ -1,0 +1,150 @@
+{
+  "number": 25099,
+  "title": "[snappi][macsec] DUT SCI-ID, in-flight flow metrics and cleanup needs fix.",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25099",
+  "createdAt": "2026-06-03T14:27:43Z",
+  "closedAt": "2026-08-06T17:56:52Z",
+  "author": "amitpawar12",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nThere are three issues here:\n- The DUT SCI ID is read incorrectly in case of multiple LC testcase. The DUT SCI ID is read from the first DUT MAC defined in the 'duthosts' list. \n- The in_flight_flow_metrics is called outside the for loop again and fails when ptype is true (macsec case).\n- The stats tgen_tx_frames and tgen_rx_frames are strings when returned from macsec flow statistics and needs to be handled appropriately.\n- The function tgen_port_info is called again in the end of the test case (via yield) with setup==False. The setup_dut_port will function '__intf_config_macsec' with the same flag. The function needs to return True when setup=False. In this case, 'cleanup_config' defined in the test, will explicitly remove the MACSEC configuration on the DUT.\n\n### Steps to Reproduce\n\n- Ensure that variables.override.yml file has multiple LC's added as Tx and Rx ports.\n- Run test_pfc_pause_lossless_with_snappi.py with '--snappi_macsec' flag.\n\n\n\n### Actual Behavior and Expected Behavior\n\n- The dut_sci_id on the tgen should reflect the mac_address of the DUT on which macsec is configured. In this case, it is mac_address of first DUT defined in the duthost list.\n- The tgen_tx_frames and tgen_rx_frames when ptype is true (macsec case) are strings and hence comparison fails for verify_tx_frame_count and verify_rx_frame_count.\n- The in_flight_flow_metrics is called again outside and fails when ptype is true(macsec case). \n- When __intf_config_macsec is called in the end during cleanup, it will configure macsec again on the DUT. Explicit cleanup in the test will take care of this, hence when setup=False, the __intf_config_macsec should not do anything.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "amitpawar12",
+      "createdAt": "2026-06-03T15:05:31Z",
+      "body": "@selldinesh , @kamalsahu0001 , @rawal01 @sdszhang for viz."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25100,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25100",
+      "title": "[snappi-macsec] Fix the dut_sci_id, in_flight_flow_metrics and tgen_frames issue while executing with macsec flag",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-06T17:56:51Z",
+      "createdAt": "2026-06-03T15:04:19Z",
+      "author": "amitpawar12",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\nFollowing changes are done in the pull-request:\r\n- The dut_sci_id required on tgen side is taken from the first DUT defined in the duthost list and will work if both Rx and Tx ports are on the same DUT. However, it will not work when they are from different DUTs or line-cards.\r\n- The in_flight_flow_metrics is called twice; one for non-macsec and other for macsec case. However, it is called again causing the macsec case to fail.\r\n- The tgen_tx_frames and tgen_rx_frames are strings from macsec. They fail when there is check if loss percentage is less than loss_tolerance level.\r\n- The tgen_port_info function calls setup_dut_port twice. Once with setup=True and in the end again with setup=False. In case of setup=False, the __intf_config_macsec does not check for setup flag and hence will end up reconfiguring macsec again. There is an explicit cleanup_config defined in the test, which will cleanup the MACSEC config.\r\n\r\nSummary:\r\nFixes #25099 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [X] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThe pull-request fixes the issues mentioned in the description above.\r\nThe fixes will resolve issues seen while running multi-line-card test with macsec enabled on egress port and plain IP on the ingress port.\r\n\r\n#### How did you do it?\r\n- DUT_SCI_ID: Checking for port_id == 1 to determine the MACSEC endpoint and using the mac_address of the DUT to configure the dut_sci_id on the tgen.\r\n- in_flight_flow_metrics: Removed the duplicate in_flight_flow_metrics called outside the if-else statement (with and without ptype). \r\n- tgen_tx_frames and tgen_rx_frames: Create a small function to check if the value is string. If yes, then convert to integer. If not, then simply return the value as is.\r\n- Function __intf_config_macsec with setup == False: Added an implicit code in function to return True when it is called with setup==False flag. The explicit cleanup_config called in the test_script should clean-up the MACSEC configuration on the DUT.\r\n\r\n#### How did you verify/test it?\r\nRan the test manually on local clone.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/snappi_fixtures.py",
+          "additions": 16,
+          "deletions": 17
+        },
+        {
+          "path": "tests/common/snappi_tests/traffic_generation.py",
+          "additions": 132,
+          "deletions": 41
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-03T15:04:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-03T15:04:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-06-03T15:05:00Z",
+          "body": "@selldinesh , @kamalsahu0001 @rawal01 @sdszhang for viz."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-04T11:15:03Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "sdszhang",
+          "createdAt": "2026-06-30T23:14:41Z",
+          "body": "pending comment resolving."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T17:06:37Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-15T17:06:55Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T17:23:32Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-15T17:23:49Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-07-15T17:29:44Z",
+          "body": "> ## Code Review\r\n> ### \ud83d\udd34 High: Early return skips Cisco-8000 route/ARP cleanup\r\n> **File:** `tests/common/snappi_tests/snappi_fixtures.py`\r\n> \r\n> The PR adds an early `return True` at the top of `__intf_config_macsec(setup=False)`, before the loop over `snappi_ports`. On **Cisco-8000**, the inner loop calls `gen_data_flow_dest_ip(setup=False)` which is the **only** path that removes static routes and ARP entries injected during setup (via `config route del` / `arp -d`).\r\n> \r\n> The PR comment claims cleanup is handled by `cleanup_config()`, but `cleanup_config` guards with `if not ptype` (where `ptype` detects `--snappi_macsec`), so it explicitly **skips** macsec scenarios.\r\n> \r\n> **Result:** Routes and ARP entries will persist on the Cisco-8000 DUT after test teardown, polluting subsequent runs.\r\n> \r\n> **Suggested fix:** Preserve the `gen_data_flow_dest_ip(setup=False)` call before returning, or move the early return to after the cleanup loop completes.\r\n> \r\n> ### \ud83d\udfe1 Medium: SCI MAC search loop missing `break`\r\n> **File:** `tests/common/snappi_tests/traffic_generation.py`\r\n> \r\n> ```python\r\n> for port in snappi_extra_params.multi_dut_params.multi_dut_ports:\r\n>     if port['port_id'] == 1:\r\n>         sci_mac = port['duthost'].get_dut_iface_mac(port['peer_port'])\r\n> # no break!\r\n> ```\r\n> \r\n> If multiple ports share `port_id == 1` (possible in larger topologies), the **last** match silently wins, applying a wrong SCI MAC to the TGEN config. This would fail traffic silently rather than triggering the assertion.\r\n> \r\n> **Suggested fix:** Add `break` after the assignment, or use `next()`:\r\n> \r\n> ```python\r\n> port = next((p for p in snappi_extra_params.multi_dut_params.multi_dut_ports if p['port_id'] == 1), None)\r\n> pytest_assert(port, \"Port with port_id=1 not found for macsec SCI configuration\")\r\n> sci_mac = port['duthost'].get_dut_iface_mac(port['peer_port'])\r\n> ```\r\n\r\nThanks for the comment @vmittal-msft :\r\n\r\n1. Addressed the gen_data_flow_dest_ip call when setup==False in function __intf_config_macsec.\r\n2. The DUT_SCI_ID change addresses for multiple ports now. Instead of relying on the port_id check, it now relies on the IXIA topology to get the ports that require this addition and identifies the peer_port.\r\n\r\nThis should also take care of multiple ingress port as well."
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-07-15T17:35:07Z",
+          "body": "Some additional changes done in the pull-request:\r\n- In traffic_generation.py, function run_traffic(), the in_flight_flow_metrics will now display flow_name, Rx_frames, Tx_frames, Rx_Gbps and Tx_Gbps in tabular format.\r\n- In traffic_generation.py, function cleanup_config() had duplicate info level log to remove the MACSEC profile.\r\n- In snappi_fixtures.py, function __intf_config_macsec() had issue while deleting existing macsec profile before adding a new one. Function delete_macsec_profile takes three arguments, but two were passed.\r\n- In snappi_fixtures.py, reading JSON file was checking for ptype. This is not required as __intf_config_macsec is ONLY called when ptype == True. Code requires additional cleanup to remove this redundant '_if ptype_' statements."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-28T01:08:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-28T01:08:17Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-07-28T01:10:27Z",
+          "body": "> ## Re-review (HEAD `f7db398`)\r\n> Thanks for the updates \u2014 the previously-raised findings are now resolved:\r\n> \r\n> * \u2705 **Teardown cleanup** \u2014 `__intf_config_macsec(setup=False)` now loops the DUT's ports calling `gen_data_flow_dest_ip(..., setup=False)` before returning, so Cisco-8000 route/ARP state is still cleaned up.\r\n> * \u2705 **DUT SCI-MAC selection / multi-DUT** \u2014 refactored into `_configure_macsec_dut_sci_macs()`, which iterates every MACsec port, matches the TGEN endpoint, `break`s on match, and asserts a match was found (no more \"last match silently wins\").\r\n> * \u2705 **`port_id` string comparison** \u2014 normalized via `int(port['port_id'])`.\r\n> * \u2705 **Duplicate `in_flight_flow_metrics` fetch** \u2014 removed; both polling branches use `_capture_in_flight_tgen_stats` / `_log_in_flight_stats` and return the correct per-`ptype` format.\r\n> * \u2705 **String frame counters** \u2014 handled by `_int_if_str`.\r\n> \r\n> ### \ud83d\udd34 One blocking issue (new, introduced in the latest push)\r\n> `delete_macsec_profile(port['duthost'], port['peer_port'], profile_name)` in `snappi_fixtures.py` passes **3** positional args, but the helper accepts only **2** (`def delete_macsec_profile(host, profile_name)`). This raises `TypeError` in the MACsec setup path this PR targets. See the inline comment for details/fix.\r\n> \r\n> ### \ud83d\udfe1 Minor / optional (non-blocking)\r\n> * `_configure_macsec_dut_sci_macs` asserts a matching TGEN endpoint for **every** `port_id >= 1`, but `__intf_config_macsec` only creates a `StaticMacsec` endpoint for `port_id == 1`. Fine for the current single-ingress topology; a future multi-MACsec-endpoint topology would trip the `pytest_assert(matched, ...)`.\r\n> * `_int_if_str` uses `int(v)` and would raise on a comma-formatted counter string (e.g. `\"1,234\"`). Low risk if IxNetwork returns plain digit strings.\r\n> \r\n> Once the `delete_macsec_profile` call is fixed, this LGTM.\r\n\r\nThe blocking comment is resolved.  \r\n\r\nThe configure_macsec_dut_sci_macs checks for 'port_id>=1' and is addressing m2o cases coming in a different pull-request."
+        },
+        {
+          "author": "sdszhang",
+          "createdAt": "2026-07-28T23:05:23Z",
+          "body": "@vmittal-msft to sign off"
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-07-29T20:13:31Z",
+          "body": "@rlhui @yxieca please help merge"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T00:19:34Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511,202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-06T19:59:56Z",
+          "body": "@amitpawar12 PR conflicts with 202511 branch"
+        },
+        {
+          "author": "amitpawar12",
+          "createdAt": "2026-08-06T21:18:36Z",
+          "body": "I have removed the flag to merge this pull-request to 202511.\r\n\r\nIf the fix is required in that branch, please let me know and I will create a different pull-request specifically for 202511 branch.\r\n\r\nThanks,\r\n"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-08-11T02:21:53Z",
+          "body": "@amitpawar12 \u2014 this PR is labeled Request for 202605 branch, but the following required information is still missing:\n\n- 202605-specific image/test result evidence\n\nPlease add the missing information to the PR description. Tracker details should cover day-one/regression status, affected branch/image/platform/test, and why 202605 needs the fix; validation should identify the tested 202605 image and include the result or result link.\n\n<!-- copilot-202605-backport-reminder -->"
+        }
+      ]
+    }
+  ]
+}

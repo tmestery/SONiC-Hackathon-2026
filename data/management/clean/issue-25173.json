@@ -1,0 +1,48 @@
+{
+  "id": "management-25173",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 25173,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/25173",
+    "title": "Bug:`dualtor_io/test_tor_failure.py` fails on master with Exception: pmon container is not up after 100 seconds",
+    "created_at": "2026-06-08T08:38:55Z",
+    "closed_at": "2026-07-09T04:50:43Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe 4 tests  fail with error `Exception: pmon container is not up after 100 seconds`\n\n1. dualtor_io/test_tor_failure.py::test_active_tor_reboot_upstream\n2. dualtor_io/test_tor_failure.py::test_active_tor_reboot_downstream_standby\n3. dualtor_io/test_tor_failure.py::test_standby_tor_reboot_upstream\n4. dualtor_io/test_tor_failure.py::test_standby_tor_reboot_downstream_active\n\n### Steps to Reproduce\n\nRun the tests on dualtor against latest master\n\n1. dualtor_io/test_tor_failure.py::test_active_tor_reboot_upstream\n2. dualtor_io/test_tor_failure.py::test_active_tor_reboot_downstream_standby\n3. dualtor_io/test_tor_failure.py::test_standby_tor_reboot_upstream\n4. dualtor_io/test_tor_failure.py::test_standby_tor_reboot_downstream_active\n\n### Actual Behavior and Expected Behavior\n\n**Actual Behavior**\nTests fail\n\n **Expected Behavior**\nTests should pass\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[test_tor_failure.log](https://github.com/user-attachments/files/28699725/test_tor_failure.log)\n[test_tor_failure.xml](https://github.com/user-attachments/files/28699726/test_tor_failure.xml)"
+  },
+  "resolution": {
+    "pr_number": 25301,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/25301",
+    "title": "Fix dualtor_io pmon timeout and KeyError with latest Ansible",
+    "merged_at": "2026-07-09T04:50:42Z",
+    "description": "### Description of PR\n\n**Summary:**\nThese changes are required for the latest Ansible runtime upgrade.\n\n  `dualtor_io/test_tor_failure.py` can fail because the mux/pmon readiness helper relies on nested Jinja escaping inside a Docker Go-template command. With Ansible-core 2.19+, the nested expression can be passed to\n  Docker literally, causing Docker template parsing to fail and the pmon readiness polling to time out.\n\n  This PR:\n  - Uses the direct Docker Go template `{{ .State.Status }}` when checking mux and pmon container state.\n  - Handles successful Ansible shell results that may not include an explicit `failed: false` key by using `output.get(\"failed\", False)`.\n\nFixes #25173\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\n### Approach\n#### What is the motivation for this PR?\n`dualtor_io/test_tor_failure.py` failed because the pmon readiness helper timed out even\nthough the container check command itself was failing before it could read the container state.\n\n  Affected tests include:\n\n  - `dualtor_io/test_tor_failure.py::test_active_tor_reboot_upstream`\n  - `dualtor_io/test_tor_failure.py::test_active_tor_reboot_downstream_standby`\n  - `dualtor_io/test_tor_failure.py::test_standby_tor_reboot_upstream`\n  - `dualtor_io/test_tor_failure.py::test_standby_tor_reboot_downstream_active`\n\n#### How did you do it?\n\n##### Issue 1\n\n  This failure is related to the Ansible-core 2.19 template trust model change. The 2.19 porting guide notes that Ansible no longer implicitly templates all strings. Because of that, the nested Jinja escape used\n  for Docker's Go template can be passed to Docker literally:\n\n  `docker inspect -f '{{ '{{' }} .State.Status {{ '}}' }}' pmon`\n\n  Docker then fails with:\n\n  `template parsing error: template: :1: unexpected \"{\" in command`\n\n  The fix uses Docker's Go template directly:\n\n  `docker inspect -f '{{ .State.Status }}' pmon`\n\n  The same fix is applied to the mux container readiness check.\n\n  Note: this direct form is intended for Ansible 2.19+.\n\n##### Issue 2\nSuccessful Ansible result may not include failed\n\n  tests/common/dualtor/dual_tor_io.py directly accessed:\n\n  output[\"failed\"]\n\n  With the newer Ansible runtime, a successful module result may omit the failed key. This can cause KeyError.\n\n  The fix safely reads the value with a default:\n\n  output.get(\"failed\", False)\n\n  Example newer Ansible result where failed is missing:\n\n ```\n {\n    \"changed\": false,\n    \"commands\": [\"router bgp 64600\", \"graceful-restart restart-time 300\"],\n    \"updates\": [\"router bgp 64600\", \"graceful-restart restart-time 300\"],\n    \"session\": \"ansible_178088953263\"\n  }\n\n```\n  Earlier Ansible shell results included:\n\n ```\n {\n    \"changed\": true,\n    \"stdout\": \"running\",\n    \"rc\": 0,\n    \"failed\": false\n  }\n```\n\n#### How did you verify/test it?\nRan  dualtor_io/test_tor_failure.py and it passed  on dualtor\n\n#### Any platform specific information?\nN/A\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/common/dualtor/dual_tor_io.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "tests/common/dualtor/tor_failure_utils.py",
+        "additions": 2,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

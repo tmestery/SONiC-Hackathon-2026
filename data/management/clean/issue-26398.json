@@ -1,0 +1,48 @@
+{
+  "id": "management-26398",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26398,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26398",
+    "title": "BMC topologies require mgmt_bridge network attachment at PTF container creation",
+    "created_at": "2026-07-21T06:00:06Z",
+    "closed_at": "2026-07-22T03:13:56Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Summary\nBMC (Baseboard Management Controller) topologies require special handling for PTF container networking. Unlike standard topologies (t0, t1, t2, etc.), BMC topologies must attach the PTF container to the management bridge at container creation time, not during the later topology bind step.\n\n## Problem\nStandard topologies create PTF with `network_mode: none` and wire up all connectivity (including management) during the `vm_topology bind` operation. However, BMC topologies are **data-plane portless** and skip the bind step entirely. This creates a gap:\n\n- PTF container would start without any network interfaces\n- Post-test operations (log collection, reachability checks) fail with \"Host unreachable\"\n- Tests cannot complete their teardown/validation phases\n\n## Root Cause\n- BMC topologies have no data-plane ports to bind; management is the only path\n- The bind operation that normally establishes connectivity is skipped for BMC\n- Without management connectivity at container startup, post-check phases are unreachable\n\n## Suggested Solution\n\nThere are 2 options:\nA) PTF container creation should detect a BMC topology and attaches to `mgmt_bridge` immediately.\nB) Or, use option `-e ptf_use_docker_network=true` when running `./testbed-cli.sh add-topo`."
+  },
+  "resolution": {
+    "pr_number": 26405,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26405",
+    "title": "[vm_set]: enable ptf_use_docker_network automatically for BMC topology",
+    "merged_at": "2026-07-22T03:13:55Z",
+    "description": "### Description of PR\n\nFixes https://github.com/sonic-net/sonic-mgmt/issues/26398\n\n**Summary:**\nFor BMC topologies, the PTF container must be connected to the Docker management bridge network (rather than `network_mode: none`) so that it can reach the DUT via the management network.\n\nPreviously this required passing `-e ptf_use_docker_network=true` explicitly on the `add-topo` and `renumber-topo` command line. This change automatically sets `ptf_use_docker_network=true` when the topology name contains `bmc`, eliminating the need for the manual flag.\n\n### Type of change\n\n- [x] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [x] 202608\n\n### Tested branch\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [x] 202608\n\n### Approach\n#### What is the motivation for this PR?\n\nBMC topologies require PTF to use the Docker management bridge network to reach the DUT. This was previously an opt-in flag that had to be passed manually, making it easy to forget and causing failures when omitted.\n\n#### How did you do it?\n\nAdded a `set_fact` task early in both `add_topo.yml` and `renumber_topo.yml` that sets `ptf_use_docker_network: true` when `'bmc' in topo`. All downstream conditional checks (`ptf_use_docker_network | default(false)`) then evaluate correctly for BMC topologies without any command-line changes.\n\n#### How did you verify/test it?\n\nRan `./testbed-cli.sh add-topo <bmc-testbed> vault` (without `-e ptf_use_docker_network=true`) on a BMC testbed and confirmed the PTF container was started with the correct `network_mode` and `networks` configuration attached to the management bridge.\n\n#### Any platform specific information?\n\nApplies only to BMC topologies (topology name contains `bmc`). No impact on other topology types.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/roles/vm_set/tasks/add_topo.yml",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "ansible/roles/vm_set/tasks/renumber_topo.yml",
+        "additions": 5,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

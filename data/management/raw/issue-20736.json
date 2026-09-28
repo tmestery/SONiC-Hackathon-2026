@@ -1,0 +1,134 @@
+{
+  "number": 20736,
+  "title": "[TSA/TSB] Bug: Intermittent TSA/TSB test failures caused by FRR config apply latency",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/20736",
+  "createdAt": "2025-09-18T19:58:37Z",
+  "closedAt": "2025-10-29T07:22:10Z",
+  "author": "vishal-nokia",
+  "labels": [
+    "Bug :bug:",
+    "Master Branch Quality",
+    "Triaged"
+  ],
+  "assignees": [
+    "vishal-nokia"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nMost test cases in the TSA/TSB suite check the Traffic shift state by issuing TSC immediately after a TSA/TSB operation. However, due to some delay in the application of FRR config, TSC can report that the DUT is in inconsistent state leading to intermittent test failures.\n\nErrors noticed when TSC is issued after TSB.\n``` python\n# code\nlinecard.shell('TSB')\nlinecard.shell('sudo config save -y')\n# Ensure that the DUT is not in maintenance already before start of the test\npytest_assert(TS_NORMAL == get_traffic_shift_state(linecard, cmd='TSC no-stats'),\n                          \"DUT is not in normal state\")\n```\n``` bash\n# Error logs\n>       pytest.fail(\"{} return unexpected state {}\".format(cmd, \"ERROR\"))\nE       Failed: TSC no-stats return unexpected state ERROR\n\ncmd        = 'TSC no-stats'\nhost       = <MultiAsicSonicHost ixre-egl-board202>\noutputs    = ['BGP0 : System Mode: Maintenance', 'BGP1 : System Mode: Normal']\n```\nSimilar Errors when TSC is issued after TSA\n``` python\n# code\nlc.shell('TSA')\nlc.shell('sudo config save -y')\n# Ensure that the DUT is in maintenance state\npytest_assert(TS_MAINTENANCE == get_traffic_shift_state(lc, cmd='TSC no-stats'),\n                      \"DUT is not in maintenance state\")\n```\n``` bash\n# Error logs\n>       pytest.fail(\"{} return unexpected state {}\".format(cmd, \"ERROR\"))\nE       Failed: TSC no-stats return unexpected state ERROR\n\ncmd        = 'TSC no-stats'\nhost       = <MultiAsicSonicHost ixre-egl-board202>\noutputs    = ['BGP0 : System Mode: Not consistent', 'BGP1 : System Mode: Maintenance']\n```\n\n### Steps to Reproduce\n\nThe following script [test.sh](https://github.com/user-attachments/files/22413608/test.sh) runs TSA-TSC-TSB-TSC in a loop. \nAfter running the script for 50 iterations, TSC reported incorrect state 2/5 times.\n\nAdding a small delay(5s) between issuing TSA/TSB and TSC resolved the issue.\n\n### Actual Behavior and Expected Behavior\n\nTSC after TSB\nExpected behavior:\n``` \n['BGP0 : System Mode: Normal', 'BGP1 : System Mode: Normal']\n```\n\nActual Behavior (Intermittent):\n``` \n['BGP0 : System Mode: Maintenance', 'BGP1 : System Mode: Normal']\n```\n\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\nmaster\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "vishal-nokia",
+      "createdAt": "2025-09-18T20:01:58Z",
+      "body": "Potential fix is to add a retry mechanism to TSC by wrapping the `get_traffic_shift_state` check within a `wait_until` function"
+    },
+    {
+      "author": "abdosi",
+      "createdAt": "2025-10-01T17:31:39Z",
+      "body": "@tjchadaga to help with review once PR is ready."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 21047,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/21047",
+      "title": "add wait_until for TSC",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-10-29T07:22:09Z",
+      "createdAt": "2025-10-21T13:33:21Z",
+      "author": "vishal-nokia",
+      "body": "\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n\r\n- Wrap the TSC call in a `wait_until` function\r\n- Remove `pytest_fail` inside `get_traffic_shift_state` function\r\n\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #20736 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nMost test cases in the TSA/TSB suite check the Traffic shift state by issuing TSC immediately after a TSA/TSB operation. However, due to some delay in the application of FRR config, TSC can report that the DUT is in inconsistent state if we read the config before it is fully applied, leading to intermittent test failures.\r\n#### How did you do it?\r\nI've modified the code to add retry mechanism to the TSC check.\r\n#### How did you verify/test it?\r\nRan the TSA/TSB tests on a T2 topology.\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/bgp/bgp_helpers.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/bgp/constants.py",
+          "additions": 1,
+          "deletions": 0
+        },
+        {
+          "path": "tests/bgp/reliable_tsa/test_reliable_tsa_flaky.py",
+          "additions": 27,
+          "deletions": 21
+        },
+        {
+          "path": "tests/bgp/reliable_tsa/test_reliable_tsa_stable.py",
+          "additions": 24,
+          "deletions": 23
+        },
+        {
+          "path": "tests/bgp/test_startup_tsa_tsb_service.py",
+          "additions": 26,
+          "deletions": 22
+        },
+        {
+          "path": "tests/bgp/test_traffic_shift.py",
+          "additions": 11,
+          "deletions": 11
+        },
+        {
+          "path": "tests/bgp/test_traffic_shift_lc.py",
+          "additions": 27,
+          "deletions": 11
+        },
+        {
+          "path": "tests/bgp/test_traffic_shift_sup.py",
+          "additions": 2,
+          "deletions": 1
+        },
+        {
+          "path": "tests/bgp/traffic_checker.py",
+          "additions": 6,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-10-21T13:33:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-10-21T13:33:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-10-21T13:42:17Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-10-21T13:42:32Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vishal-nokia",
+          "createdAt": "2025-10-21T16:02:25Z",
+          "body": "@tjchadaga for viz"
+        },
+        {
+          "author": "tjchadaga",
+          "createdAt": "2025-10-28T21:31:01Z",
+          "body": "/easycla"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-10-29T07:22:36Z",
+          "body": "Cherry-pick PR to msft-202503: "
+        },
+        {
+          "author": "mike-dubrovsky",
+          "createdAt": "2026-07-02T18:33:15Z",
+          "body": "@cyw233 \r\nCan we add back port into msft-202405 ?\r\n"
+        }
+      ]
+    }
+  ]
+}

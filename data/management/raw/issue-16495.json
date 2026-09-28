@@ -1,0 +1,67 @@
+{
+  "number": 16495,
+  "title": "[Bug]: mux simulator cannot handle new requests due to the listen backlog full",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16495",
+  "createdAt": "2025-01-13T11:38:30Z",
+  "closedAt": "2025-01-24T02:35:39Z",
+  "author": "lolyu",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\r\ndualtor nightly suffers from http request timeout:\r\n```\r\n2025 Jan 13 11:40:09.678044 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: y_cable_port 5: attempt=3, GET http://10.64.246.133:8080/mux/vms21-3/8 for physical_port 5 failed with TimeoutError('timed out')\r\n2025 Jan 13 11:40:09.678044 str2-7050cx3-acs-10 NOTICE pmon#CCmisApi: y_cable_port 5: Sleep 1 seconds to retry GET http://10.64.246.133:8080/mux/vms21-3/8 for physical port 5\r\n2025 Jan 13 11:40:13.073700 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: y_cable_port 1: attempt=6, GET http://10.64.246.133:8080/mux/vms21-3/0 for physical_port 1 failed with TimeoutError('timed out')\r\n2025 Jan 13 11:40:13.073700 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: y_cable_port 1: Retry GET http://10.64.246.133:8080/mux/vms21-3/0 for physical port 1 timeout after 30 seconds, attempted=6\r\n2025 Jan 13 11:40:13.073700 str2-7050cx3-acs-10 WARNING pmon#CCmisApi: Error: Could not get active side for cli command show mux hwmode muxdirection logical port Ethernet0 and physical port 1\r\n```\r\nMux simulator cannot handle new requests to to the listen backlog is full; it appeared that there are too many connections in `CLOSE_WAIT`; so mux simulator cannot accept new connections due to this socket fd leak.\r\n\r\n```\r\n# ss -lnt | grep 8080\r\nLISTEN   1025         1024                0.0.0.0:8080             0.0.0.0:*\r\n# netstat -s | grep -i listen\r\n    472273 times the listen queue of a socket overflowed\r\n    472277 SYNs to LISTEN sockets dropped\r\n# netstat -ant | grep 8080 | grep CLOSE_WAIT | wc -l\r\n1313\r\n```\r\n\r\n\r\n## how to reproduce?\r\nThe `CLOSE_WAIT` sockets are created by the HTTP requests from the following code:\r\n\r\nhttps://github.com/sonic-net/sonic-mgmt/blob/62a15b7fc6755830a21b49edcaeae1da44c7c139/tests/common/dualtor/mux_simulator_control.py#L178-L209\r\n\r\nIt appeared that, the toggle-all command that calls this function can take more than 10 seconds to finish, which causes the post request timeout and close the tcp connection on the client side. The TCP socket on the server side (mux simulator) transits into `CLOSE_WAIT` and mux simulator doesn't close them, which results in a socket fd leak.\r\n\r\n### Results you see\r\n\r\nAs the description.\r\n\r\n### Results you expected to see\r\n\r\nAs the description.\r\n\r\n### Is it platform specific\r\n\r\ngeneric\r\n\r\n### Relevant log output\r\n\r\n```shell\r\nAs the description.\r\n```\r\n\r\n\r\n### Output of `show version`\r\n\r\n```shell\r\nAs the description.\r\n```\r\n\r\n\r\n### Attach files (if any)\r\n\r\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 16651,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16651",
+      "title": "[dualtor][mux simulator] Fine-tune the mux simulator control post timeout",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-24T02:35:38Z",
+      "createdAt": "2025-01-23T14:17:52Z",
+      "author": "lolyu",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes # (issue)\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [x] 202411\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nThis is to fix https://github.com/sonic-net/sonic-mgmt/issues/16495.\r\nThe root cause is that, on dualtor testbed, the post request to `mux_simulator` to toggle all mux ports can take up to 15+ seconds to finish; but the post timeout is 10s, so the post request to toggle all mux ports always timeout.\r\n\r\nHere is the workflow for a HTTP requests to `mux_simulator`:\r\n```\r\n#\r\n# how does a HTTP request to mux_simulator work?\r\n#         +------------+       +------------+      +-------------+       +--------------+\r\n# ------->|listen queue+------>|accept queue+----->|mux simulator+------>| mux simulator|\r\n#         +------------+       +------------+      |  dispatcher |       |handler worker|\r\n#                                                  +-------------+       +--------------+\r\n```\r\nThe HTTP requests are handled by TCP listen/accept queue first; after the connection is established, `mux_simulator` will consume the request and dispatch the request to workers to handle the request.\r\nBack to the toggle all mux ports post request, the client times out and disconnects, but the request has already been dispatched by the `mux_simulator`, its handler worker is still busy handling the request. If our test code send more timeout requests to `mux_simulator`, those inundated requests could overload the `mux_simulator` handler workers and a kind of denial-of-service occurs. Even worse, with more HTTP requests coming, the listen/accept queue will overflow.\r\n\r\nThis PR is to stop creating timeout requests to `mux_simulator`.\r\n\r\nSigned-off-by: Longxiang Lyu <lolv@microsoft.com>\r\n\r\n#### How did you do it?\r\nThe post timeout needs to be adjusted to allow the `mux_simulator` slowness, in addition, it should be able to detect the TCP connection slowness/failure.\r\n\r\nBased on the [timeout specification](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts), let's use `3.5s` as the TCP connection timeout as it is slightly greater than 3 (default TCP retran timeout); and use `30s` as the mux simulator response timeout, which should covers all the mux simulator APIs.\r\n\r\n#### How did you verify/test it?\r\nRun the dualtor, and no more timeout happens.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/common/dualtor/mux_simulator_control.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-23T14:17:54Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-23T14:18:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2025-01-23T21:32:08Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-23T21:32:21Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-18T16:48:56Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-mgmt/pull/17007"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-18T18:19:17Z",
+          "body": "Cherry-pick PR to 202411: https://github.com/sonic-net/sonic-mgmt/pull/17008"
+        }
+      ]
+    }
+  ]
+}

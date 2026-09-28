@@ -1,0 +1,43 @@
+{
+  "id": "management-24198",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24198,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24198",
+    "title": "Regression: `test_snmp_queue_counters.py` fails with `Failed: Snmpwalk Queue counters actual count 64 differs from expected count 0 (UC queues: 0, MC queues: 0)`",
+    "created_at": "2026-04-25T00:34:50Z",
+    "closed_at": "2026-04-30T17:42:32Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Previous Working Version\n\nPrior to https://github.com/sonic-net/sonic-mgmt/pull/23264 merging\n\n### Steps to Reproduce\n\nRun `test_snmp_queue_counters.py`\n\n### Impact of this regression\n\nTest that was previously passing is now failing.\n\nhttps://github.com/sonic-net/sonic-mgmt/pull/23264 introduced `get_redis_queue_count_with_types`\nThis function queries the `COUNTERS_QUEUE_NAME_MAP` but assumes it gets back a list of entries, but it really gets back a single string:\n```\n(Pdb) name_map_cmd = \"sonic-db-cli -n asic0 COUNTERS_DB HGETALL COUNTERS_QUEUE_NAME_MAP\"\n(Pdb) name_map_result = duthost.shell(name_map_cmd)['stdout_lines']\n(Pdb) len(name_map_result)\n1\n(Pdb) p name_map_result[0]\n\"{'Ethernet-IB0:0': 'oid:0x150000000005e1', 'Ethernet-IB0:1': 'oid:0x150000000005e2', 'Ethernet-IB0:2'\n<snip>\n, 'Ethernet96:15': 'oid:0x1500000000041c'}\"\n```\n\nThis causes the iteration loop to not work:\n```\nfor i in range(0, len(name_map_result), 2):\n    if i + 1 < len(name_map_result): <--------this will always be false for a list of length 1\n        key = name_map_result[i]\n```\n\n### Relevant log output\n\n```shell\n>       pytest_assert(\n            (queue_counters_cnt_pre == expected_snmp_cnt_pre),\n            \"Snmpwalk Queue counters actual count {} differs from expected \"\n            \"count {} (UC queues: {}, MC queues: {})\".format(\n                queue_counters_cnt_pre, expected_snmp_cnt_pre,\n                queue_counts_pre['unicast'], queue_counts_pre['multicast']))\nE       Failed: Snmpwalk Queue counters actual count 64 differs from expected count 0 (UC queues: 0, MC queues: 0)\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24208,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24208",
+    "title": "[tests/snmp]: Fix multi-ASIC HGETALL parsing in queue counter test",
+    "merged_at": "2026-04-30T17:42:31Z",
+    "description": "### Description of PR\n\nFix https://github.com/sonic-net/sonic-mgmt/issues/24198\n\nPR #23264 introduced `get_redis_queue_count_with_types()` which uses `sonic-db-cli -n <namespace> HGETALL` on multi-ASIC systems. However, `sonic-db-cli` returns HGETALL output as a Python dict string on a single line, while the parsing logic expects `redis-cli`'s alternating key/value line format. This causes the iteration guard to always be `False` for a list of length 1, resulting in zero queue counts and failing the test.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\n`test_snmp_queue_counters.py` is failing with `Failed: Snmpwalk Queue counters actual count 64 differs from expected count 0 (UC queues: 0, MC queues: 0)`\n\n#### How did you do it?\n* Replaced `sonic-db-cli` / `redis-cli` command branching with `asic.run_redis_cmd()` which handles multi-ASIC transparently via `docker exec` into the database container\n* This always returns consistent `redis-cli` alternating key/value output, eliminating the format mismatch\n\n#### How did you verify/test it?\n1. Dry runned `test_snmp_queue_counters`, need verification on a multi-ASIC DUT. The test should now pass with correct UC/MC queue counts\n\n#### Any platform specific information?\nAffects multi-ASIC platforms only. Single-ASIC path is unchanged.\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 bug fix for existing test supporting `any` and `t1-multi-asic` topologies.\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/snmp/test_snmp_queue_counters.py",
+        "additions": 8,
+        "deletions": 20
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

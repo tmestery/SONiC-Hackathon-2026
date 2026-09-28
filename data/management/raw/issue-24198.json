@@ -1,0 +1,112 @@
+{
+  "number": 24198,
+  "title": "Regression: `test_snmp_queue_counters.py` fails with `Failed: Snmpwalk Queue counters actual count 64 differs from expected count 0 (UC queues: 0, MC queues: 0)`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/24198",
+  "createdAt": "2026-04-25T00:34:50Z",
+  "closedAt": "2026-04-30T17:42:32Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "regression",
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Previous Working Version\n\nPrior to https://github.com/sonic-net/sonic-mgmt/pull/23264 merging\n\n### Steps to Reproduce\n\nRun `test_snmp_queue_counters.py`\n\n### Impact of this regression\n\nTest that was previously passing is now failing.\n\nhttps://github.com/sonic-net/sonic-mgmt/pull/23264 introduced `get_redis_queue_count_with_types`\nThis function queries the `COUNTERS_QUEUE_NAME_MAP` but assumes it gets back a list of entries, but it really gets back a single string:\n```\n(Pdb) name_map_cmd = \"sonic-db-cli -n asic0 COUNTERS_DB HGETALL COUNTERS_QUEUE_NAME_MAP\"\n(Pdb) name_map_result = duthost.shell(name_map_cmd)['stdout_lines']\n(Pdb) len(name_map_result)\n1\n(Pdb) p name_map_result[0]\n\"{'Ethernet-IB0:0': 'oid:0x150000000005e1', 'Ethernet-IB0:1': 'oid:0x150000000005e2', 'Ethernet-IB0:2'\n<snip>\n, 'Ethernet96:15': 'oid:0x1500000000041c'}\"\n```\n\nThis causes the iteration loop to not work:\n```\nfor i in range(0, len(name_map_result), 2):\n    if i + 1 < len(name_map_result): <--------this will always be false for a list of length 1\n        key = name_map_result[i]\n```\n\n### Relevant log output\n\n```shell\n>       pytest_assert(\n            (queue_counters_cnt_pre == expected_snmp_cnt_pre),\n            \"Snmpwalk Queue counters actual count {} differs from expected \"\n            \"count {} (UC queues: {}, MC queues: {})\".format(\n                queue_counters_cnt_pre, expected_snmp_cnt_pre,\n                queue_counts_pre['unicast'], queue_counts_pre['multicast']))\nE       Failed: Snmpwalk Queue counters actual count 64 differs from expected count 0 (UC queues: 0, MC queues: 0)\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-04-25T20:59:53Z",
+      "body": "Seems like the simplest fix is to switch to `asic.run_redis_cmd()`? This way the existing line parser works as-is.\n\nHappy to make a PR."
+    },
+    {
+      "author": "Bojun-Feng",
+      "createdAt": "2026-04-27T23:01:11Z",
+      "body": "Update: CI is green for the PR, @eder-arista helped verify the fix on QuartzDD.\n\nWaiting for review and merge."
+    },
+    {
+      "author": "rlhui",
+      "createdAt": "2026-04-29T17:30:16Z",
+      "body": "@BYGX-wcr , would you please check if multi-asic PR build was run in the eariler PR? thanks."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 24208,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24208",
+      "title": "[tests/snmp]: Fix multi-ASIC HGETALL parsing in queue counter test",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-30T17:42:31Z",
+      "createdAt": "2026-04-25T22:18:45Z",
+      "author": "Bojun-Feng",
+      "body": "### Description of PR\r\n\r\nFix https://github.com/sonic-net/sonic-mgmt/issues/24198\r\n\r\nPR #23264 introduced `get_redis_queue_count_with_types()` which uses `sonic-db-cli -n <namespace> HGETALL` on multi-ASIC systems. However, `sonic-db-cli` returns HGETALL output as a Python dict string on a single line, while the parsing logic expects `redis-cli`'s alternating key/value line format. This causes the iteration guard to always be `False` for a list of length 1, resulting in zero queue counts and failing the test.\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n`test_snmp_queue_counters.py` is failing with `Failed: Snmpwalk Queue counters actual count 64 differs from expected count 0 (UC queues: 0, MC queues: 0)`\r\n\r\n#### How did you do it?\r\n* Replaced `sonic-db-cli` / `redis-cli` command branching with `asic.run_redis_cmd()` which handles multi-ASIC transparently via `docker exec` into the database container\r\n* This always returns consistent `redis-cli` alternating key/value output, eliminating the format mismatch\r\n\r\n#### How did you verify/test it?\r\n1. Dry runned `test_snmp_queue_counters`, need verification on a multi-ASIC DUT. The test should now pass with correct UC/MC queue counts\r\n\r\n#### Any platform specific information?\r\nAffects multi-ASIC platforms only. Single-ASIC path is unchanged.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A \u2014 bug fix for existing test supporting `any` and `t1-multi-asic` topologies.\r\n\r\n### Documentation\r\nN/A",
+      "files": [
+        {
+          "path": "tests/snmp/test_snmp_queue_counters.py",
+          "additions": 8,
+          "deletions": 20
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-25T22:18:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-25T22:19:06Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-27T14:24:31Z",
+          "body": "Hi @arista-nwolfe, I replaced the `sonic-db-cli` shell commands with `asic.run_redis_cmd()`, which handles the output parsing correctly on both single-ASIC and multi-ASIC platforms.\r\n\r\nI don't currently have a multi-ASIC testbed to validate the fix end-to-end. Would you mind giving it a try on your setup to confirm it resolves the counter mismatch? I'd really appreciate it. Thanks!"
+        },
+        {
+          "author": "eder-arista",
+          "createdAt": "2026-04-27T22:33:51Z",
+          "body": "@Bojun-Feng I've verified on a QuartzDD and looks good. Thanks for the fix."
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-04-27T23:01:08Z",
+          "body": "> @Bojun-Feng I've verified on a QuartzDD and looks good. Thanks for the fix.\r\n\r\nThanks! Making an update in the issue as well."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-30T01:27:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-30T01:27:39Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-07T02:40:29Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-05-12T17:54:46Z",
+          "body": "@Bojun-Feng, Could we please create a cherry pick pr for 202511 branch?"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-05-12T22:48:43Z",
+          "body": "> @Bojun-Feng, Could we please create a cherry pick pr for 202511 branch?\n\nSure! Happy to do it tonight"
+        },
+        {
+          "author": "Bojun-Feng",
+          "createdAt": "2026-05-13T06:27:34Z",
+          "body": "@YatishSVC Created backport PR in https://github.com/sonic-net/sonic-mgmt/pull/24588\r\nFirst time creating backport PR manually. Let me know if there are any formatting changes needed."
+        }
+      ]
+    }
+  ]
+}

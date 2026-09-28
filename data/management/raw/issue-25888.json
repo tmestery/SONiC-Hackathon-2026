@@ -1,0 +1,105 @@
+{
+  "number": 25888,
+  "title": "Bug: Adaptive recovery during sanity_check_full when \"var-log\": \"Resource limit matched\" triggers reboot",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25888",
+  "createdAt": "2026-07-03T17:23:06Z",
+  "closedAt": "2026-08-05T15:35:01Z",
+  "author": "peterbailey-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nAdaptive recovery will simply reboot the dut for `monit` sanity check failures, but for var-log disk space this  masks the true problem because\n\n/etc/monit/conf.d/sonic-host contains the following:\n```\ncheck filesystem var-log with path /var/log\n    if space usage > 90% for 10 times within 20 cycles then alert repeat every 1 cycles\n```\nand so on reboot the 10 times for 20 cycles must be repeated for monit to register the issue again 10 miniutes later.\nMeaning the sanity check will seem stable without having recovered.\n\n### Steps to Reproduce\n\n1. run `df -h /var/log` to see the space used and available\n2. run `sudo fallocate -l <XYZ>M /var/log/dummy.log` to fill more than 90% of the space\n3. verify with `df -h /var/log` \n\nDo this before a test is running, wait 10 minutes.\n\n4. run `sudo monit status rsyslog` to verify that monit is catching the problem\n5. Now run the test and sanity check will spot the problem.\n\nSome tests like linkflap stress tests on max topologies will sometimes fill up the var/log space as well but that is less reliable for reproducing.\n\n### Actual Behavior and Expected Behavior\n\nActual behaviour: dut reboots\nExpected behaviour: var/log storage is recovered\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "peterbailey-arista",
+      "createdAt": "2026-07-03T20:39:55Z",
+      "body": "Fix is here: https://github.com/sonic-net/sonic-mgmt/pull/25889"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 25889,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25889",
+      "title": "Rotate syslog on `monit var-log` sanity check failure, instead of reboot",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-05T15:35:00Z",
+      "createdAt": "2026-07-03T17:27:11Z",
+      "author": "peterbailey-arista",
+      "body": "https://github.com/sonic-net/sonic-mgmt/issues/25888\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #25888\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n\r\nAdaptive recovery triggered during sanity_check_full when \"var-log\": \"Resource limit matched\"\r\nbut monit does not have any specific path for recovery and defaults to reboot\r\n\r\nThis masks the true problem because\r\n/etc/monit/conf.d/sonic-host contains the following\r\n\r\n```\r\ncheck filesystem var-log with path /var/log\r\n    if space usage > 90% for 10 times within 20 cycles then alert repeat every 1 cycles\r\n```\r\non reboot the 10 times for 20 cycles must be repeated for monit to register the issue again.\r\n\r\nmy fix is to rotate var log instead of reboot.\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [ ] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request:\r\nFailure type: <!-- day-one issue / regression / other -->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nSpeed up tests by not fruitlessly rebooting, and replace the recovery that only masks the problem with one that works.\r\n\r\n#### How did you do it?\r\nadd a monit path for recovery, specifically var-log. call logrotate on the dut.\r\n\r\n#### How did you verify/test it?\r\nverified that with the recovery, the dut no longer reboots and that /var/log empties\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n#### Which release branch to backport (provide reason below if selected)\r\n\r\n<!--\r\n- Note we only backport fixes to a release branch, *not* features!\r\n- Please also provide a reason for the backporting below.\r\n- e.g.\r\n- [x] 202006\r\n-->\r\n\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n- [x] 202605\r\n\r\n#### Tested branch\r\n\r\n<!--\r\n- Select each branch where the change was tested.\r\n- If you request a backport/cherry-pick, select the base branch and the tested\r\n  target release branch(es).\r\n-->\r\n\r\n- [x] master\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] 202608\r\n- [ ] N/A\r\n\r\n#### Test result\r\nRecovery of var log over usage no longer results in an unecessary reboot. Var log resources are freed.\r\n\r\n<!--\r\n- Provide the tested image version and test evidence for each selected branch.\r\n- e.g.\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->",
+      "files": [
+        {
+          "path": "tests/common/plugins/sanity_check/recover.py",
+          "additions": 12,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-03T17:27:19Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-03T17:27:34Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-04T02:50:27Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "yxieca",
+          "createdAt": "2026-07-05T18:13:20Z",
+          "body": "Thanks for tackling the reboot-masking-on-full-`/var/log` case \u2014 the adaptive-recovery approach looks reasonable. A couple of questions before this goes in:\n\n**1. `logrotate` target \u2014 snippet vs. main config.** The recovery runs:\n```python\ndut.shell(\"logrotate --force /etc/logrotate.d/rsyslog\", module_ignore_errors=True)\n```\n`/etc/logrotate.d/rsyslog` is a fragment that's `include`d by `/etc/logrotate.conf` (it's rendered at runtime by `logrotate-config.sh`). Invoking `logrotate` directly on the fragment skips the global directives in `/etc/logrotate.conf` (rotate count, and the tmpfs state file under `/dev/shm/logrotate/`). Was running the fragment directly intentional, or would `logrotate -f /etc/logrotate.conf` better match how SONiC normally rotates and be more robust across branches? (If the fragment is deliberate, a one-line comment explaining why would help future readers.)\n\n**2. Exact-string match on the monit status.** The branch keys off:\n```python\nif services_status.get('var-log') == 'Resource limit matched':\n```\n`services_status['var-log']` comes from `get_monit_services_status()`, which takes the text after `status` on that service's line in `sudo monit status`. Have we confirmed that value is exactly `Resource limit matched` on all supported branches/monit versions (no trailing qualifier, no localization/version drift)? If the string ever differs, `_recover_monit` silently falls through to `action = 'reboot'`, which reintroduces the reboot this PR is trying to avoid. Would a `startswith`/substring check (grounded against the actual monit output) be safer here?\n\nNot blocking on my end \u2014 just want to make sure the recovery actually frees space and reliably triggers so it doesn't quietly regress to reboot.\n\n*Reviewed by AI agent on behalf of Ying.*\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-07T20:55:57Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-07T20:56:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "peterbailey-arista",
+          "createdAt": "2026-07-07T21:14:50Z",
+          "body": "@yxieca thanks for the review. \r\n1. Agreed, I have changed the command to use `logrotate -f /etc/logrotate.conf` instead of `logrotate --force /etc/logrotate.d/rsyslog` since it is far more standard in the codebase.\r\n2. No action needed, this is the specific check and error message that we are handling. The idea is that my monit handler function should be extended as/if needed in the future but I am handling this specific case."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-27T12:19:37Z",
+          "body": "This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "peterbailey-arista",
+          "createdAt": "2026-07-29T16:58:09Z",
+          "body": "> This PR has backport request label(s) for branch(es): 202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202605: <test result>) in the **Test result** section as well in your PR description.\r\n> \r\n> ---Powered by SONiC BuildBot\r\n\r\n@mssonicbld testing info added."
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-07-29T17:25:55Z",
+          "body": "> @yxieca thanks for the review.\r\n> \r\n> 1. Agreed, I have changed the command to use `logrotate -f /etc/logrotate.conf` instead of `logrotate --force /etc/logrotate.d/rsyslog` since it is far more standard in the codebase.\r\n> 2. No action needed, this is the specific check and error message that we are handling. The idea is that my monit handler function should be extended as/if needed in the future but I am handling this specific case.\r\n\r\n@yxieca ok to approve? thanks."
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-08-11T02:21:40Z",
+          "body": "@peterbailey-arista \u2014 this PR is labeled Request for 202605 branch, but the following required information is still missing:\n\n- 202605-specific image/test result evidence\n\nPlease add the missing information to the PR description. Tracker details should cover day-one/regression status, affected branch/image/platform/test, and why 202605 needs the fix; validation should identify the tested 202605 image and include the result or result link.\n\n<!-- copilot-202605-backport-reminder -->"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-12T11:56:53Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/26999"
+        }
+      ]
+    }
+  ]
+}

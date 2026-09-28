@@ -1,0 +1,43 @@
+{
+  "id": "management-15256",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 15256,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/15256",
+    "title": "[202405][MultiAsic]: `test_lldp_syncd` fails on multi-asic systems",
+    "created_at": "2024-10-30T01:35:36Z",
+    "closed_at": "2024-10-31T23:33:27Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\nFailure 1:\n```\n  File \"/data/tests/lldp/test_lldp_syncd.py\", line 30, in get_lldp_entry_keys\n    items = db.get_keys(\"LLDP_ENTRY_TABLE*\")\n  File \"/data/tests/common/helpers/sonic_db.py\", line 167, in get_keys\n    raise SonicDbKeyNotFound(\"No keys for %s found in sonic-db cmd: %s\" % (table, cmd))\ntests.common.helpers.sonic_db.SonicDbKeyNotFound: 'No keys for LLDP_ENTRY_TABLE* found in sonic-db cmd:  APPL_DB  keys LLDP_ENTRY_TABLE*'\n```\n   test_lldp_entry_table_keys\n   test_lldp_entry_table_after_flap\n   test_lldp_entry_table_after_lldp_restart\n   test_lldp_entry_table_after_reboot\n\nFailure 2:\n```\n  File \"/data/tests/lldp/test_lldp_syncd.py\", line 177, in test_lldp_entry_table_content\n    lldpctl_output = get_lldpctl_output(duthost)\n  File \"/data/tests/lldp/test_lldp_syncd.py\", line 49, in get_lldpctl_output\n    result = duthost.shell(\"docker exec lldp /usr/sbin/lldpctl -f json\")[\"stdout\"]\n  File \"/data/tests/common/devices/multi_asic.py\", line 134, in _run_on_asics\n    return getattr(self.sonichost, self.multi_asic_attr)(*module_args, **complex_args)\n  File \"/data/tests/common/devices/base.py\", line 131, in _run\n    raise RunAnsibleModuleFail(\"run module {} failed\".format(self.module_name), res)\ntests.common.errors.RunAnsibleModuleFail: run module shell failed, Ansible Results =>\n{\"changed\": true, \"cmd\": \"docker exec lldp /usr/sbin/lldpctl -f json\", \"delta\": \"<IPV6>.017317\", \"end\": \"2024-10-27 <IPV6>.736083\", \"failed\": true, \"msg\": \"non-zero return code\", \"rc\": 1, \"start\": \"2024-10-27 <IPV6>.718766\", \"stderr\": \"Error response from daemon: No such container: lldp\", \"stderr_lines\": [\"Error response from daemon: No such\ncontainer: lldp\"], \"stdout\": \"\", \"stdout_lines\": []}\n```\n   test_lldp_entry_table_content\n\nFailure 3:\n```\n  /data/tests/lldp/test_lldp_syncd.py(286)test_lldp_entry_table_after_lldp_restart()\n-> duthost.shell(\"sudo systemctl restart lldp\")\n  /data/tests/common/devices/multi_asic.py(134)_run_on_asics()\n-> return getattr(self.sonichost, self.multi_asic_attr)(*module_args, **complex_args)\n> /data/tests/common/devices/base.py(131)_run()\n-> raise RunAnsibleModuleFail(\"run module {} failed\".format(self.module_name), res)\n\"Failed to restart lldp.service: Unit lldp.service is masked.\"\n```\n   test_lldp_entry_table_after_lldp_restart\n\nFailure 4: (Note we see this on single-asic as well)\n```\n  File \"/data/tests/lldp/test_lldp_syncd.py\", line 241, in test_lldp_entry_table_after_flap\n    assert_lldp_entry_content(interface, entry_content, lldpctl_interface)\n  File \"/data/tests/lldp/test_lldp_syncd.py\", line 94, in assert_lldp_entry_content\n    chassis_info = lldpctl_interface[\"chassis\"][entry_content[\"lldp_rem_sys_name\"]]\nKeyError: 'lldp_rem_sys_name'\n```\n   test_lldp_entry_table_after_flap\n   test_lldp_entry_table_after_reboot\n\n### Results you see\n\nFailures on tests on multi-asic systems:\n   test_lldp_entry_table_keys\n   test_lldp_entry_table_after_flap\n   test_lldp_entry_table_after_lldp_restart\n   test_lldp_entry_table_after_reboot\n   test_lldp_entry_table_content\n\n### Results you expected to see\n\nAll tests should pass on multi-asic systems\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 15258,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/15258",
+    "title": "Multi-asic fixes for `lldp/test_lldp_syncd.py`",
+    "merged_at": "2024-10-31T23:33:26Z",
+    "description": "### Description of PR\nVarious multi-asic fixes in `lldp/test_lldp_syncd.py`\n* Fix helper functions `db_instance`, `get_lldp_entry_keys`, `get_lldp_entry_content`, `get_lldpctl_output` to query both namespaces\n\ntest_lldp_entry_table_after_flap\n* Ignore routeCheck log errors as this test flaps ports and churns routes `ignore_expected_loganalyzer_exceptions`\n* Don't skip the test if it finds `eth0` port, just continue\n* Add namespace to `config interface` commands\n* Increase delay from 5s to 10s as `verify_lldp_entry` was seeing the stale `LLDP_ENTRY` from before link flap and returning True\n\ntest_lldp_entry_table_after_lldp_restart\n* Query the per-namespace `lldp` docker when available\n\ntest_lldp_entry_table_after_reboot\n* wait until `check_intf_up_ports=True` when rebooting, otherwise the `LLDP_ENTRY` may flap when the ports come up\n\nSummary:\nFixes https://github.com/sonic-net/sonic-mgmt/issues/15256\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [x] 202405",
+    "files": [
+      {
+        "path": "tests/lldp/test_lldp_syncd.py",
+        "additions": 57,
+        "deletions": 19
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

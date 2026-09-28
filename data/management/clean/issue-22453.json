@@ -1,0 +1,43 @@
+{
+  "id": "management-22453",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22453,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22453",
+    "title": "Bug:[fdb tests] CRM polling interval not set on all DUTs in multi-DUT testbeds",
+    "created_at": "2026-02-18T02:56:49Z",
+    "closed_at": "2026-02-24T12:48:57Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe set_polling_interval fixture in tests/arp/conftest.py only sets CRM polling\ninterval on a single DUT (duthost parameter). In multi-DUT testbeds, other DUTs\nretain the default 300-second polling interval, causing CRM neighbor counters to\nupdate slowly. This leads to intermittent test failures when tests expect counters\nto be current.\n\nCurrent code (tests/fdb/conftest.py:26-35):\n\n```\n@pytest.fixture(scope=\"module\", autouse=True)\n  def set_polling_interval(duthost):\n      wait_time = 2\n      duthost.command(\"crm config polling interval {}\".format(CRM_POLLING_INTERVAL))\n      wait(wait_time, \"Waiting {} sec for CRM counters to become updated\".format(wait_time))\n\n      yield\n\n      duthost.command(\"crm config polling interval {}\".format(CRM_DEFAULT_POLL_INTERVAL))\n      wait(wait_time, \"Waiting {} sec for CRM counters to become updated\".format(wait_time))\n\n```\n\n### Steps to Reproduce\n\n1. Run fdb tests (tests/fdb/test_fdb_mac_move.py) on a multi-DUT testbed\n2. The test fails with  Failed: fdb_entry not populated in CRM resources\n3. This test sets crm polling on first dut\n4. The actual test test_fdb_mac_move chooses a random dut using a random dut  `duthost = duthosts[rand_one_dut_hostname]`\n5. When it queries the crm counter it fails intermittently as counters are not ready  `get_crm_resources(duthost, \"fdb_entry\", \"available\")`\n6. Fix conftest.py to set crm polling on all duts so that the test is resilent .Similar to issue #22335\n\n### Actual Behavior and Expected Behavior\n\nActual\n\nOnly one DUT (duthost) has CRM polling interval set to 1 second\nOther DUTs in the testbed retain default 300-second polling interval\n\nExpected\n\nAll DUTs in the testbed should have CRM polling interval set to 1 second\nCRM neighbor counters should update every 1 second on all DUTs\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22455,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22455",
+    "title": "[fdb] Apply CRM polling interval to all DUTs",
+    "merged_at": "2026-02-24T12:48:56Z",
+    "description": "### Description of PR\nThis PR fixes CRM polling interval configuration in FDB tests\n  for multi-DUT testbeds.\n\n  The `set_polling_interval` fixture only configured polling on\n  first DUT, causing test failures when FDB entries weren't\n  reflected in CRM resources quickly enough.\n\nSummary:\nFixes #22453\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\nTest `test_fdb_mac_move` failed in multi-DUT testbeds:\n\nFailed: fdb_entry not populated in CRM resources\n\nThe fixture only set CRM polling on one DUT. Other DUTs kept\nthe default 300s interval, causing slow counter updates.\n\n#### How did you do it?\nChanged `set_polling_interval` in `tests/fdb/conftest.py`:\n  - Parameter: `duthost` \u2192 `duthosts`\n  - Use duthosts.command() to set polling interval\n  - Apply same fix to cleanup code\n\n#### How did you verify/test it?\n- Tested on multi-DUT testbed with original failure\n- Verified polling set on all DUTs\n- Confirmed `test_fdb_mac_move` passes consistently without this error\n- Verified CRM counters update correctly\n\n#### Any platform specific information?\nNo. Applies to all platforms in multi-DUT testbeds.\n\n#### Supported testbed topology if it's a new test case?\nN/A - Bug fix for existing test.\n\n### Documentation\nNo documentation needed. Internal test fixture fix only.",
+    "files": [
+      {
+        "path": "tests/fdb/conftest.py",
+        "additions": 3,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

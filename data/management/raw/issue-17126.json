@@ -1,0 +1,62 @@
+{
+  "number": 17126,
+  "title": "[Bug]: `gnmi/test_gnmi.py` fails for various reasons on chassis",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/17126",
+  "createdAt": "2025-02-24T18:23:40Z",
+  "closedAt": "2025-02-27T04:02:23Z",
+  "author": "arista-nwolfe",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "I see `gnmi/test_gnmi.py` failing with a couple symptoms\n1. `test_gnmi_capabilities`\n```\n        duthost = duthosts[enum_rand_one_per_hwsku_hostname]\n        ret, msg = gnmi_capabilities(duthost, localhost)\n&gt;       assert ret == 0, msg\nE       AssertionError: F0223 13:31:56.523478    1602 gnmi_cli.go:216] could not read \"/etc/sonic/telemetry/gnmiCA.pem\": open /etc/sonic/telemetry/gnmiCA.pem: no such file or directory\n```\n\n2. `test_gnmi_authorize_failed_with_invalid_cname`\n```\n&gt;       assert \"Unauthenticated\" in msg\nE       AssertionError\n```\n\nThese issues were introduced by https://github.com/sonic-net/sonic-mgmt/pull/16955\nThis change switches the test fixture from `rand_one_dut_hostname` to `enum_rand_one_per_hwsku_hostname`.\nHowever, the `autouse=True` fixtures in `conftest` still use `rand_one_dut_hostname` to setup the gnmi client/server.\n```\n@pytest.fixture(scope=\"module\", autouse=True)\ndef download_gnmi_client(duthosts, rand_one_dut_hostname, localhost):\n```\n```\n@pytest.fixture(scope=\"module\", autouse=True)\ndef setup_gnmi_server(duthosts, rand_one_dut_hostname, localhost, ptfhost):\n```\n\nThis means that the gnmi client/server is setup on one hostname (supe or LC) but the test is run on each.\nE.G. in my run I see `download_gnmi_client` run on `cmp227-5`\n```\n23/02/2025 13:31:19 base._run                                L0071 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-5] AnsibleModule::shell, args=[\"docker cp gnmi:/usr/sbin/gnmi_cli /tmp\"], kwargs={}\n```\n\nBut I see the tests run on `cmp227`, `cmp227-4`, `cmp227-6` so they all fail:\n```\n23/02/2025 13:31:56 base._run                                L0071 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-4] AnsibleModule::shell, args=[\"docker exec gnmi gnmi_cli -client_types=gnmi -a 10.240.86.56:50052 -client_crt /etc/sonic/telemetry/gnmiclient.crt -      client_key /etc/sonic/telemetry/gnmiclient.key -ca_crt /etc/sonic/telemetry/gnmiCA.pem -logtostderr -capabilities\"], kwargs={\"module_ignore_errors\": true}\n/etc/sonic/telemetry/gnmiCA.pem: no such file or directory\n```\n```\n23/02/2025 13:32:02 base._run                                L0071 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227-6] AnsibleModule::shell, args=[\"docker exec gnmi gnmi_cli -client_types=gnmi -a 10.240.86.61:50052 -client_crt /etc/sonic/telemetry/gnmiclient.crt -      client_key /etc/sonic/telemetry/gnmiclient.key -ca_crt /etc/sonic/telemetry/gnmiCA.pem -logtostderr -capabilities\"], kwargs={\"module_ignore_errors\": true}\n/etc/sonic/telemetry/gnmiCA.pem: no such file or directory\n```\n```\n23/02/2025 13:32:08 base._run                                L0071 DEBUG  | /data/tests/common/devices/multi_asic.py::_run_on_asics#136: [cmp227] AnsibleModule::shell, args=[\"docker exec gnmi gnmi_cli -client_types=gnmi -a 10.240.86.26:50052 -client_crt /etc/sonic/telemetry/gnmiclient.crt -        client_key /etc/sonic/telemetry/gnmiclient.key -ca_crt /etc/sonic/telemetry/gnmiCA.pem -logtostderr -capabilities\"], kwargs={\"module_ignore_errors\": true}\n/etc/sonic/telemetry/gnmiCA.pem: no such file or directory\n```",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 17132,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/17132",
+      "title": "Revert \"Running test_gnmi.py on each hwsku instead of selecting one rand hwsku\"",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-02-27T04:02:22Z",
+      "createdAt": "2025-02-24T23:52:07Z",
+      "author": "arlakshm",
+      "body": "Reverts sonic-net/sonic-mgmt#16955\r\n\r\nFixes https://github.com/sonic-net/sonic-mgmt/issues/17126",
+      "files": [
+        {
+          "path": "tests/gnmi/test_gnmi.py",
+          "additions": 8,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-02-24T23:52:10Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-02-24T23:52:22Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2025-02-25T00:59:00Z",
+          "body": "Revert in msft branch https://github.com/Azure/sonic-mgmt.msft/pull/112"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2025-02-27T04:08:07Z",
+          "body": "@arlakshm  why both 202405 and msft-202405 need this revert?"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2025-02-27T04:47:51Z",
+          "body": "> @arlakshm why both 202405 and msft-202405 need this revert?\r\n\r\n@rlhui This pr was merged in both 202405 and msft-202405, that's why reverting this only from these two.\r\nI'll work on this to see how we can avoid regression while having this change."
+        }
+      ]
+    }
+  ]
+}

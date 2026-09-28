@@ -1,0 +1,43 @@
+{
+  "id": "management-24231",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24231,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24231",
+    "title": "Bug: test_memory_checker failed in Post-test sanity check",
+    "created_at": "2026-04-27T07:28:03Z",
+    "closed_at": "2026-04-29T15:18:20Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nModerate\n\n### Description of the bug\n\n The `memory_checker` test intermittently fails during post-test sanity checks because monit program services remain in \"Initializing\" state. The current implementation of `check_monit_running()` only\n     verifies that the monit daemon process is running, but does not validate that individual services have completed their first execution cycle.\n\n```\n>                   pt_assert(False, \"!!!!!!!!!!!!!!!! Post-test sanity check failed: !!!!!!!!!!!!!!!!\\n{}\"\n                              .format(json.dumps(post_failed_results, indent=4, default=fallback_serializer)))\nE                   Failed: !!!!!!!!!!!!!!!! Post-test sanity check failed: !!!!!!!!!!!!!!!!\nE                   [\nE                       {\nE                           \"failed\": true,\nE                           \"check_item\": \"monit\",\nE                           \"host\": \"bjw3-can-7260-14\",\nE                           \"services_status\": {\nE                               \"root-overlay\": \"OK\",\nE                               \"var-log\": \"OK\",\nE                               \"bjw3-can-7260-14\": \"OK\",\nE                               \"rsyslog\": \"OK\",\nE                               \"routeCheck\": \"Initializing\",\nE                               \"dualtorNeighborCheck\": \"Initializing\",\nE                               \"diskCheck\": \"Initializing\",\nE                               \"container_checker\": \"Initializing\",\nE                               \"vnetRouteCheck\": \"Initializing\",\nE                               \"memory_check\": \"Initializing\",\nE                               \"arp_update_checker\": \"Initializing\",\nE                               \"controlPlaneDropCheck\": \"Initializing\",\nE                               \"mgmtOperStatus\": \"Initializing\",\nE                               \"container_memory_telemetry\": \"Initializing\",\nE                               \"container_memory_snmp\": \"Initializing\",\nE                               \"container_memory_otel\": \"Initializing\",\nE                               \"container_memory_gnmi\": \"Initializing\",\nE                               \"container_eventd\": \"Initializing\",\nE                               \"container_memory_bmp\": \"Initializing\"\nE                           }\nE                       }\nE                   ]\n```\n\n### Steps to Reproduce\n\n1. Run the test memory_checker/test_memory_checker.py multiple times ( ~10)\n2. Multiple times it fails in post sanity with monit monitored service in \"Initializing\" state which is not a valid state\n\n### Actual Behavior and Expected Behavior\n\n ## Actual Behavior\n\n  After monit service is restarted, check_monit_running() returns True  and does NOT validate that services are in ready states.\n\n  Result:\n  - Test proceeds while Program services are still in \"Initializing\" state\n  - Post-test sanity check runs and fails with:\n    Service 'routeCheck' status: Initializing (expected: Status ok)\n    Service 'diskCheck' status: Initializing (expected: Status ok)\n  - Intermittent test failures\n\n## Expected Behavior\n\n  After monit service is restarted, check_monit_running() should wait until all services are in their expected operational states before returning True:\n  - Filesystem services: \"Accessible\"\n  - Process services: \"Running\"\n  - Program services: \"Status ok\"\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 24232,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24232",
+    "title": "Fix monit socket timeout after restore/restart",
+    "merged_at": "2026-04-29T15:18:19Z",
+    "description": "### Description of PR\n\nThe `memory_checker` test modifies monit configuration files during testing. During cleanup, the test **restores the original configuration from backup** (`/tmp/monit` \u2192 `/etc/monit`) and **restarts the monit\n   service** (`systemctl restart monit`). This triggers two critical timing issues:\n\n  1. **Insufficient timeout**: After restore and restart, the monit socket `/var/run/monit.sock` becomes inaccessible for a long time upto  300 seconds. The current 320-second timeout provides only a 20-second buffer.\n\n  2. **No state validation**: `check_monit_running()` only verifies the socket is accessible (by checking if `monit status` succeeds), not that individual services have completed initialization. It returns True\n   while services are still in \"Initializing\" state, causing downstream sanity check failures.\n\n  This PR fixes both issues by increasing the timeout to 400 seconds and adding validation to ensure all services reach their expected operational states before proceeding.\n\nSummary:\nFixes #24231\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\nThe `memory_checker` test fails intermittently on dual-ToR testbeds during post-test sanity checks with monit services stuck in \"Initializing\" state. The fix addresses a timing issue and implements a condition for monit services to be in a\nReady State\n\n#### How did you do it?\n- Changed `MONIT_RESTART_THRESHOLD_SECS` from 320 to 400 seconds\n-  Modified `check_monit_running()` to validate each service is in the correct state\n    - Iterates through `monit_services_status` and checks service_type:\n        Filesystem \u2192 must be \"Accessible\"\n        Process \u2192 must be \"Running\"\n        Program \u2192 must be \"Status ok\"\n     - Allows \"Not monitored\" and \"OK\" (intentional configurations)\n     - Returns False if any service still \"Initializing\" or in error state\n\n#### How did you verify/test it?\nValidated with 15 consecutive successful runs of the test\n\n#### Any platform specific information?\nNo\n#### Supported testbed topology if it's a new test case?\nNo\n### Documentation",
+    "files": [
+      {
+        "path": "tests/memory_checker/test_memory_checker.py",
+        "additions": 15,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

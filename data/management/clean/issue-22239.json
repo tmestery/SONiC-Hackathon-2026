@@ -1,0 +1,43 @@
+{
+  "id": "management-22239",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22239,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22239",
+    "title": "Bug: `generic_config_updater/test_bgp_prefix.py` fails due to `Failed to remove bgp prefix v4 config`",
+    "created_at": "2026-02-04T01:09:50Z",
+    "closed_at": "2026-02-18T19:00:08Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`generic_config_updater/test_bgp_prefix.py` is failing with:\n```\n            bgp_config = show_bgp_running_config(duthost, cli_namespace_prefix)\n>           pytest_assert(\n                not re.search(PREFIXES_V4_RE.format(community, PREFIXES_V4_DUMMY), bgp_config),\n                \"Failed to remove bgp prefix v4 config.\"\n            )\nE           Failed: Failed to remove bgp prefix v4 config.\n```\n\nWe can see this entry isn't expected to be in the `show runningconfiguration bgp` output:\n```\n(Pdb) PREFIXES_V4_RE.format(community, PREFIXES_V4_DUMMY)\n'ip prefix-list PL_ALLOW_LIST_DEPLOYMENT_ID_0_COMMUNITY_empty_V4 seq \\\\d+ permit <IP>/16'\n\n(Pdb) re.search(PREFIXES_V4_RE.format(community, PREFIXES_V4_DUMMY), bgp_config)\n<re.Match object; span=(435, 525), match='ip prefix-list PL_ALLOW_LIST_DEPLOYMENT_ID_0_COMM>\n```\n\nWhen looking at the syslog after the fact I can see that the prefixes were cleaned up after we polled the bgp running config.\n```\n2026 Feb  3 <IPV6>.282710 ctn101 NOTICE config: 'apply-patch' executed successfully for localhost by [{'op': 'remove', 'path': '/BGP_ALLOWED_PREFIXES'}] in thread:140060083802368\n\n2026 Feb  3 <IPV6>.630292 ctn101 INFO python[3633817]: ansible-ansible.legacy.command Invoked with _raw_params=show runningconfiguration bgp\n\n2026 Feb  3 <IPV6>.735983 ctn101 DEBUG bgp#bgpcfgd: BGPAllowListMgr::__remove_prefix_lists. af='v4' pl_names='PL_ALLOW_LIST_DEPLOYMENT_ID_0_COMMUNITY_empty_V4'\n```\n\nSo after I hit the pdb if I re-query the `show runningconfiguration bgp` it will now be correctly excluding those config lines:\n```\n(Pdb) bgp_config2 = show_bgp_running_config(duthost, cli_namespace_prefix)\nWednesday 04 February 2026  <IPV6> +0000 (<IPV6>.589)       <IPV6>.376 ****\n(Pdb) re.search(PREFIXES_V4_RE.format(community, PREFIXES_V4_DUMMY), bgp_config2)\n(Pdb)\n```\n\nI've seen other places in this file that converted an `assert` to a `wait_until`.\nE.G. https://github.com/sonic-net/sonic-mgmt/pull/19521\n\nI think this will be another place where we should use a `wait_until`.\n\n### Steps to Reproduce\n\n`sudo ./run_tests.sh -n ardut -u -c generic_config_updater/test_bgp_prefix.py -x -e '--pdb'`\n\n### Actual Behavior and Expected Behavior\n\nTest should wait for the patch to take effect and then query the bgp running config\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 22240,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22240",
+    "title": "Add `wait_until` to `bgp_prefix_tc1_remove`",
+    "merged_at": "2026-02-18T19:00:07Z",
+    "description": "`bgp_prefix_tc1_remove` can fail because it asserts the gcu patch takes effect immediately but it can take a few seconds for it to take effect.\nConvert the assert to a wait_until to fix this.\nDetails in: https://github.com/sonic-net/sonic-mgmt/issues/22239\n\nThe same solution was done for `bgp_prefix_tc1_replace` in https://github.com/sonic-net/sonic-mgmt/pull/19521\n\nSummary:\nFixes #22239\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511",
+    "files": [
+      {
+        "path": "tests/generic_config_updater/test_bgp_prefix.py",
+        "additions": 25,
+        "deletions": 12
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

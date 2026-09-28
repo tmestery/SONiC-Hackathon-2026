@@ -1,0 +1,108 @@
+{
+  "id": "management-24680",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24680,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24680",
+    "title": "[Enhancement] Require infra to capture memory and CPU footprint during the test.",
+    "created_at": "2026-05-16T13:29:02Z",
+    "closed_at": "2026-06-30T21:26:25Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "enhancement",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the enhancement\n\nMost of the tests, especially the performance and scale tests require some **_kind of mechanism for memory and CPU monitoring of the processes_** during peak/important phase of the test. Similarly with various optimization techniques, it is best practice to see if the memory and CPU footprints see improvement as well.\n\nUseful for **_memory and CPU profiling_** for:\n- _Performance and scale tests._\n- Comparison of various optimization in _specific areas on same platform_.\n- Comparison on _different platforms_.\n\nThese memory and CPU profiles will help to understand which **processes utilize most memory**, which **part of test causes memory to spike or release memory**, and **by what factor**, and if the **memory is released at the end** of the test.\n\n**_Graphs_** are usually best to summarize the utilization over a period of time. Some kind of mechanism should exist to plot the data.\n\n**_Raw data_** should be captured for future reference or one-on-one comparison with similar data captured with some fine-tuning or different platform.\n\nIt is imperative to have some mechanism to indicate the **memory utilization taken at some important points** during the test. As an example of link-flap test, user should be able to indicate the memory and CPU utilization taken during let's say link down and link up events for better readability and comparison.\n\n### Current Behavior\n\nExisting memory utilization plugin captures memory before and after the test. It compares the utilization with a given threshold marker and raises an ALARM if threshold marker is crossed.\n\n### Proposed Behavior\n\n- The memory and CPU utilization should be captured during the entire test for defined processes.\n- If possible, test should capture top 5 or 10 processes CPU and memory utilization.\n- There should be some mechanism to capture the utilization in either raw data or JSON/CSV format.\n- There should be flexibility to plot this utilization over period of time"
+  },
+  "resolution": {
+    "pr_number": 24681,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24681",
+    "title": "Infra to capture cpu and memory utilization of processes during test, take snapshots and plot the data.",
+    "merged_at": "2026-06-30T21:26:24Z",
+    "description": "### Description of PR\n\nMemory and CPU utilization infrastructure is added with following features:\n- Disabled by default and will be enabled with either pytest marker or a flag.\n- Infra allows defining capturing memory and CPU utilization for various processes using '**_top_**' command output. Optionally, free and used memory can be captured using '**_free -m_**\" command on the box. Similarly, the docker CPU and memory utilization can also be captured using '**_docker stats_**' command.\n- The default interval of capturing data is set to **1secs** by default.\n- User can define various **_snapshot points_** to capture memory and CPU footprint on significant milestones in the test.\n- The infra takes care of stopping the capture if there is no explicit stop defined.\n- Along with user defined processes, infra capture top 5 processes having significant jump in memory utilization during the test.\n- Data is captured in three formats - **_raw, JSON and CSV_**.\n- Optionally, this data can be plotted. As an example, we are plotting three different graphs with CPU utilization, Memory % utilization and Memory utilization (MiB) for the processes and time on X-axis.\n- The graphs are plotted with various **_snapshot point indicators_**, thus improving readability to correlate memory/CPU utilization at various points during the test.\n- Memory_leak_check event captures the memory snapshot at the defined point and compares it with first reading taken during the test.\n\nAs part of example and integration, the route download test is integrated with this infrastructure. README and HLD is also available.\n\nSummary:\nFixes #24680\n\n### Type of change\n\n- [ ] Bug fix\n- [X] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [X] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\nIn the existing test infrastructure, the memory_utilization functionality captures the memory utilization before and after the test.\n\nThe test infrastructure was required to capture the CPU and memory utilization run-time during the tests of pre-defined processes (by the user) and also top-memory utilizing processes.\n\n- **Scale**: Full host top every tick is too heavy to store and plot everything; keep bounded, meaningful rows (top RSS \u00b1 user interest) while still allowing mem_cpu_monitor on long runs.\n- **Debuggability**: Parsed rows and truncated COMMAND are not enough; full raw top (and optional all-command raw log) helps verify DUT output and parser behavior.\n- **Readability**: Plots should be easier to read (grids, time on all panels, compact title) and artifacts should log paths clearly in CI logs.\n- **Maintainability**: HLD/README and small unit tests document behavior and guard regressions.\n\n#### How did you do it?\n**top_parser.py**: parse_top_host_all, parse_free_m_used, strict/loose parse_top helpers.\n**controller.py**:  ProcMemCpuMonitor \u2014 start() builds targets, optional raw logs, _probe_host_num_cores_once(), immediate _poll_tick() + daemon _loop with _stop_event.wait(interval); _host_top_capture_names filters host-wide rows before append; plot() / export_samples() matplotlib + JSON/CSV; MemCpuMonitorResult extended where needed.\n**__init__.py / pytest_addoption / marker**: opt-in fixture; disabled stub when off.\n**test_top_parser.py**: parser and capture-helper tests; typo fix on len(bgpds).\n**docs/HLD.md, README.md**: API, capture rules, interval, raw logs, plot notes, document control.\n\nThe tests/snappi_tests/bgp/test_bgp_rib_route_optimztn_perf.py is integrated with these changes. The files/bgp_convergence_helper.py file captures snapshots during the test.\n\n#### How did you verify/test it?\nTested it on local master repo with BGP convergence route download test.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/README.md",
+        "additions": 139,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/__init__.py",
+        "additions": 86,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/constants.py",
+        "additions": 3,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/controller.py",
+        "additions": 1316,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/EXAMPLE_PLOTS.md",
+        "additions": 75,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/HLD.md",
+        "additions": 224,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/example_plots/cpu_example.png",
+        "additions": 0,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/docs/example_plots/memory_example.png",
+        "additions": 0,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/tcmalloc_parser.py",
+        "additions": 49,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/test_top_parser.py",
+        "additions": 163,
+        "deletions": 0
+      },
+      {
+        "path": "tests/common/plugins/proc_mem_cpu_monitor/top_parser.py",
+        "additions": 268,
+        "deletions": 0
+      },
+      {
+        "path": "tests/conftest.py",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "tests/snappi_tests/bgp/files/bgp_convergence_helper.py",
+        "additions": 126,
+        "deletions": 68
+      },
+      {
+        "path": "tests/snappi_tests/bgp/test_bgp_rib_route_optimztn_perf.py",
+        "additions": 40,
+        "deletions": 12
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

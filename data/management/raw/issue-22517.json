@@ -1,0 +1,147 @@
+{
+  "number": 22517,
+  "title": "Bug: tacacs_daily_daemon race condition in process detection",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22517",
+  "createdAt": "2026-02-20T22:20:25Z",
+  "closedAt": "2026-08-12T17:56:02Z",
+  "author": "roeebar-arista",
+  "labels": [
+    "Bug :bug:",
+    "Pending Triage :medical_symbol:"
+  ],
+  "assignees": [
+    "roeebar-arista"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nansible installs the daemon script `/root/tacacs_daily_daemon` on the PTF container to ensure TACACS is running continuously. The daemon checks whether another instance of the daemon is already running and exits if one is detected to prevent duplicate daemons.\n\nThe problematic check:\n```\nPROCESS_NUM=$(ps -ef | grep \"/bin/sh .*tacacs_daily_daemon\" | grep -v \"grep\" | wc -l)\nif [ $PROCESS_NUM -ge 3 ]; then\n    echo \"tacacs_daily_daemon already running in background\" $PROCESS_NUM\n    exit 0\nfi\n```\n### Intended Logic:\nThe threshold of >=3 is based on the assumption that when a daemon is already running:\n- Process 1: The original daemon instance\n- Process 2: The current daemon instance (checking if it should run)\n- Process 3: The $(...) command substitution subshell executing the check\n\nTherefore, PROCESS_NUM >= 3 indicates a daemon is already running.\n\n### The race condition\nWhen the shell executes the pipeline `ps -ef | grep ... | grep ... | wc -l`, it creates multiple processes by first forking the subshell followed by loading the actual process. There is a critical timing window where\nthe pipeline processes have been forked but not yet loaded with the process, and where `ps -ef` executes during this window, it captures these intermediate processes. This causes PROCESS_NUM to be >=3 even when no other daemon is actually running.\n \n\n\n### Steps to Reproduce\n\nNo way to reliably reproduce this. However, we observed output such as `tacacs_daily_daemon already running in background 3` and `tacacs_daily_daemon already running in background 4` (suggesting 3 or 4 instances running) even when the daemon was not previously loaded. By adding additional printouts we observed the following process tree structure right before it failed:\n```\nPID 1824 (PPID=1):     /bin/sh /root/tacacs_daily_daemon\n  \u2514\u2500 PID 1838 (PPID=1824): /bin/sh /root/tacacs_daily_daemon\n      \u2514\u2500 PID 1841 (PPID=1838): /bin/sh /root/tacacs_daily_daemon\n```\nThis implies all instances of `tacacs_daily_daemon` are a result of nested forks, supporting the hypothesis above.\n\n### Actual Behavior and Expected Behavior\n\nIntermittent false positives when detecting whether the daemon is already running\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22518,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22518",
+      "title": "Fix race condition in tacacs_daily_daemon",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-12T17:56:00Z",
+      "createdAt": "2026-02-20T23:58:45Z",
+      "author": "roeebar-arista",
+      "body": "\r\n### Description of PR\r\n\r\nThis addresses the issue in https://github.com/sonic-net/sonic-mgmt/issues/22517.\r\n\r\nThe change replaces the existing `ps` based check for whether the daemon is already running with a file lock using `flock`. Using a lock avoids parsing the process list and removes the race condition described in the issue.\r\n\r\nPreviously the script determined whether another instance was running with:\r\n\r\n```\r\nps -ef | grep ... | grep ... | wc -l\r\n```\r\n\r\nWhen the shell runs this pipeline it forks several processes before the actual commands are fully loaded. There is a short window where those intermediate processes appears as the `tacacs_daily_daemon` and `ps -ef` can see them. If that happens, the count becomes >= 3 even though no other daemon instance is actually running. The issue link includes a detailed breakdown of this behavior.\r\n\r\nInstead, the script now uses the following to guarantee that only one instance proceeds:\r\n```\r\n# Exit if tacacs_daily_daemon already running in background\r\nLOCKFILE=/var/run/tacacs_daily_daemon.lock\r\nexec 9>\"$LOCKFILE\"\r\nif ! flock -n 9; then\r\n    echo \"tacacs_daily_daemon already running in background\"\r\n    exit 0\r\nfi\r\n```\r\n\r\nAdditionally, we redirect the daemon's stdout and stderr to `/var/log/tacacs_daily_daemon.log` file to prevent SIGPIPE signals when the parent SSH session terminates: When ansible executes `start_tacacs.sh` via ssh, the daemon inherits stdout/stderr descriptors pointing to the ssh session. When the ession closes (after ansible completes), these pipes are closed. Any subsequent write to stdout/stderr (e.g., echo statements in the while loop) causes the script to crash.\r\n\r\nSummary:\r\nFixes #22517 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [x] 202511\r\n\r\n#### How did you verify/test it?\r\n\r\nRan the ansible playbook:\r\n`cd /data/ansible; ./testbed-cli.sh -k ceos add-topo ardut ~/.password -l server_1 -vvv`\r\n\r\nAnd verified TACACS is running. Also manually killed TACACS and verified the daemon keeps running, as previously that would result in SIGPIPE.\r\n",
+      "files": [
+        {
+          "path": "ansible/scripts/start_tacacs.sh",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "ansible/scripts/tacacs_daily_daemon",
+          "additions": 4,
+          "deletions": 11
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-20T23:58:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-20T23:59:07Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "r12f",
+          "createdAt": "2026-03-09T06:18:21Z",
+          "body": "hi @roeebar-arista , used 3 different agents reviewing the code. there will be some duplication, please feel free to resolve them in batch."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-12T22:48:02Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-12T22:48:16Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-12T23:22:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-12T23:22:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-12T23:36:24Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-12T23:36:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-13T00:00:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-13T00:00:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-26T02:11:31Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-26T02:11:46Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-26T03:07:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-05-26T03:07:59Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-05-26T11:16:16Z",
+          "body": "This PR has backport request for branch(es): 202511.<br>Added label(s) for branch(es) 202511.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-06-10T17:42:17Z",
+          "body": "> hi @roeebar-arista , used 3 different agents reviewing the code. there will be some duplication, please feel free to resolve them in batch.\r\n\r\n@r12f  are we ready to approve? thanks."
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-06-10T17:43:06Z",
+          "body": "@BYGX-wcr would you please help check for the pr build failure? thanks"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-25T23:34:27Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-25T23:34:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

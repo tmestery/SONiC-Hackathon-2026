@@ -1,0 +1,234 @@
+{
+  "number": 26174,
+  "title": "Enhancement: [snappi] pfcQueueGroupSize defaults to 8 with no validation against tgen port capability \u2014 silent PFC honoring failures on 4-queue-group load modules",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26174",
+  "createdAt": "2026-07-14T21:58:14Z",
+  "closedAt": "2026-07-28T23:39:45Z",
+  "author": "atul-nexthop",
+  "labels": [],
+  "assignees": [
+    "atul-nexthop"
+  ],
+  "milestone": null,
+  "body": "**Is it platform specific:** generic\n\n**Importance or Severity:** Medium\n\n### Description of the enhancement\n\nThe snappi test framework assumes the traffic generator port supports 8 PFC TX queue groups unless a per-testbed override is set:\n\n- `tests/common/snappi_tests/variables.py` \u2014 `pfcQueueGroupSize = get_pfcQueueGroupSize(default=8)`\n- `tests/common/snappi_tests/snappi_fixtures.py` \u2014 programs L1 `flow_control.ieee_802_1qbb.pfc_class_0..7` from this value (1:1 mapping for 8, folded via `pfcQueueValueDict` for 4)\n- `tests/common/snappi_tests/traffic_generation.py` and per-test helpers (e.g. `tests/snappi_tests/pfcwd/files/pfcwd_basic_helper.py`) \u2014 assign each flow's `eth.pfc_queue` from the same value\n\nNewer high-speed Keysight load modules (e.g. 400G port modes) support only **4** PFC TX queue groups per port. When such a port runs with the default of 8, PFC classes are mapped to TX queues that do not exist on the hardware. The configuration is accepted without error, and the mismatch only surfaces later as test-level symptoms: the tgen does not honor PFC pause frames for the affected priorities, so pause-storm-based tests (pfcwd, pfc) see traffic flowing through a storm and fail loss-rate assertions intermittently \u2014 e.g. only on runs where the randomly selected lossless priority maps above the physical queue count. Nothing in the logs points at the queue-group mismatch, making root cause very hard to find.\n\n### Current Behavior\n\n`pfcQueueGroupSize` silently defaults to 8. There is no detection of, or validation against, the tgen port's actual queue-group capability, and no log output indicating which mapping is in effect. A mismatch produces misleading intermittent test failures instead of a configuration error.\n\n### Proposed Behavior\n\nThe framework should resolve or validate `pfcQueueGroupSize` against the connected tgen port's capability (or at minimum fail/warn loudly on mismatch) instead of silently applying the default.",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26221,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26221",
+      "title": "snappi: auto-detect the PFC TX queue-group size from the tgen ports",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-28T23:39:44Z",
+      "createdAt": "2026-07-15T18:15:10Z",
+      "author": "atul-nexthop",
+      "body": "### Description of PR\n\nSummary:\nThe snappi framework assumes tgen ports honor 8 PFC TX queue groups unless a per-testbed override says otherwise (`pfcQueueGroupSize` in `tests/common/snappi_tests/variables.py`, default 8). On load modules that honor only 4 (e.g. high-speed Keysight AresOne-family port modes), the default silently maps PFC classes to non-existent TX queues: the tgen does not honor pause frames for the affected priorities, and pause-storm tests (pfcwd, pfc) fail intermittently with loss-rate assertions \u2014 nothing in the logs points at the queue-group mismatch. This PR makes the framework resolve the size automatically from the connected ports, with explicit logging of which source decided the value and why.\n\nFixes #26174\n\n### Type of change\n\n- [ ] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\n### Approach\n#### What is the motivation for this PR?\n\nDebugging intermittent PFCWD basic test failures on a 400G testbed, we found the tgen transmitting straight through PFC pause storms for some priorities: the port honors 4 PFC TX queue groups, the framework had programmed the 8-group identity class map, so class-N pause frames paused queues that don't exist on the hardware. The configuration is accepted without error and the mismatch only surfaces as unexplained test failures (details in #26174).\n\n#### How did you do it?\n\n- `snappi_helpers.fetch_pfc_queue_group_size(api, config)`: reads the queue-group size every session vport honors via `L1Config.<CardType>.Fcoe.PfcQueueGroupSize`, deriving the card-type object the same way snappi_ixnetwork's own `_set_vport_type` does (strip the `Fcoe` suffix from `CurrentType`); verified against all 12 Fcoe-eligible card families in ixnetwork_restpy 1.10.0. Non-IxNetwork OTG backends return None and keep today's behavior. If ports report different sizes, the folded size 4 is used (every port honors the folded mapping; only 4-group ports break on the identity one).\n- `common_helpers.pfc_queue_group_size()`: resolves once per session \u2014 testbed override > detected size > default 8 \u2014 caches the result, and logs the deciding source. Detection runs from the base-config fixtures (vports exist only after the first set_config); consumer calls just read the cached value.\n- `snappi_fixtures._config_pfc_classes()`: collapses the three duplicated 20-line L1 `pfc_class` programming blocks into one helper that resolves then programs (this also fixes an indentation issue in the multidut block where the class programming sat outside the port-match loop).\n- All consumers (traffic_generation and the pfcwd/pfc/dataplane helpers) move from the import-time `variables.pfcQueueGroupSize` constant \u2014 frozen before any tgen session exists, so it can never reflect hardware \u2014 to the accessor. The constant remains as a deprecated shim for out-of-tree users. The existing per-testbed override keeps highest precedence, so current testbeds are unaffected.\n\n#### How did you verify/test it?\n\nOn a 4x400G AresOne-M snappi testbed with a Broadcom-DNX DUT, PFCWD basic tests at full traffic rate pass with:\n\n- Detection path (no override configured):\n  `fetch_pfc_queue_group_size: {'Port 0': 4, 'Port 1': 4, 'Port 2': 4, 'Port 3': 4}`\n  `pfcQueueGroupSize: selecting 4 over default 8 \u2014 the tgen port honors 4 PFC TX queue groups; with 8, pause frames for priorities mapped above queue 3 would not be honored`\n- Override path: `pfcQueueGroupSize=4 from testbed override (auto-detect skipped)` \u2014 detection bypassed, existing testbed behavior unchanged.\n- flake8 clean on all changed files with the repo pre-commit flags.\n\n#### Any platform specific information?\n\nTgen-side only; no DUT-side changes. Detection is IxNetwork-specific (`api._ixnetwork`, same access pattern as the existing capture configuration code), guarded so other OTG backends fall back to the override/default resolution used today.\n\n#### Supported testbed topology if it's a new test case?\n\nNot a new test case.\n\n### Documentation\n\nDeprecation note added on `variables.pfcQueueGroupSize` pointing to the accessor.",
+      "files": [
+        {
+          "path": "tests/common/snappi_tests/common_helpers.py",
+          "additions": 47,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/snappi_tests/snappi_fixtures.py",
+          "additions": 21,
+          "deletions": 62
+        },
+        {
+          "path": "tests/common/snappi_tests/snappi_helpers.py",
+          "additions": 63,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/snappi_tests/traffic_generation.py",
+          "additions": 6,
+          "deletions": 5
+        },
+        {
+          "path": "tests/common/snappi_tests/variables.py",
+          "additions": 3,
+          "deletions": 0
+        },
+        {
+          "path": "tests/snappi_tests/README.md",
+          "additions": 6,
+          "deletions": 4
+        },
+        {
+          "path": "tests/snappi_tests/dataplane/files/helper.py",
+          "additions": 7,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/dataplane/imports.py",
+          "additions": 2,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/lossless_response_to_external_pause_storms_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/lossless_response_to_throttling_pause_storms_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/m2o_fluctuating_lossless_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_lossy_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfc/test_lossless_response_to_throttling_pause_storms.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/snappi_tests/pfc/test_m2o_oversubscribe_lossless_lossy.py",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "tests/snappi_tests/pfcwd/files/pfcwd_basic_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfcwd/files/pfcwd_burst_storm_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfcwd/files/pfcwd_multi_node_helper.py",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "tests/snappi_tests/pfcwd/files/pfcwd_runtime_traffic_helper.py",
+          "additions": 3,
+          "deletions": 2
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T18:15:18Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-15T18:15:19Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-15T18:15:34Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-07-15T18:18:41Z",
+          "body": "@vmittal-msft @YatishSVC @sdszhang \u2014 requesting review when you have a chance.\n\nThis fixes the silent PFC queue-group mismatch tracked in #26174: the framework assumed 8 PFC TX queue groups per tgen port, while newer high-speed load modules honor only 4 \u2014 pause frames for priorities mapped above queue 3 were silently ignored, causing intermittent pause-storm test failures. The framework now resolves the size from the connected ports once per session (testbed override > detected > default 8) and logs the deciding source; existing testbeds with the override configured are unaffected, and non-IxNetwork backends keep today's behavior.\n\nValidated on a 4x400G testbed \u2014 detection and override paths both exercised (logs in the PR description). Related context: the same mismatch was the root cause behind the traffic-rate workaround removed from #25950."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T18:23:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-15T18:23:29Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "YatishSVC",
+          "createdAt": "2026-07-15T23:14:27Z",
+          "body": "Thanks @atul-nexthop \r\n\r\nLGTM \u2014 nice fix for the silent PFC queue-group mismatch, and good that the existing override keeps highest precedence so current testbeds are unaffected.\r\n\r\nOne FYI (not blocking): `master` already has a per-testbed override for this in [tests/snappi_tests/variables.override.yml](vscode-file://vscode-app/c:/Users/yatishkoul/AppData/Local/Programs/Microsoft%20VS%20Code/7a8049eb2d/resources/app/out/vs/code/electron-browser/workbench/workbench.html) ([pfcQueueGroupSize](vscode-file://vscode-app/c:/Users/yatishkoul/AppData/Local/Programs/Microsoft%20VS%20Code/7a8049eb2d/resources/app/out/vs/code/electron-browser/workbench/workbench.html) set per testbed alongside `multidut_port_info`), resolved by [get_pfcQueueGroupSize()](vscode-file://vscode-app/c:/Users/yatishkoul/AppData/Local/Programs/Microsoft%20VS%20Code/7a8049eb2d/resources/app/out/vs/code/electron-browser/workbench/workbench.html) in [tests/common/snappi_tests/common_helpers.py](vscode-file://vscode-app/c:/Users/yatishkoul/AppData/Local/Programs/Microsoft%20VS%20Code/7a8049eb2d/resources/app/out/vs/code/electron-browser/workbench/workbench.html) via [parse_override(testbed_name, 'pfcQueueGroupSize')](vscode-file://vscode-app/c:/Users/yatishkoul/AppData/Local/Programs/Microsoft%20VS%20Code/7a8049eb2d/resources/app/out/vs/code/electron-browser/workbench/workbench.html). Might be worth confirming the auto-detection layers cleanly on top of that path \u2014 auto-detect as the default, with the per-testbed YAML value as the explicit override."
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-07-15T23:21:13Z",
+          "body": "Thanks @YatishSVC \u2014 that's exactly the layering implemented: `pfc_queue_group_size()` first consults the same `parse_override(testbed_name, 'pfcQueueGroupSize')` path via the existing `get_pfcQueueGroupSize()`, and only runs detection when no override exists. So the `variables.override.yml` entries on master (e.g. the multidut testbed's `pfcQueueGroupSize: 8`) keep deciding the value for those testbeds, byte-for-byte as today, with detection never contacted. Both paths were exercised on hardware \u2014 override: `pfcQueueGroupSize=4 from testbed override (auto-detect skipped)`; detection: log in the PR description."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-16T11:15:51Z",
+          "body": "This PR has backport request for branch(es): 202511,202605.<br>Added label(s) for branch(es) 202511,202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-07-16T18:17:59Z",
+          "body": "@vmittal-msft @sdszhang If this looks good - can we get this merged ?"
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-07-18T00:49:10Z",
+          "body": "@amitpawar12 @kamalsahu0001 @selldinesh please check"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T17:57:25Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T17:57:42Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "atul-nexthop",
+          "createdAt": "2026-07-23T17:58:19Z",
+          "body": "Thanks @vmittal-msft \u2014 all review comments addressed in bd334594a:\n\n- **README** (your top-level note): the AresOne section no longer tells users to edit `variables.py` (which also pointed at a misspelled filename); it now says the queue-group size is auto-detected, documents the `variables.override.yml` per-testbed override as the explicit escape hatch (and for non-IxNetwork OTG backends where detection is unavailable), and notes the log states which source decided the value.\n- Dataplane/RDMA path now resolves with `api`/`config` (once, after ports are added; gated on `is_rdma`), so it auto-detects instead of relying on the override.\n- Non-IxNetwork backends: module-name guard before any apply \u2014 no more early `set_config` side effect.\n- Multidut fixture: detection moved to a single explicit call before the per-port L1 loop.\n- Readback parsing hardened to a trailing-digits regex with a logged fallback; cache semantics documented in the accessor docstring.\n\nRe-validated on the 4x400G AresOne-M testbed after the changes: detection path (override removed) resolves 4 on all ports from the new pre-loop call site and `pfcwd` basic tests pass; override path re-verified unchanged."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T18:00:16Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-23T18:00:42Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-23T18:18:08Z",
+          "body": "This PR has backport request label(s) for branch(es): 202511,202605, but is missing required test information. Please make sure you tick the tested branch(es) in the **Tested branch** section and provide test evidence (e.g., 202511: &lt;test result&gt;) in the **Test result** section as well in your PR description.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "kamalsahu0001",
+          "createdAt": "2026-07-23T18:26:43Z",
+          "body": "I am updating the README file and will be raising a separate PR. I updated the section for pfc_queue_size that it auto-detects now. Copied the changes from @atul-nexthop in this file. May be @atul-nexthop can discard those README file changes.\r\n\r\nhttps://github.com/sonic-net/sonic-mgmt/pull/26538"
+        },
+        {
+          "author": "vmittal-msft",
+          "createdAt": "2026-07-24T18:04:05Z",
+          "body": "@rlhui @yxieca please help merge"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-08-11T02:21:10Z",
+          "body": "@atul-nexthop \u2014 this PR is labeled Request for 202605 branch, but the following required information is still missing:\n\n- 202605-specific image/test result evidence\n\nPlease add the missing information to the PR description. Tracker details should cover day-one/regression status, affected branch/image/platform/test, and why 202605 needs the fix; validation should identify the tested 202605 image and include the result or result link.\n\n<!-- copilot-202605-backport-reminder -->"
+        }
+      ]
+    }
+  ]
+}

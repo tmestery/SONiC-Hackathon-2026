@@ -1,0 +1,77 @@
+{
+  "number": 15410,
+  "title": "[T2] `bgp/test_bgp_session_flap.py` fails with `KeyError`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/15410",
+  "createdAt": "2024-11-07T00:50:14Z",
+  "closedAt": "2024-11-15T06:10:09Z",
+  "author": "arista-nwolfe",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\n\nWe see this issue on Arista T2 modulars when there is a single-asic LC present\r\n```\r\n    @pytest.fixture(scope='module')\r\n    def setup(tbinfo, nbrhosts, duthosts, enum_frontend_dut_hostname, enum_rand_one_frontend_asic_index):\r\n        duthost = duthosts[enum_frontend_dut_hostname]\r\n        asic_index = enum_rand_one_frontend_asic_index\r\n        namespace = duthost.get_namespace_from_asic_id(asic_index)\r\n\r\n        bgp_facts = duthost.bgp_facts(instance_id=asic_index)['ansible_facts']\r\n        neigh_keys = []\r\n        tor_neighbors = dict()\r\n        neigh_asn = dict()\r\n        for k, v in bgp_facts['bgp_neighbors'].items():\r\n            if 'asic' not in v['description'].lower():\r\n                neigh_keys.append(v['description'])\r\n                neigh_asn[v['description']] = v['remote AS']\r\n>               tor_neighbors[v['description']] = nbrhosts[v['description']][\"host\"]\r\nE               KeyError: 'cmp314-4'\r\n```\r\n\r\nThe problem is it's checking for the iBGP neighbor of the remote single-asic LC against the `nbrhosts` which holds the list of eBGP neighbors:\r\n```\r\n(Pdb) p nbrhosts.keys()\r\ndict_keys(['ARISTA04T1', 'ARISTA04T3', 'ARISTA01T1', 'ARISTA06T1', 'ARISTA06T3', 'ARISTA01T3', 'ARISTA03T3', 'ARISTA03T1'])\r\n```\n\n### Results you see\n\n`bgp/test_bgp_session_flap.py` fails with `KeyError` when run on a T2 with a single-asic LC\n\n### Results you expected to see\n\n`bgp/test_bgp_session_flap.py` should pass, likely the iBGP neighbor should be ignored/skipped\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 15411,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/15411",
+      "title": "`bgp/test_bgp_session_flap.py` Fix condition intended to skip iBGP neighbors to work on single-asic",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2024-11-15T06:10:08Z",
+      "createdAt": "2024-11-07T00:52:33Z",
+      "author": "arista-nwolfe",
+      "body": "### Description of PR\r\nhttps://github.com/sonic-net/sonic-mgmt/pull/13662 added support for running `bgp/test_bgp_session_flap.py` on `T2` topology.\r\nHowever, the condition it added to skip iBGP neighbors only works on multi-asic LCs:\r\n`if 'asic' not in v['description'].lower():`\r\n\r\nE.G. here is a switch which has 3 LCs (LC4 - multi-asic, LC5 - multi-asic, LC6 - single-asic)\r\n```\r\nroot@cmp206-4:~# show ip bgp summary -d all\r\n...\r\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down      State/PfxRcd  NeighborName\r\n-----------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\r\n10.0.0.1       4  65200       4113       6364         0      0       0  01:21:00            34050  ARISTA01T3\r\n...\r\n10.0.0.63      4  65200       4033       6720         0      0       0  01:19:44            34050  ARISTA32T3\r\n10.0.254.1     4  65100      20415      27839         0      0       0  02:09:35           340512  ASIC0\r\n10.0.254.3     4  65100      27839      20415         0      0       0  02:09:34           476708  ASIC1\r\n10.0.254.5     4  65100       4737      23014         0      0       0  01:33:32             2067  cmp206-5-ASIC0\r\n10.0.254.5     4  65100       4738      31515         0      0       0  01:33:33             2067  cmp206-5-ASIC0\r\n10.0.254.7     4  65100       5803      27835         0      0       0  02:09:27             4131  cmp206-5-ASIC1\r\n10.0.254.7     4  65100       5844      20415         0      0       0  02:09:34             4131  cmp206-5-ASIC1\r\n10.0.254.9     4  65100       7197      20394         0      0       0  02:09:01             6196  cmp206-6\r\n10.0.254.9     4  65100       7197      26987         0      0       0  02:09:03             6196  cmp206-6\r\n```\r\nNote that LC4 and LC5 neighbor iBGPs will be skipped because `ASIC` is in the name but LC6 won't because it's single ASIC.\r\n\r\nThe better solution is to check the BGP session's `peer group` which will indicate if it's internal or not regardless of single-asic or multi-asic\r\n```\r\nNeighbhor      V     AS    MsgRcvd    MsgSent    TblVer    InQ    OutQ  Up/Down      State/PfxRcd  NeighborName\r\n-----------  ---  -----  ---------  ---------  --------  -----  ------  ---------  --------------  --------------\r\n10.0.254.1     4  65100       6818       6818         0      0       0  03:10:58            68104  ASIC0\r\n10.0.254.5     4  65100       5731       7122         0      0       0  02:35:12             1037  cmp314-4\r\n```\r\n(Pdb) bgp_facts['bgp_neighbors']['10.0.254.5']\r\n{'admin': 'up', 'accepted prefixes': 7, 'ip_version': 4, 'remote AS': 65100, 'local AS': 65100, **'description': 'cmp314-4'**, **'peer group': 'VOQ_CHASSIS_V4_PEER'**, 'remote routerid': '8.0.0.7', 'state': 'established', 'capabilities': {'peer restart timer': 120}, 'message statistics': {'Opens': {'sent': 3, 'rcvd': 3}, 'Notifications': {'sent': 0, 'rcvd': 0}, 'Updates': {'sent': 1634, 'rcvd': 243}, 'Keepalives': {'sent': 2373, 'rcvd': 2373}, 'Route Refresh': {'sent': 0, 'rcvd': 0}, 'Capability': {'sent': 0, 'rcvd': 0}, 'Total': {'sent': 4010, 'rcvd': 2619}}, 'mrai': 0, 'connections established': 3, 'connections dropped': 2}\r\n(Pdb) bgp_facts['bgp_neighbors']['10.0.254.1']\r\n{'admin': 'up', 'accepted prefixes': 4, 'ip_version': 4, 'remote AS': 65100, 'local AS': 65100, **'description': 'ASIC0'**, **'peer group': 'VOQ_CHASSIS_V4_PEER'**, 'remote routerid': '8.0.0.2', 'state': 'established', 'capabilities': {'peer restart timer': 120}, 'message statistics': {'Opens': {'sent': 1, 'rcvd': 1}, 'Notifications': {'sent': 0, 'rcvd': 0}, 'Updates': {'sent': 1088, 'rcvd': 1088}, 'Keepalives': {'sent': 2612, 'rcvd': 2612}, 'Route Refresh': {'sent': 0, 'rcvd': 0}, 'Capability': {'sent': 0, 'rcvd': 0}, 'Total': {'sent': 3701, 'rcvd': 3701}}, 'mrai': 0, 'connections established': 1, 'connections dropped': 0}\r\n\r\nNote: I included `INTERNAL` as another keyword to indicate an iBGP neighbor as I believe that's what non-voq chassis will have as their neighbor name (Took this from https://github.com/sonic-net/sonic-mgmt/blob/master/tests/bgp/test_bgp_queue.py#L64)\r\n\r\nSummary:\r\nFixes #15410 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405",
+      "files": [
+        {
+          "path": "tests/bgp/test_bgp_session_flap.py",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-11-07T00:52:36Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-11-07T00:52:47Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2024-11-07T17:45:38Z",
+          "body": "/azpw run Azure.sonic-mgmt"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-11-07T17:45:40Z",
+          "body": "/AzurePipelines run Azure.sonic-mgmt"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-11-07T17:45:52Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arlakshm",
+          "createdAt": "2024-11-15T06:10:31Z",
+          "body": "@yejianquan, can you please approve this PR for 202405"
+        },
+        {
+          "author": "yejianquan",
+          "createdAt": "2024-11-15T10:03:29Z",
+          "body": "@bingwang-ms could you help to approve cherry-pick?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-11-15T19:43:53Z",
+          "body": "Cherry-pick PR to 202405: https://github.com/sonic-net/sonic-mgmt/pull/15593"
+        }
+      ]
+    }
+  ]
+}

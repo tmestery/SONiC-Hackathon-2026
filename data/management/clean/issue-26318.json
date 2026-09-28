@@ -1,0 +1,43 @@
+{
+  "id": "management-26318",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26318,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26318",
+    "title": "Bug: SFP thermal threshold test fails for passive copper cable with N/A thresholds",
+    "created_at": "2026-07-18T20:32:34Z",
+    "closed_at": "2026-07-30T03:18:29Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`platform_tests/test_sfp_thermal_state_db.py::TestSfpThermalStateDb::test_sfp_thresholds_match_xcvrd_tables`\n  can fail for passive copper cables when all DOM threshold temperature values\n  are `N/A`.\n\n  Passive copper cables can legitimately report `N/A` for DOM temperature\n  threshold values, so the test should use the passive-copper skip path.\n\n  In the failure, `Ethernet132` was a passive copper cable, but the helper did\n  not classify it as passive copper. The port was placed in the\n  non-passive/unknown bucket and the test failed.\n\n  The root cause is that the EEPROM parser drops the key\n  `SFP+CableTechnology` because the third-level key regex does not allow `+`.\n\n### Steps to Reproduce\n\n 1. Use a DUT with a passive copper SFP/QSFP cable.\n 2. Ensure the transceiver EEPROM output contains:\n     `SFP+CableTechnology: Passive Cable`\n3. Ensure `TRANSCEIVER_DOM_THRESHOLD` temperature threshold values are `N/A`.\n4. Run:\n     `platform_tests/test_sfp_thermal_state_db.py::TestSfpThermalStateDb::test_sfp_thresholds_match_xcvrd_tables`\n\n### Actual Behavior and Expected Behavior\n\n **Actual behavior:**\n\n  The test fails because the passive copper port is classified as\n  non-passive/unknown:\n\n```\n  Failed: No numeric TRANSCEIVER_DOM_THRESHOLD temperature values available,\n  but non-passive-copper/unknown transceivers are present: ['Ethernet132']\n```\n\n  **Expected behavior:**\n\n  The parser should preserve SFP+CableTechnology. The port should be\n  classified as passive copper, and the test should skip when no numeric\n  threshold temperature values are available for passive copper transceivers.\n\n### Relevant log output\n\n```shell\nEthernet132 ... Medium N/A Type SFP/SFP+/SFP28 Vendor Arista Networks Model CAB-Q-S-1M\n\nConnector: Copper pigtail\nInfiniband Compliance: 1X Copper Passive\nSFP+CableTechnology: Passive Cable\nVendor PN: CAB-Q-S-1M\ndom_capability: N/A\n\nFailed: No numeric TRANSCEIVER_DOM_THRESHOLD temperature values available,\nbut non-passive-copper/unknown transceivers are present: ['Ethernet132']\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n[test_sfp_thermal_state_db_202605_ld201_failed.log](https://github.com/user-attachments/files/30156714/test_sfp_thermal_state_db_202605_ld201_failed.log)\n[test_sfp_thermal_state_db_202605_ld201_failed.xml](https://github.com/user-attachments/files/30156713/test_sfp_thermal_state_db_202605_ld201_failed.xml)"
+  },
+  "resolution": {
+    "pr_number": 26319,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26319",
+    "title": "platform: fix passive SFP+ detection",
+    "merged_at": "2026-07-30T03:18:28Z",
+    "description": "### Description of PR\n\nThe SFP EEPROM parser did not accept + in third-level keys, so it\n  dropped SFP+CableTechnology from sfputil EEPROM output. As a result,\n  passive SFP+ cables could be missed by get_passive_cable_port_list()\n  and treated as non-passive or unknown.\n\nThis caused test_sfp_thresholds_match_xcvrd_tables to fail on\n  passive copper ports with N/A DOM threshold values instead of taking the\n  expected passive copper skip path.\n\nSummary:\nFixes #26318\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n- [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\nFailure type: day-one\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n202605\n\n[test_sfp_thermal_state_db_202605_ld201_failed.log](https://github.com/user-attachments/files/30156881/test_sfp_thermal_state_db_202605_ld201_failed.log)\n[test_sfp_thermal_state_db_202605_ld201_failed.xml](https://github.com/user-attachments/files/30156882/test_sfp_thermal_state_db_202605_ld201_failed.xml)\n\n### Approach\n\n#### What is the motivation for this PR?\nPassive copper cables can legitimately report N/A for DOM temperature\nthreshold values. The test already has logic to skip this case when all\nports with threshold rows are passive copper ports.\n\nHowever, a passive copper module on Ethernet132 was not classified as\npassive copper because the EEPROM parser dropped this key:\n\n SFP+CableTechnology: Passive Cable\n\n#### How did you do it?\nAllowed + in the third-level EEPROM key parser.\n\n#### How did you verify/test it?\n\nRan the same Test case  platform_tests/test_sfp_thermal_state_db.py::TestSfpThermalStateDb::test_sfp_thresholds_match_xcvrd_tables[ld201]\nand confirmed a PASS\n\n#### Any platform specific information?\nObserved with an Arista passive copper cable:\n\n  ```\nEthernet132\n  Type: SFP/SFP+/SFP28\n  Vendor: Arista Networks\n  Model: CAB-Q-S-1M\n  Connector: Copper pigtail\n  Infiniband Compliance: 1X Copper Passive\n  SFP+CableTechnology: Passive Cable\n  dom_capability: N/A\n```\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "tests/common/platform/transceiver_utils.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

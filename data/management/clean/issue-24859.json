@@ -1,0 +1,43 @@
+{
+  "id": "management-24859",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24859,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24859",
+    "title": "Bug: `rif_support` should be derived from interface chosen for testing `rif_rx_ifaces` rather arbritary interface `rif_iface`",
+    "created_at": "2026-05-26T06:16:45Z",
+    "closed_at": "2026-06-10T17:47:06Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nCurrently `ip/test_ip_packet.py` detects `rif_support` via checking if arbritarily chosen `rif_iface` `rx_err` field is N/A:\n```\nrif_counter_out = parse_rif_counters(\n    duthost.command(\"show interfaces counters rif\")[\"stdout_lines\"])\nrif_iface = list(rif_counter_out.keys())[0]\nrif_support = False if rif_counter_out[rif_iface]['rx_err'] == 'N/A' else True\n```\n\nWe have encountered situations where the first `iface` may indicate `rif_support = True`, but `rif_support` should be False, e.g.:\n```\n          IFACE    RX_OK    RX_BPS    RX_PPS    RX_ERR    TX_OK    TX_BPS    TX_PPS    TX_ERR\n --------------  -------  --------  --------  --------  -------  --------  --------  --------\n  Ethernet-Rec0      N/A       N/A       N/A         0      N/A       N/A       N/A         0\n PortChannel101      N/A       N/A       N/A       N/A      N/A       N/A       N/A       N/A\n ...\n```\nWhere `Ethernet-Rec0` is an inband port for VoQ, not a physical front-panel port. (Whether or not this is a bug or not is still under investigation).\n\nWhen having `rif_support = True` when we are receiving `N/A` on ports means we error with failures e.g.:\n```\n...\n  File \"/var/src/sonic-mgmt_vmstr-ut2-nh5010-5/tests/ip/test_ip_packet.py\", line 165, in test_forward_ip_packet_with_0x0000_chksum\n    rx_err = int(rif_counter_out[rif_rx_ifaces][\"rx_err\"].replace(\",\", \"\")) if rif_support else 0\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'N/A'\n```\n\nA more reliable way to determine if `rif_support` should be True or False, is simply by checking `rx_err` / `tx_err` of the chosen rif for testing, `rif_rx_ifaces`, rather than arbritarily checking `rif_iface = list(rif_counter_out.keys())[0]`\n\n### Steps to Reproduce\n\nUnder investigation, has happened twice during testing on `NH5010-5` devices with URH min topology.\n\n### Actual Behavior and Expected Behavior\n\nCheck if `rif_support` is True or False, by checking if `rx_err`/`tx_err` = `N/A` on the actual iface being tested, `rif_rx_ifaces`. This will ensure that there aren't any failures like `ValueError: invalid literal for int() with base 10: 'N/A'`\n\n### Relevant log output\n\n```shell\nSee above\n```\n\n### Output of `show version`\n\n```shell\n20251110.29\n```\n\n### Attach files (if any)\n\nN/A"
+  },
+  "resolution": {
+    "pr_number": 24861,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/24861",
+    "title": "Use chosen test iface (`rif_rx_ifaces`) to determine `rif_support` in `test_ip_packet.py`",
+    "merged_at": "2026-06-10T17:47:05Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #24859\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [ ] 202605\n\n### Test result\n202511: 20251110.41 - tested locally (previously failing / bad state after test -> pass and good state after test)\n\n### Approach\n#### What is the motivation for this PR?\nFailures due to trying to `rif_support` being set as True, because it was based off arbritary iface other than chosen testing iface\n#### How did you do it?\nDetermine `rif_support` via chosen testing iface.\n#### How did you verify/test it?\nTest that it appropriately sets `rif_support` to False in those cases\n#### Any platform specific information?\nN/A\n#### Supported testbed topology if it's a new test case?\nN/A\n### Documentation",
+    "files": [
+      {
+        "path": "tests/ip/test_ip_packet.py",
+        "additions": 5,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "number": 25819,
+  "title": "[vpp] test_po_cleanup_after_reload ERRORs on t1-lag-vpp: memory_utilization teardown fails on config_reload memory spike",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25819",
+  "createdAt": "2026-07-01T16:17:28Z",
+  "closedAt": "2026-07-02T22:17:07Z",
+  "author": "AnantKishorSharma",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Summary\nSince #25062 enabled `pc/test_po_cleanup.py` on sonic-vpp, **`test_po_cleanup_after_reload`** intermittently **ERRORs at teardown** on the `t1-lag-vpp` KVM testbed. **Both test bodies pass** \u2014 the failure is the global `memory_utilization` plugin failing the teardown because `monit` reports a transient memory increase during the test's CPU stress + `config_reload`.\n\nThese tests were enabled on sonic-vpp by #25062 (\"chore: enable pc VPP tests p1\", commit `cbaaa8bdd`, 2026-06-24, @cyw233), which removed the sonic-vpp skip markers for `pc/test_po_cleanup.py::test_po_cleanup` and `::test_po_cleanup_after_reload`.\n\n### Failure signature\nBuild `1152688`, DUT `vlab-vpp-01`:\n```\n============= 2 passed, 162 warnings, 1 error in 643.23s (0:10:43) =============\nERROR at teardown of test_po_cleanup_after_reload[vlab-vpp-01]\nE   Failed: [ALARM]: monit:memory_usage memory usage increased by 20.9%,\n    exceeds increase threshold 10% (previous: 19.9%, current: 40.8%)\ncommon/plugins/memory_utilization/__init__.py:206: Failed\n```\nElastictest test plan: https://elastictest.org/scheduler/publictestplan/6a439f9cf9d3963c406e2b07?testcase=pc%2Ftest_po_cleanup.py&type=console\n\nDUT facts (from the run's conditional-skip dump): `asic_type=vpp`, `asic_subtype=vpp`, `platform=x86_64-kvm_x86_64-r0`, `topo_name=t1-lag`, `is_multi_asic=false`, pytest `9.1.1`.\n\n### Root cause\n`test_po_cleanup_after_reload` deliberately drives CPU to 100% (`yes` processes) and runs `config_reload`, which transiently spikes memory usage. On the low-RAM sonic-vpp KVM VM this briefly exceeds the `memory_utilization` plugin's 10% increase threshold, so the autouse fixture calls `pytest.fail()` at teardown (`common/plugins/memory_utilization/__init__.py:206`). The po_cleanup logic itself passes \u2014 the failure is the memory-delta check reacting to the reload/stress transient, not a po_cleanup functional issue.\n\n### Observed scope\n- `test_po_cleanup` \u2192 **PASSES**\n- `test_po_cleanup_after_reload` \u2192 body passes, **ERROR at teardown** (flaky \u2014 only when the transient spike crosses the threshold)\n- Elastictest aggregate: `P1 / S0 / F1`\n\n### Proposed fix\nAdd `@pytest.mark.disable_memory_utilization` to `test_po_cleanup_after_reload` \u2014 the established pattern for reboot/reload/stress tests (e.g. `platform_tests/test_reboot.py`, `golden_config_infra/test_config_reload_with_rendered_golden_config.py`, `upgrade_path/test_warmboot_data_consistency.py`). The test still runs and validates real po_cleanup behavior; only the memory-delta teardown check is skipped for this reload/stress test.\n\nFix PR: #25820\n\n### Impacted PRs (t1-lag-vpp CI red on this)\n- sonic-net/sonic-buildimage#28164\n- sonic-net/sonic-buildimage#28042\n- (any buildimage PR whose `impacted-area-kvmtest-t1-lag-vpp` selects `pc/test_po_cleanup.py`)\n\ncc @cyw233\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25820,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25820",
+      "title": "[pc/test_po_cleanup] Skip memory_utilization for test_po_cleanup_after_reload",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-02T22:17:06Z",
+      "createdAt": "2026-07-01T16:19:33Z",
+      "author": "AnantKishorSharma",
+      "body": "#### Why I did it\r\n`pc/test_po_cleanup.py::test_po_cleanup_after_reload` intermittently **ERRORs at teardown** on the `t1-lag-vpp` KVM testbed. The test body passes; the failure is the global `memory_utilization` plugin failing the teardown because `monit` reports a transient memory increase during the test's CPU stress + `config_reload`:\r\n\r\n```\r\nERROR at teardown of test_po_cleanup_after_reload[vlab-vpp-01]\r\nE   Failed: [ALARM]: monit:memory_usage memory usage increased by 20.9%,\r\n    exceeds increase threshold 10% (previous: 19.9%, current: 40.8%)\r\ncommon/plugins/memory_utilization/__init__.py:206: Failed\r\n```\r\n\r\nThese tests were enabled on sonic-vpp by #25062. On the low-RAM vpp KVM VM the reload/stress transient crosses the plugin's 10% memory-increase threshold, even though the po_cleanup behavior is correct.\r\n\r\nFixes #25819\r\n\r\n#### How I did it\r\nAdd vpp-scoped conditional-mark YAML entry. The test still runs and validates real po_cleanup behavior; only the memory-delta teardown check is skipped for it. `test_po_cleanup` is unchanged.\r\n\r\n#### How to verify it\r\nRe-run `pc/test_po_cleanup.py` on `t1-lag-vpp`; `test_po_cleanup_after_reload` no longer ERRORs at teardown of the `memory_utilization` fixture (`common/plugins/memory_utilization/__init__.py:206`).\r\n\r\nUnblocks: sonic-net/sonic-buildimage#28164, sonic-net/sonic-buildimage#28042\r\n",
+      "files": [
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions_sonic_vpp.yaml",
+          "additions": 9,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-01T16:19:41Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-01T16:19:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-01T16:48:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "github-actions",
+          "createdAt": "2026-07-01T16:48:14Z",
+          "body": "<!-- skip-expiry-conditional-mark-review-note -->\n@StormLiangMS @wangxin @yxieca A user wants to merge changes to the conditional mark files into `master`. Please review."
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-01T16:48:15Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

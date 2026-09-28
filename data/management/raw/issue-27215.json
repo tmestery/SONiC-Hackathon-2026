@@ -1,0 +1,118 @@
+{
+  "number": 27215,
+  "title": "[202605] Bug: `crm/test_crm.py::test_acl_entry` fails with `Failed: \"crm_stats_acl_entry_used\" counter was not decremented or \"crm_stats_acl_entry_available\" counter was not incremented`",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27215",
+  "createdAt": "2026-08-20T22:14:59Z",
+  "closedAt": "2026-09-09T17:41:17Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "arista-nwolfe"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nIntroduced in https://github.com/sonic-net/sonic-mgmt/pull/22166 many of the ports in the minigraph.xml output went from using the `alias` name to using the `non-alias` name but the associated testing code wasn't updated.\nThis failure is due to this.\n```\n{% if num_asics > 1 or hwsku_has_alias_name_collision %}\n  {% set a_intf = intf_alias %}\n{% else %}\n  {% set a_intf = port_alias_map[intf_alias] %}\n{% endif %}\n{{- acl_intfs.append(a_intf) -}}\n```\nWhen you run `crm/test_crm.py::test_acl_entry` on a single-asic system on 202605 or later it will fail with:\n```\nE                         Failed: \"crm_stats_acl_entry_used\" counter was not decremented or \"crm_stats_acl_entry_available\" counter was not incremented\n```\nWhen reproducing we can see the test removes 2 ACL entries and expects the available ACL count to go from `2028` to\n```\n((Pdb)) p crm_stats_acl_entry_available\n2034\n```\nBut in reality it goes to `2038`\n```\n  Available Count\n-----------------\n             2038\n```\n\nThe reason it calculates the available count wrong is it only considers the port-channels as acl binding points:\n```\n((Pdb)) p asicAclBindings\n{'PortChannel104', 'PortChannel103', 'PortChannel101'}\n```\nSo it thinks it should add `3 (ports) * 2 (acl rules) = 6` to the available count.\n\nBut in reality there are also 2 front panel ports bound to this ACL that aren't included in the `mg_facts['minigraph_acls']`:\n```\nName        Type       Binding\n----------  ---------  --------------\nDATAACL     L3         Ethernet28\n                       Ethernet88\n                       PortChannel101\n                       PortChannel103\n                       PortChannel104\n((Pdb)) mg_facts[\"minigraph_acls\"]\n{'DataAcl': ['Ethernet8', 'Ethernet36', 'Ethernet60', 'Ethernet64']}\n```\nIf it did include the extra 2 non-portchannel ports it would've correctly calculated `5 (ports) * 2 (acl rules) = 10`\n\nAnd the reason it only considers the port-channels as acl binding points is because the the `minigraph_facts.py` expects the `AttachTo` to contain alias ports not Ethernet ports:\nhttps://github.com/sonic-net/sonic-mgmt/blob/5ed0dc0820aab417d7986c603908533ff95ad789/ansible/library/minigraph_facts.py#L471-L480\n```\n                elif member in port_alias_to_name_map:\n                    acl_intfs.append(port_alias_to_name_map[member])\n```\n```\n((Pdb)) mg_facts['minigraph_port_alias_to_name_map']\n{'Recirc0': 'Ethernet-Rec0', 'etp1': 'Ethernet0', ...\n```\nSo because of https://github.com/sonic-net/sonic-mgmt/pull/22166 we now see Ethernet ports in the AttachTo of the ACLs in minigraph:\n```\n<AttachTo>PortChannel101;PortChannel103;PortChannel104;Ethernet28;Ethernet88</AttachTo>\n<InAcl>DataAcl</InAcl>\n```\n\nE.G 202511 looks like:\n```\n<AttachTo>PortChannel102;PortChannel104;PortChannel106;PortChannel108;PortChannel110;PortChannel112;PortChannel114;PortChannel116;PortChannel118;PortChannel120;PortChannel122;PortChannel124;PortChannel126;PortChannel128;PortChannel130;PortChannel132;PortChannel134;PortChannel136;PortChannel138;PortChannel140;PortChannel142;PortChannel144;PortChannel146;PortChannel148;PortChannel150;PortChannel152;PortChannel154;PortChannel156;PortChannel158;PortChannel160;PortChannel162;PortChannel164;etp17;etp18;etp19;etp20;etp21;etp22;etp23;etp24;etp25;etp26;etp27;etp28;etp29;etp30;etp31;etp32;etp33;etp34;etp35;etp36;etp37;etp38;etp39;etp40;etp41;etp42;etp43;etp44;etp45;etp46;etp47;etp48</AttachTo>\n          <InAcl>DataAcl</InAcl>\n```\n\n### Steps to Reproduce\n\nRun `crm/test_crm.py::test_acl_entry` on any single-asic SKU with non-portchannels on 202605 or later and it will fail.\n\n### Actual Behavior and Expected Behavior\n\nminigraph_facts.py and minigraph_dpg.j2 need to agree on the format they are using in the AttachTo output so we don't incorrectly miss the front panel ports.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [
+    {
+      "author": "rlhui",
+      "createdAt": "2026-09-02T18:04:25Z",
+      "body": "@narasim-microsoft , would you please follow up further what tests should have been run for the previous test PR https://github.com/sonic-net/sonic-mgmt/pull/22166 that broke this? thanks"
+    },
+    {
+      "author": "narasim-microsoft",
+      "createdAt": "2026-09-03T23:47:21Z",
+      "body": "@rlhui I analyzed the breakage.  Here is my analysis and a recommendation how we might handle it in CI.\n\n1. \u00a0minigraph_dpg.j2\u00a0 changed ACL and BGP peer-link \u00a0AttachTo\u00a0 binding to use interface names (not aliases) for standalone interfaces.\n2. This broke standalone-interface ACL bindings on single-ASIC SKUs (except \u00a0Arista-7050CX3\u00a0).\n3. BGP is unaffected \u2014 its consumer code (\u00a0minigraph_facts.py\u00a0) has a fallback that tolerates either alias or interface-name format.\n4. \u00a0crm/test_crm.py\u00a0 fails when standalone-port ACLs are present, since its consumer (\u00a0minigraph_facts.py\u00a0's ACL parser) expects only aliases \n     and silently drops  entries it doesn't recognize \u2014 causing an ACL entry-count mismatch.\n5. CI didn't catch it because:\n   a. \u00a0crm/test_crm.py\u00a0 was correctly selected and run \u2014 but only against \u00a0t0_checker\u00a0.\n   b. \u00a0t0_checker\u00a0 uses the \u00a0t0\u00a0 topology, whose links are all port-channels \u2014 no standalone-port ACLs ever exist there to trigger the failure.\n\nHow to handle the testing gap:\n-----------------------------------\nCI fix: ensure \u00a0crm/test_crm.py\u00a0 (and any test that tests data plane ACLs ) runs against at least one checker whose topology includes standalone, non-port-channel interfaces with \u00a0DataAcl\u00a0 bound \u2014 not just port-channel-only topologies like \u00a0t0\u00a0/\u00a0t1-lag\u00a0/\u00a0t2\u00a0.   "
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 27217,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27217",
+      "title": "mg_facts: Handle ACL bind points being non-alias",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-09T17:41:16Z",
+      "createdAt": "2026-08-20T22:56:48Z",
+      "author": "arista-nwolfe",
+      "body": "### Description of PR\r\nhttps://github.com/sonic-net/sonic-mgmt/pull/22166 made single-asic SKUs use non-alias ports as the bind points for ACLs.\r\nThe minigraph_facts.py was never updated to handle non-alias ports in the ACLs.\r\n\r\nMore details in https://github.com/sonic-net/sonic-mgmt/issues/27215\r\n\r\nSummary:\r\nFixes #27215 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\n### Tested branch\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n- 202605: internal image built on Aug 20th\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nhttps://github.com/sonic-net/sonic-mgmt/pull/22166 converted the ACL bindpoints to use non-alias ports.\r\nWe need to update minigraph_facts.py to handle non-alias ports otherwise `crm/test_crm.py::test_acl_entry` will fail\r\n\r\n#### How did you do it?\r\nCheck if the port in the ACL `AttachTo` entry is in both `port_alias_to_name_map` and `port_name_to_alias_map`\r\n\r\n#### How did you verify/test it?\r\nRan `crm/test_crm.py::test_acl_entry` and saw it passing on 202605 after the change\r\n\r\n#### Any platform specific information?\r\nN/A\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n\r\n### Documentation\r\nN/A\r\n",
+      "files": [
+        {
+          "path": "ansible/library/minigraph_facts.py",
+          "additions": 2,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T22:56:56Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-20T22:56:57Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-20T22:57:12Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2026-08-20T22:59:51Z",
+          "body": "@nnelluri-cisco could you take a look as this is a subsequent required change after https://github.com/sonic-net/sonic-mgmt/pull/22166"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-20T23:00:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-20T23:01:10Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-21T00:16:23Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-21T00:16:27Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2026-08-25T18:22:47Z",
+          "body": "/azpw run Azure.sonic-mgmt"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T18:22:50Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T18:22:52Z",
+          "body": "Retrying failed(or canceled) stages in build 1198500:\n\n\n\u2705Stage **Test**:\n- Job impacted-area-kvmtest-t0-vpp by Elastictest: retried."
+        },
+        {
+          "author": "rlhui",
+          "createdAt": "2026-09-09T17:33:24Z",
+          "body": "> can we have a sonic-mgmt test for the non port channel member in kvm for coverage?\r\n\r\n@narasim-microsoft , would you please check this? thx"
+        },
+        {
+          "author": "narasim-microsoft",
+          "createdAt": "2026-09-09T18:09:02Z",
+          "body": "> > can we have a sonic-mgmt test for the non port channel member in kvm for coverage?\r\n> \r\n> @narasim-microsoft , would you please check this? thx\r\n@rlhui / @arista-nwolfe \r\nThis was the issue https://github.com/sonic-net/sonic-mgmt/issues/27215 to track missing test coverage for non-port channels.   Looks like it's just been closed due to this merge.  May be we need a separate issue to track the test coverage gap? "
+        }
+      ]
+    }
+  ]
+}

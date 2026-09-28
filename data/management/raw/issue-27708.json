@@ -1,0 +1,107 @@
+{
+  "number": 27708,
+  "title": "Bug: Everflow policer test can lose packets or hit ENOBUFS due to unpaced PTF traffic",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27708",
+  "createdAt": "2026-09-03T07:05:33Z",
+  "closedAt": "2026-09-24T00:53:30Z",
+  "author": "zypgithub",
+  "labels": [
+    "Bug :bug:",
+    "Triaged"
+  ],
+  "assignees": [
+    "zypgithub"
+  ],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\n`EverflowPolicerTest` has two unpaced PTF traffic-generation paths that can overload the PTF data path and make the test fail for reasons unrelated to DUT policer behavior:\n\n1. `checkOriginalFlow()` sends all 10,000 original-flow packets in one unpaced `send_packet(..., count=10000)` call. This can generate scheduler-driven microbursts and cause intermittent capture loss before policer validation starts.\n2. `checkMirroredFlow()` first sends another unpaced 10,000-packet burst to absorb CBS, then continuously calls `send_packet()` in a tight loop for `send_time` (75 seconds on Mellanox). This can exhaust the PTF raw-socket/network transmit buffer and raise `OSError: [Errno 105] No buffer space available` before TX/RX PPS is calculated.\n\nBoth paths should use controlled pacing. The mirrored-flow rate must remain safely above the configured policer upper bound so the test still validates rate limiting.\n\n### Steps to Reproduce\n\nRun the Everflow policer cases repeatedly, including:\n\n```text\nTestEverflowV4IngressAclIngressMirror::test_everflow_dscp_with_policer[erspan_ipv4-cli-downstream-default]\nTestEverflowV4IngressAclIngressMirror::test_everflow_dscp_with_policer[erspan_ipv4-cli-upstream-default]\n```\n\nThe ENOBUFS failure was observed on `Mellanox-SN4700-O32` with `cir=100`, `cbs=100`, and `send_time=75`.\n\n### Actual Behavior and Expected Behavior\n\nActual behavior in `checkOriginalFlow()`:\n\nPassing captures peak at 52-57 packets per 10 ms, while failing captures spike to 119-192 packets per 10 ms and receive only 9,850-9,898 of 10,000 packets, causing the 99% assertion to fail.\n\nActual behavior in `checkMirroredFlow()`:\n\nThe unpaced 75-second send loop can terminate in the PTF raw-socket send path:\n\n```text\nFile \"/root/acstests/everflow_policer_test.py\", line 312, in checkMirroredFlow\n    testutils.send_packet(self, self.src_port, self.base_pkt)\n...\nFile \"/root/env-python3/lib/python3.11/site-packages/ptf/dataplane.py\", line 180, in send\n    return self.socket.send(packet)\nOSError: [Errno 105] No buffer space available\n```\n\nWhen this happens, the test exits before logging `Sent ... packets`, `TX PPS`, or `RX PPS`, so it does not evaluate DUT policer behavior.\n\nExpected behavior:\n\n- Pace the 10,000-packet original-flow validation so all packets can be reliably captured while the offered rate remains above the policer rate.\n- Pace both the CBS-absorption burst and sustained traffic in `checkMirroredFlow()` at a stable rate above `max_rx_pps`.\n- Complete the full send interval and evaluate `tx_pps > max_rx_pps` and `min_rx_pps <= rx_pps <= max_rx_pps` without PTF packet loss or ENOBUFS.\n\n### Relevant log output\n\n```text\nRecieved 10000 original packets\nOSError: [Errno 105] No buffer space available\nRan 1 test in 76.398s\nFAILED (errors=1)\n```\n\n### Output of `show version`\n\nThe failure was observed on `x86_64-mlnx_msn4700-r0` with HwSKU\n`Mellanox-SN4700-O32`. \n\n### Attach files (if any)\n\nNo public attachment is available because the source report contains internal test infrastructure details.\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27840,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27840",
+      "title": "everflow: pace policer test traffic",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-24T00:53:29Z",
+      "createdAt": "2026-09-10T02:19:33Z",
+      "author": "dlanov",
+      "body": "### Description of PR\n\nSummary:\n\nPace PTF traffic generation in `EverflowPolicerTest` to avoid unpaced bursts and sustained tight send loops that can cause packet loss or exhaust the PTF transmit path for reasons unrelated to DUT policer behavior.\n\n`checkOriginalFlow()` previously sent all 10,000 packets in one unpaced `send_packet(..., count=10000)` call. This can produce short microbursts and intermittent packet loss before policer validation starts.\n\n`checkMirroredFlow()` also had two unpaced traffic paths: the 10,000-packet CBS-absorption burst and the sustained send loop. The sustained tight loop can exhaust the PTF transmit path and raise `OSError: [Errno 105] No buffer space available` before TX/RX PPS validation completes.\n\nThis change:\n\n- sends count-based traffic in batches of at most 60 packets with a 10 ms interval;\n- uses the same pacing for the CBS-absorption burst;\n- paces the duration-based mirrored traffic using `time.monotonic()`;\n- preserves the exact transmitted packet count used for TX PPS calculation; and\n- keeps the offered traffic rate safely above the configured policer upper bound.\n\nThe existing packet receive checks and policer assertions are unchanged.\n\nFixes #27708\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): N/A  \nFailure type: test reliability issue\n\n### Tested branch\n\n- [x] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [ ] 202605\n- [ ] N/A\n\n### Test result\n\nLocal validation against master:\n\n```text\npython3 -m pytest --noconftest \\\n    --confcutdir=tests/common/unit_tests \\\n    tests/common/unit_tests/unit_test_everflow_policer_pacing.py -v\n\n4 passed\n```\n\nAdditional validation:\n\n```text\npython3 -m py_compile \\\n    ansible/roles/test/files/acstests/everflow_policer_test.py \\\n    tests/common/unit_tests/unit_test_everflow_policer_pacing.py\n\nPASS\n```\n\n```text\npre-commit run --files \\\n    ansible/roles/test/files/acstests/everflow_policer_test.py \\\n    tests/common/unit_tests/unit_test_everflow_policer_pacing.py\n\nAll hooks passed\n```\n\n```text\ngit diff --check\n\nPASS\n```\n\nNo DUT test was performed. The local regression tests validate the pacing helpers and verify that `checkMirroredFlow()` uses both paced traffic-generation paths.\n\n### Approach\n\n#### What is the motivation for this PR?\n\nUnpaced traffic generation in `EverflowPolicerTest` can make the test fail because of the PTF traffic-generation path rather than DUT policer behavior.\n\nFor the original flow, a single 10,000-packet send can create a short burst large enough to cause intermittent packet loss.\n\nFor the mirrored flow, both the CBS-absorption burst and sustained tight send loop were unpaced. The sustained loop can exhaust the transmit path and raise `ENOBUFS` before the test reaches its TX/RX PPS assertions.\n\n#### How did you do it?\n\nAdded shared pacing helpers for count-based and duration-based traffic generation.\n\nCount-based sends:\n\n- send at most 60 packets per batch;\n- wait 10 ms between batches;\n- preserve the exact requested total packet count.\n\nDuration-based sends:\n\n- send traffic in 60-packet batches;\n- pace batches at 10 ms intervals;\n- use `time.monotonic()` for duration measurement;\n- cap the final sleep to the remaining duration; and\n- return the exact transmitted packet count for the existing TX PPS calculation.\n\nThe same pacing is used for:\n\n- `checkOriginalFlow()`;\n- the `checkMirroredFlow()` CBS-absorption send; and\n- the sustained `checkMirroredFlow()` traffic.\n\nThe nominal pacing target is approximately 6,000 pps before send overhead, which remains many times above the policer rates exercised by the current test.\n\nThe following behavior is unchanged:\n\n- `NUM_OF_TOTAL_PACKETS`;\n- original-flow 99% receive assertion;\n- policer min/max calculations;\n- `tx_pps > max_rx_pps` validation;\n- `min_rx_pps <= rx_pps <= max_rx_pps` validation;\n- receive polling and packet matching; and\n- platform-specific packet handling.\n\n#### How did you verify/test it?\n\nThe unit tests use AST extraction so the standalone pacing logic can be tested without importing the PTF-dependent module.\n\nCoverage verifies:\n\n- 10,000 packets are split into 166 batches of 60 plus a final batch of 40;\n- the exact packet total is preserved;\n- 10 ms delays occur between count-based batches;\n- no unnecessary delay occurs after the final count-based batch;\n- exact-multiple packet counts are handled correctly;\n- duration-based pacing terminates at the configured deadline using a deterministic fake clock;\n- the final sleep is capped to the remaining duration;\n- the returned TX packet count matches the generated traffic; and\n- `checkMirroredFlow()` calls both pacing helpers and contains no direct unpaced `send_packet()` call in its outer traffic-generation path.\n\n#### Any platform specific information?\n\nNo. This is a generic PTF traffic-generation reliability issue.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A.\n\n### Documentation\n\nN/A.",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/acstests/everflow_policer_test.py",
+          "additions": 59,
+          "deletions": 8
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-10T02:19:42Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-10T02:19:52Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-10T02:20:08Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "zypgithub",
+          "createdAt": "2026-09-10T10:07:33Z",
+          "body": "The scope of #27708 has been expanded based on an additional failure signature from the same unpaced PTF traffic-generation pattern.\n\nThis PR currently fixes only `checkOriginalFlow()`. `checkMirroredFlow()` still has two unpaced sends:\n\n```python\ntestutils.send_packet(self, self.src_port, self.base_pkt, count=self.NUM_OF_TOTAL_PACKETS)\n...\nwhile datetime.datetime.now() < end_time:\n    testutils.send_packet(self, self.src_port, self.base_pkt)\n```\n\nOn a Mellanox SN4700 run with `send_time=75`, the sustained loop failed before PPS validation with:\n\n```text\nFile \"/root/acstests/everflow_policer_test.py\", line 312, in checkMirroredFlow\n    testutils.send_packet(self, self.src_port, self.base_pkt)\n...\nOSError: [Errno 105] No buffer space available\n```\n\nPlease extend the fix to pace both the CBS-absorption burst and sustained send loop in `checkMirroredFlow()`. The controlled transmit rate should remain safely above `max_rx_pps` so the policer assertion remains meaningful. Until that is included, this PR only partially fixes #27708.\n"
+        },
+        {
+          "author": "zypgithub",
+          "createdAt": "2026-09-10T10:14:12Z",
+          "body": "@dlanov, the scope of #27708 has been updated to cover both unpaced traffic-generation paths in `EverflowPolicerTest`.\n\nThe current PR addresses the burst in `checkOriginalFlow()`, but `checkMirroredFlow()` still has an unpaced CBS-absorption burst followed by a sustained tight send loop. The latter can exhaust the PTF transmit buffer and raise `OSError: [Errno 105] No buffer space available` before TX/RX PPS validation completes.\n\nCould you please extend this fix to pace both sends in `checkMirroredFlow()` as well? The paced transmit rate should remain safely above `max_rx_pps` so the policer validation stays meaningful. With only the current `checkOriginalFlow()` change, #27708 would be partially fixed.\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-10T18:20:55Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-10T18:21:13Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dlanov",
+          "createdAt": "2026-09-10T18:23:50Z",
+          "body": "Thanks for the additional failure details. I've updated the PR to pace both `checkMirroredFlow()` paths as well \u2014 the CBS-absorption burst and the sustained send loop. The sustained path now uses deadline-based pacing with `time.monotonic()`, while keeping the offered rate well above `max_rx_pps`. I also extended the regression tests to cover the new pacing paths."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-23T10:27:06Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-23T10:27:22Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "Xichen96",
+          "createdAt": "2026-09-23T10:27:49Z",
+          "body": "Validated the production pacing change on `testbed-bjw-can-720dt-1` (Arista-720DT-G48S4, M0) with tagged `SONiC.20260510.17`, build commit `dfb49be0fd`.\n\nPretest passed: 11 passed, 3 expected skips.\n\nSame-bed A/B/A result for the exact downstream M0 L3 and upstream M0 VLAN policer scenarios:\n\n- **A1, unpatched baseline:** 8 failures / 16 passes. Failures occurred in `checkOriginalFlow()` before mirror/policer validation, including zero-first-packet assertions and partial original-flow receives (`6555`, `7073`, `7437`, `6555`, `8011` of 10,000).\n- **B, paced implementation:** 10 sequential iterations passed; **20/20 target cases passed**, zero failures/errors.\n- **A2, reverted baseline:** 6 sequential iterations; 3 passed and 3 failed. Failing iterations received `7449`, `8104`, and `7808` original packets.\n\nThis same-bed fail/pass/fail control isolates PTF send pacing as the corrective mechanism; the failures occur before DUT policer-rate validation.\n\nValidation interval: 2026-09-23 04:22-09:53 UTC / 14:22-19:53 Sydney. Final DUT health was clean: system state `running`, no failed systemd units, Monit checks healthy, and `gnmi`, `telemetry`, `swss`, and `syncd` running.\n\nEvidence archive SHA-256: `509989693f24a1126301bb20a8015fa103ba0c4b5fc4029f975eb9d894200c92`.\n\nThe AST-based unit-test file was removed in commit `dd682b5b7e28097a68367b2166e771e0f7df9abd`; the PR now contains the focused production change only.\n"
+        },
+        {
+          "author": "Xichen96",
+          "createdAt": "2026-09-23T11:00:30Z",
+          "body": "**Design review notes / alternatives considered**\n\n- We searched the sonic-mgmt repository for an existing reusable pacing helper. sFlow and VPP/KVM tests contain local count-based batching, while CoPP and DHCP stress tests contain duration/interval loops, but none provides the required fixed-count and duration-based callback semantics with exact accounting and immediate exception propagation.\n- We considered extracting shared PTF utilities, but rejected that for this fix because it adds cross-directory import plumbing and unrelated scope. If another caller needs the same abstraction, that can be handled as a separate refactor.\n- We considered updating sFlow in this PR, but rejected it as unrelated scope.\n- We removed the AST-based unit-test file because it primarily tested source structure and scheduling arithmetic, not the real PTF failure mode. Same-bed A/B/A hardware validation provides the relevant regression evidence.\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-24T00:53:57Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/28193"
+        }
+      ]
+    }
+  ]
+}

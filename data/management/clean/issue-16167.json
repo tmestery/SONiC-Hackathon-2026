@@ -1,0 +1,43 @@
+{
+  "id": "management-16167",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 16167,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/16167",
+    "title": "[Bug]: `qos/test_qos_sai.py::TestQosSai::testQosSaiPgSharedWatermark` fails with `multi_asic` and `multi_dut` variants",
+    "created_at": "2024-12-19T20:29:40Z",
+    "closed_at": "2025-01-08T18:51:15Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Issue Description\n\nFailure seen:\n```\ndst_port_id: 47, src_port_id: 34 src_port_vlan: None\nactual dst_port_id: 47\nInitial watermark:[112, 0, 0, 0, 256, 0, 0, 0]\nReceived packets: 0\nInit pkts num sent: 0, min: 0, actual watermark value to start: 0\nFilled PG min\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\n|               | Pfc3TxPkt | InDiscard | InDropPkt | OutDiscard | OutDropPkt | OutUcPkt | InUcPkt | InNonUcPkt | OutNonUcPkt | OutQlen | Ing Pg3 Pkt | Ing Pg3 Share Wm |\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\n| base src port |  3159299  |  2821770  |     0     |     0      |     0      |    4     | 5839385 |    2442    |     1248    |    0    |    837638   |        0         |\n|      src port |  3159299  |  2821770  |     0     |     0      |     0      |    4     | 5839385 |    2443    |     1249    |    0    |    837638   |        0         |\n| base dst port |     0     |     3     |     0     |     0      |     0      |  422261  |   5177  |    1224    |      88     |    0    |      0      |        0         |\n|      dst port |     0     |     3     |     0     |     0      |     0      |  422261  |   5177  |    1224    |      88     |    0    |      0      |        0         |\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\npkts num to send: 41, total pkts: 41, pg shared: 415271\nCompensate 2176538 packets to port 34, and retry 1 times\nReceived packets: 418930\nTo fill PG share pool, send 41 pkt\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\n|               | Pfc3TxPkt | InDiscard | InDropPkt | OutDiscard | OutDropPkt | OutUcPkt | InUcPkt | InNonUcPkt | OutNonUcPkt | OutQlen | Ing Pg3 Pkt | Ing Pg3 Share Wm |\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\n| base src port |  3159299  |  2821770  |     0     |     0      |     0      |    4     | 5839385 |    2442    |     1248    |    0    |    837638   |        0         |\n|      src port |  5555195  |  4576881  |     0     |     0      |     0      |    4     | 8013426 |    2493    |     1274    |    0    |   1256568   |     46510464     |\n| base dst port |     0     |     3     |     0     |     0      |     0      |  422261  |   5177  |    1224    |      88     |    0    |      0      |        0         |\n|      dst port |     0     |     3     |     0     |     0      |     0      |  422408  |   5227  |    1250    |      88     |    0    |      0      |        0         |\n+---------------+-----------+-----------+-----------+------------+------------+----------+---------+------------+-------------+---------+-------------+------------------+\nlower bound: 167936, actual value: 46510464, upper bound (+40): 9072\n> /root/saitests/py3/sai_qos_tests.py(4624)runTest()\n```\n```\n======================================================================\nFAIL: sai_qos_tests.PGSharedWatermarkTest\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"saitests/py3/sai_qos_tests.py\", line 4623, in runTest\n    * (packet_length + internal_hdr_size)))\nAssertionError\n\n----------------------------------------------------------------------\nRan 1 test in 934.434s\n```\n\nThe issue appears to be during the `dynamically_compensate_leakout`\n`Compensate 2176538 packets to port 34, and retry 1 times`\nWe can see this is sending far too many packets `2176538`.\n\nThis function compares the `TX_OK` value before and after sending the 41 packets.\nHere is where it stores the counts before the packets are sent:\nhttps://github.com/sonic-net/sonic-mgmt/blob/202405/tests/saitests/py3/sai_qos_tests.py#L4464\n```\n             xmit_counters_history, _ = sai_thrift_read_port_counters(\n                 self.dst_client, asic_type, port_list['dst'][dst_port_id])\n```\n\nAnd within `dynamically_compensate_leakout` here is where they are read:\nhttps://github.com/sonic-net/sonic-mgmt/blob/202405/tests/saitests/py3/sai_qos_tests.py#L454\n```\n    curr, _ = counter_checker(thrift_client, asic_type, check_port)\n    leakout_num = curr[check_field] - prev[check_field]\n```\n\nThe problem here is the call to `dynamically_compensate_leakout` is passed `self.src_client` as the `thrift_client` argument but is operating on a port in the `self.dst_client`:\nhttps://github.com/sonic-net/sonic-mgmt/blob/202405/tests/saitests/py3/sai_qos_tests.py#L4551\n```\n                    dynamically_compensate_leakout(self.src_client, asic_type, sai_thrift_read_port_counters,\n                                                   port_list['dst'][dst_port_id], TRANSMITTED_PKTS,\n                                                   xmit_counters_history, self, src_port_id, pkt, 40)\n```\n\nIn this failure case I can see that the `dst_port_id` value is used on both asics:\n```\n(Pdb) port_list['src'][32]\n4294967297\n(Pdb) port_list['dst'][dst_port_id]\n4294967297\n```\n\nIf I dump the `TX_OK` of port 32 on the src asic I get:\n```\n(Pdb) sai_thrift_read_port_counters(self.src_client, asic_type, port_list['dst'][dst_port_id])[0][TRANSMITTED_PKTS]\n2598800\n```\nOn the dst asic I get:\n```\n(Pdb) sai_thrift_read_port_counters(self.dst_client, asic_type, port_list['dst'][dst_port_id])[0][TRANSMITTED_PKTS]\n422409\n```\nThis is where the massive compensate packet number comes from:\n```\n(Pdb) xmit_counters_history[TRANSMITTED_PKTS]\n422261\n```\n```\n2598800 - 422261 = 2176539\n```\n\n### Results you see\n\nWe poll the incorrect asic/dut client in `dynamically_compensate_leakout`\n\n### Results you expected to see\n\nWe should poll the same asic/dut client in `dynamically_compensate_leakout` as the port we're referencing\n\n### Is it platform specific\n\ngeneric\n\n### Relevant log output\n\n_No response_\n\n### Output of `show version`\n\n_No response_\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 16169,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/16169",
+    "title": "Correcting client arguments to `dynamically_compensate_leakout` in `PGSharedWatermarkTest`",
+    "merged_at": "2025-01-08T18:51:14Z",
+    "description": "In https://github.com/sonic-net/sonic-mgmt/pull/8149 the `multi-asic` and `multi-dut` variants were added to `test_qos_sai.py`.\nThis required updating calls to `dynamically_compensate_leakout` to specify either the `src_client` or dst_client` but a couple calls in `PGSharedWatermarkTest` passed the wrong client.\n\nFor more details on the failure this causes see https://github.com/sonic-net/sonic-mgmt/issues/16167\n\nSummary:\nFixes #16167\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] Test case(new/improvement)\n\n### Back port request\n- [ ] 202012\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [x] 202405",
+    "files": [
+      {
+        "path": "tests/saitests/py3/sai_qos_tests.py",
+        "additions": 2,
+        "deletions": 2
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

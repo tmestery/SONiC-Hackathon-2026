@@ -1,0 +1,43 @@
+{
+  "id": "management-26426",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26426,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26426",
+    "title": "[iface_namingmode] PR #24258 skip logic makes assertions unreachable (dead code)",
+    "created_at": "2026-07-21T17:23:49Z",
+    "closed_at": "2026-08-12T20:39:13Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Description\n\nPR #24258 (merged) fixes `test_show_interfaces_counter` and `test_show_queue_counters` failures on SmartSwitch platforms where internal Dpc (backplane) ports appear in CLI output but aren't in the test setup's port mappings.\n\nHowever, the fix adds `if item not in ...: continue` immediately before the `assert item in ...` check, making the assertion dead code - if the item isn't in the list it skips, and if it is, the assert always passes.\n\n### Current code (after PR #24258):\n```\nfor item in interfaces:\n    if mode == 'alias':\n        if item not in setup['port_alias']:\n            continue\n        assert item in setup['port_alias'], ...  # always True here - dead code\n```\n\n### Suggested improvement:\nFilter unknown interfaces upfront and assert that at least some known interfaces were validated:\n\n```\nknown_interfaces = [item for item in interfaces if item in setup['port_alias']]\nassert len(known_interfaces) > 0, 'No known testbed interfaces found in output'\nfor item in known_interfaces:\n    # actual validation logic here\n```\n\nThis preserves the skip behavior for internal ports while keeping the test meaningful.\n\n### Context\n- Affects: `tests/iface_namingmode/test_iface_namingmode.py`\n- Root cause: Cisco-8102-28FH-DPU-O uses JSON path in `port_alias` module which correctly excludes Dpc role ports from test setup (to avoid renaming backplane aliases and disrupting DPU connectivity), but CLI/CONFIG_DB still shows them\n- Related PRs: #24258, #25735"
+  },
+  "resolution": {
+    "pr_number": 26429,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26429",
+    "title": "iface_namingmode: require validation of at least one frontend interface in show interfaces counter",
+    "merged_at": "2026-08-12T20:39:12Z",
+    "description": "### Description of PR\nFix test_show_interfaces_counter to properly handle SmartSwitch internal interfaces while ensuring the test still validates frontend interface naming.\n\nFixes #26426\n\n### Type of change\n\n- [x] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n- [ ] 202512\n- [x] 202605\n\n### Tested branch\n- [x] 202511\n\n### Test result\n202511: Validated on a SmartSwitch testbed.\nConfirmed test_show_interfaces_counter passes when show interfaces counter includes SmartSwitch internal/backplane interfaces that are not part of the frontend port mappings.\nConfirmed the test still requires at least one expected frontend interface to be present, preventing false-positive passes when all parsed interfaces are skipped.\nApproach\nWhat is the motivation for this PR?\n\nA previous change ignored interfaces that are not part of the frontend interface mappings (for example, SmartSwitch internal backplane interfaces). However, the associated assertions became unreachable, allowing the test to pass even when no expected frontend interfaces were validated.\n\nHow did you do it?\n\nUpdated test_show_interfaces_counter to:\n\nContinue ignoring interfaces that are not present in the frontend port mappings.\nRequire that at least one expected frontend interface is found in the CLI output.\nRemove the unreachable per-interface assertions introduced by the previous implementation.\nHow did you verify/test it?\n\nExecuted the iface_namingmode test on a SmartSwitch platform and verified that:\n\nInternal SmartSwitch interfaces no longer cause the test to fail.\nThe test succeeds when expected frontend interfaces are present.\nThe test would fail if no expected frontend interfaces are found, preventing false-positive results.\nAny platform specific information?\n\nYes. This change is primarily intended for SmartSwitch platforms, where show interfaces counter includes internal backplane interfaces that are not part of the frontend port mappings. The change is generic and preserves existing behavior on non-SmartSwitch platforms.",
+    "files": [
+      {
+        "path": "tests/iface_namingmode/test_iface_namingmode.py",
+        "additions": 44,
+        "deletions": 26
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

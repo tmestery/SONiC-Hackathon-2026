@@ -1,0 +1,57 @@
+{
+  "number": 25943,
+  "title": "[show_techsupport] credentials directory absence causes false failure",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25943",
+  "createdAt": "2026-07-07T06:35:39Z",
+  "closedAt": "2026-07-07T13:36:31Z",
+  "author": "StormLiangMS",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "\ufeff### Issue Description\n\n`show_techsupport/test_techsupport_no_secret.py::test_credentials_dir_removed_from_show_techsupport` can fail even when the techsupport dump correctly omits `/etc/sonic/credentials/`.\n\nThe test currently runs `find <dump>/etc/sonic/credentials/ -type f 2>/dev/null` through `check_no_result()`, which requires `rc == 0`. If the `credentials` directory is absent from the dump, `find` returns rc=1 with no stdout/stderr. That is the desired secure state (no credential files leaked), but the test reports `Failed: None`.\n\n### Failure summary\n\nKusto query over 202605 results in the last 60 days shows body failures grouped as `Failed: None`:\n\n\nThere are also unrelated setup/teardown failures in the same query (memory utilization, process-reboot-cause syslog, minigraph setup), so those should not be mixed with this body assertion issue.\n\nExample failing plans:\n- https://elastictest.org/scheduler/testplan/6a33b8df7b45361a6286ee98?testcase=show_techsupport%2Ftest_techsupport_no_secret.py&type=console\n- https://elastictest.org/scheduler/testplan/6a34a2a07b45361a6286efe9?testcase=show_techsupport%2Ftest_techsupport_no_secret.py&type=console\n- https://elastictest.org/scheduler/testplan/6a3b3a2091ea7fe055c2e3dd?testcase=show_techsupport%2Ftest_techsupport_no_secret.py&type=console\n\n### Triage notes\n\n- Classification: flaky test assertion / false failure.\n- The test was added by PR #24299 to verify that credential files do not appear in techsupport dumps.\n- A missing `etc/sonic/credentials/` directory in the extracted dump should pass, because no files under that directory leaked.\n\n### Proposed fix direction\n\nAllow the credentials directory to be absent before running `find`:\n\n```bash\ntest ! -d <dump>/etc/sonic/credentials/ || find <dump>/etc/sonic/credentials/ -type f\n```\n\nThis preserves the existing check when the directory exists, while treating an absent directory as success.",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25944,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25944",
+      "title": "show_techsupport: allow credentials directory to be absent from dump",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-07-07T13:36:30Z",
+      "createdAt": "2026-07-07T06:41:17Z",
+      "author": "StormLiangMS",
+      "body": "### Description of PR\n\nSummary:\nAllow `test_credentials_dir_removed_from_show_techsupport` to pass when the techsupport dump omits the entire `etc/sonic/credentials/` directory. A missing credentials directory means no credential files leaked, but the previous `find <missing-dir>` command returned rc=1 and caused a false `Failed: None` result.\n\nFixes #25943\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\n### Approach\n#### What is the motivation for this PR?\nKusto data for 202605 showed flaky body failures in `show_techsupport/test_techsupport_no_secret.py::test_credentials_dir_removed_from_show_techsupport`, primarily on Arista 7260CX3 t0-116, with summary `Failed: None`. Other query failures were unrelated setup/teardown issues.\n\nThe test verifies that no files under `/etc/sonic/credentials/` are included in the techsupport dump. If the whole directory is absent from the extracted dump, that is a valid secure outcome, but `find <missing-dir> -type f 2>/dev/null` returns rc=1. `check_no_result()` requires rc=0, so the test failed despite no credential file leakage.\n\n#### How did you do it?\nChanged the assertion command to first accept the directory being absent, and only run `find` when it exists:\n\n```bash\ntest ! -d <dump>/etc/sonic/credentials/ || find <dump>/etc/sonic/credentials/ -type f\n```\n\nThis preserves the existing behavior when the directory exists: any files under it are printed and `check_no_result()` fails.\n\n#### How did you verify/test it?\n- `python -m py_compile tests/show_techsupport/test_techsupport_no_secret.py` passes.\n- Manual style sanity checks passed: no changed line over 120 characters and no trailing whitespace.\n- Verified the PR branch is a one-commit / one-file diff against upstream `master`.\n\n#### Any platform specific information?\nObserved as a flaky false failure on 202605, mainly Arista 7260CX3 t0-116, but the test logic is platform-independent.\n\n#### Supported testbed topology if it's a new test case?\nN/A\n\n### Documentation\nN/A",
+      "files": [
+        {
+          "path": "tests/show_techsupport/test_techsupport_no_secret.py",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-07T06:41:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-07T06:41:41Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-07T11:13:46Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-07T13:37:13Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/25949"
+        }
+      ]
+    }
+  ]
+}

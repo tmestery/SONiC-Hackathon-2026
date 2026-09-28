@@ -1,0 +1,84 @@
+{
+  "number": 27787,
+  "title": "Bug: dhcp_relay test_dhcp_relay_default and test_dhcp_relay_with_source_port_ip_in_relay_enabled fail on dual-tor with sonic-relay-agent due to incorrect standby ToR cleanup",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/27787",
+  "createdAt": "2026-09-07T10:12:51Z",
+  "closedAt": "2026-09-08T23:42:44Z",
+  "author": "fzjalfred",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\ntest_dhcp_relay_default[sonic-relay-agent] and test_dhcp_relay_with_source_port_ip_in_relay_enabled[sonic-relay-agent] always fail on dual-tor testbeds. The test body passes, but the cleanup code at the end of each test calls restart_dhcp_service(standby_duthost, ['sonic']), which asserts dhcp4relay is RUNNING on the standby ToR \u2014 a process that was never started there.\n\nIntroduced by #24403 (cherry-picked as #26284).\nBefore that PR, restart_dhcp_service() took no relay_types argument and used a generic heuristic to check readiness. The refactor correctly made callers declare the expected relay type, but the standby ToR cleanup was given the same relay_types as the active ToR, without considering that the enable_sonic_dhcpv4_relay_agent fixture only configures rand_selected_dut (the active ToR).\n\nIn dual-tor mode:\n- The enable_sonic_dhcpv4_relay_agent fixture sets has_sonic_dhcpv4_relay=True and restarts dhcp_relay only on the active ToR.\n- The standby ToR is never switched; it remains on whatever relay mode the device was deployed with (typically ISC).\n- During cleanup, the test calls restart_dhcp_service(standby_duthost, relay_types) where relay_types=['sonic'], which waits for dhcp4relay to appear in supervisord on the standby ToR \u2014 it never does, and the check times out after 240s.\n\n### Steps to Reproduce\n\nRun test_dhcp_relay_default or test_dhcp_relay_with_source_port_ip_in_relay_enabled with sonic-relay-agent parameter on a dual-tor testbed\n\n### Actual Behavior and Expected Behavior\n\nActual Behavior:\nThe dhcp4relay process is completely absent from the standby ToR's supervisor state because enable_sonic_dhcpv4_relay_agent fixture only configured the active ToR. The cleanup incorrectly waits for dhcp4relay to be RUNNING on the standby ToR, which never happens.\n\nExpected Behavior:\nCleanup should complete successfully. The standby ToR cleanup should only restart the dhcp_relay container to recover dhcpmon from debug mode, without asserting any specific relay type that was never configured by the fixture.\n\n### Relevant log output\n\n```shell\nFailed: dhcp_relay is not ready (relay_types=['sonic'] last_supervisor_states={'dependent-startup': 'EXITED', 'dhcp6relay': 'RUNNING', 'dhcprelayd': 'RUNNING', 'dhcpmon-Vlan1000': 'RUNNING', 'isc-dhcpv4-relay-Vlan1000': 'RUNNING', 'rsyslogd': 'RUNNING', 'start': 'EXITED', 'supervisor-proc-exit-listener': 'RUNNING'} isc_internal_procs=[])\n```\n\n### Output of `show version`\n\n```shell\nVersion\nSONiC.202605_RC.93-dc03213076_Internal, SONiC.202605_RC.93-dc03213076_Internal\nPlatform\nx86_64-mlnx_msn4700-r0, x86_64-mlnx_msn4700-r0\nHwSKU\nMellanox-SN4700-V64, Mellanox-SN4700-V64\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 27794,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/27794",
+      "title": "[dhcp_relay] Fix standby cleanup relay-mode mismatch",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-08T23:42:43Z",
+      "createdAt": "2026-09-07T12:18:51Z",
+      "author": "StormLiangMS",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nFix standby ToR cleanup in `test_dhcp_relay_default` and\r\n`test_dhcp_relay_with_source_port_ip_in_relay_enabled`. Determine the standby's\r\nrelay mode from its own `has_sonic_dhcpv4_relay` configuration, and use that mode\r\nfor both service readiness and interface/socket checks.\r\n\r\nFixes #27787\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [x] Test case improvement\r\n\r\n### Back port request\r\n\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nhttps://github.com/sonic-net/sonic-mgmt/issues/27787\r\n\r\nFailure type: Regression introduced by #24403, backported to 202605 by #26284.\r\n\r\n### Tested branch\r\n\r\nLocal isolated regression coverage passed on master and 202605.\r\nPhysical dual-ToR verification also passed on internal-202605 plus this fix.\r\n\r\n- [x] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n\r\n| Branch | Base revision | Image | Result |\r\n|---|---|---|---|\r\n| master | `db17012d24dfa89ae2da2fe94e96def1e3a771e7` | N/A - isolated unit tests | 27 passed; changed-file pre-commit hooks passed |\r\n| 202605 | `6b8af195e61e044459e47487ed931df9260141a7` | N/A - isolated unit tests | Patch applies cleanly; the same 27 tests passed |\r\n| internal-202605 | `9fae8042611960ce3f35e646f4af2a53ba3a1961` | N/A - isolated unit tests | Adapted insertion context around internal counter helpers; 27 passed; changed-file pre-commit hooks passed |\r\n\r\n**Physical verification: FINISHED / SUCCESS, September 7, 2026.**\r\nhttps://elastictest.org/scheduler/testplan/6a9ece81cecbc372f5d55a96\r\n\r\nThe successful run used a physical `Arista-7050CX3-32S-C32` classic dual-ToR and\r\n`internal-202605` plus this fix (verification revision\r\n`acb77e225f7e526f56a50f844fefe107b613539f`). The helper and both cleanup blocks\r\nare AST-identical to this PR. Both affected tests ran with both ISC and SONiC\r\nparameters, normal pre/post checks, and no retries.\r\n\r\nBoth DUTs were confirmed on `SONiC.20260510.13`, matching the original failure.\r\nPreparation logged checkout `acb77e2`, matching the expected verification revision.\r\n\r\n| Physical testcase | ISC | SONiC |\r\n|---|---|---|\r\n| `test_dhcp_relay_default` | PASSED | PASSED |\r\n| `test_dhcp_relay_with_source_port_ip_in_relay_enabled` | PASSED | PASSED |\r\n\r\nAll four outcomes are confirmed by pytest output and JUnit XML. Both SONiC\r\ncases completed the new standby mode read, ISC service readiness, and matching\r\nsocket checks successfully. Pre-checks: **14 passed, 3 skipped**.\r\nPost-checks: **7 passed**. Overall plan: **25 passed, 3 skipped, 0 failed/errors**.\r\nThe testbed returned to READY and was released normally.\r\n\r\n**Nonfatal warning:** the module config audit reported an added\r\n`LOGGER.dhcp4relay` entry on the selected ToR. The same warning is present in\r\nthe original failing plan. Framework config reloads succeeded, and all\r\npost-checks passed; this result is not a claim of zero config drift.\r\n\r\nThe [first physical attempt](https://elastictest.org/scheduler/testplan/6a9eb06b0ba481e905c192a5)\r\nhit the two-hour total `TEST_PLAN_TIMEOUT` after three passes and one interrupted\r\ncase. The successful rerun changed only the plan name and total budget (four\r\nhours), not code, test selection, assertions, pre/post checks, or retries.\r\n\r\nCI also completed successfully: Azure sonic-mgmt including all impacted-area\r\nKVM jobs, CodeQL, Semgrep, DCO, and EasyCLA.\r\n\r\nOriginal failure:\r\nhttps://elastictest.org/scheduler/testplan/6a99260a3ff6ad8b9caddf7a?testcase=dhcp_relay%2Ftest_dhcp_relay.py&type=console\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nThe SONiC-relay fixture configures only the selected ToR. The standby normally\r\nremains on ISC, but both tests passed the selected ToR's `relay_types` to standby\r\ncleanup. For the SONiC parameter this waits for a standby `dhcp4relay` process\r\nthat was never configured. The subsequent socket check had the same incorrect\r\nassumption.\r\n\r\n#### How did you do it?\r\n\r\nAdd a small shared standby-cleanup helper within the test module. It reads\r\n`DEVICE_METADATA|localhost.has_sonic_dhcpv4_relay` from the standby CONFIG_DB and\r\nuses the same exact `\"True\"` check as the DHCP relay supervisor template.\r\nAn absent or disabled flag selects ISC; an enabled flag selects SONiC.\r\n\r\nBoth affected cleanup blocks call this helper. Selected-ToR configuration,\r\ntraffic assertions, counter expectations, and selected-ToR cleanup remain\r\nunchanged. Standby mode is not changed, and no readiness or socket assertions\r\nare removed. CONFIG_DB read failures propagate instead of silently selecting\r\nanother relay mode.\r\n\r\nThis does not enable SONiC on an otherwise ISC standby or change the test's\r\nforwarding coverage.\r\n\r\n#### How did you verify/test it?\r\n\r\n```text\r\npython -m pytest --noconftest --confcutdir=tests/common/unit_tests \\\r\n  tests/common/unit_tests/unit_test_dhcp_relay_cleanup.py -q\r\n\r\npython -m pre_commit run --files \\\r\n  tests/dhcp_relay/test_dhcp_relay.py \\\r\n  tests/common/unit_tests/unit_test_dhcp_relay_cleanup.py \\\r\n  tests/common/unit_tests/README.md\r\n\r\ngit diff --check\r\n```\r\n\r\nThe regression suite executes the actual helper and both actual cleanup blocks\r\nin an isolated namespace, following the repository's existing AST-based unit\r\ntest pattern. Coverage includes single/dual-ToR, ISC/SONiC selected mode,\r\nabsent/disabled/enabled standby feature flag, and propagation of CONFIG_DB,\r\nservice-readiness, and socket failures.\r\n\r\nThe complete patch was also applied to a separate 202605 worktree and the same\r\ntests rerun there. The physical run above separately verified packet forwarding,\r\ncounters, both standby cleanup paths, and normal pre/post checks.\r\n\r\n#### Any platform specific information?\r\n\r\nThe defect is common to dual-ToR platforms, not ASIC-specific. The reported\r\nsupervisor-state signature occurs with an ISC-configured standby while the\r\nselected ToR uses SONiC relay.\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\nNo new integration testcase or topology is introduced. Regression coverage\r\nchecks single-ToR and dual-ToR cleanup paths.\r\n\r\n### Documentation\r\n\r\nUpdated `tests/common/unit_tests/README.md` with the isolated regression command,\r\ncoverage, and the distinction from physical dual-ToR verification.\r\n",
+      "files": [
+        {
+          "path": "tests/common/unit_tests/README.md",
+          "additions": 15,
+          "deletions": 0
+        },
+        {
+          "path": "tests/common/unit_tests/unit_test_dhcp_relay_cleanup.py",
+          "additions": 112,
+          "deletions": 0
+        },
+        {
+          "path": "tests/dhcp_relay/test_dhcp_relay.py",
+          "additions": 14,
+          "deletions": 4
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-07T12:19:00Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T12:19:09Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-07T12:19:26Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-09-07T17:22:48Z",
+          "body": "Physical verification completed successfully:\r\nhttps://elastictest.org/scheduler/testplan/6a9ece81cecbc372f5d55a96\r\n\r\nPhysical Arista-7050CX3-32S-C32 classic dual-ToR, both DUTs on SONiC.20260510.13.\r\nThe verification checkout was `acb77e2` on internal-202605 plus this PR's fix;\r\nthe helper and both cleanup blocks are AST-identical to PR head `f02c7bc`.\r\n\r\n| Test | ISC | SONiC |\r\n|---|---|---|\r\n| `test_dhcp_relay_default` | PASSED | PASSED |\r\n| `test_dhcp_relay_with_source_port_ip_in_relay_enabled` | PASSED | PASSED |\r\n\r\nAll four passes are confirmed by pytest output and JUnit XML. Both SONiC\r\nstandby readiness/socket cleanup paths completed successfully. Pre-checks:\r\n14 passed, 3 skipped. Post-checks: 7 passed. No retries. The testbed was released\r\nnormally and is READY.\r\n\r\nA nonfatal `LOGGER.dhcp4relay` config-drift warning on the selected ToR remains\r\ndocumented; the same warning exists in the original failing plan. Framework\r\nconfig reloads succeeded, and post-checks passed.\r\n\r\nThe earlier two-hour run timed out after three passes and one interrupted\r\ncase. This successful run changed only the total budget to four hours and\r\nthe plan name. PR CI also completed successfully.\r\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-07T18:13:38Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "StormLiangMS",
+          "createdAt": "2026-09-08T23:38:58Z",
+          "body": "Thanks, @Xichen96 will come up a PR to follow up."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-08T23:43:21Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/27817"
+        }
+      ]
+    }
+  ]
+}

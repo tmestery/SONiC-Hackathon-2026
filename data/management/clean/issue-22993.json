@@ -1,0 +1,43 @@
+{
+  "id": "management-22993",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22993,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22993",
+    "title": "Bug: Pytest hangs while running test_default_route.py",
+    "created_at": "2026-03-16T09:29:18Z",
+    "closed_at": "2026-03-18T08:38:35Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nPytest hangs while running test_default_route.py. After going through scripts, could observe that one thread is in while loop forever.\n\n### Steps to Reproduce\n\npython3 -m pytest route/test_default_route.py\n\n### Actual Behavior and Expected Behavior\n\nTestcase should pass/fail. Below thread is running for ever in few scenarios.\n\n```\ndef monitor_memory(process_name, initial_memory, interval):\n    while True:\n        memory_usage = get_memory_usage(process_name)\n        logging.info(\"Monitor Memory usage for {}: {} bytes\".format(process_name, memory_usage))\n        if memory_usage >= 2 * initial_memory:\n            pytest_assert(False,\n                          \"{} exceeded double the initial memory usage: {} bytes\".format(process_name, initial_memory))\n        time.sleep(interval)\n\n```\n\n### Relevant log output\n\n```shell\ntest_default_route.py::test_default_route_with_bgp_flap\n-------------------------------- live log setup --------------------------------\nINFO     root:init.py:53 Completeness level not set during test execution. Setting to default level: 1\nINFO     root:init.py:151 Test has no defined levels. Continue without test completeness checks\nINFO     root:init.py:31 logrotate called on blrsonic-d4-oc1-dut\nINFO     tests.common.helpers.parallel:parallel.py:147 process analyzer_logrotate-- terminated with exit code None\nINFO     tests.common.helpers.parallel:parallel.py:234 Force read exception regardless of whether the process exited normally.\nINFO     tests.common.helpers.parallel:parallel.py:296 Completed running processes for target \"analyzer_logrotate\" in <IPV6>.754809 seconds\nINFO     root:loganalyzer.py:244 Loaded extend ignore config: []\nINFO     root:init.py:43 add marker called on blrsonic-d4-oc1-dut\nINFO     root:init.py:45 Add start marker into DUT syslog for host blrsonic-d4-oc1-dut\nINFO     tests.common.helpers.parallel:parallel.py:147 process analyzer_add_marker-- terminated with exit code None\nINFO     tests.common.helpers.parallel:parallel.py:234 Force read exception regardless of whether the process exited normally.\nINFO     tests.common.helpers.parallel:parallel.py:296 Completed running processes for target \"analyzer_add_marker\" in <IPV6>.728601 seconds\nINFO     tests.common.devices.sonic:sonic.py:1872 asic: td4\nINFO     tests.common.plugins.memory_utilization:init.py:130 Memory utilization monitoring is disabled\nINFO     root:init.py:69 -------------------- fixture ignore_expected_loganalyzer_exception setup starts --------------------\nINFO     root:init.py:76 -------------------- fixture ignore_expected_loganalyzer_exception setup ends --------------------\nINFO     root:conftest.py:3773 skip setup dualtor mux cables on non-dualtor testbed\n-------------------------------- live log call ---------------------------------\nINFO     root:test_default_route.py:240 Monitor Memory usage for openbmpd: 0 bytes\nINFO     root:test_default_route.py:240 Monitor Memory usage for bgpd: 0 bytes << Test hangs here\n```\n\n### Output of `show version`\n\n```shell\n202511\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 23066,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/23066",
+    "title": "Fix infinite loop in monitor_memory causing pytest hang (#22993)",
+    "merged_at": "2026-03-18T08:38:34Z",
+    "description": "### Description of PR\n\nThe `monitor_memory()` function had an infinite `while True` loop with no exit condition. When `test_default_route_with_bgp_flap()` tried to join the monitoring threads in the finally block, it would hang indefinitely because the threads never terminated.\n\nThis fix adds a `threading.Event` to signal when monitoring should stop:\n- Added `stop_event` parameter to `monitor_memory()`\n- Changed `while True` to `while not stop_event.is_set()`\n- Create `stop_event` in `test_default_route_with_bgp_flap()`\n- Pass `stop_event` to all monitoring threads\n- Set `stop_event` before joining threads in finally block\n\nThis allows the threads to exit gracefully and prevents pytest from hanging.\n\nSummary:\nFixes #22993\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n\n#### What is the motivation for this PR?\n\nPytest hangs indefinitely while running `test_default_route.py`. The test creates monitoring threads that run in an infinite loop with no exit condition. When the monitored processes (openbmpd, bgpd) are not running, their initial memory is 0 bytes, and the condition `memory_usage >= 2 * initial_memory` is never True, causing the threads to loop forever.\n\n#### How did you do it?\n\nImplemented a graceful thread termination mechanism using `threading.Event`:\n1. Modified `monitor_memory()` to accept a `stop_event` parameter\n2. Changed the infinite loop from `while True` to `while not stop_event.is_set()`\n3. Created a `stop_event` in the test function\n4. Passed the `stop_event` to all monitoring threads\n5. Set the `stop_event` in the finally block before joining threads\n\n#### How did you verify/test it?\n\n- Verified the fix prevents infinite loops when processes have 0 initial memory\n- Confirmed threads terminate gracefully when `stop_event` is set\n- Test can now complete successfully without hanging\n\n#### Any platform specific information?\n\nGeneric - affects all platforms\n\n#### Supported testbed topology if it's a new test case?\n\nN/A - This is a bug fix for existing test case\n\n### Documentation\n\nN/A - Bug fix only, no new features or test cases added",
+    "files": [
+      {
+        "path": "tests/route/test_default_route.py",
+        "additions": 11,
+        "deletions": 4
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

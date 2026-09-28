@@ -1,0 +1,90 @@
+{
+  "number": 16147,
+  "title": "[Bug]: `fib/test_fib.py::test_fib::test_hash[ipv4]` failing due to `check_balancing` for `ip-protocol` varying field",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/16147",
+  "createdAt": "2024-12-18T18:01:20Z",
+  "closedAt": "2025-01-22T21:32:26Z",
+  "author": "arista-nwolfe",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\r\n\r\nThe `fib/test_fib.py::test_fib::test_hash[ipv4]` test checks the ECMP and LAG hashing of 5 different fields:\r\n`'src-ip', 'dst-ip', 'src-port', 'dst-port', 'ip-proto'`\r\n\r\nThe `ip-proto` field is only 8-bits wide so can only have 256 unique values (some of which we need to exclude for special cases).\r\nFor this reason even though the test is sending 8000 packets we only end up with ~256 unique packets which are re-sent many times, so if hashing is a little off on these ~256 buckets then we'll get a big deviation from the expected hashing.\r\n\r\nThe test expects no ECMP or LAG hash to exceed 25% deviation but we see some do:\r\n```\r\ntype         port(s)           exp_cnt        act_cnt        diff(%)\r\nECMP         [0, 1]                333            268         -19.6%\r\nLAG          0                     134            109        -18.66%\r\nLAG          1                     134            159         18.66%\r\nECMP         [2, 3]                333            517          55.1%\r\nLAG          2                     258            260          0.58%\r\nLAG          3                     258            257         -0.58%\r\nECMP         [4, 5]                333            214         -35.8%\r\nLAG          4                     107            131         22.43%\r\nLAG          5                     107             83        -22.43%\r\nECMP         [6, 7]                333            448          34.4%\r\nLAG          6                     224            192        -14.29%\r\nLAG          7                     224            256         14.29%\r\nECMP         [8, 9]                333            143     -57.099999999999994%\r\nLAG          8                      71             89         24.48%\r\nLAG          9                      71             54        -24.48%\r\nECMP         [10, 11]              333            425     27.500000000000004%\r\nLAG          10                    212            193     -9.180000000000001%\r\nLAG          11                    212            232     9.180000000000001%\r\nECMP         [16, 17]              333            317          -4.9%\r\nLAG          16                    158            156         -1.58%\r\nLAG          17                    158            161          1.58%\r\nECMP         [13, 14]              333            479          43.7%\r\nLAG          13                    239            257          7.31%\r\nLAG          14                    239            222         -7.31%\r\nECMP         [12]                  333            225         -32.5%\r\nECMP         [15]                  333            453          35.9%\r\nECMP         [18]                  333            106         -68.2%\r\nECMP         [19]                  333            443          32.9%\r\nECMP         [20]                  333            256     -23.200000000000003%\r\nECMP         [21]                  333            485          45.5%\r\nECMP         [22]                  333            275         -17.5%\r\nECMP         [23]                  333            423     26.900000000000002%\r\nECMP         [24]                  333            137         -58.9%\r\nECMP         [25]                  333            407          22.1%\r\nECMP         [26]                  333            200         -40.0%\r\nECMP         [27]                  333            507          52.1%\r\nECMP         [28]                  333            268         -19.6%\r\nECMP         [29]                  333            419          25.7%\r\nECMP         [30]                  333            159     -52.300000000000004%\r\nECMP         [31]                  333            426     27.800000000000004%\r\n```\r\n\r\n### Results you see\r\n\r\n`ip-proto` hashing test goes outside of the 25% deviation threshold on some ports\r\n\r\n### Results you expected to see\r\n\r\n`ip-proto` might need the threshold relaxed a little due to it's 8-bit entropy limitation.\r\n\r\n### Is it platform specific\r\n\r\ngeneric\r\n\r\n### Relevant log output\r\n\r\n_No response_\r\n\r\n### Output of `show version`\r\n\r\n_No response_\r\n\r\n### Attach files (if any)\r\n\r\n_No response_",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2025-01-08T16:45:58Z",
+      "body": "@tjchadaga please review the fix."
+    },
+    {
+      "author": "auspham",
+      "createdAt": "2025-05-27T05:27:59Z",
+      "body": "Hi @arista-nwolfe, we noticed the same thing for LT2 running arista platform, we have 14-way ECMP and i noticed diff(%) could go up to 40% for ip-protocol.\n\nI have checked from my ends ip routes and weight they're looking good from our side. Could you please advise if this change is needed for 14-way ECMP as well? \n\nThank you \n\n\ncc @bingwang-ms for viz"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 16188,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/16188",
+      "title": "Increase tolerance for 'ip-proto' hash_key on t2 topos",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2025-01-22T21:32:25Z",
+      "createdAt": "2024-12-20T18:59:55Z",
+      "author": "arista-nwolfe",
+      "body": "'ip-proto' hash_key only has 8-bits of entropy which won't result in good distributions on systems with large ECMP groups.\r\nT2 systems have a 24-way ecmp which sees some paths deviate from the 25% threshold for the `ip-proto` hash key.\r\n\r\nThis change increases the tolerance just for `ip-proto` and `t2` full topologies.\r\nFor more details see https://github.com/sonic-net/sonic-mgmt/issues/16147\r\n\r\nSummary:\r\nFixes #16147 \r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 202012\r\n- [ ] 202205\r\n- [ ] 202305\r\n- [ ] 202311\r\n- [x] 202405\r\n",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/ptftests/py3/hash_test.py",
+          "additions": 17,
+          "deletions": 9
+        },
+        {
+          "path": "tests/fib/test_fib.py",
+          "additions": 10,
+          "deletions": 5
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2024-12-20T18:59:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2024-12-20T19:00:14Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "arista-nwolfe",
+          "createdAt": "2025-01-15T17:16:10Z",
+          "body": "/azpw run Azure.sonic-mgmt"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-01-15T17:16:13Z",
+          "body": "/AzurePipelines run Azure.sonic-mgmt"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2025-01-15T17:16:25Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-09T02:05:20Z",
+          "body": "Cherry-pick PR to msft-202412: https://github.com/Azure/sonic-mgmt.msft/pull/185"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2025-04-15T01:36:18Z",
+          "body": "Cherry-pick PR to msft-202412: https://github.com/Azure/sonic-mgmt.msft/pull/192"
+        }
+      ]
+    }
+  ]
+}

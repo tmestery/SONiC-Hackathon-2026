@@ -1,0 +1,43 @@
+{
+  "id": "management-23756",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 23756,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/23756",
+    "title": "Bug: test_route_perf: reload_dut fixture crashes with AttributeError when rep_call is missing",
+    "created_at": "2026-04-08T22:06:03Z",
+    "closed_at": "2026-04-15T07:42:13Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nThe reload_dut fixture is an autouse=True teardown fixture. After yield, it accesses request.node.rep_call.failed to decide whether to config-reload the DUT. The problem is that rep_call is only set by the pytest_runtest_makereport hook after the test call phase completes. If the fixture teardown runs in a scenario where rep_call hasn't been attached yet (e.g., the test was skipped, collection failed, or an error occurred during setup), accessing request.node.rep_call raises an AttributeError, masking a real failure.\n\nhttps://github.com/sonic-net/sonic-mgmt/blob/af3dde7d701145173a47061a2d086c1e6acfdeee/tests/route/test_route_perf.py#L152-L158\n\n### Steps to Reproduce\n\nIf any of the dependent fixture fails, this error can be reproduced.\n\n### Actual Behavior and Expected Behavior\n\nActual behavior:\n\nWhen test_perf_add_remove_routes fails during the setup phase (e.g., DUT unreachable, fixture error, or test skipped), the reload_dut teardown crashes with:\n\nAttributeError: 'Function' object has no attribute 'rep_call'\n\nThis results in:\n- The original setup failure / skip reason is masked in the test report by the AttributeError\n- The config_reload cleanup is never evaluated \u2014 if it was actually needed, the DUT is left in a dirty state\n- Test report shows an ERROR in teardown instead of the real root cause, making triage harder\n\nExpected behavior:\n\nWhen the test never reaches the call phase, the reload_dut teardown should exit gracefully without error. Specifically:\n\n- If rep_call is not present (test was skipped or failed in setup), the fixture should assume no config reload is needed and return silently\n- The original failure / skip reason should be the only error visible in the test report\n- No secondary AttributeError should appear in teardown\n\n### Relevant log output\n\n```shell\nAttributeError: 'Function' object has no attribute 'rep_call'\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 23757,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/23757",
+    "title": "Fix `reload_dut` AttributeError when test skips or fails in setup ",
+    "merged_at": "2026-04-15T07:42:11Z",
+    "description": "### Description of PR\n\nSummary:\nThe `reload_dut` fixture in `tests/route/test_route_perf.py` unconditionally accesses `request.node.rep_call.failed` during teardown. The `rep_call` attribute is only set by the `pytest_runtest_makereport` hook (in `tests/conftest.py`)\nafter the call phase completes. When a test is skipped or fails during setup, `rep_call` is never set, causing an `AttributeError` that masks the original failure.\n\nThis PR adds a `hasattr` guard so the teardown exits gracefully when the test never reaches the call phase\n\nFixes #23756\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [x] 202405\n- [x] 202411\n- [ ] 202505\n- [x] 202511\n\n### Approach\n#### What is the motivation for this PR?\nWhen `test_perf_add_remove_routes` fails during setup or is skipped, the `reload_dut` fixture teardown crashes with:\nAttributeError: 'Function' object has no attribute 'rep_call'\nThis secondary error masks the real root cause in the test report and may leave the DUT in a dirty state.\n\n#### How did you do it?\nAdded a `hasattr(request.node, \"rep_call\")` guard before accessing `request.node.rep_call.failed`\n\n#### How did you verify/test it?\n- Verified the fix by triggering a setup-phase failure (unreachable DUT) and confirming the teardown completes without `AttributeError`.\n- Confirmed that the `config_reload` path still executes correctly when `rep_call` is present and `failed` is `True`.\n\n#### Any platform specific information?\nNA\n\n#### Supported testbed topology if it's a new test case?\nNA\n\n### Documentation\n\nNA",
+    "files": [
+      {
+        "path": "tests/route/test_route_perf.py",
+        "additions": 1,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

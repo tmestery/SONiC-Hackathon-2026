@@ -1,0 +1,58 @@
+{
+  "id": "management-4817",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 4817,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/4817",
+    "title": "test_reboot.py validation issue for the warmboot_finalizer activating state",
+    "created_at": "2021-12-06T14:46:46Z",
+    "closed_at": "2022-02-09T01:57:34Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "This is with respect to the below PR that went in\nhttps://github.com/Azure/sonic-mgmt/pull/4706\n\nThe above PR adds check to validate the warmboot finalizer state with below\nif reboot_type == 'warm':\n        logger.info('waiting for warmboot-finalizer service to become activating on {}'.format(hostname))\n        # Check if finalizer state reaches \"activating\" before the \"wait\" period,\n        # the default wait is 90s since issue of warm-reboot).\n        # If the finalizer state is activating, however time passed is greater than \"wait\",\n        # then fail the testcase. Start with empty value to verify time passed before\n        # checking finalizer state for the first time.\n        finalizer_state = ''\n        while finalizer_state != 'activating':\n            dut_datetime_after_ssh = duthost.get_now_time()\n            time_passed = float(dut_datetime_after_ssh.strftime(\"%s\")) - float(dut_datetime.strftime(\"%s\"))\n            if time_passed > wait:\n                raise Exception('warmboot-finalizer never reached state \"activating\" on {}'.format(hostname))\n            time.sleep(1)\n            finalizer_state = get_warmboot_finalizer_state(duthost)\n\nThis was done to make sure we dont allow the false positive (first time we get warmboot finalizer state it might be more than 90s and the script used to let it go through before).\n\nHowever the above change causes failure to valid case:\n\nt0 - > warmboot was issued\nt0+50sec -> warmboot finalizer state became activating\nt0+91sec -> script checks the warmboot finalizer state and thinks that 90sec has passed and fails the case. This is not really valid since warmboot finalizer state did become activating below 90s and just that ssh to device to validate took long.\nSince the test case is about validating \"When warmboot finalizer state became activating\", the check that was added causes right case to fail and we might have to address that."
+  },
+  "resolution": {
+    "pr_number": 5083,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/5083",
+    "title": "[advanced-reboot] Verify LACP session timeout after warmboot",
+    "merged_at": "2022-02-09T01:57:34Z",
+    "description": "### Description of PR\n\nSummary: Improve LAG flap  detection - measure LACP session wait time during warmboot.\n\nFix https://github.com/Azure/sonic-mgmt/issues/4817\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [x] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n\n### Approach\n#### What is the motivation for this PR?\n\nThe present test_reboot.py::test_warm_reboot has inaccurate mechanism to verify 90s timeout for control plane downtime.\n\nProblem with present code in test_reboot.py:\n\n1. Start anchor for 90s timeout is at the time of issuing the warmboot command.\n2. End anchor for 90s timeout is when FINALIZER state has reached `activating` state.\n\nThis leads to false positives as the timer starts much earlier than last LACP PDU is sent, and the timer ends much later than when first LACP PDU is received.\n\n#### How did you do it?\n\nFix this issues by:\n\n1. Do not run a timer.\n2. Catch the timestamp of last LACPDU sent by DUT (t0) to neighbors (t1) before warmboot kexec.\n3. Catch the timestamp of first LACPDU after warmboot.\n4. Measure the time difference between two LACPDUs from each T1, and verify if they are under 90s.\n5. If the difference is >=90s, then the neighbors will initiate LACP session teardown, causing to LAGs flap.\n\nSince these checks involve interacting with neighbors and do advanced checks, moving this check from `test_reboot.py` to `test_advanced_reboot.py`.\n\n#### How did you verify/test it?\nTested on  physical DUTs.\n\nNow if the LACPDUs are sent too late, test fails with:\n```\n2022-02-06 <IPV6> : --------------------------------------------------\n2022-02-06 <IPV6> : Fails:\n2022-02-06 <IPV6> : --------------------------------------------------\n2022-02-06 <IPV6> : FAILED:<IP>:bgp ipv4 graceful restart is not enabled\n2022-02-06 <IPV6> : FAILED:<IP>:bgp graceful restart timeout is less then 120 seconds\n2022-02-06 <IPV6> : FAILED:<IP>:bgp ipv4 graceful restart is not enabled\n2022-02-06 <IPV6> : FAILED:<IP>:bgp graceful restart timeout is less then 120 seconds\n2022-02-06 <IPV6> : FAILED:<IP>:bgp ipv4 graceful restart is not enabled\n2022-02-06 <IPV6> : FAILED:<IP>:bgp graceful restart timeout is less then 120 seconds\n2022-02-06 <IPV6> : FAILED:<IP>:bgp ipv4 graceful restart is not enabled\n2022-02-06 <IPV6> : FAILED:<IP>:bgp graceful restart timeout is less then 120 seconds\n2022-02-06 <IPV6> : FAILED:dut:LACP session terminated by Neighbor (<IP>) post-reboot lacpdu came after 91.9960591793s of lacpdu pre-boot\n2022-02-06 <IPV6> : FAILED:dut:LACP session terminated by Neighbor (<IP>) post-reboot lacpdu came after 91.710517168s of lacpdu pre-boot\n2022-02-06 <IPV6> : FAILED:dut:LACP session terminated by Neighbor (<IP>) post-reboot lacpdu came after 92.1095261574s of lacpdu pre-boot\n2022-02-06 <IPV6> : FAILED:dut:LACP session terminated by Neighbor (<IP>) post-reboot lacpdu came after 91.9090697765s of lacpdu pre-boot\n2022-02-06 <IPV6> : ==================================================\n```\nAlso this is captured in the timing data reporT:\n```\n{\n\t\"controlplane\": {\n\t\t\"arp_ping\": \"\",\n\t\t\"downtime\": \"82.739583\"\n\t},\n\t\"lacp_sessions\": {\n\t\t\"<IP>\": 92.10952615737915,\n\t\t\"<IP>\": 91.99605917930603,\n\t\t\"<IP>\": 91.90906977653503,\n\t\t\"<IP>\": 91.71051716804504\n\t},\n\t\"dataplane\": {\n\t\t\"lost_packets\": \"0\",\n\t\t\"downtime\": \"0.0\"\n\t}\n}\n```\n\nOtherwise, if PDUs are received in time, the timing is captured in the test report:\n```\n    \"lacp_sessions\": {\n        \"<IP>\": 83.43812203407288,\n        \"<IP>\": 83.38292264938354,\n        \"<IP>\": 83.26467967033386,\n        \"<IP>\": 83.12556576728821\n    },\n    \"dataplane\": {\n        \"lost_packets\": \"0\",\n        \"downtime\": \"0.0\"\n    },\n    \"controlplane\": {\n        \"arp_ping\": \"\",\n        \"downtime\": \"74.469363\"\n    },\n```\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "ansible/roles/test/files/ptftests/advanced-reboot.py",
+        "additions": 28,
+        "deletions": 3
+      },
+      {
+        "path": "ansible/roles/test/files/ptftests/arista.py",
+        "additions": 68,
+        "deletions": 3
+      },
+      {
+        "path": "tests/common/reboot.py",
+        "additions": 1,
+        "deletions": 38
+      },
+      {
+        "path": "tests/platform_tests/conftest.py",
+        "additions": 10,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

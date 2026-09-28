@@ -1,0 +1,85 @@
+{
+  "number": 15813,
+  "title": "[Bug]: Some log lost during the place_marker_to_syslog in loganalyzer ",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/15813",
+  "createdAt": "2024-11-30T13:02:56Z",
+  "closedAt": "2026-02-27T16:12:44Z",
+  "author": "nhe-NV",
+  "labels": [
+    "Help Wanted"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Issue Description\r\n\r\nIn the place_marker_to_syslog,  when the flush_rsyslogd() is called, sometimes it will have some log lost since \"sudo kill -HUP {}\".format(pid)\" \r\n\r\nThis is a known issue This is a known issue: https://serverfault.com/questions/813871/proper-way-to-reload-rsyslog-with-a-config-file-for-a-custom-application\r\n\r\n![image](https://github.com/user-attachments/assets/4dba82e7-dbe9-4dd2-9d2e-1e4775851dc5)\r\n\r\n\r\n```\r\ndef place_marker_to_syslog(self, marker):\r\n        syslogger = self.init_sys_logger()\r\n        syslogger.info(marker)\r\n        syslogger.info('\\n')\r\n        self.flush_rsyslogd()\r\n\r\n\r\ndef flush_rsyslogd(self):\r\n        '''\r\n        @summary: flush all remaining buffer in rsyslogd to disk\r\n\r\n        rsyslog.service - System Logging Service\r\n            Loaded: loaded (/lib/systemd/system/rsyslog.service; enabled; vendor preset: enabled)\r\n            Active: active (running) since Fri 2021-09-03 15:50:17 UTC; 14h ago\r\n        TriggeredBy: syslog.socket\r\n            Docs: man:rsyslogd(8)\r\n             https://www.rsyslog.com/doc/\r\n         Main PID: 17516 (rsyslogd)\r\n         Tasks: 5 (limit: 3402)\r\n         Memory: 3.3M\r\n         CGroup: /system.slice/rsyslog.service\r\n              17516 /usr/sbin/rsyslogd -n\r\n        '''\r\n        pid = None\r\n        out = str(subprocess.check_output(\"systemctl status rsyslog\", shell=True))\r\n        for msgs in out.split('\\n'):\r\n            m = re.search(re_rsyslog_pid, msgs)\r\n            if m:\r\n                pid = int(m.group(1))\r\n                break\r\n\r\n        if pid:\r\n            os.system(\"sudo kill -HUP {}\".format(pid))\r\n```\r\n\r\n\r\n### Results you see\r\n\r\nSometimes, there will be log lost when run loganalyzer\r\n\r\nWhen run place_marker_to_syslog, sometimes there will be timeout exception: \r\n[ INFO] (proxy_ssh_engine.py:622) Traceback (most recent call last):\r\n\r\nFile \"/tmp/loganalyzer.py\", line 870, in <module>\r\n\r\nmain(sys.argv[1:])\r\n\r\nFile \"/tmp/loganalyzer.py\", line 851, in main\r\n\r\nanalyzer.place_marker(\r\n\r\nFile \"/tmp/loganalyzer.py\", line 262, in place_marker\r\n\r\nraise RuntimeError(\r\n\r\nRuntimeError: cannot find marker end-LogAnalyzer-test_check_errors_in_log_during_deploy_sonic_image in /var/log/syslog\r\n\r\n**The timeout is due to could not find the mark in the syslog.**\r\n\r\n\r\n### Results you expected to see\r\nplace_marker_to_syslog could always pass and No log lost \r\n\r\n### Is it platform specific\r\n\r\ngeneric\r\n\r\n### Relevant log output\r\n\r\n_No response_\r\n\r\n### Output of `show version`\r\n\r\n```shell\r\nit could happen to any version\r\n```\r\n\r\n\r\n### Attach files (if any)\r\n\r\n_No response_",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2024-12-11T16:43:59Z",
+      "body": "@nhe-NV can you add more specific scenarios to the \"Results you see\" section? I suspect that 'failed to find the start marker' is one of them?"
+    },
+    {
+      "author": "nhe-NV",
+      "createdAt": "2024-12-12T02:42:00Z",
+      "body": "> @nhe-NV can you add more specific scenarios to the \"Results you see\" section? I suspect that 'failed to find the start marker' is one of them?\r\n\r\nUpdated"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22447,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22447",
+      "title": "[loganalyzer] Replace kill -HUP with systemctl reload to prevent syslog message loss",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-27T16:12:43Z",
+      "createdAt": "2026-02-18T02:04:18Z",
+      "author": "rustiqly",
+      "body": "Fixes #15813.\n\nThe loganalyzer's flush_rsyslogd() used 'kill -HUP <pid>' to flush rsyslog\nbuffers to disk. This causes rsyslog to close and reopen all log files,\ncreating a race window where in-flight syslog messages can be lost. This\nmanifests as intermittent 'cannot find marker' failures in loganalyzer.\n\nReplace the manual PID lookup + kill -HUP with 'systemctl reload rsyslog',\nwhich performs a cleaner configuration reload. Add a 0.5s sleep after reload\nto give rsyslog time to flush internal queues.\n\nAlso remove the now-unused re_rsyslog_pid regex and subprocess import.\n\nSigned-off-by: Rustiqly <rustiqly@users.noreply.github.com>\nSigned-off-by: Sonicly1G <sonicly1g@users.noreply.github.com>\n\nRe-submitted from rustiqly (closes #22426). Fixes #15813.",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/tools/loganalyzer/loganalyzer.py",
+          "additions": 11,
+          "deletions": 23
+        }
+      ],
+      "comments": [
+        {
+          "author": "linux-foundation-easycla",
+          "createdAt": "2026-02-18T02:04:25Z",
+          "body": "<a href=\"https://easycla.lfx.linuxfoundation.org/#/?version=2\"><img src=\"https://s3.amazonaws.com/cla-project-logo-prod/cla-signed.svg?v=2\" alt=\"CLA Signed\" align=\"left\" height=\"28\" width=\"328\" ></a><br/><br />The committers listed above are authorized under a signed CLA.<ul><li>:white_check_mark: login: rustiqly / name: Rustiqly  (de20faeacc3d93cc62fc51ae2d672950d543c5a5)</li></ul>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-18T02:04:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-18T02:04:40Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-26T00:13:43Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-26T00:13:57Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rustiqly",
+          "createdAt": "2026-02-27T04:41:22Z",
+          "body": "@copilot review"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-15T04:52:17Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/26191"
+        }
+      ]
+    }
+  ]
+}

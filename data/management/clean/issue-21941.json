@@ -1,0 +1,43 @@
+{
+  "id": "management-21941",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 21941,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/21941",
+    "title": "Bug: `test_everflow_fwd_recircle_port_queue_check` fails specifically for `TestEverflowV4IngressAclIngressMirror` variant on VOQ systems",
+    "created_at": "2026-01-15T00:32:06Z",
+    "closed_at": "2026-03-04T19:00:46Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\n`everflow/test_everflow_testbed.py::TestEverflowV4IngressAclIngressMirror::test_everflow_fwd_recircle_port_queue_check` fails due to unexpected number of packets in the Ethernet-Rec0 VOQ\n\n```\n            for q in range(1, 8):\n                if str(q) == queue:\n>                   assert wait_until(30, 1, 0, check_queue_counters, duthost, asic_ns, recircle_port, q, count), \\\n                        \"Recircle port {} queue{} counter value is not same as packets sent\".format(recircle_port, q)\nE                   AssertionError: Recircle port Ethernet-Rec0 queue4 counter value is not same as packets sent\n```\n\nThe test calls `send_and_check_mirror_packets` 10 times and therefor expects 10 packets to show up on Ethernet-Rec0's VOQ.\nHowever we're seeing 20 packets:\n```\n# show queue counters Ethernet-Rec0\n         Port    TxQ    Counter/pkts    Counter/bytes    Drop/pkts    Drop/bytes\n-------------  -----  --------------  ---------------  -----------  ------------\nEthernet-Rec0    UC4              20            3,060            0             0\n```\n\nThe reason being is on VOQ systems specifically for Ingress Everflow every call to `send_and_check_mirror_packets` actually injects 2 packets.\nSeen here:\nhttps://github.com/sonic-net/sonic-mgmt/blob/202511/tests/everflow/everflow_test_utilities.py#L1046\n```\n        if 't2' in setup['topo'] and 'lt2' not in setup['topo'] and 'ft2' not in setup['topo']:\n            if valid_across_namespace is True:\n                src_port_set.add(src_port) <-----------------------------------------\n                src_port_metadata_map[src_port] = (None, 1)\n                # Add the dest_port to src_port_set only in non MACSEC testbed scenarios\n                if not MACSEC_INFO:\n                    if duthost.facts['switch_type'] == \"voq\":\n                        if self.mirror_type() != \"egress\":  # no egress route on the other node/namespace\n                            src_port_set.add(dest_ports[0]) <-------------------------------------------------\n                            src_port_metadata_map[dest_ports[0]] = (setup[direction][\"egress_router_mac\"], 1)\n```\nWe add one of the `dest_ports` to the `src_port_set` meaning we'll have 2 entries in there resulting in 2 injected packets and 2 packets hitting Ethernet-Rec0.\n\n### Steps to Reproduce\n\n Run `everflow/test_everflow_testbed.py::TestEverflowV4IngressAclIngressMirror::test_everflow_fwd_recircle_port_queue_check` on a VOQ system\n\n### Actual Behavior and Expected Behavior\n\nWe should expect the Ethernet-Rec0 VOQ counter to be equal to the amount of packets we injected.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 21942,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/21942",
+    "title": "Fix `Ethernet-Rec0` counter expectation in Everflow Test",
+    "merged_at": "2026-03-04T19:00:44Z",
+    "description": "Update 'send_and_check_mirror_packets' to return the number of packets sent, in turn update 'test_everflow_fwd_recircle_port_queue_check' to expect the Ethernet-Rec0 VOQ counters to increment the same number of packets sent by the test.\n\nFixes: https://github.com/sonic-net/sonic-mgmt/issues/21941\n\nSummary:\nFixes #21941\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [x] 202505\n- [x] 202511",
+    "files": [
+      {
+        "path": "tests/everflow/everflow_test_utilities.py",
+        "additions": 8,
+        "deletions": 3
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "number": 22878,
+  "title": "[smartswitch][upgrade_image] upgrade_by_sonic fails after reboot when DPU SSH proxy ports are not yet up",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22878",
+  "createdAt": "2026-03-11T17:20:16Z",
+  "closedAt": "2026-03-17T07:25:00Z",
+  "author": "vvolam",
+  "labels": [
+    "Enhancement",
+    "Triaged"
+  ],
+  "assignees": [
+    "vvolam"
+  ],
+  "milestone": null,
+  "body": "## Description\n\n`upgrade_image.py` fails with `HostsUnreachable` after successfully rebooting the switch,\nbecause it immediately calls `config_facts` on DPU hosts before their SSH proxy ports\n(e.g. ports 5021\u20135024 on the switch management IP) have come up post-reboot.\n\n## Steps to Reproduce\n\n1. Run `upgrade_image.py` on a SmartSwitch DUT that has DPUs configured\n2. Image is installed successfully and switch reboots\n3. Switch management IP becomes reachable\n4. `upgrade_by_sonic` immediately calls `config_facts` on all hosts including DPUs\n5. DPU SSH proxy ports are still `Connection refused` \u2192 `HostsUnreachable` exception \u2192 crash\n\n## Error\n\n```\ndevutil.devices.ansible_hosts.HostsUnreachable: upgrade_by_sonic#66: config_facts failed with hosts unreachable:\ndpu-0: ssh: connect to host <mgmt-ip> port 5021: Connection refused\ndpu-1: ssh: connect to host <mgmt-ip> port 5022: Connection refused\ndpu-2: ssh: connect to host <mgmt-ip> port 5023: Connection refused\ndpu-3: ssh: connect to host <mgmt-ip> port 5024: Connection refused\n```\n\n## Root Cause\n\nIn `ansible/devutil/devices/sonic.py::upgrade_by_sonic`, after triggering a reboot\nand detecting the switch is back up, the script calls `config_facts` on all hosts\n(including DPUs) without waiting for DPU SSH proxy ports to be available.\n\nThe initial reachability check (`check_reachability`) correctly skips DPU SSH checks:\n```python\nINFO - Skipping SSH check for DPU host: dpu-0\n```\n\nBut `upgrade_by_sonic#66` then immediately calls `config_facts` on all DPU hosts, which fails because the SSH proxy service on the switch hasn't finished starting.\n\n## Expected Behavior\n\nAfter a switch reboot during image upgrade, the script should either:\n\n- Skip `config_facts` on DPU hosts (since the switch image is what's being upgraded), or\n- Add a wait/retry loop for DPU SSH proxy ports before calling `config_facts`\n\n## Affected Files\n\n- `.azure-pipelines/upgrade_image.py`\n- `ansible/devutil/devices/sonic.py` (`upgrade_by_sonic` function, around line 66)\n\n## Platform\n\nSmartSwitch with DPUs (Mellanox/Nvidia BF3)",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 22881,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22881",
+      "title": "[smartswitch][upgrade_image] Enable NAT for DPU hosts after switch upgrade reboot",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-03-17T07:24:58Z",
+      "createdAt": "2026-03-11T18:24:20Z",
+      "author": "vvolam",
+      "body": "## Description\r\n\r\nAfter a switch reboot during image upgrade, NAT/DNAT rules on the NPU that\r\nforward SSH traffic to DPU hosts are lost. This causes `HostsUnreachable` errors\r\nwhen subsequent operations try to reach DPU hosts.\r\n\r\nFixes #22878\r\n\r\n## Changes\r\n\r\n### `ansible/devutil/devices/sonic.py`\r\n- Added `is_nat_enabled_for_dpu()` \u2014 checks if DNAT rules for DPU SSH access exist\r\n- Added `get_dpu_name_ssh_port_dict()` \u2014 builds DPU name to SSH port mapping from inventory\r\n- Added `enable_nat_for_dpuhosts()` \u2014 enables IP forwarding and sets up DNAT rules via `sonic-dpu-mgmt-traffic.sh`\r\n\r\n### `.azure-pipelines/upgrade_image.py`\r\n- Separates NPU and DPU hostnames from the testbed\r\n- Uses NPU-only `sonichosts` for upgrade/reboot operations\r\n- Re-enables NAT after each upgrade reboot cycle (prev-image and target-image)\r\n\r\n### `.azure-pipelines/testbed_health_check.py`\r\n- Removed duplicate NAT helper functions (~115 lines)\r\n- Now imports and delegates to the canonical implementation in `sonic.py`\r\n\r\n## How it was tested\r\n\r\n- Reviewed against existing NAT enablement patterns in `testbed_health_check.py` and\r\n`tests/conftest.py`. The implementation mirrors the same `sonic-dpu-mgmt-traffic.sh`\r\ninvocation pattern used by the test framework.\r\n\r\n- Verified `testbed_health_check.py` and `upgrade_image.py` for both smart-switch and non-smart-switch",
+      "files": [
+        {
+          "path": ".azure-pipelines/testbed_health_check.py",
+          "additions": 44,
+          "deletions": 149
+        },
+        {
+          "path": ".azure-pipelines/upgrade_image.py",
+          "additions": 29,
+          "deletions": 2
+        },
+        {
+          "path": "ansible/devutil/devices/sonic.py",
+          "additions": 104,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-11T18:25:58Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-11T18:26:13Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "dgsudharsan",
+          "createdAt": "2026-03-12T19:30:33Z",
+          "body": "@nhe-NV @congh-nvidia Can you please review?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-12T20:07:14Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-03-12T20:07:29Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "vvolam",
+          "createdAt": "2026-03-12T20:45:25Z",
+          "body": "@nissampa @rameshraghupathy for vis"
+        },
+        {
+          "author": "vvolam",
+          "createdAt": "2026-03-16T23:21:39Z",
+          "body": "@yxieca @wangxin could you help review and merge the PR?"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-17T07:26:49Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/23034"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "number": 25436,
+  "title": "[Enhancement] Support environment-variable overrides for KVM testbed deployment credentials (no source edits)",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/25436",
+  "createdAt": "2026-06-17T19:25:28Z",
+  "closedAt": "2026-06-18T01:22:04Z",
+  "author": "securely1g",
+  "labels": [
+    "Enhancement"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Enhancement\n\n### Problem\n\nDeploying a local KVM testbed (`testbed-cli.sh add-topo` / `deploy-mg`) currently requires editing **tracked source files** to insert host-specific credentials and identity values:\n\n- `ansible/group_vars/vm_host/creds.yml` \u2014 `ansible_user`, `vm_host_user`, `ansible_become_password`, `vm_host_become_password`, `vm_host_password`\n- `ansible/group_vars/sonic/variables` \u2014 `ansible_altpassword`\n- `ansible/group_vars/ptf/secrets.yml` \u2014 `ansible_user`, `ansible_password` / `ansible_ssh_pass`\n- `ansible/veos_vtb` \u2014 host login user for the vm_host entry (`STR-ACS-VSERV-01`) plus the same `ansible_altpassword`\n\nThese files ship with placeholder values such as `use_own_value` / `YourPaSsWoRd`, so every deployer must modify them locally.\n\nThis has real downsides:\n\n- **Dirty working tree** on every deployment, which obscures the actual functional changes (e.g. adding a new testbed entry) and makes `git status` / diffs noisy.\n- **Credential-leak risk** \u2014 secrets get edited directly into tracked files and can be committed/pushed by accident.\n- **Harder automation/CI** \u2014 pipelines that check out a clean tree cannot deploy without patching files first.\n\n### Request\n\nAllow these deployment credentials/identity values to be supplied via **environment variables**, falling back to the current defaults when the env var is unset. Ansible supports this cleanly with `lookup('env', 'VAR') | default(<current_value>, true)` in the relevant `group_vars`, so **no code/file edits are required** for a normal deployment \u2014 you just export the vars (or leave them unset to keep today's behavior).\n\n`testbed-cli.sh` already forwards trailing `$@` to `ansible-playbook`, so `-e key=value` works today; the gap is purely that the `group_vars` defaults are hardcoded placeholders rather than env-backed.\n\n### Proposed environment variables\n\n| Env var | Maps to | Current default |\n|---|---|---|\n| `SONIC_MGMT_VM_HOST_USER` | `vm_host`: `ansible_user`, `vm_host_user`; `veos_vtb` vm_host login user | (placeholder `use_own_value`) |\n| `SONIC_MGMT_VM_HOST_PASSWORD` | `vm_host`: `ansible_password`, `vm_host_password` | (placeholder `use_own_value`) |\n| `SONIC_MGMT_VM_HOST_BECOME_PASSWORD` | `vm_host`: `ansible_become_password`, `vm_host_become_password` | (placeholder `use_own_value`) |\n| `SONIC_MGMT_SONIC_ALTPASSWORD` | `sonic/variables` + `veos_vtb`: `ansible_altpassword` | `YourPaSsWoRd` |\n| `SONIC_MGMT_PTF_USER` | `ptf/secrets.yml`: `ansible_user` | `root` |\n| `SONIC_MGMT_PTF_PASSWORD` | `ptf/secrets.yml`: `ansible_password`, `ansible_ssh_pass` | `root` |\n\nNames are a suggestion; the key ask is **env-var override with behavior-preserving defaults**.\n\n### Example (sketch)\n\n`ansible/group_vars/vm_host/creds.yml`:\n\n```yaml\nansible_user: \"{{ lookup('env', 'SONIC_MGMT_VM_HOST_USER') | default('use_own_value', true) }}\"\nansible_password: \"{{ lookup('env', 'SONIC_MGMT_VM_HOST_PASSWORD') | default('use_own_value', true) }}\"\nansible_become_password: \"{{ lookup('env', 'SONIC_MGMT_VM_HOST_BECOME_PASSWORD') | default('use_own_value', true) }}\"\nvm_host_user: \"{{ lookup('env', 'SONIC_MGMT_VM_HOST_USER') | default('use_own_value', true) }}\"\nvm_host_password: \"{{ lookup('env', 'SONIC_MGMT_VM_HOST_PASSWORD') | default('use_own_value', true) }}\"\nvm_host_become_password: \"{{ lookup('env', 'SONIC_MGMT_VM_HOST_BECOME_PASSWORD') | default('use_own_value', true) }}\"\n```\n\nDeployment then becomes:\n\n```bash\nexport SONIC_MGMT_VM_HOST_USER=myuser\nexport SONIC_MGMT_VM_HOST_BECOME_PASSWORD=...\n# ...etc\n./testbed-cli.sh add-topo vms-kvm-t0 ~/.password\n```\n\nwith a clean, unmodified working tree.\n\n### Notes / scope\n\n- Defaults must exactly preserve current behavior so existing setups are unaffected.\n- This is about deployment-time host/PTF credentials and the vm_host login identity; it does not change the Ansible Vault flow for encrypted secrets.\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 25437,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/25437",
+      "title": "Support env overrides for KVM testbed credentials and image paths",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-06-18T01:22:03Z",
+      "createdAt": "2026-06-17T19:30:45Z",
+      "author": "securely1g",
+      "body": "## Summary\n\nAllow KVM virtual testbed deployment to be fully configured via environment variables, eliminating the need for local file edits in `group_vars` and inventory files.\n\n### Credential Overrides\n- `SONIC_MGMT_VM_HOST_USER` / `SONIC_MGMT_VM_HOST_PASSWORD` / `SONIC_MGMT_VM_HOST_BECOME_PASSWORD` \u2014 vm_host SSH and sudo credentials\n- `SONIC_MGMT_SONIC_ALTPASSWORD` \u2014 DUT alternate password (default: `YourPaSsWoRd`)\n- `SONIC_MGMT_PTF_USER` / `SONIC_MGMT_PTF_PASSWORD` \u2014 PTF container credentials\n\n### Image Path Overrides\n- `SONIC_MGMT_SONIC_KVM_IMAGE` \u2014 override the DUT KVM disk source path (default: `~/sonic-vm/images/sonic-vs.img`)\n- `SONIC_MGMT_CSONIC_DOCKER_IMAGE` \u2014 override the cSONiC neighbor Docker image name (default: `docker-sonic-vs`)\n\n### Use Case\nEnables commit-indexed image deployment without manual file copies:\n```bash\ndocker exec \\\n  -e SONIC_MGMT_SONIC_KVM_IMAGE=/data/images/e80b26197/sonic-vs.img \\\n  -e SONIC_MGMT_CSONIC_DOCKER_IMAGE=docker-sonic-vs:e80b26197 \\\n  -e SONIC_MGMT_VM_HOST_USER=myuser \\\n  sonic-mgmt bash -c \"cd /data/sonic-mgmt/ansible && \\\n    ./testbed-cli.sh -t vtestbed.yaml -m veos_vtb -k csonic add-topo vms-kvm-t0 password.txt\"\n```\n\nAll defaults are backward-compatible \u2014 when env vars are unset, behavior is unchanged.\n\n## Files Changed\n- `ansible/group_vars/vm_host/creds.yml` \u2014 vm_host credential env lookups\n- `ansible/group_vars/vm_host/csonic.yml` \u2014 `SONIC_MGMT_CSONIC_DOCKER_IMAGE` env lookup\n- `ansible/group_vars/all/creds.yml` \u2014 sonic_login env lookup\n- `ansible/group_vars/sonic/variables` \u2014 `SONIC_MGMT_SONIC_ALTPASSWORD` env lookup\n- `ansible/group_vars/ptf/secrets.yml` \u2014 PTF credential env lookups\n- `ansible/roles/vm_set/tasks/start_sonic_vm.yml` \u2014 `SONIC_MGMT_SONIC_KVM_IMAGE` env lookup\n- `ansible/veos_vtb` \u2014 inventory credential and image env lookups\n\n## Verification\n- Tested with `ansible localhost -m debug` confirming env var resolution inside sonic-mgmt container\n- Verified defaults are preserved when env vars are unset (Jinja `| default(..., true)`)\n- Full testbed deployment validated: `add-topo` \u2192 `deploy-mg` \u2192 4/4 BGP Established\n- `git diff --check` passes\n\nFixes sonic-net/sonic-mgmt#25436",
+      "files": [
+        {
+          "path": "ansible/group_vars/all/creds.yml",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "ansible/group_vars/ptf/secrets.yml",
+          "additions": 3,
+          "deletions": 2
+        },
+        {
+          "path": "ansible/group_vars/sonic/variables",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "ansible/group_vars/vm_host/creds.yml",
+          "additions": 6,
+          "deletions": 6
+        },
+        {
+          "path": "ansible/group_vars/vm_host/csonic.yml",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "ansible/roles/vm_set/tasks/start_sonic_vm.yml",
+          "additions": 1,
+          "deletions": 1
+        },
+        {
+          "path": "ansible/veos_vtb",
+          "additions": 3,
+          "deletions": 3
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-17T19:30:53Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-17T19:31:09Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-06-17T21:21:38Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-06-17T21:21:53Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

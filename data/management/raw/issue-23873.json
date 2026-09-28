@@ -1,0 +1,144 @@
+{
+  "number": 23873,
+  "title": "Bug: [sflow] sflow tests on VS/KVM silently pass without executing PTF traffic",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/23873",
+  "createdAt": "2026-04-13T17:19:34Z",
+  "closedAt": "2026-04-17T23:09:17Z",
+  "author": "anders-nexthop",
+  "labels": [
+    "Triaged"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`tests/sflow/test_sflow.py` reports PASS on VS/KVM testbeds without actually running any PTF traffic. PR #21208 removed the global `skip` condition that excluded VS from sflow tests, but omitted `kvm_support=True` on the `ptf_runner` call in `partial_ptf_runner`. When `dut_type == \"kvm\"` and `kvm_support is False` (the default), `ptf_runner` silently skips the PTF test and returns a passing result.\n\n### Steps to Reproduce\n\n1. Set up a VS testbed\n2. Run `tests/sflow/test_sflow.py`\n3. Observe test reports PASS with no PTF traffic sent or validated\n\n### Actual Behavior and Expected Behavior\n\n- **Actual:** Test reports PASS but no sflow samples are generated or validated via PTF\n- **Expected:** PTF traffic executes and sflow sample counts are validated on VS/KVM\n\n### Relevant log output\n\nN/A \u2014 no error is surfaced; the test silently passes\n\n### Output of `show version`\n\nN/A (VS testbed)\n\n### Attach files (if any)\n\nFixed by #23659",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 23659,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/23659",
+      "title": "[sflow] Properly enable sflow tests on VS/KVM",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-04-17T23:09:16Z",
+      "createdAt": "2026-04-06T22:51:07Z",
+      "author": "anders-nexthop",
+      "body": "### Description of PR\r\n\r\nSummary:\r\nA previous attempt to enable sflow/test_sflow.py on VS (#21208) removed the global skip condition but omitted `kvm_support=True` on the `ptf_runner` call. As a result, `ptf_runner` silently skips the PTF test on KVM DUTs (`dut_type == \"kvm\"` and `kvm_support is False`), causing the test to report PASS without actually running any traffic.\r\n\r\nFixes #23873\r\n\r\n### Type of change\r\n\r\n- [x] Bug fix\r\n- [x] Test case improvement\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\n\r\nWith `kvm_support=True` missing, running sflow tests on a VS testbed appeared\r\nto pass but the PTF traffic test was never executed. Three fixes are included:\r\n\r\n1. **`kvm_support=True`** in the `ptf_runner` call in `partial_ptf_runner` so the PTF test actually executes on VS/KVM DUTs.\r\n2. **PTF packet batching** \u2014 VS TAP interfaces have a limited kernel receive queue depth. Sending the full sampling burst (~512 packets) at once causes ~20% packet loss before the TC ingress sampler processes them, leading to under-sampling failures. Sending in 32-packet batches with a 1ms pause between batches allows the queue to drain.\r\n3. **xfail `testWarmreboot` on VS** \u2014 VS SAI does not re-apply TC ingress filters after `vs_recreate_hostif_tap_interfaces()` creates new TAP interfaces during warm reboot, resulting in 0 sflow samples. Tracked in sonic-net/sonic-buildimage#26594. The xfail will clear automatically once that issue is resolved.\r\n\r\n#### How did you do it?\r\n\r\n- `tests/sflow/test_sflow.py`: Add `kvm_support=True` to `ptf_runner` call.\r\n- `ansible/roles/test/files/ptftests/py3/sflow_test.py`: Send packets in 32-packet batches with 1ms between batches.\r\n- `tests_mark_conditions.yaml`: Add `xfail` for `testWarmreboot` on VS, conditioned on sonic-net/sonic-buildimage#26594 being open.\r\n\r\n#### How did you verify/test it?\r\n\r\nValidated on a VS testbed.\r\n\r\n#### Any platform specific information?\r\n\r\nVS/KVM only.\r\n\r\nNOTE: This is an AI-assisted PR, please review accordingly.\r\n\r\n*\u2014 anders-bot (AI-assisted, on behalf of @anders-nexthop)*\n",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/ptftests/py3/sflow_test.py",
+          "additions": 11,
+          "deletions": 1
+        },
+        {
+          "path": "tests/common/plugins/conditional_mark/tests_mark_conditions.yaml",
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "tests/sflow/test_sflow.py",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-06T22:51:16Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-06T22:51:31Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-04-07T18:02:25Z",
+          "body": "/azpw run"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-07T18:02:28Z",
+          "body": "\u26a0\ufe0f **Notice**: `/azpw run` only runs failed jobs now. If you want to trigger a whole pipline run, please rebase your branch or close and reopen the PR.\n\ud83d\udca1 **Tip**: You can also use `/azpw retry` to retry failed jobs directly.\n\nRetrying failed(or canceled) jobs..."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-07T18:02:31Z",
+          "body": "Retrying failed(or canceled) stages in build 1080578:\n\n\n\u2705Stage **Test**:\n- Job kvmtest-t1-lag-vpp by Elastictest [OPTIONAL]: skipped (optional job and does not block the PR merge).\n- Job impacted-area-kvmtest-t1-lag by Elastictest: retried.\n- Job impacted-area-kvmtest-t0 by Elastictest: retried."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-07T19:35:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-07T19:35:50Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-07T19:39:48Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-07T19:40:03Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T17:00:05Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T17:00:18Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-08T17:11:23Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-08T17:11:37Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-09T18:33:10Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-09T18:33:24Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-04-13T17:29:27Z",
+          "body": "@yxieca I missed this in my PR to enable test_sflow.py for VS images, we've been running the test and reporting PASS without ever actually sending sample traffic. This should fix the issue, from the CI/CD logs I can see that traffic is flowing now, and the test is passing. "
+        },
+        {
+          "author": "anders-nexthop",
+          "createdAt": "2026-04-13T17:30:01Z",
+          "body": "@ZhaohuiS this is the fix to get test_sflow.py to actually run on KVM duts."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-04-14T16:26:21Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-04-14T16:26:36Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

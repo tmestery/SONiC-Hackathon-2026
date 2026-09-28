@@ -1,0 +1,134 @@
+{
+  "number": 26458,
+  "title": "Bug: LogAnalyzer false positive on dualtor config_reload tests due to journalctl-tagged TACACS+ error",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/26458",
+  "createdAt": "2026-07-22T09:37:43Z",
+  "closedAt": "2026-08-21T06:49:04Z",
+  "author": "gopi-arista",
+  "labels": [
+    "Bug :bug:"
+  ],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nAfter sonic-buildimage PR [#18113](https://github.com/sonic-net/sonic-buildimage/pull/18113) migrated rsyslog from UDP to RELP for container-to-host syslog forwarding, transient TACACS+ errors during config reload now appear with the `journalctl:` syslog tag instead of process-specific tags like `audisp-tacplus`, `dockerd`, `ntpd`, etc.\n\nThe LogAnalyzer already ignores these same TACACS+ errors from those process-specific tags, but has no pattern for `journalctl:`. Any test calling `config_reload` on a TACACS+ enabled DUT running 202605+ builds will fail on teardown with a false positive.\n\n### Steps to Reproduce\n\n1. Use a testbed with TACACS+ authentication configured (e.g. dualtor-AA)\n2. Run any test that performs `config reload` on a 202605 build (e.g. `dualtor_io/test_link_failure.py::test_active_link_admin_down_config_reload_upstream`)\n3. LogAnalyzer catches transient TACACS+ errors during the networking restart phase.\n\n### Actual Behavior and Expected Behavior\n\n **Actual:** Tests fail on teardown with `Failed: Got matched syslog in processes \"analyze_logs\"` due to:\n`gd377 ERR journalctl: tac_connect_single: connection failed with 172.30.139.229:49: Transport endpoint is not connected`\n`gd377 ERR journalctl: nss_tacplus: failed to connect TACACS+ server 172.30.139.229:49, ret=-9: Transport endpoint is not connected`\n\n**Expected:** These transient errors should be ignored, as they are ignored for every other process tag.\n\n### Relevant log output\n\n```shell\n- Test: test_active_link_admin_down_config_reload_upstream[active-active]\n- Topology: dualtor-aa and dualtor-aa-56\n\ngd377 ERR journalctl: tac_connect_single: connection failed with 172.30.139.229:49: Transport endpoint is not connected\ngd377 ERR journalctl: nss_tacplus: failed to connect TACACS+ server 172.30.139.229:49, ret=-9: Transport endpoint is not connected\n```\n\n### Output of `show version`\n\n```shell\nbranch.202605-ars.e36dabd7-buildimage.7c11c58c300637d0f925e35a075c920e8a499f96-nightly-2026.06.17.15.48\n```\n\n### Attach files (if any)\n\n_No response_",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 26460,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/26460",
+      "title": "Add loganalyzer ignore for journalctl-tagged TACACS+ transient errors",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-08-21T06:49:03Z",
+      "createdAt": "2026-07-22T10:47:05Z",
+      "author": "gopi-arista",
+      "body": "During config reload, the NSS TACACS+ module attempts to connect to the TACACS+ server while the network stack is restarting, producing ERR-level syslog messages. The loganalyzer ignore list already covers these errors from ntpd, chronyd, iptables, audisp-tacplus, dockerd, and libnetwork-setkey. In 202605, these errors appear under the 'journalctl:' syslog tag instead of process-specific tags.\r\n\r\nThe regex matches only \"Transport endpoint is not connected\" (ENOTCONN), which occurs exclusively when the socket is created but the peer connection was never established \u2014 a transient state during service restarts. Real TACACS+ failures produce different errno strings that remain caught by LogAnalyzer.\r\n\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/sonic-net/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\nTests calling `config_reload` on TACACS+-enabled DUTs running 202605+ builds fail on teardown with false-positive LogAnalyzer matches:\r\n\r\n```\r\ngd377 ERR journalctl: tac_connect_single: connection failed with 172.30.139.229:49: Transport endpoint is not connected\r\ngd377 ERR journalctl: nss_tacplus: failed to connect TACACS+ server 172.30.139.229:49, ret=-9: Transport endpoint is not connected\r\n```\r\n\r\nThese are transient errors during the networking restart phase of `config reload`. The LogAnalyzer already ignores them from `audisp-tacplus`, `dockerd`, `ntpd`, `iptables`, `chronyd`, and `libnetwork-setkey`. After sonic-buildimage PR [#18113](https://github.com/sonic-net/sonic-buildimage/pull/18113) (RELP migration), the syslog tag changed to `journalctl:` which has no ignore pattern.\r\n\r\nThis fix adds ignore patterns for the `journalctl:`-tagged TACACS+ errors. 175 test files in sonic-mgmt call `config_reload` and are affected.\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #26458\r\n<!--\r\nIf you request a backport/cherry-pick below, link the GitHub issue or ADO work\r\nitem here (for example, \"Fixes #<issue>\" or \"ADO: <work item URL>\").\r\n-->\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] New Test case\r\n    - [ ] Skipped for non-supported platforms\r\n- [ ] Test case improvement\r\n\r\n\r\n### Back port request\r\n<!--\r\nOnly check a release or feature branch when the PR links a GitHub issue or ADO\r\nwork item above. The linked tracker should explain the failure in detail,\r\nincluding whether it is a day-one issue or a regression, the affected\r\nbranch/image/platform/test, and why this branch needs the fix. Backport or\r\ncherry-pick requests without a linked issue/work item may not be favored.\r\n\r\nIf you request a backport/cherry-pick, provide both:\r\n1. A GitHub issue or Microsoft ADO work item tracking the change.\r\n2. Test evidence from the target branch(es) requested below.\r\n-->\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n\r\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO):\r\nFailure type: regression<!-- day-one issue / regression / other -->\r\n\r\n### Tested branch\r\n<!--\r\nSelect each branch where the change was tested. If you request a\r\nbackport/cherry-pick, select the base branch and the tested target release\r\nbranch(es).\r\n-->\r\n- [ ] master\r\n- [ ] 202311\r\n- [ ] 202405\r\n- [ ] 202411\r\n- [ ] 202505\r\n- [ ] 202511\r\n- [ ] 202512\r\n- [x] 202605\r\n- [ ] N/A\r\n\r\n### Test result\r\n- 202605: branch.202605-ars.e36dabd7 (nightly 2026.06.17) \u2014 `test_active_link_admin_down_config_reload_upstream[active-active]` and `test_active_link_admin_down_config_reload_downstream[active-active]` pass teardown with fix applied on testbed dtAA.\r\n<!--\r\nProvide the tested image version and test evidence for each selected branch.\r\nFor example:\r\n- master: 20260716.01 - <test result or link>\r\n- 202605: 20260531.42 - <test result or link>\r\n-->\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nsonic-buildimage PR [#18113](https://github.com/sonic-net/sonic-buildimage/pull/18113) migrated rsyslog from UDP to RELP for container-to-host syslog forwarding. This changed the syslog tag for host-level TACACS+ transient errors from process-specific names to `journalctl:`. The LogAnalyzer ignore list had no pattern for this tag, causing false-positive teardown failures on all `config_reload` tests with TACACS+ enabled.\r\n\r\nThe loganalyzer ignore list already covers these errors from ntpd, chronyd, iptables, audisp-tacplus, dockerd, and libnetwork-setkey. \r\n\r\n#### How did you do it?\r\nAdded two ignore patterns to `loganalyzer_common_ignore.txt` matching `journalctl:`-tagged `tac_connect_single` and `nss_tacplus` errors with `Transport endpoint is not connected`.\r\n\r\nThe regex only matches errno=107 (ENOTCONN) which is specific to the \"socket not yet ready\" transient state during service restarts. Real TACACS+ failures produce different errno strings and remain caught on loganalyzer.\r\n\r\n#### How did you verify/test it?\r\nRan `test_active_link_admin_down_config_reload_upstream[active-active]` and `test_active_link_admin_down_config_reload_downstream[active-active]` on dualtor-AA testbed with build `branch.202605-ars.e36dabd7`. Both pass teardown with the fix applied.\r\n\r\n<!--\r\nSummarize the overall validation here. For a backport/cherry-pick request,\r\nprovide branch-specific image versions and evidence in the Test result section.\r\n-->\r\n\r\n#### Any platform specific information?\r\nNo\r\n\r\n#### Supported testbed topology if it's a new test case?\r\nN/A\r\n\r\n### Documentation\r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "ansible/roles/test/files/tools/loganalyzer/loganalyzer_common_ignore.txt",
+          "additions": 5,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T10:47:13Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-22T10:47:14Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-22T10:47:29Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T12:15:17Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T12:15:21Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-22T12:22:43Z",
+          "body": "Hi, there are workflow run(s) waiting for approval, you may be first-time contributor. I will notify maintainers to help approve once PR is approved. Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-07-31T03:41:15Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-07-31T03:41:31Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "rajkumar1-arista",
+          "createdAt": "2026-08-03T05:58:58Z",
+          "body": "@lolyu @StormLiangMS some unrelated checks are failing, this PR just adds additional error logs to `ignore list` of `logAnalyzer`. Failing logs: `arp/test_neighbor_mac.py`\r\n ```\r\n   )\r\nE       Failed: Failed to ping DUT interface 20.0.0.1 from PTF IP 20.0.0.2 within 120 seconds, stdout: PING 20.0.0.1 (20.0.0.1) from 20.0.0.2 : 56(84) bytes of data.\r\nE       \r\nE       --- 20.0.0.1 ping statistics ---\r\nE       1 packets transmitted, 0 received, 100% packet loss, time 0ms, stderr:\r\n\r\n ```"
+        },
+        {
+          "author": "yyynini",
+          "createdAt": "2026-08-18T06:01:44Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-18T06:01:50Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yyynini",
+          "createdAt": "2026-08-18T06:06:51Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-18T06:06:58Z",
+          "body": "<samp>\nAzure Pipelines will not run the associated pipelines, because the pull request was updated after the run command was issued. Review the pull request again and issue a new run command.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "yyynini",
+          "createdAt": "2026-08-18T06:10:06Z",
+          "body": "@gopi-arista Thanks for the fix \u2014 the two `journalctl:`-tagged TACACS+ ignore lines correctly match the `ERR journalctl: tac_connect_single: connection failed with <ip>:49: Transport endpoint is not connected` transient we're seeing on Cisco-8101 dualtor nightly on 202605 (the process-tag variants like `iptables:`/`audisp-tacplus:`/`dockerd:` don't match the `journalctl:` tag, so these were still firing LogAnalyzer).\n\nThe PR is currently in a CONFLICTING state \u2014 but to be clear it's **not a duplicate**: master's `loganalyzer_common_ignore.txt` does not yet contain these two lines. It's a positional conflict because the tail of that file has been appended to (e.g. the `ctrmgrd` entries) since this branch was cut, so the diff anchor no longer lines up. Could you please **rebase onto latest master and re-push**? That should clear the conflict and re-trigger CI (the current failures \u2014 `arp/test_neighbor_mac.py` etc. \u2014 look unrelated to this ignore-list change).\n\nAlso glad to see `202605` is already checked in the backport request \u2014 that's the branch we need this on. LGTM on the content once the rebase is done.\n"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-18T06:36:00Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-08-18T06:36:20Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "gopi-arista",
+          "createdAt": "2026-08-20T02:55:00Z",
+          "body": "@yyynini Conflict resolved. Waiting for merge approval."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-21T06:49:29Z",
+          "body": "@gopi-arista PR conflicts with 202605 branch"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-08-25T04:35:44Z",
+          "body": "This PR is approved for branch 202605. No cherry pick PR has been created because of code conflict. @gopi-arista, please manually create the cherry pick PR.<br>If this change is already in 202605, please comment \"already in 202605\". Thanks!\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        }
+      ]
+    }
+  ]
+}

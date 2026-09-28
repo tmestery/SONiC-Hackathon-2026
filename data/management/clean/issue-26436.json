@@ -1,0 +1,45 @@
+{
+  "id": "management-26436",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 26436,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/26436",
+    "title": "[smartswitch] DPU pre-upgrade image cleanup/space handling can leave DPU with a corrupt image (stuck at U-Boot)",
+    "created_at": "2026-07-21T21:24:56Z",
+    "closed_at": "2026-07-23T21:02:24Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": "bug",
+    "platform": null,
+    "target_releases": [
+      "202605"
+    ],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Description\nDuring SmartSwitch nightly image-upgrade runs, a DPU SONiC image upgrade can report success (`sonic-installer install` returns 0) while actually writing a **corrupt/truncated image** when `/host` on the DPU is low on free space. The boot config file is written but the `initrd` is missing/truncated, so on the next boot the DPU is stuck at U-Boot and requires a re-flash:\n\n```\nRetrieving file: /boot-image-<ver>.conf\nRetrieving file: /image-<ver>/boot/initrd.img-<kernel>\nFailed to load '/image-<ver>/boot/initrd.img-<kernel>'\nSkipping main for failure retrieving initrd\nDSC#\n```\n\nThe underlying install error is also easily masked at the harness level: the DPU upgrade runs as an Ansible async job on the NPU, so if the NPU reboots (e.g. an overlapping upgrade pass) the async state file is lost and the job fails with `could not find job`, hiding the real space/corruption problem.\n\n### Affected code\n`ansible/library/upgrade_dpu_sonic_image.py` \u2014 `reduce_installed_images`, `install_image_on_dpu`.\n\n### Proposed fix\n- Always run `sonic-installer cleanup -y` (with retry) before install, even if `sonic-installer list` fails, so old images are reclaimed and the install has room.\n- Add a pre-install `/host` free-space guard: if there isn't enough room to extract the new image, fail cleanly and leave the DPU on its working image instead of writing a truncated one.\n- After install, `sync` to eMMC and verify the new image's `initrd` is present and non-trivial in size before allowing the DPU to reboot; on failure, restore next-boot to the current image.\n\n### Impact\nA silent, reflash-requiring DPU brick is converted into a clean, retryable failure.\n\n### Branch\nObserved on `202605`."
+  },
+  "resolution": {
+    "pr_number": 26437,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/26437",
+    "title": "[smartswitch] Harden DPU pre-upgrade image cleanup and install",
+    "merged_at": "2026-07-23T21:02:23Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #26436\n\nHarden the SmartSwitch DPU pre-upgrade image handling so that a low-disk-space (or interrupted) `sonic-installer install` can no longer silently produce a corrupt image and leave the DPU stuck at U-Boot with a missing/truncated `initrd` (which previously required a re-flash). On these DPUs the `/host` free space barely exceeds a single image, so without guaranteed cleanup a second image does not fit.\n\n### Type of change\n\n- [x] Bug fix\n- [x] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request (GitHub issue or Microsoft ADO): #26436\nFailure type: day-one issue (missing robustness in the DPU image-upgrade module)\n\n### Tested branch\n- [x] master\n- [x] 202605\n\n### Test result\n- master: identical, branch-agnostic shell commands; verified via the checks in \"How did you verify/test it?\".\n- 202605: 20260510.04 - all new code paths verified on a live SmartSwitch DPU (see \"How did you verify/test it?\").\n\n### Approach\n#### What is the motivation for this PR?\nDuring SmartSwitch nightly image-upgrade runs, a DPU upgrade could report success (`sonic-installer install` returns 0) while actually writing a corrupt/truncated image when `/host` was low on free space: the boot config was written but the `initrd` was missing, so on the next boot the DPU was stuck at U-Boot (`Failed to load .../initrd.img... Skipping main for failure retrieving initrd`) and required a re-flash. The underlying failure was also easily masked at the harness level, because the DPU upgrade runs as an Ansible async job on the NPU: an NPU reboot loses the async state file and the job fails with `could not find job`, hiding the real space/corruption problem.\n\n#### How did you do it?\nIn `ansible/library/upgrade_dpu_sonic_image.py`:\n- `reduce_installed_images`: always run `sonic-installer cleanup -y` (with retry) before install, even when `sonic-installer list` fails, so old images are reclaimed instead of being skipped on a transient list/parse error.\n- `install_image_on_dpu`: add a pre-install `/host` free-space guard that fails cleanly (leaving the DPU on its working image) when there is not enough room to extract the new image, instead of writing a truncated one.\n- `install_image_on_dpu`: after install, `sync` to persist writes and verify the new image's `initrd` is present and non-trivial in size before rebooting; on failure, restore next-boot to the current image.\n\n#### How did you verify/test it?\nVerified all three new code paths against a live SmartSwitch DPU by exercising the exact shell commands and parsing the module uses; all checks passed:\n- `sonic-installer list` parsing of Current/Next.\n- `df -BM --output=avail /host` parsing used by the space guard.\n- Space guard, both directions: proceeds when free space is ample; blocks (skips the install) when the required size exceeds free space.\n- Post-install integrity check, both directions: a valid image (real `initrd` present, tens of MB) passes; a missing/truncated `initrd` (0 bytes) is detected and would fail the install and roll back next-boot - reproducing the exact boot-loop symptom this PR prevents.\n- `sync` succeeds.\n- `flake8 --max-line-length=120` and `py_compile` pass.\n\n#### Any platform specific information?\nApplies to SmartSwitch DPU image upgrades (the `upgrade_dpu_sonic_image` Ansible module used in the prepare stage). No NPU/host-side behavior change.\n\n#### Supported testbed topology if it's a new test case?\nN/A (not a new test case).\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "ansible/library/upgrade_dpu_sonic_image.py",
+        "additions": 114,
+        "deletions": 26
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

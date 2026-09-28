@@ -1,0 +1,77 @@
+{
+  "number": 28101,
+  "title": "Bug: Reboot test timeout setup can use a different DUT than the selected reboot DUT",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/28101",
+  "createdAt": "2026-09-22T17:07:32Z",
+  "closedAt": "2026-09-24T05:10:59Z",
+  "author": "pdam-arista",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\n`tests/platform_tests/test_reboot.py` and `tests/platform_tests/test_power_off_reboot.py` select the DUT used by the test through `enum_rand_one_per_hwsku_hostname` or `enum_supervisor_dut_hostname`. Their module-scope `set_max_time_for_interfaces` fixtures instead accept the implicit `duthost` fixture when reading platform reboot timeout control.\n\nIn a multi-DUT topology, timeout setup can therefore read `plt_reboot_ctrl` from a different DUT than the DUT being rebooted.\n\n### Steps to Reproduce\n\n1. Run `platform_tests/test_reboot.py` or `platform_tests/test_power_off_reboot.py` on a multi-DUT topology.\n2. Inspect the module-scope `set_max_time_for_interfaces` fixture.\n3. Compare its implicit `duthost` with the DUT resolved by the test from the selected DUT hostname fixture.\n\n### Actual Behavior and Expected Behavior\n\nActual behavior: reboot timeout setup uses implicit `duthost`, which may not be the selected reboot DUT.\n\nExpected behavior: timeout setup resolves the DUT from the same selected DUT hostname fixture used by the test.\n\n### Relevant log output\n\nReference dualtor execution before the fix:\n\n```text\ntst-esx-62/platform_tests/test_reboot.xml: topology=dualtor-aa-56, testbed=dtAA56, host=gd377, total=7, non_skipped=4, failures=0, errors=0\ntst-esx-62/platform_tests/test_power_off_reboot.xml: topology=dualtor-aa-56, testbed=dtAA56, host=gd377, total=2, non_skipped=2, failures=0, errors=0\ntst-esx-63/platform_tests/test_reboot.xml: topology=dualtor, testbed=dt, host=ldp203, total=7, non_skipped=4, failures=0, errors=0, skipped=3\ntst-esx-63/platform_tests/test_power_off_reboot.xml: topology=dualtor, testbed=dt, host=ldp203, total=2, non_skipped=2, failures=0, errors=0\n```\n\nThe XML/logs prove execution on multi-DUT dualtor topologies. The implicit-fixture versus selected-DUT mismatch is established by code inspection; the issue does not require an assertion failure to be exposed.\n\n### Output of `show version`\n\n```text\nbranch.202605-ars.8512e7eb-buildimage.ad6f5b869a8cacb3cb7eefe7dc226bf6f85480ff-nightly-2026.08.25.14.40\n```\n\n### Attach files (if any)\n\nNo public attachment.\n",
+  "comments": [],
+  "linkedPullRequests": [
+    {
+      "number": 28102,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/28102",
+      "title": "platform: use selected DUT for reboot timeout",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-09-24T05:10:57Z",
+      "createdAt": "2026-09-22T17:10:07Z",
+      "author": "pdam-arista",
+      "body": "### Description of PR\n\nSummary:\nFixes #28101\n\nThis fixes reboot timeout setup in multi-DUT topologies. The module-scoped\n`set_max_time_for_interfaces` fixtures now resolve the DUT using the same\nselected-DUT hostname fixture as the test body.\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n\nTracking issue/work item for backport/cherry-pick request: #28101\nFailure type: other\n\n### Tested branch\n\n- [ ] master\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n- [ ] 202512\n- [x] 202605\n- [ ] N/A\n\n### Test result\n\n- 202605 image: `branch.202605-ars.ec7bdb26-buildimage.ec99138a89ac67d9294b78738a6f1ede78cd1d47-nightly-2026.09.18.22.31`\n- `platform_tests/test_reboot.py`: 8 passed, 8 skipped, 0 failed, 0 errors.\n- `platform_tests/test_power_off_reboot.py`: 2 passed, 0 skipped, 0 failed, 0 errors.\n- Testbed: `dtAA`, topology `dualtor-aa`, host\n  `kvm-esx-34-sonictest-16g-004`, DUTs `ld599` and `ldp406`.\n- The patched `set_max_time_for_interfaces` fixture was executed in both\n  modules. The selected-DUT fixture was initialized before it in each module.\n- After-fix `.log` and `.xml` artifacts are available here:\n  [platform_reboot_after_fix_upload.zip](https://github.com/pdam-arista/sonic-mgmt/releases/download/platform-reboot-dut-selection-202605-20260923/platform_reboot_after_fix_upload.zip)\n\n### Approach\n\n#### What is the motivation for this PR?\n\nIn a multi-DUT topology, the implicit `duthost` fixture used by module-level\ntimeout setup can refer to a different DUT from the one selected by the test.\n\n#### How did you do it?\n\nUse `duthosts[enum_supervisor_dut_hostname]` in `test_power_off_reboot.py` and\n`duthosts[enum_rand_one_per_hwsku_hostname]` in `test_reboot.py` before reading\n`plt_reboot_ctrl`.\n\n#### How did you verify/test it?\n\nThe 202605 patched reboot and power-off modules completed on the requested\ndtAA testbed with no failures or errors.\n\n#### Any platform specific information?\n\ngeneric\n\n#### Supported testbed topology if it's a new test case?\n\nN/A\n\n### Documentation\n\nN/A\n",
+      "files": [
+        {
+          "path": "tests/platform_tests/test_power_off_reboot.py",
+          "additions": 2,
+          "deletions": 1
+        },
+        {
+          "path": "tests/platform_tests/test_reboot.py",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-22T17:10:16Z",
+          "body": "<!-- AzurePipelinesStatusComment -->\n<samp>\nAzure Pipelines:<br>\r\nThere may be pipelines that require an authorized user to comment /azp run to run.<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T17:10:26Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-09-22T17:10:44Z",
+          "body": "<samp>\nAzure Pipelines:<br>\r\nSuccessfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T18:15:48Z",
+          "body": "This PR has backport request for branch(es): 202605.<br>Added label(s) for branch(es) 202605.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-22T18:15:53Z",
+          "body": "The **Tested branch** section has been ticked and **Test result** is provided for branch(es): 202605. Added label(s): Tested for 202605 Branch.\n\n<div align=\"right\"><sub>---Powered by SONiC BuildBot</sub></div>"
+        },
+        {
+          "author": "lolyu",
+          "createdAt": "2026-09-25T15:26:06Z",
+          "body": "Hi @StormLiangMS, please help approve this to 202605"
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-09-27T23:53:26Z",
+          "body": "Cherry-pick PR to 202605: https://github.com/sonic-net/sonic-mgmt/pull/28246"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "management-23529",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 23529,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/23529",
+    "title": "VS testbed: DUT VM with >128 ports crashes due to KVM ioeventfd exhaustion (e1000 NIC model)",
+    "created_at": "2026-04-01T17:38:35Z",
+    "closed_at": "2026-04-02T07:15:50Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "## Description\n\nWhen deploying a virtual testbed with a DUT that has more than 128 front-panel ports (e.g., `ACS-SN6600_LD` with 130 ports), the SONiC DUT KVM VM crashes immediately after start with:\n\n```\nkvm_mem_ioeventfd_add: error adding ioeventfd: No space left on device (28)\n```\n\n## Root Cause\n\nThe `sonic.xml.j2` template uses the `e1000` NIC model for all DUT interfaces. Each e1000 NIC registers multiple devices on the KVM I/O bus. The Linux kernel has a hard-coded per-VM limit of **`NR_IOBUS_DEVS = 1000`** (defined in `include/linux/kvm_host.h`). With 131 e1000 NICs (1 mgmt + 130 front-panel), the total I/O bus device registrations exceed this limit, causing QEMU to crash.\n\nKey facts:\n- **Kernel:** 6.8.0-106-generic (Ubuntu), `NR_IOBUS_DEVS = 1000`\n- **Machine type:** q35\n- **131 e1000 NICs \u2192 crash** (exceeds 1000 ioeventfds)\n- **131 virtio NICs \u2192 works** (virtio uses fewer ioeventfd registrations per device)\n- `ulimit` / `LimitNOFILE=infinity` does **not** help \u2014 this is a kernel-level KVM limit, not a userspace file descriptor limit\n- The limit is a compile-time `#define`, not tunable via sysctl or module parameters\n\n## Affected Template\n\n`ansible/roles/vm_set/templates/sonic.xml.j2` \u2014 uses `e1000` model for all non-VPP interfaces:\n\n```jinja2\n{% if asic_type == 'vpp' %}\n    <model type='virtio-net-pci' />\n{% else %}\n    <model type='e1000' />\n{% endif %}\n```\n\n## Proposed Fix\n\nUse `virtio` NIC model when the port count exceeds 128:\n\n```jinja2\n{% if asic_type == 'vpp' %}\n    <model type='virtio-net-pci' />\n{% elif port_alias|length > 128 %}\n    <model type='virtio' />\n{% else %}\n    <model type='e1000' />\n{% endif %}\n```\n\nThis keeps backward compatibility for existing topologies with \u2264128 ports while enabling high port-count hwskus like `ACS-SN6600_LD` (130 ports) to work.\n\n## Steps to Reproduce\n\n1. Configure a virtual testbed with a hwsku that has >128 ports (e.g., `ACS-SN6600_LD`)\n2. Run `testbed-cli.sh add-topo` with `-e max_fp_num=130`\n3. The DUT VM starts but immediately crashes with `kvm_mem_ioeventfd_add` error\n4. `sonic_kickstart` times out waiting for the VM\n\n## Additional Context\n\n- Tested on a machine with 32GB+ RAM and sufficient CPU \u2014 this is purely a KVM device registration limit\n- The `sonic_vm.xml.j2` template (for neighbor VMs) already uses `virtio` model and is not affected\n- Topology: `t2-isolated-d128s2` with converged peers (3 cEOS VMs)"
+  },
+  "resolution": {
+    "pr_number": 23530,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/23530",
+    "title": "Fix DUT VM crash with >128 ports by using virtio NIC model",
+    "merged_at": "2026-04-02T07:15:48Z",
+    "description": "### Description of PR\n\nSummary:\nFix DUT VM crash when deploying virtual testbeds with more than 128 front-panel ports (e.g., hwsku `ACS-SN6600_LD` with 130 ports).\n\nThe `sonic.xml.j2` template uses the `e1000` NIC model for DUT interfaces. Each e1000 NIC registers multiple devices on the KVM I/O bus. The Linux kernel has a hard-coded per-VM limit of `NR_IOBUS_DEVS = 1000` (`include/linux/kvm_host.h`). With 131+ e1000 NICs (1 mgmt + 130 front-panel), the total I/O bus device registrations exceed this limit, causing QEMU to crash with:\n```\nkvm_mem_ioeventfd_add: error adding ioeventfd: No space left on device (28)\n```\n\nThis PR switches to the `virtio` NIC model when `port_alias|length > 128`. Virtio uses fewer ioeventfd registrations per device and works within the KVM limit. Existing topologies with \u2264128 ports remain on `e1000` and are unaffected.\n\nFixes #23529\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\n\nDeploying a T2 virtual testbed with 130 front-panel ports fails because the DUT KVM VM crashes immediately on start. The root cause is the `e1000` NIC model exhausting the KVM kernel's per-VM I/O bus device limit (`NR_IOBUS_DEVS = 1000`). This limit is a compile-time `#define` in the kernel and cannot be changed via `ulimit`, `sysctl`, or KVM module parameters.\n\n#### How did you do it?\n\nAdded a condition in `sonic.xml.j2` to use the `virtio` NIC model when the number of ports exceeds 128. The threshold of 128 was determined by binary search testing \u2014 131 e1000 NICs consistently crashes, while 131 virtio NICs works fine.\n\nThe change applies to both the management interface and the front-panel interfaces in the template. The existing `e1000` model is preserved for topologies with \u2264128 ports to maintain backward compatibility.\n\n#### How did you verify/test it?\n\n1. **Binary search test:** Tested e1000 NICs from 64 to 131 \u2014 all counts up to ~128 work, 131 crashes. Same counts with virtio all work.\n2. **Full topology deployment:** Successfully deployed `t2-isolated-d128s2` topology (130 front-panel ports, 3 converged cEOS peers) with the fix applied. DUT VM boots, all 130 interfaces come up, SSH accessible.\n3. **Backward compatibility:** The change only affects VMs with >128 ports. Existing topologies (t0, t1, t2 with \u2264128 ports) are completely unaffected.\n\n#### Any platform specific information?\n\nTested on Ubuntu with kernel 6.8.0-106-generic. The `NR_IOBUS_DEVS = 1000` limit has been the same value in mainline Linux for many years, so this affects all standard Linux kernels.\n\n#### Supported testbed topology if it's a new test case?\n\nN/A (not a new test case)\n\n### Documentation\n\nN/A",
+    "files": [
+      {
+        "path": "ansible/roles/vm_set/templates/sonic.xml.j2",
+        "additions": 4,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

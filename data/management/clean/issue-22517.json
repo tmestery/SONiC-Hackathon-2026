@@ -1,0 +1,48 @@
+{
+  "id": "management-22517",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 22517,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/22517",
+    "title": "Bug: tacacs_daily_daemon race condition in process detection",
+    "created_at": "2026-02-20T22:20:25Z",
+    "closed_at": "2026-08-12T17:56:02Z"
+  },
+  "metadata": {
+    "severity": "medium",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nMedium\n\n### Description of the bug\n\nansible installs the daemon script `/root/tacacs_daily_daemon` on the PTF container to ensure TACACS is running continuously. The daemon checks whether another instance of the daemon is already running and exits if one is detected to prevent duplicate daemons.\n\nThe problematic check:\n```\nPROCESS_NUM=$(ps -ef | grep \"/bin/sh .*tacacs_daily_daemon\" | grep -v \"grep\" | wc -l)\nif [ $PROCESS_NUM -ge 3 ]; then\n    echo \"tacacs_daily_daemon already running in background\" $PROCESS_NUM\n    exit 0\nfi\n```\n### Intended Logic:\nThe threshold of >=3 is based on the assumption that when a daemon is already running:\n- Process 1: The original daemon instance\n- Process 2: The current daemon instance (checking if it should run)\n- Process 3: The $(...) command substitution subshell executing the check\n\nTherefore, PROCESS_NUM >= 3 indicates a daemon is already running.\n\n### The race condition\nWhen the shell executes the pipeline `ps -ef | grep ... | grep ... | wc -l`, it creates multiple processes by first forking the subshell followed by loading the actual process. There is a critical timing window where\nthe pipeline processes have been forked but not yet loaded with the process, and where `ps -ef` executes during this window, it captures these intermediate processes. This causes PROCESS_NUM to be >=3 even when no other daemon is actually running.\n\n### Steps to Reproduce\n\nNo way to reliably reproduce this. However, we observed output such as `tacacs_daily_daemon already running in background 3` and `tacacs_daily_daemon already running in background 4` (suggesting 3 or 4 instances running) even when the daemon was not previously loaded. By adding additional printouts we observed the following process tree structure right before it failed:\n```\nPID 1824 (PPID=1):     /bin/sh /root/tacacs_daily_daemon\n  \u2514\u2500 PID 1838 (PPID=1824): /bin/sh /root/tacacs_daily_daemon\n      \u2514\u2500 PID 1841 (PPID=1838): /bin/sh /root/tacacs_daily_daemon\n```\nThis implies all instances of `tacacs_daily_daemon` are a result of nested forks, supporting the hypothesis above.\n\n### Actual Behavior and Expected Behavior\n\nIntermittent false positives when detecting whether the daemon is already running"
+  },
+  "resolution": {
+    "pr_number": 22518,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/22518",
+    "title": "Fix race condition in tacacs_daily_daemon",
+    "merged_at": "2026-08-12T17:56:00Z",
+    "description": "### Description of PR\n\nThis addresses the issue in https://github.com/sonic-net/sonic-mgmt/issues/22517.\n\nThe change replaces the existing `ps` based check for whether the daemon is already running with a file lock using `flock`. Using a lock avoids parsing the process list and removes the race condition described in the issue.\n\nPreviously the script determined whether another instance was running with:\n\n```\nps -ef | grep ... | grep ... | wc -l\n```\n\nWhen the shell runs this pipeline it forks several processes before the actual commands are fully loaded. There is a short window where those intermediate processes appears as the `tacacs_daily_daemon` and `ps -ef` can see them. If that happens, the count becomes >= 3 even though no other daemon instance is actually running. The issue link includes a detailed breakdown of this behavior.\n\nInstead, the script now uses the following to guarantee that only one instance proceeds:\n```\n# Exit if tacacs_daily_daemon already running in background\nLOCKFILE=/var/run/tacacs_daily_daemon.lock\nexec 9>\"$LOCKFILE\"\nif ! flock -n 9; then\n    echo \"tacacs_daily_daemon already running in background\"\n    exit 0\nfi\n```\n\nAdditionally, we redirect the daemon's stdout and stderr to `/var/log/tacacs_daily_daemon.log` file to prevent SIGPIPE signals when the parent SSH session terminates: When ansible executes `start_tacacs.sh` via ssh, the daemon inherits stdout/stderr descriptors pointing to the ssh session. When the ession closes (after ansible completes), these pipes are closed. Any subsequent write to stdout/stderr (e.g., echo statements in the while loop) causes the script to crash.\n\nSummary:\nFixes #22517\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511\n\n#### How did you verify/test it?\n\nRan the ansible playbook:\n`cd /data/ansible; ./testbed-cli.sh -k ceos add-topo ardut ~/.password -l server_1 -vvv`\n\nAnd verified TACACS is running. Also manually killed TACACS and verified the daemon keeps running, as previously that would result in SIGPIPE.",
+    "files": [
+      {
+        "path": "ansible/scripts/start_tacacs.sh",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "ansible/scripts/tacacs_daily_daemon",
+        "additions": 4,
+        "deletions": 11
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

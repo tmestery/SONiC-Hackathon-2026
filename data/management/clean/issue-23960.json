@@ -1,0 +1,48 @@
+{
+  "id": "management-23960",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 23960,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/23960",
+    "title": "Bug: Everflow's `IP_PROTOCOL` ACL rule can match LACP packets",
+    "created_at": "2026-04-15T21:52:51Z",
+    "closed_at": "2026-05-11T22:06:01Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "broadcom",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\nbroadcom\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nWhen running the `test_everflow_fwd_recircle_port_queue_check` sonic-mgmt test we see it sporadically fail on certain testbeds.\nThe issue is the test injects 50 packets but sees >50 packets on the Ethernet-Rec0 counter:\n```\nE                   AssertionError: Recircle port Ethernet-Rec0 queue5 counter value is not same as packets sent\n(Pdb) p expected_pkts\n50\n```\n```\nroot@ctn101:~# show queue counters Ethernet-Rec0\nLast cached time was 2026-04-13T16:26:35.640947\nEthernet-Rec0 Last cached time was 2026-04-13T16:26:35.640947\n         Port    TxQ    Counter/pkts    Counter/bytes    Drop/pkts    Drop/bytes\n-------------  -----  --------------  ---------------  -----------  ------------\nEthernet-Rec0    UC0               0                0            0             0\nEthernet-Rec0    UC1               0                0            0             0\nEthernet-Rec0    UC2               0                0            0             0\nEthernet-Rec0    UC3               0                0            0             0\nEthernet-Rec0    UC4               0                0            0             0\nEthernet-Rec0    UC5              52            8,004            0             0\nEthernet-Rec0    UC6               0                0            0             0\nEthernet-Rec0    UC7               0                0            0             0\n```\n\nThe problem is RULE_7 is being hit by LACP packets randomly:\n```\nroot@ctn101:~# aclshow -a\nRULE NAME    TABLE NAME      PRIO    PACKETS COUNT    BYTES COUNT\n-----------  ------------  ------  ---------------  -------------\nRULE_1       EVERFLOW        9999              120          12480\n<snip>\nRULE_7       EVERFLOW        9993                4            512\n```\n\nRULE_7 being the IP_PROTOCOL rule:\n```\nroot@ctn101:~# show acl rule\nTable     Rule       Priority  Action                          Match                         Status\n--------  -------  ----------  ------------------------------  ----------------------------  --------\nEVERFLOW  RULE_1         9999  MIRROR INGRESS: test_session_1  SRC_IP: <IP>/32          Active\n<snip>\nEVERFLOW  RULE_7         9993  MIRROR INGRESS: test_session_1  IP_PROTOCOL: 126              Active\n```\n\nI captured the sporadic packet hitting RULE_7 and we can see it's a LACP packet:\n```\n0180 c200 0002 622d 5171 ed0b **8809**\n0101 0114 8000 1655 9c**7e** 3194 0001 8000\n0001 3d00 0000 0214 ffff 9c69 edce fccd\n046c 00ff 0079 3d00 0000 0310 0000 0000\n0000 0000 0000 0000 0000 0000 0000 0000\n0000 0000 0000 0000 0000 0000 0000 0000\n0000 0000 0000 0000 0000 0000 0000 0000\n0000 0000 0000 0000 0000 0000 0000\n```\n\nWe can also see that 10-bytes after the Ethernet header (same offset as IP_PROTOCOL into an IPv4 header) we see a `0x7e` which is `126` in decimal which matches our rule `IP_PROTOCOL: 126`.\n\nThis section of the LACP header is the Actor System ID (<IPV6>:**7e**:31:94) so it can hit depending on the LACP's peer mac.\n\nI brought this up with BRCM in CS00012457180 and they mentioned that the ACL rule is underqualified.\nWe need the IP_PROTOCOL rule to also have IP_TYPE included in it to avoid matching on non-IP packets.\n\n### Steps to Reproduce\n\nRun `test_everflow_fwd_recircle_port_queue_check` on a testbed that has a peer device with `7e` as the 4th byte of the system MAC address.\n\n### Actual Behavior and Expected Behavior\n\nThe `IP_PROTOCOL` ACL is matching against LACP packets when it should only match against IP packets.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 4462,
+    "repository": "sonic-net/sonic-utilities",
+    "url": "https://github.com/sonic-net/sonic-utilities/pull/4462",
+    "title": "[acl-loader] Include `IP_TYPE=IP` in `IP_PROTOCOL` rules",
+    "merged_at": "2026-05-11T22:06:00Z",
+    "description": "If we don't include IP_TYPE as a qualifier in the IP_PROTOCOL rules then we might end up matching non-IP packets with matching values in the IP_PROTOCOL offset (10-bytes after ETH header).\n\nFixes: https://github.com/sonic-net/sonic-mgmt/issues/23960\n\n#### What I did\nIn acl-loader include `IP_TYPE=IP` qualifier on any rules that use `IP_PROTOCOL` as a qualifier.\n\n#### How I did it\nModify the openconfig->db_schema function `convert_ip` to add `IP_TYPE=IP` if the rule being converted has `IP_PROTOCOL` in it.\n\n#### How to verify it\nI configured an ACL with an IP_PROTOCOL qualifying rule and saw that the `IP_TYPE=IP` was added to it (See RULE_7):\n```\n> acl-loader update full /etc/sonic/acl-erspan.json --table_name EVERFLOW --session_name test_session_1\n\n> show acl rule\nTable     Rule     Priority    Action                          Match                         Status\n--------  -------  ----------  ------------------------------  ----------------------------  --------\nEVERFLOW  RULE_1   9999        MIRROR INGRESS: test_session_1  SRC_IP: <IP>/32          Active\nEVERFLOW  RULE_2   9998        MIRROR INGRESS: test_session_1  DST_IP: <IP>/32          Active\nEVERFLOW  RULE_3   9997        MIRROR INGRESS: test_session_1  DST_IP: <IP>/32        Active\nEVERFLOW  RULE_4   9996        MIRROR INGRESS: test_session_1  L4_SRC_PORT: 4661             Active\nEVERFLOW  RULE_5   9995        MIRROR INGRESS: test_session_1  L4_DST_PORT: 4661             Active\nEVERFLOW  RULE_6   9994        MIRROR INGRESS: test_session_1  ETHER_TYPE: 4660              Active\nEVERFLOW  RULE_7   9993        MIRROR INGRESS: test_session_1  IP_PROTOCOL: 126              Active\n                                                               IP_TYPE: IP\nEVERFLOW  RULE_8   9992        MIRROR INGRESS: test_session_1  L4_SRC_PORT_RANGE: 4672-4681  Active\nEVERFLOW  RULE_9   9991        MIRROR INGRESS: test_session_1  L4_DST_PORT_RANGE: 4672-4681  Active\nEVERFLOW  RULE_10  9990        MIRROR INGRESS: test_session_1  DSCP: 51                      Active\n```\n\nI also reran `test_everflow_fwd_recircle_port_queue_check` on a system that always failed due to packets matching RULE_7 and now the test passes.\n\n#### Previous command output (if the output of a command-line utility has changed)\nNo change\n\n#### New command output (if the output of a command-line utility has changed)\nNo change",
+    "files": [
+      {
+        "path": "acl_loader/main.py",
+        "additions": 6,
+        "deletions": 0
+      },
+      {
+        "path": "tests/acl_loader_test.py",
+        "additions": 7,
+        "deletions": 0
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

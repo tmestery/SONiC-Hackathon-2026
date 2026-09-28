@@ -1,0 +1,45 @@
+{
+  "id": "management-27358",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 27358,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/27358",
+    "title": "[platform_tests] show platform fan and pcieinfo tests fail on BMC platforms",
+    "created_at": "2026-08-26T00:34:33Z",
+    "closed_at": "2026-09-02T06:22:14Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": null,
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Test case"
+    ]
+  },
+  "failure": {
+    "body": "### Description\n\n`platform_tests/cli/test_show_platform.py` has two test cases that fail on BMC platforms (e.g. `arm64-nokia_bmc_h6_128-r0` on a `bmc` topology) because they rely on resources the BMC does not provide:\n\n- **`test_show_platform_pcieinfo`** fails because the PCIe config file is not present on the BMC:\n  ```\n  Failed to validate output of command 'show platform pcieinfo -c' line:\n  'Error: [Errno 2] No such file or directory: '/usr/share/sonic/platform/pcie.yaml''\n  ```\n- **`test_show_platform_fan`** fails because no fans report `OK` status \u2014 fan status is not managed by the BMC:\n  ```\n  No Fans are displayed with OK status on <BMC DUT>\n  ```\n\nNeither test currently has a skip condition covering BMC devices, so both fail on BMC testbeds.\n\n### Expected behavior\n\nBoth tests should be skipped on BMC platforms since the underlying resources (pcie.yaml, fan management) are not applicable to the BMC.\n\n### Proposed fix\n\nAdd a `duthost.is_bmc()` guard to skip both tests on BMC devices."
+  },
+  "resolution": {
+    "pr_number": 27359,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/27359",
+    "title": "[platform_tests]: Handle BMC platforms in show platform fan and pcieinfo tests",
+    "merged_at": "2026-09-02T06:22:13Z",
+    "description": "### Description of PR\nSummary:\nFixes #27358\n\n`test_show_platform_fan` and `test_show_platform_pcieinfo` in `platform_tests/cli/test_show_platform.py` fail on BMC platforms (e.g. `arm64-nokia_bmc_h6_128-r0` on a `bmc` topology):\n\n- On BMC, `show platform fan` returns `Fan Not detected` \u2014 fans are not managed by the BMC. `check_fan_status` only accepted an empty fan list for `dpu`/`vs` devices, so the test polled the full timeout and then failed.\n- On BMC, `show platform pcieinfo` has no `/usr/share/sonic/platform/pcie.yaml`, so the command errors out.\n\n### Type of change\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [x] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [ ] 202511\n\n### Approach\n#### What is the motivation for this PR?\nTwo `show platform` CLI tests fail on BMC platforms because the BMC does not own fan management and does not provide a PCIe config file. Neither test previously handled BMC devices.\n\n#### How did you do it?\n- `test_show_platform_fan`: extended the existing \"no fans is expected\" branch in `check_fan_status` to also cover BMC devices (`duthost.is_bmc()`), alongside the existing `dpu`/`vs` handling. On BMC, `Fan Not detected` yields an empty fan list, which is now treated as a valid pass rather than a failure \u2014 so the test provides real coverage instead of being skipped.\n- `test_show_platform_pcieinfo`: added a `duthost.is_bmc()` guard to skip the case on BMC, since the PCIe config (`pcie.yaml`) is not provided there.\n\n`duthost.is_bmc()` returns True when `router_type == 'NetworkBmc'`, so non-BMC platforms are unaffected.\n\n#### How did you verify/test it?\nCompiled the module to confirm syntax. On a BMC testbed (`vms77-bmc-7220-1`, platform `arm64-nokia_bmc_h6_128-r0`), `show platform fan` returns `Fan Not detected` and pcieinfo errors on the missing config; with this change the fan case passes and the pcieinfo case is skipped. Non-BMC platforms retain their previous behavior.\n\n#### Any platform specific information?\nAffects BMC platforms only (`router_type == 'NetworkBmc'`).\n\n#### Supported testbed topology if it's a new test case?\nN/A \u2014 existing test cases.\n\n### Documentation\nN/A",
+    "files": [
+      {
+        "path": "tests/platform_tests/cli/test_show_platform.py",
+        "additions": 4,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

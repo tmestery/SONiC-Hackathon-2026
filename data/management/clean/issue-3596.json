@@ -1,0 +1,54 @@
+{
+  "id": "management-3596",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 3596,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/3596",
+    "title": "Need new test: System and Management - Access-control lists (ACL) on VTY",
+    "created_at": "2021-06-04T07:29:43Z",
+    "closed_at": "2022-01-12T07:44:29Z"
+  },
+  "metadata": {
+    "severity": null,
+    "priority": "P1",
+    "issue_type": null,
+    "platform": null,
+    "target_releases": [],
+    "topics": [
+      "Control Plane ACL",
+      "Test gap"
+    ]
+  },
+  "failure": {
+    "body": "This is a test gap:"
+  },
+  "resolution": {
+    "pr_number": 5014,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/5014",
+    "title": "Enhance test cases for scale cacl rules",
+    "merged_at": "2022-01-29T06:38:39Z",
+    "description": "Enhance test cases for testing scale control acl rules.\n\nSigned-off-by: Zhaohui Sun <<EMAIL>>\n\n### Description of PR\n\nSummary:\nFixes #3596\nThe previous PR #4913 are not robust enough, if test case failed, it will leave cacl rules on testbed and cause access rejection, we will lost the access to testbed.\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [x] Test case(new/improvement)\n\n### Back port request\n- [ ] 201911\n\n### Approach\n#### What is the motivation for this PR?\nFixes #3596\nEnhance the previous PR #4913\n\n#### How did you do it?\nI enhance test cases in this PR as below:\n1. This is the whole process of test cases:\n\n- Add scale cacl rules into db with acl-loader command\n- Generate expected iptables rules for new added cacl rules\n- Compare the actual iptable rules with expected ones\n- Clean testbed\n\n2. Add clean_scale_rules fixture, it will clean added rules whatever test cases failed or not, if the clean failed, config reload and fail the case.\n3. It add an ACCEPT SSH iptables rule for test cases, even somehow added rules are not cleaned we won't lost the connection to testbed.\n4. How to add this ACCEPT SSH:\n\n- 1) Add SSH ACCEPT rule into scale_cacl.json file and deploy it into cacl rules, ipv4 works fine, but cacl table only support one ip version, for IPv6 case, CACL table will ignore ipv4 SSH ACCEPT rule, the access to testbed will be rejected as well.\n- 2) Use \"acl-loader update incremental\" instead of \"acl-loader update full\", but incremental is only for existing CACL rules, it will refresh iptables as well, we can't add the ACCEPT SSH rule before acl-loader.\n- 3) No1 and No2 don't work. \"acl-loader update full **.json\" command will refresh iptables, we have to add the ACCEPT SSH iptables rule after acl-loader command. But on multi-asic testbed, it always costs minutes to sync iptables rules after updating cacl rules, at first, I added time.sleep to make the process to wait, the default ansible SSH timeout is 30s, after sleeping for 3 mins, the process will try to add the ACCEPT SSH rule mentioned in No. 2, but SSH connection is disconnected, duthost.command will try to reconnect to DUT, at this time, next duthost.command will trigger ssh login, it will be rejected by default CACL DENY rule, test will fail. We have wait_until to solve this problem, I add wail_until to call check_iptable_rules every 10s to keep session alive, in check_iptable_rules just uses duthost.command to active ssh connection. In this way, we can active ssh connection and wait how long as we want.\n\n5. Run scale cases on host not on asic, control acl should be applied to host, outside of asic.\n6. collect_ignored_rules fixture is used to collect existing iptables/ip6tables rules on testbed before test, then we create scale rules, generate expected rules, at last, we will ignore the collected rules when comparing the actual rules and expected ones. In this way, we don't have to generate expected existing rules for each scenario, there are different existing rules for T0/DualToR active/DualToR standby/multi-asic and hardcode will make code hard to maintain.\n\n#### How did you verify/test it?\n\nrun test case test_cacl_scale_rules_ipv4 and test_cacl_scale_rules_ipv6 in tests/cacl/test_cacl_application.py\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\nT0/DualToR/multi-asic\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/cacl/test_cacl_application.py",
+        "additions": 229,
+        "deletions": 20
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 4913,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/4913",
+      "title": "Add a test case for testing control plane ACL scale rules",
+      "merged": true
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": false,
+    "notes": null
+  }
+}

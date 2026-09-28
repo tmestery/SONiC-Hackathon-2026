@@ -1,0 +1,88 @@
+{
+  "number": 3840,
+  "title": "Analyze/fix test_bgp_update_timer",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/3840",
+  "createdAt": "2021-07-22T00:01:41Z",
+  "closedAt": "2021-08-11T06:09:54Z",
+  "author": "neethajohn",
+  "labels": [
+    "backend"
+  ],
+  "assignees": [
+    "lolyu"
+  ],
+  "milestone": null,
+  "body": "Test failure seen on backend T1\r\n\r\nVersion: 20201231.06",
+  "comments": [
+    {
+      "author": "lolyu",
+      "createdAt": "2021-08-09T09:03:42Z",
+      "body": "Regression seen on the nightly:\r\n```\r\ncommon_setup_teardown = (<tests.common.helpers.bgp.BGPNeighbor object at 0x7fe850a3d610>, <tests.common.helpers.bgp.BGPNeighbor object at 0x7fe850a3d950>), constants = <test_bgp_update_timer._C object at 0x7fe850a3d390>\r\nduthosts = <tests.common.devices.duthosts.DutHosts object at 0x7fe862a67e10>, rand_one_dut_hostname = 'str2-7050qx-32s-acs-02', toggle_all_simulator_ports_to_rand_selected_tor = None\r\n\r\n    def test_bgp_update_timer(common_setup_teardown, constants, duthosts, rand_one_dut_hostname,\r\n                              toggle_all_simulator_ports_to_rand_selected_tor):\r\n\r\n        def bgp_update_packets(pcap_file):\r\n            \"\"\"Get bgp update packets from pcap file.\"\"\"\r\n            packets = sniff(\r\n                offline=pcap_file,\r\n                lfilter=lambda p: IP in p and bgp.BGPHeader in p and p[bgp.BGPHeader].type == 2\r\n            )\r\n            return packets\r\n\r\n        def match_bgp_update(packet, src_ip, dst_ip, action, route):\r\n            \"\"\"Check if the bgp update packet matches.\"\"\"\r\n            if not (packet[IP].src == src_ip and packet[IP].dst == dst_ip):\r\n                return False\r\n            subnet = ipaddress.ip_network(route[\"prefix\"].decode())\r\n            _route = (subnet.prefixlen, str(subnet.network_address))\r\n            bgp_fields = packet[bgp.BGPUpdate].fields\r\n            if action == \"announce\":\r\n                return bgp_fields[\"tp_len\"] > 0 and _route in bgp_fields[\"nlri\"]\r\n            elif action == \"withdraw\":\r\n                return bgp_fields[\"withdrawn_len\"] > 0 and _route in bgp_fields[\"withdrawn\"]\r\n            else:\r\n                return False\r\n\r\n        duthost = duthosts[rand_one_dut_hostname]\r\n\r\n        n0, n1 = common_setup_teardown\r\n        try:\r\n            n0.start_session()\r\n            n1.start_session()\r\n\r\n            # sleep till new sessions are steady\r\n            time.sleep(30)\r\n\r\n            # ensure new sessions are ready\r\n            bgp_facts = duthost.bgp_facts()[\"ansible_facts\"]\r\n            assert n0.ip in bgp_facts[\"bgp_neighbors\"]\r\n            assert n1.ip in bgp_facts[\"bgp_neighbors\"]\r\n            assert bgp_facts[\"bgp_neighbors\"][n0.ip][\"state\"] == \"established\"\r\n            assert bgp_facts[\"bgp_neighbors\"][n1.ip][\"state\"] == \"established\"\r\n\r\n            announce_intervals = []\r\n            withdraw_intervals = []\r\n            for i, route in enumerate(constants.routes):\r\n                bgp_pcap = BGP_LOG_TMPL % i\r\n                with log_bgp_updates(duthost, \"any\", bgp_pcap):\r\n                    n0.announce_route(route)\r\n                    time.sleep(constants.sleep_interval)\r\n                    n0.withdraw_route(route)\r\n                    time.sleep(constants.sleep_interval)\r\n\r\n                with tempfile.NamedTemporaryFile() as tmp_pcap:\r\n                    duthost.fetch(src=bgp_pcap, dest=tmp_pcap.name, flat=True)\r\n                    bgp_updates = bgp_update_packets(tmp_pcap.name)\r\n\r\n                announce_from_n0_to_dut = []\r\n                announce_from_dut_to_n1 = []\r\n                withdraw_from_n0_to_dut = []\r\n                withdraw_from_dut_to_n1 = []\r\n                for bgp_update in bgp_updates:\r\n                    if match_bgp_update(bgp_update, n0.ip, n0.peer_ip, \"announce\", route):\r\n                        announce_from_n0_to_dut.append(bgp_update)\r\n                        continue\r\n                    if match_bgp_update(bgp_update, n1.peer_ip, n1.ip, \"announce\", route):\r\n                        announce_from_dut_to_n1.append(bgp_update)\r\n                        continue\r\n                    if match_bgp_update(bgp_update, n0.ip, n0.peer_ip, \"withdraw\", route):\r\n                        withdraw_from_n0_to_dut.append(bgp_update)\r\n                        continue\r\n                    if match_bgp_update(bgp_update, n1.peer_ip, n1.ip, \"withdraw\", route):\r\n                        withdraw_from_dut_to_n1.append(bgp_update)\r\n\r\n                err_msg = \"no bgp update %s route %s from %s to %s\"\r\n                no_update = False\r\n                if not announce_from_n0_to_dut:\r\n                    err_msg %= (\"announce\", route, n0.ip, n0.peer_ip)\r\n                    no_update = True\r\n                elif not announce_from_dut_to_n1:\r\n                    err_msg %= (\"announce\", route, n1.peer_ip, n1.ip)\r\n                    no_update = True\r\n                elif not withdraw_from_n0_to_dut:\r\n                    err_msg %= (\"withdraw\", route, n0.ip, n0.peer_ip)\r\n                    no_update = True\r\n                elif not withdraw_from_dut_to_n1:\r\n                    err_msg %= (\"withdraw\", route, n1.peer_ip, n1.ip)\r\n                    no_update = True\r\n                if no_update:\r\n>                   pytest.fail(err_msg)\r\nE                   Failed: no bgp update announce route {'prefix': '10.10.100.0/27', 'nexthop': '192.168.0.2'} from 192.168.0.1 to 192.168.0.3\r\n\r\nbgp/test_bgp_update_timer.py:222: Failed\r\n```"
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 3827,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/3827",
+      "title": "[test_bgp_update_timer] Enable storage backend topologies",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-07-28T05:40:06Z",
+      "createdAt": "2021-07-21T09:13:27Z",
+      "author": "lolyu",
+      "body": "<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #3840\r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [ ] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [x] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 201911\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nEnable `test_bgp_update_timer` on storage backend topologies.\r\nSigned-off-by: Longxiang Lyu <lolv@microsoft.com>\r\n\r\n#### How did you do it?\r\n1. for `setup_interfaces`, enable it to parse sub interfaces on `t1-backend` or parse tagged vlan ports on `t0-backend`.\r\n2. modify `bgp_update_packets` to filter out only IPv4 packets only.\r\n\r\n#### How did you verify/test it?\r\nRun `test_bgp_update_timer` on `t0-backend` and `t1-backend`.\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/bgp/conftest.py",
+          "additions": 19,
+          "deletions": 1
+        },
+        {
+          "path": "tests/bgp/test_bgp_update_timer.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "lolyu",
+          "createdAt": "2021-07-21T09:24:24Z",
+          "body": "```\r\nbgp/test_bgp_update_timer.py::test_bgp_update_timer PASSED                                                                                                                                                [100%]\r\n\r\n========================================================================================== 1 passed in 194.86 seconds ===========================================================================================\r\n```"
+        }
+      ]
+    },
+    {
+      "number": 3990,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/3990",
+      "title": "[test_bgp_update_timer] Set correct neighbor type",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2021-08-11T06:09:54Z",
+      "createdAt": "2021-08-09T09:15:25Z",
+      "author": "lolyu",
+      "body": "\r\n<!--\r\nPlease make sure you've read and understood our contributing guidelines;\r\nhttps://github.com/Azure/SONiC/blob/gh-pages/CONTRIBUTING.md\r\n\r\nPlease provide following information to help code review process a bit easier:\r\n-->\r\n### Description of PR\r\n<!--\r\n- Please include a summary of the change and which issue is fixed.\r\n- Please also include relevant motivation and context. Where should reviewer start? background context?\r\n- List any dependencies that are required for this change.\r\n-->\r\n\r\nSummary:\r\nFixes #3840 \r\n\r\n### Type of change\r\n\r\n<!--\r\n- Fill x for your type of change.\r\n- e.g.\r\n- [x] Bug fix\r\n-->\r\n\r\n- [x] Bug fix\r\n- [ ] Testbed and Framework(new/improvement)\r\n- [ ] Test case(new/improvement)\r\n\r\n\r\n### Back port request\r\n- [ ] 201911\r\n\r\n### Approach\r\n#### What is the motivation for this PR?\r\nSet correct neighbor type on storage backend topologies since the DUT\r\ntype is either `BackEndToRRouter` or `BackEndLeafRouter`.\r\n\r\nSigned-off-by: Longxiang Lyu <lolv@microsoft.com>\r\n\r\n#### How did you do it?\r\n\r\n#### How did you verify/test it?\r\n```\r\nbgp/test_bgp_update_timer.py::test_bgp_update_timer PASSED                                                                                                                                                                                                             [100%]\r\n\r\n========================================================================================================================= 1 passed in 275.19 seconds =========================================================================================================================\r\n```\r\n\r\n#### Any platform specific information?\r\n\r\n#### Supported testbed topology if it's a new test case?\r\n\r\n### Documentation \r\n<!--\r\n(If it's a new feature, new test case)\r\nDid you update documentation/Wiki relevant to your implementation?\r\nLink to the wiki page?\r\n-->\r\n",
+      "files": [
+        {
+          "path": "tests/bgp/test_bgp_update_timer.py",
+          "additions": 1,
+          "deletions": 1
+        }
+      ],
+      "comments": [
+        {
+          "author": "neethajohn",
+          "createdAt": "2021-08-10T00:41:35Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2021-08-10T00:41:44Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        }
+      ]
+    }
+  ]
+}

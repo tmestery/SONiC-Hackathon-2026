@@ -1,0 +1,56 @@
+{
+  "id": "management-24001",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 24001,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/24001",
+    "title": "Bug: test_qos_sai.py::updateTestPortIdIp selects invalid ports",
+    "created_at": "2026-04-16T21:34:49Z",
+    "closed_at": "2026-05-05T18:49:13Z"
+  },
+  "metadata": {
+    "severity": "critical",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nCritical\n\n### Description of the bug\n\nupdateTestPortIdIp replaces the dutConfig's chosen src and dest ports with valid ports that are actually connected on the dut, but it has 2 major problems:\n\n1. on multi-asic it does not separate ports between asics, meaning it may replace a src port on the src asic with a port that is on the dest asic. The same goes with dest ports and the src asic.\n2. It will replace src ports with ports that do not have the same portspeed-cablelength QoS profile. This means that if the src port is replaced with a port of a different profile then the test will fail.\n  The qos tests read params from tests/qos/files/qos_params.<ASIC>.yaml and indexes by the SPEED_LENGTH profile of the chosen source port. Meaning that if updateTestPortIdIp replaces the src port with a new port that has a different profile, then the stored values read from qos_params.<ASIC>.yaml are incorrect for the test being run and the test will fail.\n\n### Steps to Reproduce\n\nThese 2 problems require semi-specific scenarios but this leads to flakiness in the tests.\n\n#### Example for problem 1:\nA multi asic system only one interface connected on asic0, if src and dest asic are chosen to be asic1 ( [single_asic] parametrized test) but the src port chosen is invalid, it will pick a new src port from those which are connected and it could pick the port from asic0 (which is NOT the src asic in this case).\n\n#### Example for problem 2:\nThe chosen src port has a pg_profile like so:\n```\n\"BUFFER_PG|Ethernet<A>|3-4\"\n{'profile': 'pg_lossless_400000_120000m_profile'}\n```\nbut all other connections have a pg profile like so:\n```\n\"BUFFER_PG|Ethernet<B-Z>|3-4\"\n{'profile': 'pg_lossless_400000_50m_profile'}\n```\nIf the src port is invalid then the qosConfig test values will have already been picked using the 400000_120000m key, and when a new src port is found by `updateTestPortIdIp` that new port can/will have `pg_lossless_400000_50m_profile` configurations. The test will then fail because the qos params computed for `400000_120000m` will not pass for ports using the `400000_50m` profile.\n\n### Actual Behavior and Expected Behavior\n\n`updateTestPortIdIp` should intelligently choose src and dest ports from the correct asic and with the correct pg profile. It currently does not.\n\n### Relevant log output\n\n```shell\n\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 23962,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/23962",
+    "title": "Fix qos test port re-selection on multi-asic and disagg chassis",
+    "merged_at": "2026-05-05T18:49:12Z",
+    "description": "### Description of PR\n\n1. Currently the testQosSaiHeadroomPoolSize will skip if the chosen port for the qos test is not 120000m plus 400 or 800G. This is not needed on disaggregated T2 skus.\n2. The test_qos_sai.py tests validate and replace chosen src and dest ports with ports that exist, but this selection was flawed. It could replace ports with those found on different asics, and it could replace ports with those that did not have the same qos profiles.\n\nThis PR fixes both problems.\n\nSummary:\nFixes #24001\n\n### Type of change\n\n- [x] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [ ] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [ ] 202505\n- [x] 202511: https://github.com/sonic-net/sonic-mgmt/pull/23963 manual backport\n\n### Approach\n#### What is the motivation for this PR?\nFix the issues mentioned above.\n\n#### How did you do it?\n**Problem 1:**\nI changed the testQosSaiHeadroomPoolSize logic so it only reduces the src ports and skips for non 120000m profiles on modular chassis.\n\n**Problem 2:**\n1. I fixed `updateTestPortIdIp` so that any replaced src ports should be from the src asic (same with dest)\n2. I fixed `updateTestPortIdIp` so that any replaced src ports must use the same portSpeedCableLength profile as the chosen src port for the test. This is to solve flakiness of these tests where the original src port was invalid, but the new src port is of a different profile and so has different pg headroom values. The qos params would not apply to the new src port and the test would fail.\n\n#### How did you verify/test it?\nRan testQosSaiHeadroomPoolSize[single_asic], testQosSaiHeadroomPoolSize[single_dut_multi_asic] on q3d and j2c+ skus to verify.\n\n#### Any platform specific information?\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/qos/qos_sai_base.py",
+        "additions": 181,
+        "deletions": 72
+      },
+      {
+        "path": "tests/qos/test_qos_sai.py",
+        "additions": 8,
+        "deletions": 7
+      }
+    ]
+  },
+  "related_prs": [
+    {
+      "pr_number": 24622,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/24622",
+      "title": "qos: use unfiltered port pool for qosParams in updateTestPortIdIp",
+      "merged": false
+    }
+  ],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "id": "management-18599",
+  "schema_version": "1.0",
+  "source": "sonic-mgmt",
+  "issue": {
+    "number": 18599,
+    "url": "https://github.com/sonic-net/sonic-mgmt/issues/18599",
+    "title": "[Snappi]: PFC m2o lossy test has lossy priorities hardcoded to 0 and 1.",
+    "created_at": "2025-05-24T19:25:47Z",
+    "closed_at": "2025-07-14T02:19:48Z"
+  },
+  "metadata": {
+    "severity": "high",
+    "priority": null,
+    "issue_type": "bug",
+    "platform": "generic",
+    "target_releases": [],
+    "topics": []
+  },
+  "failure": {
+    "body": "### Is it platform specific\n\ngeneric\n\n### Importance or Severity\n\nHigh\n\n### Description of the bug\n\nThe m2o lossy case:\n- Test has 2 ingress interfaces and 1 egress interface.\n- Ingress interfaces has test flow of lossy priority of 30% and background lossless priority flow of 25%.\n- Cumulative ingress traffic is 60% lossy traffic and 50% lossless traffic.\n\nIn test script should randomize the priorities in the lossy priorities between [0, 1, 2, 5, 6]. However, helper file eventually chooses priority 0 and 1 ONLY, thus limiting the testcase.\n\n### Steps to Reproduce\n\n1. Configure(hardcode) the lossy priority to 5 and 6 in the test-script:\n```\ntest_prio_list = [5, 6]\n```\n2. Run the test-case and check for the queue-counters. The queue counters will ONLY show priority 0 and 1.\n\n### Actual Behavior and Expected Behavior\n\nThe test-script has following code to select the lossy priorities:\n```\ntest_prio_list = [x for x in all_prio_list if x not in pause_prio_list]\n```\n\nThe helper file has following code:\nhttps://github.com/sonic-net/sonic-mgmt/blob/09d1c4d927d19a3eafc82de065d37a90a2ba9b7d/tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py#L112C1-L127C58\n\n```\n    __gen_traffic(testbed_config=testbed_config,\n                  port_config_list=port_config_list,\n                  rx_port_id_list=rx_port_id_list,\n                  tx_port_id_list=tx_port_id_list,\n                  pause_flow_name=PAUSE_FLOW_NAME,\n                  pause_prio_list=pause_prio_list,\n                  test_flow_name=TEST_FLOW_NAME,\n                  **test_flow_prio_list=test_prio_list,**\n                  test_flow_rate_percent=test_flow_rate_percent,\n                  bg_flow_name=BG_FLOW_NAME,\n                  bg_flow_prio_list=bg_prio_list,\n                  bg_flow_rate_percent=bg_flow_rate_percent,\n                  data_flow_dur_sec=DATA_FLOW_DURATION_SEC,\n                  data_pkt_size=DATA_PKT_SIZE,\n                  prio_dscp_map=prio_dscp_map,\n                  no_of_lossy_streams=no_of_test_streams)\n```\n\nThis is further called to generate test_flows:\nhttps://github.com/sonic-net/sonic-mgmt/blob/09d1c4d927d19a3eafc82de065d37a90a2ba9b7d/tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py#L231C1-L241C56\n```\n    __gen_data_flows(testbed_config=testbed_config,\n                     port_config_list=port_config_list,\n                     src_port_id_list=tx_port_id_list,\n                     dst_port_id_list=rx_port_id_list,\n                     flow_name_prefix=TEST_FLOW_NAME,\n                     flow_prio_list=test_flow_prio_list,\n                     flow_rate_percent=test_flow_rate_percent,\n                     flow_dur_sec=data_flow_dur_sec,\n                     data_pkt_size=data_pkt_size,\n                     prio_dscp_map=prio_dscp_map,\n                     no_of_streams=no_of_lossy_streams)\n```\n\nThis in turn calls following code:\nhttps://github.com/sonic-net/sonic-mgmt/blob/09d1c4d927d19a3eafc82de065d37a90a2ba9b7d/tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py#L348C1-L361C66\n\n```\n    if pfcQueueGroupSize == 8:\n        if 'Test Flow' in flow.name:\n            eth.pfc_queue.value = 1\n        elif 'Background Flow 1 -> 0' in flow.name:\n            eth.pfc_queue.value = flow_prio[0]\n        elif 'Background Flow 2 -> 0' in flow.name:\n            eth.pfc_queue.value = flow_prio[1]\n    else:\n        if 'Test Flow' in flow.name:\n            **eth.pfc_queue.value = pfcQueueValueDict[1]**\n        elif 'Background Flow 1 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[0]]\n        elif 'Background Flow 2 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[1]]\n```\n\nFurther the test flows are defined as:\nhttps://github.com/sonic-net/sonic-mgmt/blob/09d1c4d927d19a3eafc82de065d37a90a2ba9b7d/tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py#L384C1-L396C10\n```\n    elif 'Test Flow 1 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.CS1,\n        ]\n    elif 'Test Flow 2 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.AF11,\n        ]\n        ipv4.priority.dscp.phb.values = [\n            60, 61, 62, 63, 24, 25, 26, 27, 21, 23, 28, 29,\n            0, 2, 6, 59, 11, 13, 15, 58, 17, 16, 19, 54, 57,\n            56, 51, 50, 53, 52, 59, 49, 47, 44, 45, 42, 43, 40, 41\n        ]\n```\n\nThis is incorrect. Instead following code should be used for defining the PFC queues in IXIA:\n```\n        if 'Test Flow 1 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[0]]\n        elif 'Test Flow 2 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[1]]\n        elif 'Background Flow 1 -> 0' in flow.name:\n```\n\n```\n    elif 'Test Flow 1 -> 0' in flow.name:\n        # Amit code\n        ipv4.priority.dscp.phb.values = prio_dscp_map[flow_prio[0]]\n    elif 'Test Flow 2 -> 0' in flow.name:\n        # Amit code\n        ipv4.priority.dscp.phb.values = prio_dscp_map[flow_prio[1]]\n        #ipv4.priority.dscp.phb.values = [\n        #    60, 61, 62, 63, 24, 25, 26, 27, 21, 23, 28, 29,\n        #    0, 2, 6, 59, 11, 13, 15, 58, 17, 16, 19, 54, 57,\n        #    56, 51, 50, 53, 52, 59, 49, 47, 44, 45, 42, 43, 40, 41\n        #]\n\n```\n\n### Relevant log output\n\n```shell\nNot applicable.\n```\n\n### Output of `show version`\n\n```shell\n\n```\n\n### Attach files (if any)\n\n_No response_"
+  },
+  "resolution": {
+    "pr_number": 19070,
+    "repository": "sonic-net/sonic-mgmt",
+    "url": "https://github.com/sonic-net/sonic-mgmt/pull/19070",
+    "title": "[snappi] Replace hardcoded lossy flows to random priority lossy flows in PFC m2o oversubscribe tests",
+    "merged_at": "2025-07-14T02:19:47Z",
+    "description": "### Description of PR\n\nSummary:\nFixes #18599\n\n### Type of change\n\n- [ ] Bug fix\n- [ ] Testbed and Framework(new/improvement)\n- [ ] New Test case\n    - [ ] Skipped for non-supported platforms\n- [X] Test case improvement\n\n### Back port request\n- [ ] 202205\n- [ ] 202305\n- [ ] 202311\n- [ ] 202405\n- [ ] 202411\n- [X] 202505\n\n### Approach\n#### What is the motivation for this PR?\nThe PFC m2o oversubscribe testcases have 2 ingress interfaces and 1 egress interface. Each ingress interface has 1 test-flow and 1 background flow.\n\nThe test and background are either lossless or lossy priority flow depending upon the testcase.\n\nAll three testcases have list for the lossy priorities however, in the helper files, they are hard-coded to select ONLY priority 0 and 1.\n\nCorrespondingly, there is an issue in the PFC-queue assignment as well.\n\n(a) **tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_helper.py**\n```\nBackground flow priorities are assigned to single queue:\n        if 'Background Flow' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[1]\n        elif 'Test Flow 1 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[0]]\n        elif 'Test Flow 2 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[1]]\n\nBackground flows are hardcoded:\n    if 'Background Flow 1 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.CS1,\n        ]\n    elif 'Background Flow 2 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.AF11,\n        ]\n        ipv4.priority.dscp.phb.values = [\n            60, 61, 62, 63, 24, 25, 27, 21, 23, 29,\n            0, 2, 6, 59, 11, 13, 15, 58, 17, 16, 19, 54, 57,\n            56, 51, 50, 53, 52, 59, 49, 47, 44, 45, 42, 43, 40, 41\n        ]\n```\n\n(b) **tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_lossy_helper.py**\n```\nBackground and test flow priorities are assigned to single queue:\n        if 'Background Flow' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[1]\n        else:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[0]]\n\nBackground flows are hardcoded:\n    if 'Background Flow 1 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.CS1,\n        ]\n    elif 'Background Flow 2 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.AF11,\n        ]\n        ipv4.priority.dscp.phb.values = [\n            60, 61, 62, 63, 24, 25, 27, 21, 23, 29,\n            0, 2, 6, 59, 11, 13, 15, 58, 17, 16, 19, 54, 57,\n            56, 51, 50, 53, 52, 59, 49, 47, 44, 45, 42, 43, 40, 41\n        ]\n```\n\nc. **tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py**\n```\nTest flow queues are assigned to single queue:\n        if 'Test Flow' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[1]\n        elif 'Background Flow 1 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[0]]\n        elif 'Background Flow 2 -> 0' in flow.name:\n            eth.pfc_queue.value = pfcQueueValueDict[flow_prio[1]]\n\nTest flows are hardcoded:\n    elif 'Test Flow 1 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.CS1,\n        ]\n    elif 'Test Flow 2 -> 0' in flow.name:\n        ipv4.priority.dscp.phb.values = [\n            ipv4.priority.dscp.phb.AF11,\n        ]\n        ipv4.priority.dscp.phb.values = [\n            60, 61, 62, 63, 24, 25, 26, 27, 21, 23, 28, 29,\n            0, 2, 6, 59, 11, 13, 15, 58, 17, 16, 19, 54, 57,\n            56, 51, 50, 53, 52, 59, 49, 47, 44, 45, 42, 43, 40, 41\n        ]\n\n**NOTE**: The test flows are the lossy priorities flow in this testcase.\n```\n#### How did you do it?\n\n1. Randomly selecting two lossy priority flows in the testcase.\n2. The lossy priority flows are now selected from prio_dscp_map[flow_prio[<ingress_interfac_index>]], rather than being hardcoded.\n3. The PFC queues are assigned as per the lossy/lossless priority value for both background and test-flows.\n\n@selldinesh , @sdszhang , @auspham, @kamalsahu0001  for viz.\n\n#### How did you verify/test it?\n1. Ran the test on chassis setup and put checked via 'show queue counter -n <asic-value> --nonzero' on the DUT to see if the test chooses correct lossy priority and DUT is able to decode it correctly.\n\n#### Any platform specific information?\nNA\n\n#### Supported testbed topology if it's a new test case?\n\n### Documentation",
+    "files": [
+      {
+        "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_helper.py",
+        "additions": 6,
+        "deletions": 15
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossless_lossy_helper.py",
+        "additions": 8,
+        "deletions": 14
+      },
+      {
+        "path": "tests/snappi_tests/pfc/files/m2o_oversubscribe_lossy_helper.py",
+        "additions": 5,
+        "deletions": 15
+      },
+      {
+        "path": "tests/snappi_tests/pfc/test_m2o_oversubscribe_lossless.py",
+        "additions": 3,
+        "deletions": 1
+      },
+      {
+        "path": "tests/snappi_tests/pfc/test_m2o_oversubscribe_lossless_lossy.py",
+        "additions": 3,
+        "deletions": 1
+      },
+      {
+        "path": "tests/snappi_tests/pfc/test_m2o_oversubscribe_lossy.py",
+        "additions": 3,
+        "deletions": 1
+      }
+    ]
+  },
+  "related_prs": [],
+  "quality": {
+    "has_diagnostic_signal": true,
+    "notes": null
+  }
+}

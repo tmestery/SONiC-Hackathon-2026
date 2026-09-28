@@ -1,0 +1,63 @@
+{
+  "number": 22526,
+  "title": "ceos_topo_converger: cannot re-converge an already-converged topology file",
+  "state": "CLOSED",
+  "url": "https://github.com/sonic-net/sonic-mgmt/issues/22526",
+  "createdAt": "2026-02-21T05:36:38Z",
+  "closedAt": "2026-02-24T05:36:32Z",
+  "author": "yxieca",
+  "labels": [],
+  "assignees": [],
+  "milestone": null,
+  "body": "## Description\n\nThe `ceos_topo_converger.py` cannot process a topology file that has already been converged. This creates a workflow problem: after `add-topo` (which converges the topo file), running `deploy-mg` (which also invokes the converger) fails unless the user manually restores the original unconverged topo file from git.\n\n## Root Cause\n\nThe converger expects the original topology structure with individual VM entries (e.g., 24 VMs for t1-lag). After convergence, the topo file contains only 2 VMs (one per role) with VRF data. When the converger runs again on this already-converged file, it encounters unexpected structure and fails.\n\n## Observed Behavior\n\nWorkflow that triggers the issue:\n\n1. `testbed-cli.sh add-topo` \u2192 converger runs, writes converged topo file \u2705\n2. `testbed-cli.sh deploy-mg` \u2192 converger runs again on the already-converged file \u274c\n\nThe user must manually run `git checkout vars/topo_t1-lag.yml` between steps 1 and 2.\n\n## Expected Behavior\n\nThe converger should be idempotent \u2014 either:\n- Detect that the topo file is already converged and skip re-convergence\n- Or work correctly on an already-converged file\n\nThis would also help preserve the `topo_is_multi_vrf` and `convergence_data` metadata that tests need (see #22524).\n\n## Environment\n\n- Topology: t1-lag with `use_converged_peers: true`\n- cEOS: `ceosimage:4.32.5M`\n- Testbed: KVM virtual switch\n\n## Related\n\n- #22524 (converged peers: topo_is_multi_vrf not set for tests)\n- #22525 (LACP channel-group not updated for converged peers)",
+  "comments": [
+    {
+      "author": "yxieca",
+      "createdAt": "2026-02-22T01:45:09Z",
+      "body": "## Verified: idempotency fix works correctly\n\nDuring `refresh-dut` \u2192 `deploy-mg` workflow on T1-LAG converged peers, the converger correctly detected the already-converged topo and printed:\n\n```\nTopology already converged, skipping convergence.\n```\n\nWithout this fix, `deploy-mg` re-runs the converger on the already-converged topo file, causing `KeyError` on virtual VM names (e.g., `ARISTA03T2`) that were already merged into VRFs.\n\nVerified on SONiC master `dc27b5624`, T1-LAG topology with `use_converged_peers: true`."
+    }
+  ],
+  "linkedPullRequests": [
+    {
+      "number": 22528,
+      "repository": "sonic-net/sonic-mgmt",
+      "url": "https://github.com/sonic-net/sonic-mgmt/pull/22528",
+      "title": "Make ceos_topo_converger idempotent for already-converged topologies",
+      "state": "MERGED",
+      "merged": true,
+      "mergedAt": "2026-02-24T05:36:31Z",
+      "createdAt": "2026-02-21T05:44:21Z",
+      "author": "yxieca",
+      "body": "## Description\n\nMake the ceos topology converger idempotent so it can safely be invoked on an already-converged topology file.\n\n### What is the motivation for this PR?\n\nWhen using `use_converged_peers: true`, `testbed-cli.sh add-topo` runs the converger which overwrites the topo file with the converged version. A subsequent `testbed-cli.sh deploy-mg` also invokes the converger (via `TestbedProcessing.py`), but it fails because the input file is already converged.\n\nThis forces users to manually restore the original topo file (`git checkout vars/topo_*.yml`) between `add-topo` and `deploy-mg`, which also wipes the `topo_is_multi_vrf` and `convergence_data` metadata that the test framework needs for the `nbrhosts` fixture to correctly map VRF peers to physical containers (see #22524).\n\n### How did you do it?\n\nAdded an early-out check in `converge_testbed()`: if the topology already has `topo_is_multi_vrf` set, skip convergence and preserve the file as-is.\n\n### How did you verify/test it?\n\nValidated on a KVM testbed with t1-lag topology and `use_converged_peers: true`:\n- `add-topo` converges the topo file (sets `topo_is_multi_vrf: True`)\n- `deploy-mg` now skips re-convergence, preserving the converged metadata\n- Tests can read `topo_is_multi_vrf` and `convergence_data` from the topo file\n\nFixes #22526\nRelated: #22524, #22525",
+      "files": [
+        {
+          "path": "ansible/ceos_topo_converger.py",
+          "additions": 3,
+          "deletions": 0
+        }
+      ],
+      "comments": [
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-02-21T05:44:29Z",
+          "body": "/azp run"
+        },
+        {
+          "author": "azure-pipelines",
+          "createdAt": "2026-02-21T05:44:42Z",
+          "body": "<samp>\nAzure Pipelines successfully started running 1 pipeline(s).<br>\r\n\n</samp>"
+        },
+        {
+          "author": "r12f",
+          "createdAt": "2026-02-21T17:48:36Z",
+          "body": "@yutongzhang-microsoft for viz."
+        },
+        {
+          "author": "mssonicbld",
+          "createdAt": "2026-03-31T06:01:34Z",
+          "body": "Cherry-pick PR to 202511: https://github.com/sonic-net/sonic-mgmt/pull/23455"
+        }
+      ]
+    }
+  ]
+}
