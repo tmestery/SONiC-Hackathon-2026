@@ -21,7 +21,6 @@ data/swss/
 ├── clean/                    # Schema 1.0 records for train/test
 │   ├── issue-<number>.json
 │   └── manifest.json
-├── splits.json               # Frozen train/test issue lists (do not overwrite)
 ├── format.md                 # Schema for entries in clean/
 └── readme.md                 # This documentation
 ```
@@ -32,7 +31,7 @@ See [`format.md`](format.md) for field definitions. Rebuild clean records with:
 python3 scripts/swss/clean_swss.py
 ```
 
-Frozen splits are re-applied automatically if [`splits.json`](splits.json) exists.
+Frozen splits live in [`../splits.json`](../splits.json) and are re-applied automatically if that file exists.
 
 ## Raw Data Specification (`raw/`)
 
@@ -128,17 +127,16 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 
 **Diagnostic signal.** `quality.has_diagnostic_signal` looks for failure-oriented language plus swss-specific markers: `error`, `traceback`, `crash`, `segfault`, `timeout`, `orchagent`, `syncd`, `swss#`, `sairedis`, `valgrind`, `asan`/`sanitizer`, `deadlock`, `memory leak`, `show techsupport`, `FAILED`.
 
-**Train/test (frozen).** Source of truth: [`splits.json`](splits.json).
+**Train/test (frozen).** Source of truth: [`../splits.json`](../splits.json) (combined with buildimage and management).
 
 - Eligible: `has_diagnostic_signal == true` only
-- Method: random shuffle, seed `42`
-- **75% train / 25% test** — test is frozen; **never train on it**
+- Method: temporal by `issue.closed_at` (oldest → newest)
+- **75% train / 25% test** — test is the newest quarter; **never train on it**
 - Non-diagnostic rows: `split: null` (excluded)
-
-Current freeze: **30 train / 11 test** (16 excluded).
+- Record ids in the freeze are schema ids (`swss-<n>`, not raw issue numbers)
 
 ```bash
-python3 scripts/swss/freeze_splits.py --apply-only   # re-stamp after a clean rebuild
+python3 scripts/freeze_splits.py --apply-only   # re-stamp after a clean rebuild
 ```
 
 Do **not** re-run without `--apply-only` / `--force` — overwriting the freeze invalidates any prior eval numbers.

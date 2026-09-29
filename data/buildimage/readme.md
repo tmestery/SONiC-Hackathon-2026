@@ -21,7 +21,6 @@ data/buildimage/
 ├── clean/                    # Schema 1.0 records for train/test
 │   ├── issue-<number>.json
 │   └── manifest.json
-├── splits.json               # Frozen train/test issue lists (do not overwrite)
 ├── format.md                 # Schema for entries in clean/
 └── readme.md                 # This documentation
 ```
@@ -32,7 +31,7 @@ See [`format.md`](format.md) for field definitions. Rebuild clean records with:
 python3 scripts/buildimage/clean_buildimage.py
 ```
 
-Frozen splits are re-applied automatically if [`splits.json`](splits.json) exists.
+Frozen splits live in [`../splits.json`](../splits.json) and are re-applied automatically if that file exists.
 
 ## Raw Data Specification (`raw/`)
 
@@ -125,17 +124,16 @@ Each `clean/issue-<number>.json` is one issue plus its primary **merged** linked
 - `priority` / `issue_type` / `target_releases` / `topics` from labels (emoji shortcodes stripped)
 - `platform` from `Is it platform specific`, else vendor/platform labels
 
-**Train/test (frozen).** Source of truth: [`splits.json`](splits.json).
+**Train/test (frozen).** Source of truth: [`../splits.json`](../splits.json) (combined with management and swss).
 
 - Eligible: `has_diagnostic_signal == true` only
 - Method: temporal by `issue.closed_at` (oldest → newest)
 - **75% train / 25% test** — test is the newest quarter; **never train on it**
 - Non-diagnostic rows: `split: null` (excluded)
-
-Current freeze: **640 train / 214 test** (130 excluded). Cutoff `closed_at >= 2025-05-06T16:18:54Z` for test.
+- Record ids in the freeze are schema ids (`buildimage-<n>`, not raw issue numbers)
 
 ```bash
-python3 scripts/buildimage/freeze_splits.py --apply-only   # re-stamp after a clean rebuild
+python3 scripts/freeze_splits.py --apply-only   # re-stamp after a clean rebuild
 ```
 
 Do **not** re-run without `--apply-only` / `--force` — overwriting the freeze invalidates any prior eval numbers.

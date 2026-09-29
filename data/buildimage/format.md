@@ -3,7 +3,7 @@
 Labeled train/test records in `clean/issue-<n>.json`. Not a RAG corpus — that is [`data/rag/`](../rag/).
 
 Build with `python3 scripts/buildimage/clean_buildimage.py`. Never edit `raw/`.
-Frozen splits live in [`splits.json`](splits.json) — **never train on `split: "test"`**.
+Frozen splits live in [`../splits.json`](../splits.json) — **never train on `split: "test"`**.
 
 
 | Role        | Fields                                      |
@@ -18,7 +18,7 @@ Frozen splits live in [`splits.json`](splits.json) — **never train on `split: 
 
 Include a record when a linked PR is merged and its body is non-empty after HTML comments are stripped. Primary PR is the latest `mergedAt`. Other linked PRs go in `related_prs` (no bodies).
 
-**Splits (frozen):** only `has_diagnostic_signal == true` rows are assigned. Sorted by `closed_at` (oldest → newest): **75% train / 25% test**. Non-diagnostic rows get `split: null` (excluded). Rebuild stamps with `python3 scripts/buildimage/freeze_splits.py --apply-only`.
+**Splits (frozen):** only `has_diagnostic_signal == true` rows are assigned, jointly with management and swss. Sorted by `closed_at` (oldest → newest): **75% train / 25% test**. Non-diagnostic rows get `split: null` (excluded). Rebuild stamps with `python3 scripts/freeze_splits.py --apply-only`.
 
 ```json
 {

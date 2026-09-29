@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = ROOT / "data" / "management" / "raw"
 CLEAN_DIR = ROOT / "data" / "management" / "clean"
 MANIFEST_FILE = CLEAN_DIR / "manifest.json"
-SPLITS_FILE = ROOT / "data" / "management" / "splits.json"
+SPLITS_FILE = ROOT / "data" / "splits.json"
 SCHEMA_VERSION = "1.0"
 SOURCE = "sonic-mgmt"
 
@@ -444,7 +444,7 @@ def main() -> None:
         if record["quality"]["has_diagnostic_signal"]:
             diagnostic_true += 1
 
-    # Re-apply frozen splits if present (source of truth: splits.json).
+    # Re-apply frozen splits if present (source of truth: data/splits.json).
     split_meta = None
     if SPLITS_FILE.exists() and SPLITS_FILE.stat().st_size > 0:
         with SPLITS_FILE.open(encoding="utf-8") as fh:
@@ -454,10 +454,10 @@ def main() -> None:
         for path in CLEAN_DIR.glob("issue-*.json"):
             with path.open(encoding="utf-8") as fh:
                 record = json.load(fh)
-            number = record["issue"]["number"]
-            if number in train_set:
+            rid = record.get("id")
+            if rid in train_set:
                 record["split"] = "train"
-            elif number in test_set:
+            elif rid in test_set:
                 record["split"] = "test"
             else:
                 record["split"] = None
@@ -465,18 +465,19 @@ def main() -> None:
                 json.dump(record, fh, indent=2)
                 fh.write("\n")
         for entry in written:
-            if entry["issue_number"] in train_set:
+            rid = entry.get("id")
+            if rid in train_set:
                 entry["split"] = "train"
-            elif entry["issue_number"] in test_set:
+            elif rid in test_set:
                 entry["split"] = "test"
             else:
                 entry["split"] = None
         split_meta = {
-            "file": "data/management/splits.json",
+            "file": "data/splits.json",
             "method": splits.get("method"),
             "frozen_at": splits.get("frozen_at"),
             "counts": splits.get("counts"),
-            "seed": splits.get("seed"),
+            "cutoff_closed_at": splits.get("cutoff_closed_at"),
         }
 
     manifest = {
