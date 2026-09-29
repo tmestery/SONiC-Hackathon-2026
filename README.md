@@ -50,11 +50,14 @@ constrained hardware.
 
 ```
 .
-├── data/                 # Dataset: mined failures, cleaned entries, SLM context
+├── data/                 # Dataset: mined failures, cleaned entries, RAG corpus
 │   ├── buildimage/       #   From sonic-buildimage PRs and issues
 │   ├── management/       #   From sonic-mgmt PRs and issues
 │   ├── swss/             #   From sonic-swss PRs and issues
-│   └── rag/              #   SONiC docs RAG corpus (retrieval only)
+│   ├── rag/              #   SONiC docs RAG corpus (retrieval only)
+│   └── splits.json       #   Frozen train/test ids
+├── training/             #   SFT on frozen train (local model via config)
+├── evaluation/           #   Eval harness on frozen test (local agent via config)
 └── docs/                 # Project documentation
     ├── SONiC-Hackathon-2026-Proposal.md
     └── guides/           #   Dataset quality and benchmarking guides
