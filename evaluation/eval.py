@@ -128,6 +128,32 @@ def parse_score(text: str) -> float | None:
     return max(0.0, min(1.0, value))
 
 
+def describe_groq_error(resp: requests.Response, model: str, judge_name: str) -> str:
+    """Build a descriptive error message for a failed Groq response, calling
+    out token/rate limit exhaustion specifically since it needs a different
+    response (wait/backoff) than a generic API failure."""
+    try:
+        detail = resp.json().get("error") or {}
+    except ValueError:
+        detail = {}
+    message = detail.get("message") or resp.text
+    err_type = (detail.get("type") or detail.get("code") or "").lower()
+
+    if resp.status_code == 429:
+        if "token" in err_type or "token" in message.lower():
+            return (
+                f"judge '{judge_name}' (model {model}) hit its Groq TOKEN limit: "
+                f"{message}. This model's free-tier token quota is exhausted for "
+                f"now; wait for the quota to reset or swap in a different judge "
+                f"model in evaluation/config.yaml."
+            )
+        return (
+            f"judge '{judge_name}' (model {model}) hit a Groq RATE limit: "
+            f"{message}. Retry after a short delay or reduce request concurrency."
+        )
+    return f"judge '{judge_name}' (model {model}) Groq API error [{resp.status_code}]: {message}"
+
+
 def call_judge(
     judge: dict[str, Any],
     *,
@@ -142,6 +168,7 @@ def call_judge(
         gold=gold,
     )
     model = judge.get("model")
+    judge_name = judge.get("name") or model or "unnamed"
     if not model:
         raise ValueError(f"Judge {judge.get('name')!r} missing model")
 
@@ -159,9 +186,12 @@ def call_judge(
     for attempt in range(2):
         try:
             resp = requests.post(GROQ_URL, headers=headers, json=body, timeout=60)
-            if resp.status_code == 429 and attempt == 0:
-                time.sleep(2.0)
-                continue
+            if resp.status_code == 429:
+                print(f"  {describe_groq_error(resp, model, judge_name)}", file=sys.stderr)
+                if attempt == 0:
+                    time.sleep(2.0)
+                    continue
+                return None
             resp.raise_for_status()
             data = resp.json()
             content = (
@@ -176,7 +206,7 @@ def call_judge(
                 time.sleep(1.0)
                 continue
             print(
-                f"  judge {judge.get('name')}: {last_error}",
+                f"  judge '{judge_name}' (model {model}) failed: {last_error}",
                 file=sys.stderr,
             )
             return None
