@@ -61,8 +61,14 @@ source .venv/bin/activate
 # Smoke: first 5 test examples, override Ollama model
 python evaluation/eval.py --limit 5 --ollama-model qwen3.5:9b
 
-# Full frozen test split (uses ollama.model from config.yaml)
-python evaluation/eval.py
+# Full frozen test split (checkpoint saved after every example)
+python evaluation/eval.py --ollama-model qwen3.5:9b
+
+# Optional: fixed checkpoint path (easier to resume)
+python evaluation/eval.py --ollama-model qwen3.5:9b --output evaluation/results/eval-full.json
+
+# Resume after Ctrl-C / crash (skips ids already in the JSON)
+python evaluation/eval.py --ollama-model qwen3.5:9b --resume evaluation/results/eval-full.json
 
 # Ablate RAG
 python evaluation/eval.py --limit 5 --no-rag --ollama-model qwen3.5:9b
@@ -73,6 +79,7 @@ python evaluation/eval.py --limit 5 --ollama-host http://127.0.0.1:11434
 
 `--limit N` takes the first N ids from the test split (useful for cheap smoke runs).
 
+Results are **checkpointed after every example** to `evaluation/results/eval-<stamp>.json` (or `--output`). If the run dies, use `--resume <that file>` to continue without redoing finished ids.
 ## What the model sees
 
 Same user turn shape as training SFT:
