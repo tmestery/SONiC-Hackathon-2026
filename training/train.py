@@ -272,7 +272,12 @@ def smoke_prompt(cfg: dict[str, Any]) -> None:
     resp.raise_for_status()
     print(json.dumps(resp.json(), indent=2)[:2000])
 
-def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
+def run_sft(
+    cfg: dict[str, Any],
+    train_jsonl: Path,
+    *,
+    resume_from_checkpoint: bool | str | Path = False,
+) -> Path:
     try:
         import torch
         from datasets import load_dataset
@@ -339,6 +344,10 @@ def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
         device_map = None
     else:
         device_map = "cpu"
+        # float16 matmul is unreliable on CPU; force float32 for SFT.
+        if torch_dtype in (torch.float16, torch.bfloat16):
+            torch_dtype = torch.float32
+            dtype_name = "float32"
 
     log(f"Loading model: {name_or_path} (device_map={device_map}, dtype={dtype_name})")
     model_kwargs: dict[str, Any] = {
@@ -400,6 +409,8 @@ def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
 
     dataset = dataset.map(to_text, remove_columns=dataset.column_names)
 
+    use_cuda = torch.cuda.is_available()
+    use_mps = (not use_cuda) and torch.backends.mps.is_available()
     sft_kwargs: dict[str, Any] = {
         "output_dir": str(output_dir),
         "num_train_epochs": float(train_cfg.get("num_train_epochs") or 1),
@@ -416,6 +427,10 @@ def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
         "report_to": [],
         "dataset_text_field": "text",
         "gradient_checkpointing": True,
+        # Transformers rejects bf16/fp16 GPU defaults when only CPU is available.
+        "use_cpu": not use_cuda and not use_mps,
+        "fp16": use_cuda,
+        "bf16": False,
     }
     max_len = int(train_cfg.get("max_seq_length") or 1024)
     # TRL versions differ on the length kwarg name.
@@ -431,8 +446,22 @@ def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
         processing_class=tokenizer,
         peft_config=peft_config,
     )
-    log("Starting SFT…")
-    trainer.train()
+    if resume_from_checkpoint:
+        if resume_from_checkpoint is True:
+            ckpt: bool | str = True
+            log("Resuming SFT from latest checkpoint in output_dir…")
+        else:
+            ckpt_path = Path(resume_from_checkpoint)
+            if not ckpt_path.is_absolute():
+                ckpt_path = ROOT / ckpt_path
+            if not ckpt_path.exists():
+                raise SystemExit(f"Checkpoint not found: {ckpt_path}")
+            ckpt = str(ckpt_path)
+            log(f"Resuming SFT from {ckpt_path.relative_to(ROOT)}…")
+        trainer.train(resume_from_checkpoint=ckpt)
+    else:
+        log("Starting SFT…")
+        trainer.train()
     trainer.save_model(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
 
@@ -471,6 +500,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Disable BM25 RAG context even if config rag.enabled is true",
     )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const=True,
+        default=False,
+        metavar="CHECKPOINT",
+        help=(
+            "Resume SFT from the latest checkpoint under training/output "
+            "(or from CHECKPOINT if a path is given)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -488,7 +528,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.prepare_only:
         return
 
-    run_sft(cfg, train_jsonl)
+    run_sft(cfg, train_jsonl, resume_from_checkpoint=args.resume)
 
 
 if __name__ == "__main__":
