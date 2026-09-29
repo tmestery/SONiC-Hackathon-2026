@@ -177,7 +177,7 @@ def prepare_dataset(
 
 
 def smoke_prompt(cfg: dict[str, Any]) -> None:
-    """Hit the local agent endpoint with a tiny synthetic payload (eval-compatible)."""
+    """Query the local Ollama model with a tiny synthetic payload (eval-compatible)."""
     try:
         import requests
     except ImportError as exc:
@@ -186,26 +186,36 @@ def smoke_prompt(cfg: dict[str, Any]) -> None:
             "pip install -r training/requirements.txt"
         ) from exc
 
-    agent = cfg.get("agent") or {}
-    url = agent.get("url") or "http://127.0.0.1:8000/predict"
-    timeout_s = float(agent.get("timeout_s") or 120)
-    headers = dict(agent.get("headers") or {})
-    payload = {
-        "id": "smoke-local",
+    ollama_cfg = cfg.get("ollama") or {}
+    host = ollama_cfg.get("host") or "http://127.0.0.1:11434"
+    model = ollama_cfg.get("model")
+    if not model:
+        raise SystemExit("Config must define ollama.model")
+    timeout_s = float(ollama_cfg.get("timeout_s") or 120)
+
+    data_cfg = cfg.get("data") or {}
+    system_prompt = data_cfg.get("system_prompt") or (
+        "You diagnose SONiC failures and explain the root cause and fix."
+    )
+    record = {
         "issue": {"title": "orchagent crash during warm reboot"},
         "failure": {
             "body": "ERR swss#orchagent: segfault after kexec warm reboot on multi-ASIC."
         },
     }
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt.strip()},
+            {"role": "user", "content": user_content(record)},
+        ],
+        "stream": False,
+    }
+    url = host.rstrip("/") + "/api/chat"
     print(f"POST {url}")
-    resp = requests.post(url, json=payload, headers=headers, timeout=timeout_s)
+    resp = requests.post(url, json=body, timeout=timeout_s)
     resp.raise_for_status()
-    ctype = (resp.headers.get("content-type") or "").lower()
-    if "application/json" in ctype:
-        data = resp.json()
-        print(json.dumps(data, indent=2)[:2000])
-    else:
-        print(resp.text[:2000])
+    print(json.dumps(resp.json(), indent=2)[:2000])
 
 
 def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:

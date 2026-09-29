@@ -4,13 +4,13 @@ Evaluate an agent on the frozen test split.
 
 Pipeline:
   1. Load test ids from data/splits.json
-  2. POST each failure (no gold) to the agent endpoint
+  2. Query the local Ollama model for each failure (no gold)
   3. Score each prediction with configured Groq judges (0–1)
   4. Print a brief report and write JSON results
 
 Usage:
   python evaluation/eval.py
-  python evaluation/eval.py --limit 5 --agent-url http://localhost:8000/predict
+  python evaluation/eval.py --limit 5 --ollama-model qwen3.5:9b
 """
 
 from __future__ import annotations
@@ -32,6 +32,9 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = Path(__file__).resolve().parent / "config.yaml"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_SYSTEM_PROMPT = (
+    "You diagnose SONiC failures and explain the root cause and fix."
+)
 
 SOURCE_DIRS = {
     "buildimage": ROOT / "data" / "buildimage" / "clean",
@@ -80,46 +83,38 @@ def load_test_ids(splits_file: Path, limit: int | None) -> list[str]:
     return ids
 
 
-def agent_payload(record: dict[str, Any]) -> dict[str, Any]:
+def agent_user_content(record: dict[str, Any]) -> str:
     issue = record.get("issue") or {}
     failure = record.get("failure") or {}
-    return {
-        "id": record.get("id"),
-        "issue": {"title": issue.get("title") or ""},
-        "failure": {"body": failure.get("body") or ""},
-    }
+    title = issue.get("title") or ""
+    body = failure.get("body") or ""
+    return f"Title: {title}\n\nFailure report:\n{body}".strip()
 
 
-def call_agent(
-    url: str,
-    payload: dict[str, Any],
+def call_ollama(
+    host: str,
+    model: str,
     *,
+    system_prompt: str,
+    user_content: str,
     timeout_s: float,
-    headers: dict[str, str] | None,
 ) -> str:
-    resp = requests.post(
-        url,
-        json=payload,
-        headers=headers or {},
-        timeout=timeout_s,
-    )
+    url = host.rstrip("/") + "/api/chat"
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "stream": False,
+    }
+    resp = requests.post(url, json=body, timeout=timeout_s)
     resp.raise_for_status()
-    ctype = (resp.headers.get("content-type") or "").lower()
-    if "application/json" in ctype:
-        data = resp.json()
-        if isinstance(data, str):
-            return data
-        if isinstance(data, dict):
-            if "prediction" in data:
-                return str(data["prediction"])
-            if "output" in data:
-                return str(data["output"])
-            raise ValueError(f"Agent JSON missing 'prediction': {data!r}")
-        raise ValueError(f"Unexpected agent JSON type: {type(data)}")
-    text = resp.text.strip()
-    if not text:
-        raise ValueError("Agent returned empty body")
-    return text
+    data = resp.json()
+    content = (data.get("message") or {}).get("content")
+    if not content:
+        raise ValueError(f"Ollama response missing message content: {data!r}")
+    return content.strip()
 
 
 def parse_score(text: str) -> float | None:
@@ -195,7 +190,8 @@ def mean_or_none(values: list[float]) -> float | None:
 def evaluate(
     cfg: dict[str, Any],
     *,
-    agent_url: str | None = None,
+    ollama_host: str | None = None,
+    ollama_model: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
     load_dotenv(ROOT / ".env")
@@ -215,10 +211,13 @@ def evaluate(
 
     test_ids = load_test_ids(splits_file, effective_limit)
     judges = cfg.get("judges") or []
-    agent_cfg = cfg.get("agent") or {}
-    url = agent_url or agent_cfg.get("url") or "http://127.0.0.1:8000/predict"
-    timeout_s = float(agent_cfg.get("timeout_s") or 120)
-    headers = dict(agent_cfg.get("headers") or {})
+    ollama_cfg = cfg.get("ollama") or {}
+    host = ollama_host or ollama_cfg.get("host") or "http://127.0.0.1:11434"
+    model = ollama_model or ollama_cfg.get("model")
+    if not model:
+        raise SystemExit("Config must define ollama.model (or pass --ollama-model)")
+    timeout_s = float(ollama_cfg.get("timeout_s") or 120)
+    system_prompt = ollama_cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
 
     results: list[dict[str, Any]] = []
     agent_errors = 0
@@ -243,11 +242,15 @@ def evaluate(
 
         title = (record.get("issue") or {}).get("title") or ""
         gold = (record.get("resolution") or {}).get("description") or ""
-        payload = agent_payload(record)
+        user_content = agent_user_content(record)
 
         try:
-            prediction = call_agent(
-                url, payload, timeout_s=timeout_s, headers=headers
+            prediction = call_ollama(
+                host,
+                model,
+                system_prompt=system_prompt,
+                user_content=user_content,
+                timeout_s=timeout_s,
             )
         except Exception as exc:  # noqa: BLE001
             agent_errors += 1
@@ -312,7 +315,8 @@ def evaluate(
 
     output = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "agent_url": url,
+        "ollama_host": host,
+        "ollama_model": model,
         "judges": [
             {"name": j.get("name"), "model": j.get("model")} for j in judges
         ],
@@ -366,9 +370,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional cap on number of test examples",
     )
     parser.add_argument(
-        "--agent-url",
+        "--ollama-host",
         default=None,
-        help="Override agent.url from config",
+        help="Override ollama.host from config",
+    )
+    parser.add_argument(
+        "--ollama-model",
+        default=None,
+        help="Override ollama.model from config",
     )
     return parser.parse_args(argv)
 
@@ -376,7 +385,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> dict[str, Any]:
     args = parse_args(argv)
     cfg = load_config(args.config)
-    output = evaluate(cfg, agent_url=args.agent_url, limit=args.limit)
+    output = evaluate(
+        cfg,
+        ollama_host=args.ollama_host,
+        ollama_model=args.ollama_model,
+        limit=args.limit,
+    )
     print_report(output)
 
     results_rel = cfg.get("results_dir") or "evaluation/results"
