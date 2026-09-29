@@ -30,6 +30,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = Path(__file__).resolve().parent / "config.yaml"
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from rag.retriever import (  # noqa: E402
+    build_user_content,
+    load_index_from_cfg,
+    retrieve_for_record,
+)
 
 SOURCE_DIRS = {
     "buildimage": ROOT / "data" / "buildimage" / "clean",
@@ -81,14 +90,6 @@ def load_split_ids(splits_file: Path, split: str, limit: int | None) -> list[str
     return ids
 
 
-def user_content(record: dict[str, Any]) -> str:
-    issue = record.get("issue") or {}
-    failure = record.get("failure") or {}
-    title = issue.get("title") or ""
-    body = failure.get("body") or ""
-    return f"Title: {title}\n\nFailure report:\n{body}".strip()
-
-
 def gold_content(record: dict[str, Any]) -> str:
     return ((record.get("resolution") or {}).get("description") or "").strip()
 
@@ -97,12 +98,14 @@ def build_example(
     record: dict[str, Any],
     *,
     system_prompt: str,
+    rag_context: str = "",
+    rag_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    user = user_content(record)
+    user = build_user_content(record, rag_context=rag_context)
     gold = gold_content(record)
     if not user or not gold:
         return None
-    return {
+    example: dict[str, Any] = {
         "id": record.get("id"),
         "messages": [
             {"role": "system", "content": system_prompt.strip()},
@@ -110,6 +113,9 @@ def build_example(
             {"role": "assistant", "content": gold},
         ],
     }
+    if rag_meta:
+        example["rag"] = rag_meta
+    return example
 
 
 def prepare_dataset(
@@ -134,6 +140,13 @@ def prepare_dataset(
         "You diagnose SONiC failures and explain the root cause and fix."
     )
 
+    rag_cfg = cfg.get("rag") or {}
+    rag_enabled = bool(rag_cfg.get("enabled", False))
+    index = load_index_from_cfg(ROOT, cfg) if rag_enabled else None
+    top_k = int(rag_cfg.get("top_k") or 4)
+    max_query_chars = int(rag_cfg.get("max_query_chars") or 1500)
+    max_chars_per_chunk = int(rag_cfg.get("max_chars_per_chunk") or 800)
+
     prepared_rel = data_cfg.get("prepared_dir") or "training/data"
     prepared_dir = ROOT / prepared_rel
     prepared_dir.mkdir(parents=True, exist_ok=True)
@@ -141,6 +154,7 @@ def prepare_dataset(
 
     written = 0
     skipped = 0
+    rag_hit_total = 0
     with out_path.open("w", encoding="utf-8") as fh:
         for record_id in ids:
             try:
@@ -149,7 +163,27 @@ def prepare_dataset(
                 print(f"skip {record_id}: {exc}", file=sys.stderr)
                 skipped += 1
                 continue
-            example = build_example(record, system_prompt=system_prompt)
+            rag_context = ""
+            rag_meta: dict[str, Any] | None = None
+            if index is not None:
+                query, hits, rag_context = retrieve_for_record(
+                    index,
+                    record,
+                    top_k=top_k,
+                    max_query_chars=max_query_chars,
+                    max_chars_per_chunk=max_chars_per_chunk,
+                )
+                rag_hit_total += len(hits)
+                rag_meta = {
+                    "query": query,
+                    "hits": [h.to_meta() for h in hits],
+                }
+            example = build_example(
+                record,
+                system_prompt=system_prompt,
+                rag_context=rag_context,
+                rag_meta=rag_meta,
+            )
             if example is None:
                 skipped += 1
                 continue
@@ -164,6 +198,12 @@ def prepare_dataset(
         "written": written,
         "skipped": skipped,
         "train_jsonl": str(out_path.relative_to(ROOT)),
+        "rag": {
+            "enabled": rag_enabled and index is not None,
+            "top_k": top_k if index is not None else 0,
+            "hit_total": rag_hit_total,
+            "mean_hits": (rag_hit_total / written) if written else 0.0,
+        },
     }
     meta_path = prepared_dir / "meta.json"
     with meta_path.open("w", encoding="utf-8") as fh:
@@ -190,12 +230,33 @@ def smoke_prompt(cfg: dict[str, Any]) -> None:
     url = agent.get("url") or "http://127.0.0.1:8000/predict"
     timeout_s = float(agent.get("timeout_s") or 120)
     headers = dict(agent.get("headers") or {})
-    payload = {
+    record = {
         "id": "smoke-local",
         "issue": {"title": "orchagent crash during warm reboot"},
         "failure": {
             "body": "ERR swss#orchagent: segfault after kexec warm reboot on multi-ASIC."
         },
+    }
+    rag_cfg = cfg.get("rag") or {}
+    rag_context = ""
+    rag_hits_meta: list[dict[str, Any]] = []
+    index = load_index_from_cfg(ROOT, cfg)
+    if index is not None:
+        _query, hits, rag_context = retrieve_for_record(
+            index,
+            record,
+            top_k=int(rag_cfg.get("top_k") or 4),
+            max_query_chars=int(rag_cfg.get("max_query_chars") or 1500),
+            max_chars_per_chunk=int(rag_cfg.get("max_chars_per_chunk") or 800),
+        )
+        rag_hits_meta = [h.to_meta() for h in hits]
+    payload = {
+        "id": record["id"],
+        "issue": record["issue"],
+        "failure": record["failure"],
+        "rag_context": rag_context or None,
+        "rag_hits": rag_hits_meta,
+        "user_message": build_user_content(record, rag_context=rag_context),
     }
     print(f"POST {url}")
     resp = requests.post(url, json=payload, headers=headers, timeout=timeout_s)
@@ -402,12 +463,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="POST a sample failure to agent.url (local LLM server check)",
     )
+    parser.add_argument(
+        "--no-rag",
+        action="store_true",
+        help="Disable BM25 RAG context even if config rag.enabled is true",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     cfg = load_config(args.config)
+    if args.no_rag:
+        cfg.setdefault("rag", {})["enabled"] = False
 
     if args.smoke_prompt:
         smoke_prompt(cfg)
