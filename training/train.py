@@ -1,0 +1,424 @@
+#!/usr/bin/env python3
+"""
+Supervised fine-tuning on the frozen train split.
+
+Mirrors evaluation/: local model + endpoints live in config.yaml.
+
+Pipeline:
+  1. Load train ids from data/splits.json (never test)
+  2. Build chat SFT examples from clean records
+  3. Write JSONL under training/data/
+  4. Run LoRA SFT with TRL (optional --prepare-only to skip training)
+
+Usage:
+  python training/train.py --prepare-only
+  python training/train.py
+  python training/train.py --config training/config.yaml --limit 8
+  python training/train.py --smoke-prompt
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = Path(__file__).resolve().parent / "config.yaml"
+
+SOURCE_DIRS = {
+    "buildimage": ROOT / "data" / "buildimage" / "clean",
+    "management": ROOT / "data" / "management" / "clean",
+    "swss": ROOT / "data" / "swss" / "clean",
+}
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+    if not isinstance(cfg, dict):
+        raise SystemExit(f"Config must be a mapping: {path}")
+    return cfg
+
+
+def record_path_for_id(record_id: str) -> Path:
+    try:
+        source, number = record_id.split("-", 1)
+    except ValueError as exc:
+        raise ValueError(f"Bad record id: {record_id!r}") from exc
+    clean_dir = SOURCE_DIRS.get(source)
+    if clean_dir is None:
+        raise ValueError(f"Unknown source prefix in id: {record_id!r}")
+    return clean_dir / f"issue-{number}.json"
+
+
+def load_record(record_id: str) -> dict[str, Any]:
+    path = record_path_for_id(record_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing clean record for {record_id}: {path}")
+    with path.open(encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def load_split_ids(splits_file: Path, split: str, limit: int | None) -> list[str]:
+    with splits_file.open(encoding="utf-8") as fh:
+        splits = json.load(fh)
+    if split == "test":
+        raise SystemExit(
+            "Refusing to train on the frozen test split. "
+            "Use data.split: train in config."
+        )
+    ids = list(splits.get(split) or [])
+    if not ids:
+        raise SystemExit(f"No ids for split={split!r} in {splits_file}")
+    if limit is not None:
+        ids = ids[: max(0, limit)]
+    return ids
+
+
+def user_content(record: dict[str, Any]) -> str:
+    issue = record.get("issue") or {}
+    failure = record.get("failure") or {}
+    title = issue.get("title") or ""
+    body = failure.get("body") or ""
+    return f"Title: {title}\n\nFailure report:\n{body}".strip()
+
+
+def gold_content(record: dict[str, Any]) -> str:
+    return ((record.get("resolution") or {}).get("description") or "").strip()
+
+
+def build_example(
+    record: dict[str, Any],
+    *,
+    system_prompt: str,
+) -> dict[str, Any] | None:
+    user = user_content(record)
+    gold = gold_content(record)
+    if not user or not gold:
+        return None
+    return {
+        "id": record.get("id"),
+        "messages": [
+            {"role": "system", "content": system_prompt.strip()},
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": gold},
+        ],
+    }
+
+
+def prepare_dataset(
+    cfg: dict[str, Any],
+    *,
+    limit: int | None = None,
+) -> Path:
+    data_cfg = cfg.get("data") or {}
+    splits_rel = data_cfg.get("splits_file") or "data/splits.json"
+    splits_file = ROOT / splits_rel
+    if not splits_file.exists():
+        raise SystemExit(f"Missing splits file: {splits_file}")
+
+    split = data_cfg.get("split") or "train"
+    cfg_limit = data_cfg.get("limit")
+    effective_limit = limit if limit is not None else cfg_limit
+    if effective_limit is not None:
+        effective_limit = int(effective_limit)
+
+    ids = load_split_ids(splits_file, split, effective_limit)
+    system_prompt = data_cfg.get("system_prompt") or (
+        "You diagnose SONiC failures and explain the root cause and fix."
+    )
+
+    prepared_rel = data_cfg.get("prepared_dir") or "training/data"
+    prepared_dir = ROOT / prepared_rel
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+    out_path = prepared_dir / "train.jsonl"
+
+    written = 0
+    skipped = 0
+    with out_path.open("w", encoding="utf-8") as fh:
+        for record_id in ids:
+            try:
+                record = load_record(record_id)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                print(f"skip {record_id}: {exc}", file=sys.stderr)
+                skipped += 1
+                continue
+            example = build_example(record, system_prompt=system_prompt)
+            if example is None:
+                skipped += 1
+                continue
+            fh.write(json.dumps(example, ensure_ascii=False) + "\n")
+            written += 1
+
+    meta = {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "splits_file": str(splits_file.relative_to(ROOT)),
+        "split": split,
+        "requested_ids": len(ids),
+        "written": written,
+        "skipped": skipped,
+        "train_jsonl": str(out_path.relative_to(ROOT)),
+    }
+    meta_path = prepared_dir / "meta.json"
+    with meta_path.open("w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+        fh.write("\n")
+
+    print(f"Prepared {written} SFT examples (skipped {skipped})")
+    print(f"  → {out_path.relative_to(ROOT)}")
+    print(f"  → {meta_path.relative_to(ROOT)}")
+    return out_path
+
+
+def smoke_prompt(cfg: dict[str, Any]) -> None:
+    """Hit the local agent endpoint with a tiny synthetic payload (eval-compatible)."""
+    try:
+        import requests
+    except ImportError as exc:
+        raise SystemExit(
+            "requests is required for --smoke-prompt. "
+            "pip install -r training/requirements.txt"
+        ) from exc
+
+    agent = cfg.get("agent") or {}
+    url = agent.get("url") or "http://127.0.0.1:8000/predict"
+    timeout_s = float(agent.get("timeout_s") or 120)
+    headers = dict(agent.get("headers") or {})
+    payload = {
+        "id": "smoke-local",
+        "issue": {"title": "orchagent crash during warm reboot"},
+        "failure": {
+            "body": "ERR swss#orchagent: segfault after kexec warm reboot on multi-ASIC."
+        },
+    }
+    print(f"POST {url}")
+    resp = requests.post(url, json=payload, headers=headers, timeout=timeout_s)
+    resp.raise_for_status()
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if "application/json" in ctype:
+        data = resp.json()
+        print(json.dumps(data, indent=2)[:2000])
+    else:
+        print(resp.text[:2000])
+
+
+def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
+    try:
+        import torch
+        from datasets import load_dataset
+        from peft import LoraConfig
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from trl import SFTConfig, SFTTrainer
+    except ImportError as exc:
+        raise SystemExit(
+            "Missing training deps. Install with:\n"
+            "  source .venv/bin/activate\n"
+            "  pip install -r training/requirements.txt\n"
+            f"Import error: {exc}"
+        ) from exc
+
+    model_cfg = cfg.get("model") or {}
+    train_cfg = cfg.get("training") or {}
+    lora_cfg = cfg.get("lora") or {}
+
+    name_or_path = model_cfg.get("name_or_path")
+    if not name_or_path:
+        raise SystemExit("config model.name_or_path is required")
+
+    if train_cfg.get("load_in_4bit"):
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError as exc:
+            raise SystemExit(
+                "load_in_4bit requires bitsandbytes (NVIDIA CUDA only)."
+            ) from exc
+        quant = BitsAndBytesConfig(load_in_4bit=True)
+    else:
+        quant = None
+
+    output_rel = train_cfg.get("output_dir") or "training/output"
+    output_dir = ROOT / output_rel
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def log(msg: str) -> None:
+        print(msg, flush=True)
+
+    log(f"Loading tokenizer: {name_or_path}")
+    tokenizer = AutoTokenizer.from_pretrained(
+        name_or_path,
+        trust_remote_code=bool(model_cfg.get("trust_remote_code", True)),
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    dtype_name = (model_cfg.get("torch_dtype") or "float16").lower()
+    dtype_map = {
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+        "float16": torch.float16,
+        "fp16": torch.float16,
+        "float32": torch.float32,
+        "fp32": torch.float32,
+    }
+    torch_dtype = dtype_map.get(dtype_name, torch.float16)
+
+    if torch.cuda.is_available():
+        device_map = "auto"
+    elif torch.backends.mps.is_available():
+        # Avoid accelerate auto-sharding quirks on Apple Silicon.
+        device_map = None
+    else:
+        device_map = "cpu"
+
+    log(f"Loading model: {name_or_path} (device_map={device_map}, dtype={dtype_name})")
+    model_kwargs: dict[str, Any] = {
+        "trust_remote_code": bool(model_cfg.get("trust_remote_code", True)),
+        # Prefer `dtype=` (transformers>=4.56); keep torch_dtype fallback below.
+        "dtype": torch_dtype if quant is None else None,
+    }
+    if quant is not None:
+        model_kwargs["quantization_config"] = quant
+        model_kwargs["device_map"] = "auto"
+    elif device_map is not None:
+        model_kwargs["device_map"] = device_map
+
+    try:
+        model = AutoModelForCausalLM.from_pretrained(name_or_path, **model_kwargs)
+    except TypeError:
+        model_kwargs.pop("dtype", None)
+        model_kwargs["torch_dtype"] = torch_dtype if quant is None else None
+        model = AutoModelForCausalLM.from_pretrained(name_or_path, **model_kwargs)
+    if device_map is None and torch.backends.mps.is_available():
+        log("Moving model to MPS…")
+        model.to("mps")
+    log("Model loaded.")
+
+    # LoRA needs grad-enabled inputs on frozen base weights.
+    model.config.use_cache = False
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+
+    peft_config = LoraConfig(
+        r=int(lora_cfg.get("r") or 16),
+        lora_alpha=int(lora_cfg.get("alpha") or 32),
+        lora_dropout=float(lora_cfg.get("dropout") or 0.05),
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=list(
+            lora_cfg.get("target_modules")
+            or ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+        ),
+    )
+
+    dataset = load_dataset("json", data_files=str(train_jsonl), split="train")
+
+    def to_text(example: dict[str, Any]) -> dict[str, str]:
+        kwargs: dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": False,
+        }
+        # Qwen3.5 defaults to "thinking" mode; disable for SFT targets.
+        try:
+            text = tokenizer.apply_chat_template(
+                example["messages"],
+                chat_template_kwargs={"enable_thinking": False},
+                **kwargs,
+            )
+        except TypeError:
+            text = tokenizer.apply_chat_template(example["messages"], **kwargs)
+        return {"text": text}
+
+    dataset = dataset.map(to_text, remove_columns=dataset.column_names)
+
+    sft_kwargs: dict[str, Any] = {
+        "output_dir": str(output_dir),
+        "num_train_epochs": float(train_cfg.get("num_train_epochs") or 1),
+        "per_device_train_batch_size": int(
+            train_cfg.get("per_device_train_batch_size") or 1
+        ),
+        "gradient_accumulation_steps": int(
+            train_cfg.get("gradient_accumulation_steps") or 8
+        ),
+        "learning_rate": float(train_cfg.get("learning_rate") or 2e-4),
+        "logging_steps": int(train_cfg.get("logging_steps") or 10),
+        "save_steps": int(train_cfg.get("save_steps") or 100),
+        "seed": int(train_cfg.get("seed") or 42),
+        "report_to": [],
+        "dataset_text_field": "text",
+        "gradient_checkpointing": True,
+    }
+    max_len = int(train_cfg.get("max_seq_length") or 1024)
+    # TRL versions differ on the length kwarg name.
+    try:
+        sft_args = SFTConfig(**sft_kwargs, max_length=max_len)
+    except TypeError:
+        sft_args = SFTConfig(**sft_kwargs, max_seq_length=max_len)
+
+    trainer = SFTTrainer(
+        model=model,
+        args=sft_args,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+        peft_config=peft_config,
+    )
+    log("Starting SFT…")
+    trainer.train()
+    trainer.save_model(str(output_dir))
+    tokenizer.save_pretrained(str(output_dir))
+
+    log(f"Saved adapter/model → {output_dir.relative_to(ROOT)}")
+    return output_dir
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Prepare data and run SFT on the frozen train split."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG,
+        help=f"Path to training config (default: {DEFAULT_CONFIG})",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional cap on number of train examples",
+    )
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Only write training/data/train.jsonl; do not run SFT",
+    )
+    parser.add_argument(
+        "--smoke-prompt",
+        action="store_true",
+        help="POST a sample failure to agent.url (local LLM server check)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    cfg = load_config(args.config)
+
+    if args.smoke_prompt:
+        smoke_prompt(cfg)
+        return
+
+    train_jsonl = prepare_dataset(cfg, limit=args.limit)
+    if args.prepare_only:
+        return
+
+    run_sft(cfg, train_jsonl)
+
+
+if __name__ == "__main__":
+    main()
