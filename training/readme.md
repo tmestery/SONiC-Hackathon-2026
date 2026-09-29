@@ -20,12 +20,15 @@ training/
 |---|---|
 | `model.name_or_path` | HF id or local weights path to fine-tune (not an Ollama tag) |
 | `agent.url` | Local predict server for smoke / post-train eval (`http://127.0.0.1:8000/predict`) |
+| `rag.*` | BM25 over `data/rag` (enabled by default); injects docs into SFT user turns |
 | `data.splits_file` | Frozen splits; `split: train` only |
 | `training.*` / `lora.*` | SFT hyperparameters |
 
 **Note:** Ollama (`qwen3.5:9b` on `:11434`) is for **inference / baseline**. LoRA SFT needs Hugging Face-style weights via `model.name_or_path`.
 
 Default config uses `Qwen/Qwen3.5-0.8B` so a Mac can download + LoRA-smoke quickly. To train the same class as Ollama 9B, set `model.name_or_path: "Qwen/Qwen3.5-9B"` (large download + ~22GB memory).
+
+RAG uses the same BM25 index as eval. Disable with `rag.enabled: false` or `--no-rag`.
 
 ## Setup (venv)
 
@@ -75,14 +78,17 @@ python evaluation/eval.py --limit 5 --agent-url http://127.0.0.1:8000/predict
 Each train row is chat messages:
 
 - **system** — from `data.system_prompt`
-- **user** — issue title + failure body (same fields eval sends to the agent)
+- **user** — issue title + failure body + retrieved SONiC docs (`rag.enabled`)
 - **assistant** — gold `resolution.description`
+
+Optional `rag` metadata on each JSONL row lists query + hit ids/paths (not fed to the model beyond the user text).
 
 ## Contract with evaluation
 
 | | Training | Evaluation |
 |---|---|---|
 | Split | `train` only | `test` only |
-| Input | title + failure body | title + failure body |
+| Input | title + failure + RAG context | same fields in `user_message` / payload |
 | Gold | PR description (SFT target) | PR description (judge reference) |
+| RAG | `data/rag` BM25 | same index + `top_k` |
 | Local LLM | `model.name_or_path` + optional `agent.url` | `agent.url` |

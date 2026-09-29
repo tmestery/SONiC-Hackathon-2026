@@ -35,6 +35,15 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_SYSTEM_PROMPT = (
     "You diagnose SONiC failures and explain the root cause and fix."
 )
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from rag.retriever import (  # noqa: E402
+    build_user_content,
+    load_index_from_cfg,
+    retrieve_for_record,
+)
 
 SOURCE_DIRS = {
     "buildimage": ROOT / "data" / "buildimage" / "clean",
@@ -83,13 +92,13 @@ def load_test_ids(splits_file: Path, limit: int | None) -> list[str]:
     return ids
 
 
-def agent_user_content(record: dict[str, Any]) -> str:
-    issue = record.get("issue") or {}
-    failure = record.get("failure") or {}
-    title = issue.get("title") or ""
-    body = failure.get("body") or ""
-    return f"Title: {title}\n\nFailure report:\n{body}".strip()
-
+def agent_user_content(
+    record: dict[str, Any],
+    *,
+    rag_context: str = "",
+) -> str:
+    """Build the Ollama user turn (title + failure + optional RAG docs)."""
+    return build_user_content(record, rag_context=rag_context)
 
 def call_ollama(
     host: str,
@@ -249,9 +258,17 @@ def evaluate(
     timeout_s = float(ollama_cfg.get("timeout_s") or 120)
     system_prompt = ollama_cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
 
+    rag_cfg = cfg.get("rag") or {}
+    rag_enabled = bool(rag_cfg.get("enabled", False))
+    index = load_index_from_cfg(ROOT, cfg) if rag_enabled else None
+    top_k = int(rag_cfg.get("top_k") or 4)
+    max_query_chars = int(rag_cfg.get("max_query_chars") or 1500)
+    max_chars_per_chunk = int(rag_cfg.get("max_chars_per_chunk") or 800)
+
     results: list[dict[str, Any]] = []
     agent_errors = 0
     judge_failures = 0
+    rag_hit_total = 0
 
     for record_id in test_ids:
         print(f"[{len(results) + 1}/{len(test_ids)}] {record_id}", flush=True)
@@ -272,7 +289,19 @@ def evaluate(
 
         title = (record.get("issue") or {}).get("title") or ""
         gold = (record.get("resolution") or {}).get("description") or ""
-        user_content = agent_user_content(record)
+        rag_context = ""
+        rag_hits_meta: list[dict[str, Any]] = []
+        if index is not None:
+            _query, hits, rag_context = retrieve_for_record(
+                index,
+                record,
+                top_k=top_k,
+                max_query_chars=max_query_chars,
+                max_chars_per_chunk=max_chars_per_chunk,
+            )
+            rag_hits_meta = [h.to_meta() for h in hits]
+            rag_hit_total += len(hits)
+        user_content = agent_user_content(record, rag_context=rag_context)
 
         try:
             prediction = call_ollama(
@@ -292,6 +321,7 @@ def evaluate(
                     "prediction": None,
                     "scores": {},
                     "mean": None,
+                    "rag_hits": len(rag_hits_meta),
                 }
             )
             continue
@@ -318,6 +348,7 @@ def evaluate(
                 "prediction": prediction,
                 "scores": scores,
                 "mean": mean_or_none(valid),
+                "rag_hits": len(rag_hits_meta),
             }
         )
 
@@ -334,13 +365,20 @@ def evaluate(
         ]
         by_judge[name] = mean_or_none(vals)
 
+    scored_n = len(datapoint_means)
     summary = {
         "test_n": len(test_ids),
-        "scored": len(datapoint_means),
+        "scored": scored_n,
         "agent_errors": agent_errors,
         "judge_failures": judge_failures,
         "overall_mean": overall_mean,
         "by_judge": by_judge,
+        "rag": {
+            "enabled": rag_enabled and index is not None,
+            "top_k": top_k if index is not None else 0,
+            "hit_total": rag_hit_total,
+            "mean_hits": (rag_hit_total / scored_n) if scored_n else 0.0,
+        },
     }
 
     output = {
@@ -409,12 +447,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override ollama.model from config",
     )
+    parser.add_argument(
+        "--no-rag",
+        action="store_true",
+        help="Disable BM25 RAG context even if config rag.enabled is true",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> dict[str, Any]:
     args = parse_args(argv)
     cfg = load_config(args.config)
+    if args.no_rag:
+        cfg.setdefault("rag", {})["enabled"] = False
     output = evaluate(
         cfg,
         ollama_host=args.ollama_host,

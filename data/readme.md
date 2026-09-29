@@ -30,4 +30,5 @@ Each source folder (`buildimage/`, `management/`, `swss/`) follows the same stru
 ## RAG corpus
 
 `rag/` holds SONiC documentation used as retrieval context for the SLM (architecture
-guides, HLDs, CLI notes). It is **not** train/val/test data. See [`rag/readme.md`](rag/readme.md).
+guides, HLDs, CLI notes). It is **not** train/val/test data. Training and eval both
+query this corpus when `rag.enabled` is set. See [`rag/readme.md`](rag/readme.md).

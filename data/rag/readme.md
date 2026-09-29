@@ -34,3 +34,7 @@ Temp clone lives in `.cache/sonic-docs/` (gitignored).
 - Index **only** this corpus for RAG.
 - Do **not** index `clean/` issue/PR records (label leakage).
 - Query returns top-k chunks with path, title, and score for prompt context.
+- **Training** (`training/train.py`) and **eval** (`evaluation/eval.py`) both load
+  `data/rag/index/bm25.pkl` when `rag.enabled: true` and inject the same
+  `Retrieved SONiC documentation:` block into the user turn / agent
+  `user_message` payload.
