@@ -377,16 +377,30 @@ def run_sft(
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
 
+    raw_targets = lora_cfg.get("target_modules")
+    if raw_targets is None:
+        target_modules: str | list[str] = [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]
+    elif isinstance(raw_targets, str):
+        # PEFT accepts a regex string (needed for Gemma 4 language_model scoping).
+        target_modules = raw_targets
+    else:
+        target_modules = list(raw_targets)
+
     peft_config = LoraConfig(
         r=int(lora_cfg.get("r") or 16),
         lora_alpha=int(lora_cfg.get("alpha") or 32),
         lora_dropout=float(lora_cfg.get("dropout") or 0.05),
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=list(
-            lora_cfg.get("target_modules")
-            or ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-        ),
+        target_modules=target_modules,
     )
 
     dataset = load_dataset("json", data_files=str(train_jsonl), split="train")
