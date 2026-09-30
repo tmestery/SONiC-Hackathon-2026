@@ -7,11 +7,16 @@ Never trains on `test`. Layout mirrors [`evaluation/`](../evaluation/).
 
 ```
 training/
-├── config.yaml         # local model + agent endpoint + SFT/LoRA hyperparams
+├── config.yaml         # local model + Ollama smoke + SFT/LoRA hyperparams
 ├── train.py            # prepare JSONL + run LoRA SFT
 ├── requirements.txt
-├── data/               # written by --prepare-only / train (gitignored)
-└── output/             # LoRA adapter / checkpoint (gitignored)
+├── runs/               # one folder per base model (see runs/README.md)
+│   └── qwen3.5-2b-lora/
+│       ├── run.json
+│       ├── data/       # train.jsonl (committed)
+│       ├── adapter/    # final LoRA (committed)
+│       └── checkpoints/  # TRL saves (gitignored, local resume)
+└── data/               # legacy scratch (gitignored)
 ```
 
 ## Config (local LLM)
@@ -26,7 +31,7 @@ training/
 
 **Note:** Ollama (`qwen3.5:9b` on `:11434`) is for **inference / baseline**. LoRA SFT needs Hugging Face-style weights via `model.name_or_path`.
 
-Default config uses `Qwen/Qwen3.5-0.8B` so a Mac can download + LoRA-smoke quickly. To train the same class as Ollama 9B, set `model.name_or_path: "Qwen/Qwen3.5-9B"` (large download + ~22GB memory).
+Default config uses `Qwen/Qwen3.5-2B` (~2B, **no HF license gate**). Smaller smoke: `Qwen/Qwen3.5-0.8B`. Gemma/Llama need HF accept+login — avoid those if you want zero verification.
 
 RAG uses the same BM25 index as eval. Disable with `rag.enabled: false` or `--no-rag`.
 

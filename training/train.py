@@ -7,7 +7,7 @@ Mirrors evaluation/: local model + endpoints live in config.yaml.
 Pipeline:
   1. Load train ids from data/splits.json (never test)
   2. Build chat SFT examples from clean records
-  3. Write JSONL under training/data/
+  3. Write JSONL under training/runs/<model>-lora/data/
   4. Run LoRA SFT with TRL (optional --prepare-only to skip training)
 
 Usage:
@@ -45,6 +45,43 @@ SOURCE_DIRS = {
     "management": ROOT / "data" / "management" / "clean",
     "swss": ROOT / "data" / "swss" / "clean",
 }
+
+
+def model_run_slug(name_or_path: str) -> str:
+    """HF id → directory name, e.g. Qwen/Qwen3.5-2B → qwen3.5-2b-lora."""
+    leaf = name_or_path.rstrip("/").split("/")[-1]
+    return f"{leaf.lower().replace('_', '-')}-lora"
+
+
+def resolve_run_paths(cfg: dict[str, Any]) -> dict[str, Path]:
+    """Paths for one SFT run: data/, adapter/, checkpoints/ under training/runs/."""
+    model_cfg = cfg.get("model") or {}
+    train_cfg = cfg.get("training") or {}
+    data_cfg = cfg.get("data") or {}
+
+    name_or_path = model_cfg.get("name_or_path") or "model"
+    run_name = train_cfg.get("run_name") or model_run_slug(name_or_path)
+    runs_rel = train_cfg.get("runs_dir") or "training/runs"
+    run_dir = ROOT / runs_rel / run_name
+
+    if train_cfg.get("output_dir"):
+        # Legacy override: single folder for everything.
+        run_dir = ROOT / train_cfg["output_dir"]
+        return {
+            "run_dir": run_dir,
+            "data_dir": ROOT / (data_cfg.get("prepared_dir") or "training/data"),
+            "adapter_dir": run_dir,
+            "checkpoints_dir": run_dir,
+        }
+
+    data_rel = data_cfg.get("prepared_dir")
+    data_dir = ROOT / data_rel if data_rel else run_dir / "data"
+    return {
+        "run_dir": run_dir,
+        "data_dir": data_dir,
+        "adapter_dir": run_dir / "adapter",
+        "checkpoints_dir": run_dir / "checkpoints",
+    }
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -147,8 +184,8 @@ def prepare_dataset(
     max_query_chars = int(rag_cfg.get("max_query_chars") or 1500)
     max_chars_per_chunk = int(rag_cfg.get("max_chars_per_chunk") or 800)
 
-    prepared_rel = data_cfg.get("prepared_dir") or "training/data"
-    prepared_dir = ROOT / prepared_rel
+    paths = resolve_run_paths(cfg)
+    prepared_dir = paths["data_dir"]
     prepared_dir.mkdir(parents=True, exist_ok=True)
     out_path = prepared_dir / "train.jsonl"
 
@@ -192,6 +229,7 @@ def prepare_dataset(
 
     meta = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "run_dir": str(paths["run_dir"].relative_to(ROOT)),
         "splits_file": str(splits_file.relative_to(ROOT)),
         "split": split,
         "requested_ids": len(ids),
@@ -306,9 +344,13 @@ def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
     else:
         quant = None
 
-    output_rel = train_cfg.get("output_dir") or "training/output"
-    output_dir = ROOT / output_rel
-    output_dir.mkdir(parents=True, exist_ok=True)
+    paths = resolve_run_paths(cfg)
+    run_dir = paths["run_dir"]
+    adapter_dir = paths["adapter_dir"]
+    checkpoints_dir = paths["checkpoints_dir"]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
     def log(msg: str) -> None:
         print(msg, flush=True)
@@ -401,7 +443,7 @@ def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
     dataset = dataset.map(to_text, remove_columns=dataset.column_names)
 
     sft_kwargs: dict[str, Any] = {
-        "output_dir": str(output_dir),
+        "output_dir": str(checkpoints_dir),
         "num_train_epochs": float(train_cfg.get("num_train_epochs") or 1),
         "per_device_train_batch_size": int(
             train_cfg.get("per_device_train_batch_size") or 1
@@ -433,11 +475,60 @@ def run_sft(cfg: dict[str, Any], train_jsonl: Path) -> Path:
     )
     log("Starting SFT…")
     trainer.train()
-    trainer.save_model(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    trainer.save_model(str(adapter_dir))
+    tokenizer.save_pretrained(str(adapter_dir))
 
-    log(f"Saved adapter/model → {output_dir.relative_to(ROOT)}")
-    return output_dir
+    run_manifest = {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "base_model": name_or_path,
+        "run_dir": str(run_dir.relative_to(ROOT)),
+        "adapter_dir": str(adapter_dir.relative_to(ROOT)),
+        "checkpoints_dir": str(checkpoints_dir.relative_to(ROOT)),
+        "train_jsonl": str(train_jsonl.relative_to(ROOT)),
+        "training": {
+            k: train_cfg.get(k)
+            for k in (
+                "max_seq_length",
+                "num_train_epochs",
+                "per_device_train_batch_size",
+                "gradient_accumulation_steps",
+                "learning_rate",
+                "save_steps",
+                "seed",
+            )
+        },
+        "lora": dict(lora_cfg) if isinstance(lora_cfg, dict) else {},
+    }
+    state_path = checkpoints_dir / "trainer_state.json"
+    if not state_path.exists():
+        for ckpt in sorted(checkpoints_dir.glob("checkpoint-*")):
+            candidate = ckpt / "trainer_state.json"
+            if candidate.exists():
+                state_path = candidate
+                break
+    if state_path.exists():
+        with state_path.open(encoding="utf-8") as fh:
+            state = json.load(fh)
+        run_manifest["global_step"] = state.get("global_step")
+        run_manifest["epoch"] = state.get("epoch")
+        history = state.get("log_history") or []
+        if history:
+            run_manifest["final_train_log"] = history[-1]
+        run_manifest["checkpoint_steps"] = sorted(
+            int(p.name.split("-", 1)[1])
+            for p in checkpoints_dir.glob("checkpoint-*")
+            if p.name.split("-", 1)[-1].isdigit()
+        )
+
+    manifest_path = run_dir / "run.json"
+    with manifest_path.open("w", encoding="utf-8") as fh:
+        json.dump(run_manifest, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+    log(f"Saved adapter → {adapter_dir.relative_to(ROOT)}")
+    log(f"Checkpoints → {checkpoints_dir.relative_to(ROOT)}")
+    log(f"Run manifest → {manifest_path.relative_to(ROOT)}")
+    return adapter_dir
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
