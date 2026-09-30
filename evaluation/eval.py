@@ -11,6 +11,7 @@ Pipeline:
 Usage:
   python evaluation/eval.py
   python evaluation/eval.py --limit 5 --ollama-model qwen3.5:9b
+  python evaluation/eval.py --resume evaluation/results/eval-20260929-214804.json
 """
 
 from __future__ import annotations
@@ -226,12 +227,130 @@ def mean_or_none(values: list[float]) -> float | None:
     return statistics.mean(values) if values else None
 
 
+def build_summary(
+    *,
+    test_ids: list[str],
+    results: list[dict[str, Any]],
+    judges: list[dict[str, Any]],
+    rag_enabled: bool,
+    top_k: int,
+) -> dict[str, Any]:
+    datapoint_means = [r["mean"] for r in results if r.get("mean") is not None]
+    overall_mean = mean_or_none(datapoint_means)
+    by_judge: dict[str, float | None] = {}
+    for judge in judges:
+        name = judge.get("name") or judge.get("model") or "unnamed"
+        vals = [
+            r["scores"][name]
+            for r in results
+            if isinstance(r.get("scores"), dict)
+            and name in r["scores"]
+            and r["scores"][name] is not None
+        ]
+        by_judge[name] = mean_or_none(vals)
+
+    agent_errors = sum(1 for r in results if r.get("error"))
+    judge_failures = 0
+    for r in results:
+        scores = r.get("scores") or {}
+        if not isinstance(scores, dict):
+            continue
+        judge_failures += sum(1 for v in scores.values() if v is None)
+
+    rag_hit_total = sum(int(r.get("rag_hits") or 0) for r in results)
+    scored_n = len(datapoint_means)
+    return {
+        "test_n": len(test_ids),
+        "done": len(results),
+        "remaining": max(0, len(test_ids) - len(results)),
+        "scored": scored_n,
+        "agent_errors": agent_errors,
+        "judge_failures": judge_failures,
+        "overall_mean": overall_mean,
+        "by_judge": by_judge,
+        "rag": {
+            "enabled": rag_enabled,
+            "top_k": top_k if rag_enabled else 0,
+            "hit_total": rag_hit_total,
+            "mean_hits": (rag_hit_total / len(results)) if results else 0.0,
+        },
+        "complete": len(results) >= len(test_ids),
+    }
+
+
+def build_output(
+    *,
+    host: str,
+    model: str,
+    judges: list[dict[str, Any]],
+    test_ids: list[str],
+    results: list[dict[str, Any]],
+    rag_enabled: bool,
+    top_k: int,
+    checkpoint_path: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "ollama_host": host,
+        "ollama_model": model,
+        "checkpoint": checkpoint_path,
+        "judges": [
+            {"name": j.get("name"), "model": j.get("model")} for j in judges
+        ],
+        "summary": build_summary(
+            test_ids=test_ids,
+            results=results,
+            judges=judges,
+            rag_enabled=rag_enabled,
+            top_k=top_k,
+        ),
+        "results": results,
+    }
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    tmp.replace(path)
+
+
+def load_checkpoint(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise SystemExit(f"Invalid checkpoint (missing results list): {path}")
+    return data
+
+
+def resolve_checkpoint_path(
+    results_dir: Path,
+    *,
+    resume: Path | None,
+    output: Path | None,
+) -> Path:
+    if resume is not None:
+        path = resume if resume.is_absolute() else ROOT / resume
+        if not path.exists():
+            raise SystemExit(f"Checkpoint not found: {path}")
+        return path
+    if output is not None:
+        return output if output.is_absolute() else ROOT / output
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    return results_dir / f"eval-{stamp}.json"
+
+
 def evaluate(
     cfg: dict[str, Any],
     *,
     ollama_host: str | None = None,
     ollama_model: str | None = None,
     limit: int | None = None,
+    checkpoint_path: Path,
+    resume: bool = False,
 ) -> dict[str, Any]:
     load_dotenv(ROOT / ".env")
     api_key = os.getenv("GROQ_API_KEY")
@@ -264,18 +383,52 @@ def evaluate(
     top_k = int(rag_cfg.get("top_k") or 4)
     max_query_chars = int(rag_cfg.get("max_query_chars") or 1500)
     max_chars_per_chunk = int(rag_cfg.get("max_chars_per_chunk") or 800)
+    rag_on = bool(rag_enabled and index is not None)
+
+    try:
+        ckpt_rel = str(checkpoint_path.relative_to(ROOT))
+    except ValueError:
+        ckpt_rel = str(checkpoint_path)
 
     results: list[dict[str, Any]] = []
-    agent_errors = 0
-    judge_failures = 0
-    rag_hit_total = 0
+    if resume and checkpoint_path.exists():
+        prior = load_checkpoint(checkpoint_path)
+        results = list(prior.get("results") or [])
+        print(
+            f"Resuming {ckpt_rel}: {len(results)} done, "
+            f"{max(0, len(test_ids) - len(results))} remaining",
+            flush=True,
+        )
+    done_ids = {r.get("id") for r in results if r.get("id")}
+    pending_ids = [rid for rid in test_ids if rid not in done_ids]
+    if not pending_ids and results:
+        print("Checkpoint already complete; refreshing summary.", flush=True)
 
-    for record_id in test_ids:
-        print(f"[{len(results) + 1}/{len(test_ids)}] {record_id}", flush=True)
+    def persist() -> dict[str, Any]:
+        output = build_output(
+            host=host,
+            model=model,
+            judges=judges,
+            test_ids=test_ids,
+            results=results,
+            rag_enabled=rag_on,
+            top_k=top_k,
+            checkpoint_path=ckpt_rel,
+        )
+        atomic_write_json(checkpoint_path, output)
+        return output
+
+    # Create/refresh file immediately so a crash mid-first-example still leaves a path.
+    output = persist()
+    print(f"Checkpoint → {ckpt_rel}", flush=True)
+
+    total = len(test_ids)
+    for record_id in pending_ids:
+        idx = len(results) + 1
+        print(f"[{idx}/{total}] {record_id}", flush=True)
         try:
             record = load_record(record_id)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            agent_errors += 1
             results.append(
                 {
                     "id": record_id,
@@ -285,6 +438,7 @@ def evaluate(
                     "mean": None,
                 }
             )
+            persist()
             continue
 
         title = (record.get("issue") or {}).get("title") or ""
@@ -300,7 +454,6 @@ def evaluate(
                 max_chars_per_chunk=max_chars_per_chunk,
             )
             rag_hits_meta = [h.to_meta() for h in hits]
-            rag_hit_total += len(hits)
         user_content = agent_user_content(record, rag_context=rag_context)
 
         try:
@@ -312,7 +465,6 @@ def evaluate(
                 timeout_s=timeout_s,
             )
         except Exception as exc:  # noqa: BLE001
-            agent_errors += 1
             print(f"  agent error: {exc}", file=sys.stderr)
             results.append(
                 {
@@ -324,6 +476,7 @@ def evaluate(
                     "rag_hits": len(rag_hits_meta),
                 }
             )
+            persist()
             continue
 
         scores: dict[str, float | None] = {}
@@ -337,8 +490,6 @@ def evaluate(
                 api_key=api_key,
             )
             scores[name] = score
-            if score is None:
-                judge_failures += 1
 
         valid = [s for s in scores.values() if s is not None]
         results.append(
@@ -351,47 +502,9 @@ def evaluate(
                 "rag_hits": len(rag_hits_meta),
             }
         )
+        persist()
 
-    datapoint_means = [r["mean"] for r in results if r["mean"] is not None]
-    overall_mean = mean_or_none(datapoint_means)
-
-    by_judge: dict[str, float | None] = {}
-    for judge in judges:
-        name = judge.get("name") or judge.get("model") or "unnamed"
-        vals = [
-            r["scores"][name]
-            for r in results
-            if name in r.get("scores", {}) and r["scores"][name] is not None
-        ]
-        by_judge[name] = mean_or_none(vals)
-
-    scored_n = len(datapoint_means)
-    summary = {
-        "test_n": len(test_ids),
-        "scored": scored_n,
-        "agent_errors": agent_errors,
-        "judge_failures": judge_failures,
-        "overall_mean": overall_mean,
-        "by_judge": by_judge,
-        "rag": {
-            "enabled": rag_enabled and index is not None,
-            "top_k": top_k if index is not None else 0,
-            "hit_total": rag_hit_total,
-            "mean_hits": (rag_hit_total / scored_n) if scored_n else 0.0,
-        },
-    }
-
-    output = {
-        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "ollama_host": host,
-        "ollama_model": model,
-        "judges": [
-            {"name": j.get("name"), "model": j.get("model")} for j in judges
-        ],
-        "summary": summary,
-        "results": results,
-    }
-    return output
+    return persist()
 
 
 def print_report(output: dict[str, Any]) -> None:
@@ -401,24 +514,16 @@ def print_report(output: dict[str, Any]) -> None:
     print()
     print("Evaluation report")
     print(
-        f"  test_n={s['test_n']} scored={s['scored']} "
-        f"agent_errors={s['agent_errors']}"
+        f"  test_n={s['test_n']} done={s.get('done', s['scored'])} "
+        f"scored={s['scored']} agent_errors={s['agent_errors']}"
     )
+    if not s.get("complete", True):
+        print(f"  remaining={s.get('remaining')} (incomplete checkpoint)")
     print(f"  overall_mean={overall_s}")
     print("  by_judge:")
     for name, mean in (s.get("by_judge") or {}).items():
         mean_s = f"{mean:.4f}" if mean is not None else "n/a"
         print(f"    {name}: {mean_s}")
-
-
-def write_results(output: dict[str, Any], results_dir: Path) -> Path:
-    results_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    path = results_dir / f"eval-{stamp}.json"
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(output, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
-    return path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -452,6 +557,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Disable BM25 RAG context even if config rag.enabled is true",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Checkpoint/results JSON path (default: evaluation/results/eval-<stamp>.json)",
+    )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Resume from an existing checkpoint JSON (skips completed ids)",
+    )
     return parser.parse_args(argv)
 
 
@@ -460,18 +577,27 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     cfg = load_config(args.config)
     if args.no_rag:
         cfg.setdefault("rag", {})["enabled"] = False
+
+    results_rel = cfg.get("results_dir") or "evaluation/results"
+    results_dir = ROOT / results_rel
+    checkpoint_path = resolve_checkpoint_path(
+        results_dir, resume=args.resume, output=args.output
+    )
+
     output = evaluate(
         cfg,
         ollama_host=args.ollama_host,
         ollama_model=args.ollama_model,
         limit=args.limit,
+        checkpoint_path=checkpoint_path,
+        resume=args.resume is not None,
     )
     print_report(output)
-
-    results_rel = cfg.get("results_dir") or "evaluation/results"
-    results_dir = ROOT / results_rel
-    out_path = write_results(output, results_dir)
-    print(f"  wrote {out_path.relative_to(ROOT)}")
+    try:
+        rel = checkpoint_path.relative_to(ROOT)
+    except ValueError:
+        rel = checkpoint_path
+    print(f"  wrote {rel}")
     return output
 
 
