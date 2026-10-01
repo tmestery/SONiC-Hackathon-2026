@@ -10,7 +10,7 @@ Pipeline:
 
 Usage:
   python evaluation/eval.py
-  python evaluation/eval.py --limit 5 --ollama-model qwen3.5:9b
+    python evaluation/eval.py --limit 5 --ollama-model qwen3:1.7b
   python evaluation/eval.py --resume evaluation/results/eval-20260929-214804.json
 """
 
@@ -116,6 +116,8 @@ def call_ollama(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
+        # Keep evaluation output aligned with the non-thinking SFT targets.
+        "think": False,
         "stream": False,
     }
     resp = requests.post(url, json=body, timeout=timeout_s)
