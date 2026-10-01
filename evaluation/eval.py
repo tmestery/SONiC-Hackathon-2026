@@ -101,6 +101,18 @@ def agent_user_content(
     """Build the Ollama user turn (title + failure + optional RAG docs)."""
     return build_user_content(record, rag_context=rag_context)
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _clean_prediction(text: str) -> str:
+    """Strip thinking blocks and chat end tokens from model output."""
+    cleaned = _THINK_RE.sub("", text)
+    for marker in ("<|im_start|>", "<|im_end|>", "<|endoftext|>"):
+        if marker in cleaned:
+            cleaned = cleaned.split(marker, 1)[0]
+    return cleaned.strip()
+
+
 def call_ollama(
     host: str,
     model: str,
@@ -119,6 +131,10 @@ def call_ollama(
         # Keep evaluation output aligned with the non-thinking SFT targets.
         "think": False,
         "stream": False,
+        # Disable thinking when supported; keeps eval latency/cost down.
+        "think": False,
+        # Bound context + generation so MLX/safetensors imports cannot runaway.
+        "options": {"num_ctx": 4096, "num_predict": 1024},
     }
     resp = requests.post(url, json=body, timeout=timeout_s)
     resp.raise_for_status()
@@ -126,7 +142,7 @@ def call_ollama(
     content = (data.get("message") or {}).get("content")
     if not content:
         raise ValueError(f"Ollama response missing message content: {data!r}")
-    return content.strip()
+    return _clean_prediction(content)
 
 
 def parse_score(text: str) -> float | None:
